@@ -1,11 +1,14 @@
 mod prometheus_server;
+mod settings;
 
+use std::env;
 use hyper::{
     header::CONTENT_TYPE,
     service::{make_service_fn, service_fn},
     Body, Request, Response, Server,
 };
 use crate::prometheus_server::PrometheusServer;
+use crate::settings::Settings;
 
 async fn serve_req(_req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
     let mut server = PrometheusServer::new("stg");
@@ -28,6 +31,13 @@ async fn serve_req(_req: Request<Body>) -> Result<Response<Body>, hyper::Error> 
 
 #[tokio::main]
 async fn main() {
+    let mut current_dir = env::current_dir().unwrap();
+    current_dir.push("nightwatch/conf/Settings");
+    let config_path = current_dir.to_str().unwrap();
+    println!("Config directory: {:?}", config_path);
+
+    let path = env::var("NIGHT_WATCH_CONFIG").unwrap_or_else(|_|String::from(config_path));
+    let _settings = Settings::new(&path).unwrap();
     let addr = ([127, 0, 0, 1], 9898).into();
     println!("Listening on http://{}", addr);
 
