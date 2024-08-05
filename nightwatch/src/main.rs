@@ -1,14 +1,17 @@
-mod prometheus_server;
-mod settings;
-
 use std::env;
+
 use hyper::{
+    Body,
     header::CONTENT_TYPE,
-    service::{make_service_fn, service_fn},
-    Body, Request, Response, Server,
+    Request, Response, Server, service::{make_service_fn, service_fn},
 };
+
 use crate::prometheus_server::PrometheusServer;
 use crate::settings::Settings;
+
+mod prometheus_server;
+mod settings;
+mod clients;
 
 async fn serve_req(_req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
     let mut server = PrometheusServer::new("stg");
@@ -24,7 +27,6 @@ async fn serve_req(_req: Request<Body>) -> Result<Response<Body>, hyper::Error> 
         .header(CONTENT_TYPE, server.format_type)
         .body(Body::from(buffer))
         .unwrap();
-
 
     Ok(response)
 }

@@ -11,3 +11,4 @@ config =  { version = "^0.14.0", features = ["toml"] }
 serde = { version = "1.0.204", features = ["derive"] }
 reqwest = { version = "0.12", features = ["json"] }
 tokio = { version = "1", features = ["full"] }
+url = "2.2.2"
