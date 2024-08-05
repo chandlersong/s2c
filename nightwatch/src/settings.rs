@@ -12,6 +12,7 @@ struct Account {
 #[derive(Debug, Deserialize)]
 #[allow(unused)]
 pub struct Settings {
+    proxy: Option<String>,
     accounts: Vec<Account>,
 }
 
@@ -22,13 +23,15 @@ impl Settings {
             .add_source(File::with_name(path))
             .build()?;
 
+        let proxy = s.get_string("proxy").map(Some).unwrap_or(None);
 
         // 获取所有 person 配置信息
         let accounts: Vec<Account> = s.get("account").unwrap();
 
 
         Ok(Settings {
-            accounts: accounts
+            proxy,
+            accounts,
         })
     }
 }
@@ -45,8 +48,9 @@ mod tests {
 
         let actual = setting.accounts.get(0).unwrap();
         assert_eq!(actual.name, "abc");
-        assert_eq!(actual.api_key,"189rjfadoisfj8923fjio");
-        assert_eq!(actual.secret,"bfsabfsbsfbsfbsfa31bw");
+        assert_eq!(actual.api_key, "189rjfadoisfj8923fjio");
+        assert_eq!(actual.secret, "bfsabfsbsfbsfbsfa31bw");
 
+        assert_eq!(setting.proxy, Some(String::from("http://localhost:7890")));
     }
 }
