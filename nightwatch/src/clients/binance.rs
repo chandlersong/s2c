@@ -1,27 +1,58 @@
-use lazy_static::lazy_static;
-use hmac::{Hmac, Mac};
-use sha2::{Sha256};
-use sha2::digest::InvalidLength;
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use hmac::{Hmac, Mac};
 use reqwest::Client;
+use sha2::digest::InvalidLength;
+use sha2::Sha256;
 use url::Url;
 
 use crate::clients::Exchange;
+use crate::settings::Account;
 
-lazy_static! {
-    static ref BINANCE_URL: String = String::from("https://api.binance.com/");
+enum BinanceURL {
+    Normal,
+    PortfolioMargin,
 }
 
-lazy_static! {
-    static ref PING_PATH: String = String::from("api/v3/ping");
+impl From<BinanceURL> for String {
+    fn from(url: BinanceURL) -> Self {
+        String::from(
+            match url {
+                BinanceURL::Normal => String::from("https://api.binance.com/"),
+                BinanceURL::PortfolioMargin => String::from("https://papi.binance.com/")
+            }
+        )
+    }
 }
 
-
-struct BinanceExchange {
-    account_name: String,
-    client: Client,
-    base_url: String,
+enum API {
+    Normal(NormalAPI),
+    PAPI(PAPI),
 }
+
+enum NormalAPI {
+    PING
+}
+
+enum PAPI {
+    Assert
+}
+
+impl From<API> for String {
+    fn from(api: API) -> Self {
+        String::from(
+            match api {
+                API::Normal(route) => match route {
+                    NormalAPI::PING => String::from("api/v3/ping"),
+                }
+                API::PAPI(route) => match route {
+                    PAPI::Assert => String::from("/papi/v1/balance"),
+                }
+            }
+        )
+    }
+}
+
 
 // 签名方法从官方项目copy https://github.com/binance/binance-spot-connector-rust/blob/main/src/utils.rs#L9
 fn sign_hmac(payload: &str, key: &str) -> Result<String, InvalidLength> {
@@ -33,11 +64,23 @@ fn sign_hmac(payload: &str, key: &str) -> Result<String, InvalidLength> {
 }
 
 
+fn unix_time() -> u64 {
+    let now = SystemTime::now();
+    let since_epoch = now.duration_since(UNIX_EPOCH).unwrap();
+    since_epoch.as_secs() * 1000 + u64::from(since_epoch.subsec_nanos()) / 1_000_000
+}
 
-impl Exchange for BinanceExchange {
+struct BinancePMExchange {
+    account: Account,
+    client: Client,
+    trade_url: String,
+}
+
+
+impl Exchange for BinancePMExchange {
     async fn ping(&self) -> Result<(), reqwest::Error> {
-        let mut url = Url::parse(&self.base_url).expect("Invalid base URL");
-        url.set_path(&PING_PATH);
+        let mut url = Url::parse(&String::from(BinanceURL::Normal)).expect("Invalid base URL");
+        url.set_path(&String::from(API::Normal(NormalAPI::PING)));
         let res = self.client.get(url).send().await?;
 
         eprintln!("Response: {:?} {}", res.version(), res.status());
@@ -49,10 +92,35 @@ impl Exchange for BinanceExchange {
 
         Ok(())
     }
+
+    async fn get_account_info(&self) -> Result<(), reqwest::Error> {
+        let timestamp = unix_time();
+        let rec_window = 5000;
+        let query_param = format!("timestamp={timestamp}&recvWindow={rec_window}");
+        let signature = sign_hmac(&query_param, &self.account.secret).unwrap();
+        let real_param = format!("{query_param}&signature={signature}");
+
+        let mut url = Url::parse(&self.trade_url).expect("Invalid base URL");
+        url.set_path(&String::from(API::PAPI(PAPI::Assert)));
+        url.set_query(Some(&real_param));
+        let res = self.client.get(url).header("X-MBX-APIKEY", &self.account.api_key).send().await?;
+
+        eprintln!("Response: {:?} {}", res.version(), res.status());
+        eprintln!("Headers: {:#?}\n", res.headers());
+
+        let body = res.text().await?;
+
+        println!("{body}");
+        Ok(())
+    }
 }
 
-impl BinanceExchange {
-    pub fn new(account_name: String, proxy_url: Option<String>, binance_url: Option<String>) -> BinanceExchange {
+impl BinancePMExchange {
+    pub fn new(setting_account: &Account, proxy_url: &Option<String>) -> BinancePMExchange {
+        BinancePMExchange::new_with_url(setting_account, proxy_url, Some(BinanceURL::PortfolioMargin))
+    }
+
+    pub fn new_with_url(setting_account: &Account, proxy_url: &Option<String>, binance_url: Option<BinanceURL>) -> BinancePMExchange {
         let builder = reqwest::Client::builder();
         let proxy_builder = match proxy_url {
             Some(val) => { builder.proxy(reqwest::Proxy::https(val).unwrap()) }
@@ -60,21 +128,25 @@ impl BinanceExchange {
         };
 
         let client = proxy_builder.build().unwrap();
-        let base_url = match binance_url {
-            Some(val) => { val }
-            None => BINANCE_URL.clone()
+        let trade_url = match binance_url {
+            Some(val) => String::from(val),
+            None => String::from(BinanceURL::PortfolioMargin)
         };
-        BinanceExchange {
+        let account: Account = setting_account.clone();
+        BinancePMExchange {
             client,
-            account_name,
-            base_url,
+            account,
+            trade_url,
         }
     }
+
 }
 
 
 #[cfg(test)]
 mod tests {
+    use crate::settings::Settings;
+
     use super::*;
 
     #[test]
@@ -95,10 +167,22 @@ mod tests {
     #[ignore]
     #[test]
     async fn test_ping() {
-        let proxy = Option::from(String::from("http://localhost:7890"));
-        let base_url = Option::from(BINANCE_URL.clone());
-        let exchange = BinanceExchange::new(String::from("test"), proxy, base_url);
-        assert_eq!("test", exchange.account_name);
+        let setting = Settings::new("conf/Settings.toml").unwrap();
+        let account = setting.get_account(0);
+        let exchange = BinancePMExchange::new(account, &setting.proxy);
+        assert_eq!("cyc", exchange.account.name);
         exchange.ping().await.unwrap();
+    }
+
+
+    #[tokio::main]
+    #[ignore]
+    #[test]
+    async fn test_get_account() {
+        let setting = Settings::new("conf/Settings.toml").unwrap();
+        let account = setting.get_account(0);
+        let exchange = BinancePMExchange::new(account, &setting.proxy);
+
+        let _ = exchange.get_account_info().await;
     }
 }

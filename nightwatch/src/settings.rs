@@ -1,18 +1,19 @@
 use config::{Config, ConfigError, File};
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[allow(unused)]
-struct Account {
-    name: String,
-    api_key: String,
-    secret: String,
+pub struct Account {
+    pub name: String,
+    pub api_key: String,
+    pub secret: String,
 }
+
 
 #[derive(Debug, Deserialize)]
 #[allow(unused)]
 pub struct Settings {
-    proxy: Option<String>,
+    pub proxy: Option<String>,
     accounts: Vec<Account>,
 }
 
@@ -34,12 +35,15 @@ impl Settings {
             accounts,
         })
     }
+
+    pub fn get_account(&self, idx: usize) -> &Account {
+        &self.accounts[idx]
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[test]
     fn test_load_setting() {
