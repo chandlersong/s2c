@@ -1,5 +1,6 @@
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use crate::models::UnixTimeStamp;
 
 pub(crate) mod binance;
 
@@ -42,7 +43,7 @@ struct PMBalance {
     #[serde(rename = "cmUnrealizedPNL")]
     pub cm_unrealized_pnl: Decimal,    // 币本位未实现盈亏
     #[serde(rename = "updateTime")]
-    pub update_time: u64,
+    pub update_time:  UnixTimeStamp,
     #[serde(rename = "negativeBalance")]
     pub negative_balance: Decimal,
 }
