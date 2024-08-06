@@ -1,6 +1,6 @@
-use rust_decimal::Decimal;
+
 use serde::{Deserialize, Serialize};
-use crate::models::UnixTimeStamp;
+use crate::models::{Decimal, UnixTimeStamp};
 
 pub(crate) mod binance;
 
