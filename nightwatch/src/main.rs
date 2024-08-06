@@ -12,6 +12,7 @@ use crate::settings::Settings;
 mod prometheus_server;
 mod settings;
 mod clients;
+mod models;
 
 async fn serve_req(_req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
     let mut server = PrometheusServer::new("stg");

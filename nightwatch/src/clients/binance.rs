@@ -6,13 +6,14 @@ use sha2::digest::InvalidLength;
 use sha2::Sha256;
 use url::Url;
 
-use crate::clients::Exchange;
+use crate::clients::{Exchange, PMBalance};
 use crate::settings::Account;
 
 enum BinanceURL {
     Normal,
     PortfolioMargin,
 }
+
 
 impl From<BinanceURL> for String {
     fn from(url: BinanceURL) -> Self {
@@ -93,7 +94,7 @@ impl Exchange for BinancePMExchange {
         Ok(())
     }
 
-    async fn get_account_info(&self) -> Result<(), reqwest::Error> {
+    async fn get_get_balance(&self) -> Result<Vec<PMBalance>, reqwest::Error> {
         let timestamp = unix_time();
         let rec_window = 5000;
         let query_param = format!("timestamp={timestamp}&recvWindow={rec_window}");
@@ -105,13 +106,10 @@ impl Exchange for BinancePMExchange {
         url.set_query(Some(&real_param));
         let res = self.client.get(url).header("X-MBX-APIKEY", &self.account.api_key).send().await?;
 
-        eprintln!("Response: {:?} {}", res.version(), res.status());
-        eprintln!("Headers: {:#?}\n", res.headers());
+        let vec = res.json().await?;
+        Ok(vec)
 
-        let body = res.text().await?;
 
-        println!("{body}");
-        Ok(())
     }
 }
 
@@ -178,11 +176,14 @@ mod tests {
     #[tokio::main]
     #[ignore]
     #[test]
-    async fn test_get_account() {
+    async fn test_get_balance() {
         let setting = Settings::new("conf/Settings.toml").unwrap();
         let account = setting.get_account(0);
         let exchange = BinancePMExchange::new(account, &setting.proxy);
 
-        let _ = exchange.get_account_info().await;
+        let data = exchange.get_get_balance().await.unwrap();
+        for d in &data{
+            println!("{}", d.asset)
+        }
     }
 }
