@@ -1,4 +1,8 @@
 use lazy_static::lazy_static;
+use hmac::{Hmac, Mac};
+use sha2::{Sha256};
+use sha2::digest::InvalidLength;
+
 use reqwest::Client;
 use url::Url;
 
@@ -18,6 +22,16 @@ struct BinanceExchange {
     client: Client,
     base_url: String,
 }
+
+// 签名方法从官方项目copy https://github.com/binance/binance-spot-connector-rust/blob/main/src/utils.rs#L9
+fn sign_hmac(payload: &str, key: &str) -> Result<String, InvalidLength> {
+    let mut mac = Hmac::<Sha256>::new_from_slice(key.to_string().as_bytes())?;
+
+    mac.update(payload.to_string().as_bytes());
+    let result = mac.finalize();
+    Ok(format!("{:x}", result.into_bytes()))
+}
+
 
 
 impl Exchange for BinanceExchange {
@@ -62,6 +76,20 @@ impl BinanceExchange {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sign_payload_with_hmac_test() {
+        let payload = "symbol=LTCBTC&side=BUY&type=LIMIT&timeInForce=GTC&quantity=1&price=0.1&recvWindow=5000&timestamp=1499827319559";
+        let key = "NhqPtmdSJYdKjVHjA7PZj4Mge3R5YNiP1e3UZjInClVN65XAbvqqM6A7H5fATj0j";
+
+        let signature = super::sign_hmac(payload, key).unwrap();
+
+        assert_eq!(
+            signature,
+            "c8db56825ae71d6d79447849e617115f4a920fa2acdcab2b053c4b2838bd6b71".to_owned()
+        );
+    }
+
 
     #[tokio::main]
     #[ignore]
