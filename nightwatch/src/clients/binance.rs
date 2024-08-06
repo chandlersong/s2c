@@ -25,7 +25,7 @@ struct BinanceExchange {
 
 // 签名方法从官方项目copy https://github.com/binance/binance-spot-connector-rust/blob/main/src/utils.rs#L9
 fn sign_hmac(payload: &str, key: &str) -> Result<String, InvalidLength> {
-    let mut mac = Hmac::<Sha256>::new_from_slice(key.to_string().as_bytes())?;
+    let mut mac = Hmac::<Sha256>::new_from_slice(key.as_bytes())?;
 
     mac.update(payload.to_string().as_bytes());
     let result = mac.finalize();
