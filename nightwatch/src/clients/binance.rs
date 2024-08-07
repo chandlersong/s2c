@@ -2,12 +2,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use hmac::{Hmac, Mac};
 use reqwest::Client;
+use rust_decimal_macros::dec;
 use sha2::digest::InvalidLength;
 use sha2::Sha256;
 use url::Url;
 
 use crate::clients::{AccountBalance, Exchange};
-use crate::clients::binance_models::PMBalance;
+use crate::clients::binance_models::{PMBalance, UMSwapBalance};
 use crate::errors::NightWatchError;
 use crate::models::UnixTimeStamp;
 use crate::settings::Account;
@@ -39,7 +40,8 @@ enum NormalAPI {
 }
 
 enum PAPI {
-    Assert
+    Balance,
+    SwapPosition,
 }
 
 impl From<API> for String {
@@ -50,7 +52,8 @@ impl From<API> for String {
                     NormalAPI::PING => String::from("api/v3/ping"),
                 }
                 API::PAPI(route) => match route {
-                    PAPI::Assert => String::from("/papi/v1/balance"),
+                    PAPI::Balance => String::from("/papi/v1/balance"),
+                    PAPI::SwapPosition => String::from("/papi/v1/um/account"),
                 }
             }
         )
@@ -102,6 +105,8 @@ impl Exchange for BinancePMExchange {
         for a in &assets{
             println!("{}", a.asset)
         }
+
+        self.get_swap_position().await?;
         Ok(AccountBalance{})
     }
 }
@@ -132,6 +137,21 @@ impl BinancePMExchange {
     }
 
      async fn get_balance(&self) -> Result<Vec<PMBalance>, NightWatchError> {
+         let timestamp = unix_time();
+         let query_param = format!("timestamp={timestamp}");
+         let signature = sign_hmac(&query_param, &self.account.secret).unwrap();
+         let real_param = format!("{query_param}&signature={signature}");
+
+         let mut url = Url::parse(&self.trade_url).expect("Invalid base URL");
+         url.set_path(&String::from(API::PAPI(PAPI::Balance)));
+         url.set_query(Some(&real_param));
+         let res = self.client.get(url).header("X-MBX-APIKEY", &self.account.api_key).send().await?;
+
+         let assets = res.json().await?;
+         Ok(assets)
+     }
+
+    async fn get_swap_position(&self) -> Result<UMSwapBalance, NightWatchError> {
         let timestamp = unix_time();
         let rec_window = 5000;
         let query_param = format!("timestamp={timestamp}&recvWindow={rec_window}");
@@ -139,12 +159,13 @@ impl BinancePMExchange {
         let real_param = format!("{query_param}&signature={signature}");
 
         let mut url = Url::parse(&self.trade_url).expect("Invalid base URL");
-        url.set_path(&String::from(API::PAPI(PAPI::Assert)));
+        url.set_path(&String::from(API::PAPI(PAPI::SwapPosition)));
         url.set_query(Some(&real_param));
         let res = self.client.get(url).header("X-MBX-APIKEY", &self.account.api_key).send().await?;
 
-        let assets = res.json().await?;
-        Ok(assets)
+        let mut balance: UMSwapBalance = res.json().await?;
+        balance.positions.retain(|p| p.maint_margin != dec!(0));
+        Ok(balance)
     }
 
 }
@@ -190,7 +211,28 @@ mod tests {
         let account = setting.get_account(0);
         let exchange = BinancePMExchange::new(account, &setting.proxy);
 
-        let _data = exchange.account_balance().await.unwrap();
+        let data = exchange.get_balance().await.unwrap();
+        for b in &data {
+            println!("{}", b.asset)
+        }
+    }
 
+    #[tokio::main]
+    #[ignore]
+    #[test]
+    async fn test_get_swap_position() {
+        let setting = Settings::new("conf/Settings.toml").unwrap();
+        let account = setting.get_account(0);
+        let exchange = BinancePMExchange::new(account, &setting.proxy);
+
+        let balance = exchange.get_swap_position().await.unwrap();
+
+        println!("group_id:{}", balance.trade_group_id);
+        println!("assert assert size :{}", balance.assets.len());
+        println!("assert position size :{}", balance.positions.len());
+
+        for p in &balance.positions {
+            assert_ne!(p.maint_margin, dec!(0))
+        }
     }
 }

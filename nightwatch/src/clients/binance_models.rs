@@ -38,3 +38,87 @@ pub struct PMBalance {
     pub negative_balance: Decimal,
 }
 
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UMSwapPosition {
+    pub symbol: String,    // 交易对
+
+    #[serde(rename = "initialMargin")]
+    pub initial_margin: Decimal,   // 当前所需起始保证金(基于最新标记价格)
+
+    #[serde(rename = "maintMargin")]
+    pub maint_margin: Decimal,     // 维持保证金
+
+    #[serde(rename = "unrealizedProfit")]
+    pub unrealized_profit: Decimal,  // 持仓未实现盈亏
+
+    #[serde(rename = "positionInitialMargin")]
+    pub position_initial_margin: Decimal,      //持仓所需起始保证金(基于最新标记价格)
+
+    #[serde(rename = "openOrderInitialMargin")]
+    pub open_order_initial_margin: Decimal,     // 当前挂单所需起始保证金(基于最新标记价格)
+
+    #[serde(rename = "leverage")]
+    pub leverage: Decimal,      // 杠杆倍率
+
+    #[serde(rename = "entryPrice")]
+    pub entry_price: Decimal,    // 持仓成本价
+
+    #[serde(rename = "maxNotional")]
+    pub max_notional: Decimal,    // 当前杠杆下用户可用的最大名义价值
+
+    #[serde(rename = "bidNotional")]
+    pub bid_notional: Decimal,  // 买单净值，忽略
+
+    #[serde(rename = "askNotional")]
+    pub ask_notional: Decimal,  // 卖单净值，忽略
+
+    #[serde(rename = "positionSide")]
+    pub position_side: String,     // 持仓方向
+
+    #[serde(rename = "positionAmt")]
+    pub position_amt: Decimal,         //  持仓数量
+
+    #[serde(rename = "updateTime")]
+    pub update_time: UnixTimeStamp,         // 更新时间
+
+    #[serde(rename = "breakEvenPrice")]
+    pub break_even_price: Decimal,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UMSwapAssert {
+    #[serde(rename = "asset")]
+    pub asset: String,            // 资产
+
+    #[serde(rename = "crossWalletBalance")]
+    pub cross_wallet_balance: Decimal,      // 全仓账户余额
+
+    #[serde(rename = "crossUnPnl")]
+    pub cross_un_pnl: Decimal,    // 全仓持仓未实现盈亏
+
+    #[serde(rename = "maintMargin")]
+    pub maint_margin: Decimal,   // 维持保证金
+
+    #[serde(rename = "initialMargin")]
+    pub initial_margin: Decimal, // 当前所需起始保证金
+
+    #[serde(rename = "positionInitialMargin")]
+    pub position_initial_margin: Decimal,  //持仓所需起始保证金(基于最新标记价格)
+
+    #[serde(rename = "openOrderInitialMargin")]
+    pub open_order_initial_margin: Decimal, //当前挂单所需起始保证金(基于最新标记价格)
+
+    #[serde(rename = "updateTime")]
+    pub update_time: UnixTimeStamp, // 更新时间
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UMSwapBalance {
+    #[serde(rename = "tradeGroupId")]
+    pub trade_group_id: i32,
+    #[serde(rename = "assets")]
+    pub assets: Vec<UMSwapAssert>,
+    #[serde(rename = "positions")]
+    pub positions: Vec<UMSwapPosition>,
+}
