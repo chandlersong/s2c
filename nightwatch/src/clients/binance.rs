@@ -232,7 +232,8 @@ mod tests {
         println!("assert position size :{}", balance.positions.len());
 
         for p in &balance.positions {
-            assert_ne!(p.maint_margin, dec!(0))
+            println!("symbol:{},持仓未实现盈亏:{}", p.symbol, p.unrealized_profit);
+            assert_ne!(p.maint_margin, dec!(0));
         }
     }
 }
