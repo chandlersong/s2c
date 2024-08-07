@@ -14,11 +14,10 @@ mod tests {
         // In most cases, you should create/build a reqwest::Client and reuse
         // it for all requests.
         // let http_proxy = reqwest::Proxy::http("http://localhost:7890")?;
-        // let https_proxy = reqwest::Proxy::https("http://localhost:7890")?;
+        let https_proxy = reqwest::Proxy::https("http://localhost:7890")?;
 
         let client = reqwest::Client::builder()
-            // .proxy(https_proxy)
-            // .proxy(http_proxy)
+            .proxy(https_proxy)
             .build().unwrap();
 
         let res = client.get(url).send().await?;

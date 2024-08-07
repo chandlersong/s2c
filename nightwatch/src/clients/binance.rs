@@ -6,7 +6,9 @@ use sha2::digest::InvalidLength;
 use sha2::Sha256;
 use url::Url;
 
-use crate::clients::{Exchange, PMBalance};
+use crate::clients::{AccountBalance, Exchange};
+use crate::clients::binance_models::PMBalance;
+use crate::errors::NightWatchError;
 use crate::models::UnixTimeStamp;
 use crate::settings::Account;
 
@@ -80,7 +82,7 @@ struct BinancePMExchange {
 
 
 impl Exchange for BinancePMExchange {
-    async fn ping(&self) -> Result<(), reqwest::Error> {
+    async fn ping(&self) -> Result<(), NightWatchError> {
         let mut url = Url::parse(&String::from(BinanceURL::Normal)).expect("Invalid base URL");
         url.set_path(&String::from(API::Normal(NormalAPI::PING)));
         let res = self.client.get(url).send().await?;
@@ -95,22 +97,12 @@ impl Exchange for BinancePMExchange {
         Ok(())
     }
 
-    async fn get_get_balance(&self) -> Result<Vec<PMBalance>, reqwest::Error> {
-        let timestamp = unix_time();
-        let rec_window = 5000;
-        let query_param = format!("timestamp={timestamp}&recvWindow={rec_window}");
-        let signature = sign_hmac(&query_param, &self.account.secret).unwrap();
-        let real_param = format!("{query_param}&signature={signature}");
-
-        let mut url = Url::parse(&self.trade_url).expect("Invalid base URL");
-        url.set_path(&String::from(API::PAPI(PAPI::Assert)));
-        url.set_query(Some(&real_param));
-        let res = self.client.get(url).header("X-MBX-APIKEY", &self.account.api_key).send().await?;
-
-        let vec = res.json().await?;
-        Ok(vec)
-
-
+    async fn account_balance(&self) -> Result<AccountBalance, NightWatchError> {
+        let assets = self.get_balance().await?;
+        for a in &assets{
+            println!("{}", a.asset)
+        }
+        Ok(AccountBalance{})
     }
 }
 
@@ -137,6 +129,22 @@ impl BinancePMExchange {
             account,
             trade_url,
         }
+    }
+
+     async fn get_balance(&self) -> Result<Vec<PMBalance>, NightWatchError> {
+        let timestamp = unix_time();
+        let rec_window = 5000;
+        let query_param = format!("timestamp={timestamp}&recvWindow={rec_window}");
+        let signature = sign_hmac(&query_param, &self.account.secret).unwrap();
+        let real_param = format!("{query_param}&signature={signature}");
+
+        let mut url = Url::parse(&self.trade_url).expect("Invalid base URL");
+        url.set_path(&String::from(API::PAPI(PAPI::Assert)));
+        url.set_query(Some(&real_param));
+        let res = self.client.get(url).header("X-MBX-APIKEY", &self.account.api_key).send().await?;
+
+        let assets = res.json().await?;
+        Ok(assets)
     }
 
 }
@@ -182,9 +190,7 @@ mod tests {
         let account = setting.get_account(0);
         let exchange = BinancePMExchange::new(account, &setting.proxy);
 
-        let data = exchange.get_get_balance().await.unwrap();
-        for d in &data{
-            println!("{}", d.asset)
-        }
+        let _data = exchange.account_balance().await.unwrap();
+
     }
 }
