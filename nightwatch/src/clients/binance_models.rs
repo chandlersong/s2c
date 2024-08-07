@@ -122,3 +122,12 @@ pub struct UMSwapBalance {
     #[serde(rename = "positions")]
     pub positions: Vec<UMSwapPosition>,
 }
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Ticker {
+    #[serde(rename = "symbol")]
+    pub symbol: String,       // 交易对
+    #[serde(rename = "price")]
+    pub price: Decimal,        // 价格
+    #[serde(rename = "time")]
+    pub time: UnixTimeStamp   // 撮合引擎时间,Spot的不存在这个数据
+}

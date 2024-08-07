@@ -8,7 +8,7 @@ use sha2::Sha256;
 use url::Url;
 
 use crate::clients::{AccountBalance, Exchange};
-use crate::clients::binance_models::{PMBalance, UMSwapBalance};
+use crate::clients::binance_models::{PMBalance, Ticker, UMSwapBalance};
 use crate::errors::NightWatchError;
 use crate::models::UnixTimeStamp;
 use crate::settings::Account;
@@ -16,6 +16,7 @@ use crate::settings::Account;
 enum BinanceURL {
     Normal,
     PortfolioMargin,
+    SWAP,
 }
 
 
@@ -24,7 +25,8 @@ impl From<BinanceURL> for String {
         String::from(
             match url {
                 BinanceURL::Normal => String::from("https://api.binance.com/"),
-                BinanceURL::PortfolioMargin => String::from("https://papi.binance.com/")
+                BinanceURL::PortfolioMargin => String::from("https://papi.binance.com/"),
+                BinanceURL::SWAP => String::from("https://fapi.binance.com")
             }
         )
     }
@@ -33,15 +35,21 @@ impl From<BinanceURL> for String {
 enum API {
     Normal(NormalAPI),
     PAPI(PAPI),
+    FAPI(FAPI)
 }
 
 enum NormalAPI {
-    PING
+    PING,
+    SpotTicker
 }
 
 enum PAPI {
     Balance,
     SwapPosition,
+}
+
+enum FAPI {
+    SwapTicker,
 }
 
 impl From<API> for String {
@@ -50,10 +58,14 @@ impl From<API> for String {
             match api {
                 API::Normal(route) => match route {
                     NormalAPI::PING => String::from("api/v3/ping"),
+                    NormalAPI::SpotTicker => String::from("/api/v3/ticker/price"),
                 }
                 API::PAPI(route) => match route {
                     PAPI::Balance => String::from("/papi/v1/balance"),
                     PAPI::SwapPosition => String::from("/papi/v1/um/account"),
+                }
+                API::FAPI(route) => match route {
+                    FAPI::SwapTicker => String::from("/fapi/v2/ticker/price"),
                 }
             }
         )
@@ -168,6 +180,21 @@ impl BinancePMExchange {
         Ok(balance)
     }
 
+    async fn swap_ticker(&self) -> Result<Vec<Ticker>, NightWatchError> {
+        let mut url = Url::parse(&String::from(BinanceURL::SWAP)).expect("Invalid base URL");
+        url.set_path(&String::from(API::FAPI(FAPI::SwapTicker)));
+        let res = self.client.get(url).send().await?;
+        let ticker: Vec<Ticker> = res.json().await?;
+        Ok(ticker)
+    }
+
+    async fn spot_ticker(&self) -> Result<Vec<Ticker>, NightWatchError> {
+        let mut url = Url::parse(&String::from(BinanceURL::SWAP)).expect("Invalid base URL");
+        url.set_path(&String::from(API::Normal(NormalAPI::SpotTicker)));
+        let res = self.client.get(url).send().await?;
+        let ticker: Vec<Ticker> = res.json().await?;
+        Ok(ticker)
+    }
 }
 
 
@@ -235,5 +262,32 @@ mod tests {
             println!("symbol:{},持仓未实现盈亏:{}", p.symbol, p.unrealized_profit);
             assert_ne!(p.maint_margin, dec!(0));
         }
+    }
+
+
+    #[tokio::main]
+    #[ignore]
+    #[test]
+    async fn test_swap_ticker() {
+        let setting = Settings::new("conf/Settings.toml").unwrap();
+        let account = setting.get_account(0);
+        let exchange = BinancePMExchange::new(account, &setting.proxy);
+
+        let tickers = exchange.swap_ticker().await.unwrap();
+
+        println!("ticker size:{}", tickers.len());
+    }
+
+    #[tokio::main]
+    #[ignore]
+    #[test]
+    async fn test_spot_ticker() {
+        let setting = Settings::new("conf/Settings.toml").unwrap();
+        let account = setting.get_account(0);
+        let exchange = BinancePMExchange::new(account, &setting.proxy);
+
+        let tickers = exchange.spot_ticker().await.unwrap();
+
+        println!("ticker size:{}", tickers.len());
     }
 }
