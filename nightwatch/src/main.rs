@@ -14,6 +14,7 @@ mod settings;
 mod clients;
 mod models;
 mod errors;
+mod utils;
 
 async fn serve_req(_req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
     let mut server = PrometheusServer::new("stg");

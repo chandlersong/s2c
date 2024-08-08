@@ -129,5 +129,5 @@ pub struct Ticker {
     #[serde(rename = "price")]
     pub price: Decimal,        // 价格
     #[serde(rename = "time")]
-    pub time: UnixTimeStamp   // 撮合引擎时间,Spot的不存在这个数据
+    pub time: Option<UnixTimeStamp>   // 撮合引擎时间,Spot的不存在这个数据
 }

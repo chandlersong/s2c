@@ -12,6 +12,7 @@ use crate::clients::binance_models::{PMBalance, Ticker, UMSwapBalance};
 use crate::errors::NightWatchError;
 use crate::models::UnixTimeStamp;
 use crate::settings::Account;
+use crate::utils::unix_time;
 
 enum BinanceURL {
     Normal,
@@ -83,11 +84,7 @@ fn sign_hmac(payload: &str, key: &str) -> Result<String, InvalidLength> {
 }
 
 
-fn unix_time() -> UnixTimeStamp {
-    let now = SystemTime::now();
-    let since_epoch = now.duration_since(UNIX_EPOCH).unwrap();
-    since_epoch.as_secs() * 1000 + u64::from(since_epoch.subsec_nanos()) / 1_000_000
-}
+
 
 struct BinancePMExchange {
     account: Account,
@@ -156,6 +153,7 @@ impl BinancePMExchange {
 
          let mut url = Url::parse(&self.trade_url).expect("Invalid base URL");
          url.set_path(&String::from(API::PAPI(PAPI::Balance)));
+         url.set_path(&String::from(API::PAPI(PAPI::Balance)));
          url.set_query(Some(&real_param));
          let res = self.client.get(url).header("X-MBX-APIKEY", &self.account.api_key).send().await?;
 
@@ -189,9 +187,11 @@ impl BinancePMExchange {
     }
 
     async fn spot_ticker(&self) -> Result<Vec<Ticker>, NightWatchError> {
-        let mut url = Url::parse(&String::from(BinanceURL::SWAP)).expect("Invalid base URL");
+        let mut url = Url::parse(&String::from(BinanceURL::Normal)).expect("Invalid base URL");
         url.set_path(&String::from(API::Normal(NormalAPI::SpotTicker)));
         let res = self.client.get(url).send().await?;
+        // let content = res.text().await?;
+        // println!("{}", content);
         let ticker: Vec<Ticker> = res.json().await?;
         Ok(ticker)
     }
