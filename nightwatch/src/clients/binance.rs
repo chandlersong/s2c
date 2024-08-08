@@ -1,5 +1,3 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use hmac::{Hmac, Mac};
 use reqwest::Client;
 use rust_decimal_macros::dec;
@@ -10,7 +8,6 @@ use url::Url;
 use crate::clients::{AccountBalance, Exchange};
 use crate::clients::binance_models::{PMBalance, Ticker, UMSwapBalance};
 use crate::errors::NightWatchError;
-use crate::models::UnixTimeStamp;
 use crate::settings::Account;
 use crate::utils::unix_time;
 
@@ -190,8 +187,6 @@ impl BinancePMExchange {
         let mut url = Url::parse(&String::from(BinanceURL::Normal)).expect("Invalid base URL");
         url.set_path(&String::from(API::Normal(NormalAPI::SpotTicker)));
         let res = self.client.get(url).send().await?;
-        // let content = res.text().await?;
-        // println!("{}", content);
         let ticker: Vec<Ticker> = res.json().await?;
         Ok(ticker)
     }
