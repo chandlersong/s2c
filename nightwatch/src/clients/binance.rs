@@ -86,23 +86,6 @@ struct BinanceClient {
     api: Box<dyn BinanceAPI>,
 }
 
-#[cfg_attr(test, automock)]
-#[async_trait]
-trait BinanceAPI {
-    async fn ping(&self) -> Result<(), NightWatchError>;
-    async fn get_balance(&self) -> Result<Vec<PMBalance>, NightWatchError>;
-    async fn get_swap_position(&self) -> Result<Vec<UMSwapPosition>, NightWatchError>;
-    async fn swap_ticker(&self) -> Result<Vec<Ticker>, NightWatchError>;
-    async fn spot_ticker(&self) -> Result<Vec<Ticker>, NightWatchError>;
-}
-
-struct BinancePMAPI {
-    account: Account,
-    client: reqwest::Client,
-    trade_url: String,
-}
-
-
 impl BinanceClient {
     fn new(setting_account: &Account, proxy_url: &Option<String>) -> BinanceClient {
         BinanceClient {
@@ -130,6 +113,21 @@ impl Client for BinanceClient {
     }
 }
 
+#[cfg_attr(test, automock)]
+#[async_trait]
+trait BinanceAPI {
+    async fn ping(&self) -> Result<(), NightWatchError>;
+    async fn get_balance(&self) -> Result<Vec<PMBalance>, NightWatchError>;
+    async fn get_swap_position(&self) -> Result<Vec<UMSwapPosition>, NightWatchError>;
+    async fn swap_ticker(&self) -> Result<Vec<Ticker>, NightWatchError>;
+    async fn spot_ticker(&self) -> Result<Vec<Ticker>, NightWatchError>;
+}
+
+struct BinancePMAPI {
+    account: Account,
+    client: reqwest::Client,
+    trade_url: String,
+}
 
 impl BinancePMAPI {
     pub fn new(setting_account: &Account, proxy_url: &Option<String>) -> BinancePMAPI {
