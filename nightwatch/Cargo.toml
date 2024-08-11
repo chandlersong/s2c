@@ -16,3 +16,8 @@ sha2 = { version = "0.10.6", default-features = false, features = ["oid"] }
 hmac = "0.12.0"
 rust_decimal = "1.35"
 rust_decimal_macros = "1.35"
+async-trait = "0.1.81"
+
+
+[dev-dependencies]
+mockall = "0.13.0"

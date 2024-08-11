@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use crate::models::{Decimal, UnixTimeStamp};
+use crate::models::{Decimal, SwapBalance, UnixTimeStamp};
+use crate::utils;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PMBalance {
     pub asset: String,
 
@@ -39,8 +40,8 @@ pub struct PMBalance {
 }
 
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct UMSwapPosition {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UMSwapAssert {
     pub symbol: String,    // 交易对
 
     #[serde(rename = "initialMargin")]
@@ -86,43 +87,68 @@ pub struct UMSwapPosition {
     pub break_even_price: Decimal,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct UMSwapAssert {
-    #[serde(rename = "asset")]
-    pub asset: String,            // 资产
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UMSwapPosition {
+    #[serde(rename = "entryPrice")]
+    pub entry_price: Decimal, // 开仓均价
 
-    #[serde(rename = "crossWalletBalance")]
-    pub cross_wallet_balance: Decimal,      // 全仓账户余额
+    #[serde(rename = "leverage", deserialize_with = "utils::str_to_u16")]
+    pub leverage: u16, // 当前杠杆倍数
 
-    #[serde(rename = "crossUnPnl")]
-    pub cross_un_pnl: Decimal,    // 全仓持仓未实现盈亏
+    #[serde(rename = "markPrice")]
+    pub mark_price: Decimal,   // 当前标记价格
 
-    #[serde(rename = "maintMargin")]
-    pub maint_margin: Decimal,   // 维持保证金
+    #[serde(rename = "maxNotionalValue")]
+    pub max_notional_value: Decimal, // 当前杠杆倍数允许的名义价值上限
 
-    #[serde(rename = "initialMargin")]
-    pub initial_margin: Decimal, // 当前所需起始保证金
+    #[serde(rename = "positionAmt")]
+    pub position_amt: Decimal, // 头寸数量，符号代表多空方向, 正数为多，负数为空
 
-    #[serde(rename = "positionInitialMargin")]
-    pub position_initial_margin: Decimal,  //持仓所需起始保证金(基于最新标记价格)
+    #[serde(rename = "notional")]
+    pub notional: Decimal, // 爆仓价格
 
-    #[serde(rename = "openOrderInitialMargin")]
-    pub open_order_initial_margin: Decimal, //当前挂单所需起始保证金(基于最新标记价格)
+    #[serde(rename = "symbol")]
+    pub symbol: String, // 交易对
+
+    #[serde(rename = "unRealizedProfit")]
+    pub unrealized_profit: Decimal, // 持仓未实现盈亏
+
+    #[serde(rename = "liquidationPrice")]
+    pub liquidation_price: Decimal, // 爆仓价格
+
+    #[serde(rename = "positionSide")]
+    pub position_side: String, // 持仓方向
 
     #[serde(rename = "updateTime")]
-    pub update_time: UnixTimeStamp, // 更新时间
+    pub update_time: UnixTimeStamp,   // 更新时间
+
+    #[serde(rename = "breakEvenPrice")]
+    pub break_even_price: Decimal //表仓位盈亏平衡价
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+impl From<&UMSwapPosition> for SwapBalance {
+    fn from(value: &UMSwapPosition) -> Self {
+        SwapBalance {
+            symbol: value.symbol.clone(),
+            position: value.position_amt.clone(),
+            cost_price: value.entry_price.clone(),
+            unrealized_profit: value.unrealized_profit.clone(),
+            price: value.mark_price.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UMSwapBalance {
     #[serde(rename = "tradeGroupId")]
     pub trade_group_id: i32,
     #[serde(rename = "assets")]
     pub assets: Vec<UMSwapAssert>,
     #[serde(rename = "positions")]
-    pub positions: Vec<UMSwapPosition>,
+    pub positions: Vec<UMSwapAssert>,
 }
-#[derive(Debug, Serialize, Deserialize)]
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ticker {
     #[serde(rename = "symbol")]
     pub symbol: String,       // 交易对
