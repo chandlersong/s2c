@@ -3,6 +3,69 @@ use serde::{Deserialize, Serialize};
 use crate::models::{Decimal, SwapBalance, UnixTimeStamp};
 use crate::utils;
 
+
+#[derive(Debug)]
+pub(crate) enum BinanceBase {
+    Normal,
+    PortfolioMargin,
+    SWAP,
+}
+
+
+impl From<BinanceBase> for String {
+    fn from(url: BinanceBase) -> Self {
+        String::from(
+            match url {
+                BinanceBase::Normal => String::from("https://api.binance.com/"),
+                BinanceBase::PortfolioMargin => String::from("https://papi.binance.com/"),
+                BinanceBase::SWAP => String::from("https://fapi.binance.com")
+            }
+        )
+    }
+}
+
+pub(crate) enum BinancePath {
+    Normal(NormalAPI),
+    PAPI(PmAPI),
+    FAPI(Future),
+}
+
+#[derive(Debug)]
+pub(crate) enum NormalAPI {
+    PingAPI,
+    SpotTickerAPI,
+}
+
+
+pub(crate) enum PmAPI { //统一账户
+    BalanceAPI,
+    SwapPositionAPI,
+}
+
+pub(crate) enum Future { //合约账户
+    SwapTickerAPI,
+}
+
+impl From<BinancePath> for String {
+    fn from(api: BinancePath) -> Self {
+        String::from(
+            match api {
+                BinancePath::Normal(route) => match route {
+                    NormalAPI::PingAPI => String::from("api/v3/ping"),
+                    NormalAPI::SpotTickerAPI => String::from("/api/v3/ticker/price"),
+                }
+                BinancePath::PAPI(route) => match route {
+                    PmAPI::BalanceAPI => String::from("/papi/v1/balance"),
+                    PmAPI::SwapPositionAPI => String::from("/papi/v1/um/positionRisk"),
+                }
+                BinancePath::FAPI(route) => match route {
+                    Future::SwapTickerAPI => String::from("/fapi/v2/ticker/price"),
+                }
+            }
+        )
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PMBalance {
     pub asset: String,
@@ -156,4 +219,24 @@ pub struct Ticker {
     pub price: Decimal,        // 价格
     #[serde(rename = "time")]
     pub time: Option<UnixTimeStamp>   // 撮合引擎时间,Spot的不存在这个数据
+}
+
+
+pub struct CommandInfo<'a> {
+    pub base: BinanceBase,
+    pub path: BinancePath,
+    pub sign: bool,
+    pub client: &'a reqwest::Client,
+}
+
+
+#[cfg(test)]
+mod tests {
+    use crate::clients::binance_models::{BinanceBase, BinancePath, NormalAPI};
+
+    #[test]
+    fn test_api_define() {
+        assert_eq!("api/v3/ping", String::from(BinancePath::Normal(NormalAPI::PingAPI)));
+        assert_eq!("https://api.binance.com/", String::from(BinanceBase::Normal));
+    }
 }

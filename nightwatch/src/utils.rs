@@ -1,6 +1,9 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-use serde::{Deserialize, Deserializer};
 use crate::models::UnixTimeStamp;
+use hmac::digest::InvalidLength;
+use hmac::{Hmac, Mac};
+use serde::{Deserialize, Deserializer};
+use sha2::Sha256;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn unix_time() -> UnixTimeStamp {
     let now = SystemTime::now();
@@ -15,4 +18,14 @@ where
 {
     let s: String = Deserialize::deserialize(deserializer)?;
     s.parse::<u16>().map_err(serde::de::Error::custom)
+}
+
+
+// 签名方法从官方项目copy https://github.com/binance/binance-spot-connector-rust/blob/main/src/utils.rs#L9
+pub fn sign_hmac(payload: &str, key: &str) -> Result<String, InvalidLength> {
+    let mut mac = Hmac::<Sha256>::new_from_slice(key.as_bytes())?;
+
+    mac.update(payload.to_string().as_bytes());
+    let result = mac.finalize();
+    Ok(format!("{:x}", result.into_bytes()))
 }
