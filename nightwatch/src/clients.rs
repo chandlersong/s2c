@@ -5,11 +5,9 @@ pub(crate) mod binance_deprecated;
 pub(crate) mod binance_models;
 mod binance;
 
-trait Client {
-    async fn ping(&self) -> Result<(), NightWatchError>;
 
-    async fn account_balance(&self) -> Result<AccountBalance, NightWatchError>;
+pub(crate) async fn ping_server() -> Result<(), NightWatchError> {
+    binance::execute_ping().await.expect("can't connect to binance");
+    println!("binance access success");
+    Ok(())
 }
-
-
-

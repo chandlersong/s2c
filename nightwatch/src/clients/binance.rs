@@ -14,7 +14,7 @@ lazy_static! {
 
 
 
-async fn execute_ping() -> Result<(), NightWatchError> {
+pub(crate) async fn execute_ping() -> Result<(), NightWatchError> {
     let info = CommandInfo {
         base: BinanceBase::Normal,
         path: BinancePath::Normal(NormalAPI::PingAPI),

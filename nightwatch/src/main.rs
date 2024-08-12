@@ -1,13 +1,13 @@
 use std::env;
 
-use hyper::{
-    Body,
-    header::CONTENT_TYPE,
-    Request, Response, Server, service::{make_service_fn, service_fn},
-};
-
+use crate::clients::ping_server;
 use crate::prometheus_server::PrometheusServer;
 use crate::settings::Settings;
+use hyper::{
+    header::CONTENT_TYPE,
+    service::{make_service_fn, service_fn},
+    Body, Request, Response, Server,
+};
 
 mod prometheus_server;
 mod settings;
@@ -53,4 +53,9 @@ async fn main() {
     if let Err(err) = serve_future.await {
         eprintln!("server error: {}", err);
     }
+
+    if let Err(err) = ping_server().await {
+        eprintln!("connect exchange failed: {}", err);
+    }
+
 }

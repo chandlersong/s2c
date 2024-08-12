@@ -1,14 +1,15 @@
 use async_trait::async_trait;
-use mockall::automock;
 use url::Url;
 
 use crate::clients::binance_models::{BinanceBase, BinancePath, Future, NormalAPI, PMBalance, PmAPI, Ticker, UMSwapPosition};
-use crate::clients::{AccountBalance, Client};
+use crate::clients::AccountBalance;
 use crate::errors::NightWatchError;
 use crate::models::SwapBalance;
 use crate::settings::Account;
 use crate::utils::{sign_hmac, unix_time};
 
+#[cfg(test)]
+use mockall::automock;
 
 struct BinanceClient {
     api: Box<dyn BinanceAPI>,
@@ -20,10 +21,7 @@ impl BinanceClient {
             api: Box::new(BinancePMAPI::new(setting_account, proxy_url)),
         }
     }
-}
 
-
-impl Client for BinanceClient {
     async fn ping(&self) -> Result<(), NightWatchError> {
         // self.api.ping().await.expect("can't connect to binance");
         Ok(())
@@ -82,7 +80,6 @@ impl BinancePMAPI {
     }
 }
 
-#[automock]
 #[async_trait]
 impl BinanceAPI for BinancePMAPI {
     async fn ping(&self) -> Result<(), NightWatchError> {
