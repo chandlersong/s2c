@@ -3,6 +3,7 @@ use crate::errors::NightWatchError;
 use crate::models::EmptyObject;
 use crate::settings::Settings;
 use lazy_static::lazy_static;
+use log::trace;
 use serde::de::DeserializeOwned;
 use std::env;
 use std::marker::PhantomData;
@@ -54,7 +55,8 @@ impl<T, U: DeserializeOwned> BNCommand<T, U> for GetCommand<T, U> {
         let mut url = Url::parse(&String::from(info.base)).expect("Invalid base URL");
         url.set_path(&String::from(&String::from(info.path)));
         let res = info.client.get(url).send().await?;
-
+        trace!("Response: {:?} {}", res.version(), res.status());
+        trace!("Headers: {:#?}\n", res.headers());
         let body = res.json().await?;
         Ok(body)
     }
@@ -67,6 +69,11 @@ mod tests {
     use crate::clients::binance_models::{BinanceBase, BinancePath, NormalAPI};
     use crate::models::EmptyObject;
 
+    /**
+    因为这里的方法，都是一些直接连接服务器的。所以都ignore了。需要去连接后面。
+    **/
+
+    #[ignore]
     #[tokio::test]
     async fn test_ping() {
         let info = CommandInfo {

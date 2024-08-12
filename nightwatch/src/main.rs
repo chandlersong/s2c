@@ -1,13 +1,14 @@
-use std::env;
-
 use crate::clients::ping_server;
 use crate::prometheus_server::PrometheusServer;
 use crate::settings::Settings;
+use crate::utils::setup_logger;
 use hyper::{
     header::CONTENT_TYPE,
     service::{make_service_fn, service_fn},
     Body, Request, Response, Server,
 };
+use log::{error, info};
+use std::env;
 
 mod prometheus_server;
 mod settings;
@@ -34,28 +35,30 @@ async fn serve_req(_req: Request<Body>) -> Result<Response<Body>, hyper::Error> 
     Ok(response)
 }
 
+
 #[tokio::main]
 async fn main() {
+    setup_logger();
     let mut current_dir = env::current_dir().unwrap();
     current_dir.push("nightwatch/conf/Settings");
     let config_path = current_dir.to_str().unwrap();
-    println!("Config directory: {:?}", config_path);
 
     let path = env::var("NIGHT_WATCH_CONFIG").unwrap_or_else(|_|String::from(config_path));
+    info!("Config directory: {:?}", config_path);
     let _settings = Settings::new(&path).unwrap();
     let addr = ([127, 0, 0, 1], 9898).into();
-    println!("Listening on http://{}", addr);
+    info!("Listening on http://{}", addr);
 
     let serve_future = Server::bind(&addr).serve(make_service_fn(|_| async {
         Ok::<_, hyper::Error>(service_fn(serve_req))
     }));
 
     if let Err(err) = serve_future.await {
-        eprintln!("server error: {}", err);
+        error!("server error: {}", err);
     }
 
     if let Err(err) = ping_server().await {
-        eprintln!("connect exchange failed: {}", err);
+        error!("connect exchange failed: {}", err);
     }
 
 }
