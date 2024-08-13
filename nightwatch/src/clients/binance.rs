@@ -40,7 +40,7 @@ pub(crate) async fn execute_ping() -> Result<(), NightWatchError> {
     let info = CommandInfo::new(BinanceBase::Normal, BinancePath::Normal(NormalAPI::PingAPI));
 
     let get = GetCommand::<EmptyObject, EmptyObject> { phantom: Default::default() };
-    let _ = get.execute(info, EmptyObject {}).await?;
+    let _ = get.execute(info, None).await?;
     Ok(())
 }
 
@@ -58,7 +58,7 @@ fn init_client() -> reqwest::Client {
 }
 
 trait BNCommand<T, U> {
-    async fn execute(&self, info: CommandInfo, data: T) -> Result<U, NightWatchError>;
+    async fn execute(&self, info: CommandInfo, data: Option<T>) -> Result<U, NightWatchError>;
 }
 
 
@@ -67,7 +67,7 @@ pub struct GetCommand<T, U: DeserializeOwned> {
 }
 
 impl<T, U: DeserializeOwned> BNCommand<T, U> for GetCommand<T, U> {
-    async fn execute(&self, info: CommandInfo<'_>, data: T) -> Result<U, NightWatchError> {
+    async fn execute(&self, info: CommandInfo<'_>, data: Option<T>) -> Result<U, NightWatchError> {
         let mut url = Url::parse(&String::from(info.base)).expect("Invalid base URL");
         url.set_path(&String::from(&String::from(info.path)));
         let res = info.client.get(url).send().await?;
@@ -95,7 +95,7 @@ mod tests {
         let info = CommandInfo::new(BinanceBase::Normal, BinancePath::Normal(NormalAPI::PingAPI));
 
         let get = GetCommand::<EmptyObject, EmptyObject> { phantom: Default::default() };
-        let x = get.execute(info, EmptyObject {}).await.unwrap();
+        let x = get.execute(info, None).await.unwrap();
         assert_eq!(x, EmptyObject {})
     }
 }
