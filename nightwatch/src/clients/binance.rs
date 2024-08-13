@@ -4,8 +4,9 @@ use crate::models::EmptyObject;
 use crate::settings::Settings;
 use crate::utils::sign_hmac;
 use lazy_static::lazy_static;
-use log::trace;
+use log::{error, trace};
 use serde::de::DeserializeOwned;
+use serde_json::Error as JsonError;
 use std::env;
 use std::fmt::Display;
 use std::marker::PhantomData;
@@ -98,9 +99,17 @@ impl<T: Display, U: DeserializeOwned> BNCommand<T, U> for GetCommand<T, U> {
         let res = request.send().await?;
         trace!("Response: {:?} {}", res.version(), res.status());
         trace!("Headers: {:#?}\n", res.headers());
-        let body = res.json().await?;
+        // let body = res.json().await.e;
+        let body = res.text().await?;
+        let result: Result<U, JsonError> = serde_json::from_str(&body);
+        match result {
+            Ok(resp1) => Ok(resp1),
+            Err(_) => {
+                error!("binance error response,{}",&body);
+                panic!("connect error!")
+            }
+        }
 
-        Ok(body)
     }
 }
 
@@ -110,6 +119,7 @@ mod tests {
     use crate::clients::binance::CommandInfo;
     use crate::clients::binance_models::{BinanceBase, BinancePath, NormalAPI, PmAPI, TimeStampRequest, UMSwapPosition};
     use crate::models::EmptyObject;
+    use crate::utils::setup_logger;
 
     /**
     因为这里的方法，都是一些直接连接服务器的。所以都ignore了。需要去连接后面。
@@ -129,6 +139,7 @@ mod tests {
     #[ignore]
     #[tokio::test]
     async fn test_pm_swap_position() {
+        let _ = setup_logger();
         let setting = Settings::new("conf/Settings.toml").unwrap();
         let account = setting.get_account(0);
 
