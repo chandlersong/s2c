@@ -38,7 +38,7 @@ async fn serve_req(_req: Request<Body>) -> Result<Response<Body>, hyper::Error> 
 
 #[tokio::main]
 async fn main() {
-    setup_logger();
+    let _ = setup_logger();
     let mut current_dir = env::current_dir().unwrap();
     current_dir.push("nightwatch/conf/Settings");
     let config_path = current_dir.to_str().unwrap();

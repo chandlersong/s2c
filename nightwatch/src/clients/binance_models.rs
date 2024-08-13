@@ -1,7 +1,6 @@
-use serde::{Deserialize, Serialize};
-
 use crate::models::{Decimal, SwapBalance, UnixTimeStamp};
 use crate::utils;
+use serde::{Deserialize, Serialize};
 
 
 #[derive(Debug)]
@@ -222,10 +221,15 @@ pub struct Ticker {
 }
 
 
+pub struct SecurityInfo {
+    pub api_key: String,
+    pub api_secret: String,
+}
+
 pub struct CommandInfo<'a> {
     pub base: BinanceBase,
     pub path: BinancePath,
-    pub sign: bool,
+    pub security: Option<SecurityInfo>,
     pub client: &'a reqwest::Client,
 }
 

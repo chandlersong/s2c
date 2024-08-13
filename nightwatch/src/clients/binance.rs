@@ -1,4 +1,4 @@
-use crate::clients::binance_models::{BinanceBase, BinancePath, CommandInfo, NormalAPI};
+use crate::clients::binance_models::{BinanceBase, BinancePath, CommandInfo, NormalAPI, SecurityInfo};
 use crate::errors::NightWatchError;
 use crate::models::EmptyObject;
 use crate::settings::Settings;
@@ -14,14 +14,30 @@ lazy_static! {
 }
 
 
+impl CommandInfo<'_> {
+    pub fn new(base: BinanceBase, path: BinancePath) -> CommandInfo<'static> {
+        CommandInfo {
+            base,
+            path,
+            security: None,
+            client: &CLIENT,
+        }
+    }
 
+    pub fn new_with_security(base: BinanceBase, path: BinancePath, api_key: &str, api_security: &str) -> CommandInfo<'static> {
+        CommandInfo {
+            base,
+            path,
+            security: Some(SecurityInfo {
+                api_key: String::from(api_key),
+                api_secret: String::from(api_security),
+            }),
+            client: &CLIENT,
+        }
+    }
+}
 pub(crate) async fn execute_ping() -> Result<(), NightWatchError> {
-    let info = CommandInfo {
-        base: BinanceBase::Normal,
-        path: BinancePath::Normal(NormalAPI::PingAPI),
-        sign: false,
-        client: &CLIENT,
-    };
+    let info = CommandInfo::new(BinanceBase::Normal, BinancePath::Normal(NormalAPI::PingAPI));
 
     let get = GetCommand::<EmptyObject, EmptyObject> { phantom: Default::default() };
     let _ = get.execute(info, EmptyObject {}).await?;
@@ -76,12 +92,7 @@ mod tests {
     #[ignore]
     #[tokio::test]
     async fn test_ping() {
-        let info = CommandInfo {
-            base: BinanceBase::Normal,
-            path: BinancePath::Normal(NormalAPI::PingAPI),
-            sign: false,
-            client: &CLIENT,
-        };
+        let info = CommandInfo::new(BinanceBase::Normal, BinancePath::Normal(NormalAPI::PingAPI));
 
         let get = GetCommand::<EmptyObject, EmptyObject> { phantom: Default::default() };
         let x = get.execute(info, EmptyObject {}).await.unwrap();
