@@ -26,6 +26,13 @@ pub struct SwapBalance {
 #[derive(Debug, PartialEq, Default)]
 pub struct EmptyObject;
 
+
+impl std::fmt::Display for EmptyObject {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "")
+    }
+}
+
 impl Serialize for EmptyObject {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where

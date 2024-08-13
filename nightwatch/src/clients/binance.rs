@@ -2,10 +2,12 @@ use crate::clients::binance_models::{BinanceBase, BinancePath, CommandInfo, Norm
 use crate::errors::NightWatchError;
 use crate::models::EmptyObject;
 use crate::settings::Settings;
+use crate::utils::sign_hmac;
 use lazy_static::lazy_static;
 use log::trace;
 use serde::de::DeserializeOwned;
 use std::env;
+use std::fmt::Display;
 use std::marker::PhantomData;
 use url::Url;
 
@@ -57,23 +59,47 @@ fn init_client() -> reqwest::Client {
     proxy_builder.build().unwrap()
 }
 
-trait BNCommand<T, U> {
+trait BNCommand<T: Display, U: DeserializeOwned> {
     async fn execute(&self, info: CommandInfo, data: Option<T>) -> Result<U, NightWatchError>;
 }
 
 
-pub struct GetCommand<T, U: DeserializeOwned> {
+pub struct GetCommand<T: Display, U: DeserializeOwned> {
     phantom: PhantomData<(T, U)>,
 }
 
-impl<T, U: DeserializeOwned> BNCommand<T, U> for GetCommand<T, U> {
+impl<T: Display, U: DeserializeOwned> BNCommand<T, U> for GetCommand<T, U> {
     async fn execute(&self, info: CommandInfo<'_>, data: Option<T>) -> Result<U, NightWatchError> {
         let mut url = Url::parse(&String::from(info.base)).expect("Invalid base URL");
         url.set_path(&String::from(&String::from(info.path)));
-        let res = info.client.get(url).send().await?;
+
+        data.map(|request| {
+            let query_param = format!("{}", request);
+
+            let real_param = match &info.security {
+                None => { query_param }
+                Some(security) => {
+                    let signature = sign_hmac(&query_param, &security.api_secret).unwrap();
+                    format!("{query_param}&signature={signature}")
+                }
+            };
+
+            url.set_query(Some(&real_param));
+        });
+        let request = match &info.security {
+            None => { info.client.get(url) }
+            Some(security) => {
+                info.client.get(url).header(
+                    "X-MBX-APIKEY", &security.api_key,
+                )
+            }
+        };
+
+        let res = request.send().await?;
         trace!("Response: {:?} {}", res.version(), res.status());
         trace!("Headers: {:#?}\n", res.headers());
         let body = res.json().await?;
+
         Ok(body)
     }
 }
@@ -82,7 +108,7 @@ impl<T, U: DeserializeOwned> BNCommand<T, U> for GetCommand<T, U> {
 mod tests {
     use super::*;
     use crate::clients::binance::CommandInfo;
-    use crate::clients::binance_models::{BinanceBase, BinancePath, NormalAPI};
+    use crate::clients::binance_models::{BinanceBase, BinancePath, NormalAPI, PmAPI, TimeStampRequest, UMSwapPosition};
     use crate::models::EmptyObject;
 
     /**
@@ -97,5 +123,24 @@ mod tests {
         let get = GetCommand::<EmptyObject, EmptyObject> { phantom: Default::default() };
         let x = get.execute(info, None).await.unwrap();
         assert_eq!(x, EmptyObject {})
+    }
+
+
+    #[ignore]
+    #[tokio::test]
+    async fn test_pm_swap_position() {
+        let setting = Settings::new("conf/Settings.toml").unwrap();
+        let account = setting.get_account(0);
+
+        let info = CommandInfo::new_with_security(BinanceBase::PortfolioMargin,
+                                                  BinancePath::PAPI(PmAPI::SwapPositionAPI),
+                                                  &account.api_key,
+                                                  &account.secret);
+
+        let get = GetCommand::<TimeStampRequest, Vec<UMSwapPosition>> { phantom: Default::default() };
+        let positions = get.execute(info, Some(Default::default())).await.unwrap();
+        for p in &positions {
+            println!("symbol:{},持仓未实现盈亏:{}", p.symbol, p.unrealized_profit);
+        }
     }
 }

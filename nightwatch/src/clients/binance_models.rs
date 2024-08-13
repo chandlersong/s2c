@@ -1,7 +1,7 @@
 use crate::models::{Decimal, SwapBalance, UnixTimeStamp};
 use crate::utils;
+use crate::utils::unix_time;
 use serde::{Deserialize, Serialize};
-
 
 #[derive(Debug)]
 pub(crate) enum BinanceBase {
@@ -232,6 +232,28 @@ pub struct CommandInfo<'a> {
     pub security: Option<SecurityInfo>,
     pub client: &'a reqwest::Client,
 }
+
+
+pub struct TimeStampRequest {
+    pub timestamp: UnixTimeStamp,
+    pub rec_window: u16,
+}
+
+impl std::fmt::Display for TimeStampRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "timestamp={}&recvWindow={}", self.timestamp, self.rec_window)
+    }
+}
+
+impl Default for TimeStampRequest {
+    fn default() -> Self {
+        TimeStampRequest {
+            timestamp: unix_time(),
+            rec_window: 5000,
+        }
+    }
+}
+
 
 
 #[cfg(test)]
