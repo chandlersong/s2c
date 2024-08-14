@@ -25,7 +25,7 @@ impl PrometheusServer {
         self.symbols_gauges.push(gauge);
     }
 
-    pub fn print_metric(&self) -> Vec<u8> {
+    pub fn print_metric(&mut self) -> Vec<u8> {
         let r = Registry::new();
         for g in &self.symbols_gauges {
             r.register(Box::new(g.clone())).unwrap()
@@ -34,6 +34,7 @@ impl PrometheusServer {
         let encoder = TextEncoder::new();
         let mut buffer = vec![];
         encoder.encode(&r.gather(), &mut buffer).unwrap();
+        self.symbols_gauges.clear();
         buffer
     }
 }
@@ -48,7 +49,6 @@ mod tests {
         let mut server = PrometheusServer::new("stg");
         server.add_new_symbol("coinA", "field", 1.1f64, "open");
         server.add_new_symbol("coinB", "field", 2.1f64, "close");
-        // assert_eq!(gauge_name, "bbb-bb-cc");
         let buffer = server.print_metric();
         let expect = String::from("# HELP stg_acc stg_acc_help\n# TYPE stg_acc gauge\nstg_acc{field=\"close\",symbol=\"coinB\"} 2.1\nstg_acc{field=\"open\",symbol=\"coinA\"} 1.1\n");
         let actual = String::from_utf8(buffer).unwrap();

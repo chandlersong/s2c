@@ -1,4 +1,4 @@
-use crate::clients::ping_server;
+use crate::clients::ping_exchange;
 use crate::prometheus_server::PrometheusServer;
 use crate::settings::Settings;
 use crate::utils::setup_logger;
@@ -39,6 +39,11 @@ async fn serve_req(_req: Request<Body>) -> Result<Response<Body>, hyper::Error> 
 #[tokio::main]
 async fn main() {
     let _ = setup_logger(Some(LevelFilter::Info));
+
+    if let Err(err) = ping_exchange().await {
+        error!("connect exchange failed: {}", err);
+    }
+
     let mut current_dir = env::current_dir().unwrap();
     current_dir.push("nightwatch/conf/Settings");
     let config_path = current_dir.to_str().unwrap();
@@ -55,10 +60,6 @@ async fn main() {
 
     if let Err(err) = serve_future.await {
         error!("server error: {}", err);
-    }
-
-    if let Err(err) = ping_server().await {
-        error!("connect exchange failed: {}", err);
     }
 
 }

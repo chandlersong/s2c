@@ -1,6 +1,9 @@
 use crate::models::{Decimal, SwapBalance, UnixTimeStamp};
 use crate::utils;
 use crate::utils::unix_time;
+use prometheus::{Gauge, Opts};
+use rust_decimal::prelude::ToPrimitive;
+use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug)]
@@ -200,6 +203,44 @@ impl From<&UMSwapPosition> for SwapBalance {
     }
 }
 
+impl UMSwapPosition {
+    pub fn to_prometheus(&self, strategy: &str) -> Vec<Gauge> {
+        let side = if self.position_amt > dec!(0) { dec!(1) } else { dec!(-1) };
+        let side_name = if side == dec!(1) { format!("{strategy}_long") } else { format!("{strategy}_short") };
+
+        let cur_price = Gauge::with_opts(Opts::new(&side_name, format!("{0}_acc_help", strategy))
+            .const_label("symbol", &self.symbol)
+            .const_label("field", "cur_price")).unwrap();
+        cur_price.set(self.mark_price.to_f64().unwrap());
+
+        let avg_price = Gauge::with_opts(Opts::new(&side_name, format!("{0}_acc_help", strategy))
+            .const_label("symbol", &self.symbol)
+            .const_label("field", "avg_price")).unwrap();
+        avg_price.set(self.entry_price.to_f64().unwrap());
+
+        let pos_u = Gauge::with_opts(Opts::new(&side_name, format!("{0}_acc_help", strategy))
+            .const_label("symbol", &self.symbol)
+            .const_label("field", "pos_u")).unwrap();
+        pos_u.set(self.position_amt.to_f64().unwrap());
+
+
+        let pnl_u = Gauge::with_opts(Opts::new(&side_name, format!("{0}_acc_help", strategy))
+            .const_label("symbol", &self.symbol)
+            .const_label("field", "pnl_u")).unwrap();
+        pnl_u.set(self.unrealized_profit.to_f64().unwrap());
+
+        let change_value: Decimal = (self.mark_price / self.entry_price - dec!(1)) * side;
+        let change = Gauge::with_opts(Opts::new(&side_name, format!("{0}_acc_help", strategy))
+            .const_label("symbol", &self.symbol)
+            .const_label("field", "change")).unwrap();
+        change.set(change_value.to_f64().unwrap());
+
+
+        vec![cur_price, pos_u, pnl_u, avg_price, change]
+    }
+}
+
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UMSwapBalance {
     #[serde(rename = "tradeGroupId")]
@@ -258,11 +299,33 @@ impl Default for TimeStampRequest {
 
 #[cfg(test)]
 mod tests {
-    use crate::clients::binance_models::{BinanceBase, BinancePath, NormalAPI};
+    use crate::clients::binance_models::{BinanceBase, BinancePath, NormalAPI, UMSwapPosition};
+    use rust_decimal_macros::dec;
 
     #[test]
     fn test_api_define() {
         assert_eq!("api/v3/ping", String::from(BinancePath::Normal(NormalAPI::PingAPI)));
         assert_eq!("https://api.binance.com/", String::from(BinanceBase::Normal));
+    }
+
+    #[test]
+    fn test_to_prometheus() {
+        let swap_position = UMSwapPosition {
+            entry_price: dec!(1),
+            leverage: 0,
+            mark_price: dec!(2),
+            max_notional_value: Default::default(),
+            position_amt: dec!(3),
+            notional: Default::default(),
+            symbol: "BAC".to_string(),
+            unrealized_profit: dec!(3),
+            liquidation_price: Default::default(),
+            position_side: "".to_string(),
+            update_time: 0,
+            break_even_price: Default::default(),
+        };
+        let actual = swap_position.to_prometheus("test");
+
+        assert_eq!(5, actual.len());
     }
 }
