@@ -95,7 +95,6 @@ impl<T: Display, U: DeserializeOwned> BNCommand<T, U> for GetCommand<T, U> {
                 )
             }
         };
-
         let res = request.send().await?;
         trace!("Response: {:?} {}", res.version(), res.status());
         trace!("Headers: {:#?}\n", res.headers());
@@ -106,7 +105,7 @@ impl<T: Display, U: DeserializeOwned> BNCommand<T, U> for GetCommand<T, U> {
             Ok(resp1) => Ok(resp1),
             Err(_) => {
                 error!("binance error response,{}",&body);
-                panic!("connect error!")
+                panic!("binance request error!,response:{}", &body)
             }
         }
 
