@@ -1,6 +1,7 @@
 use crate::models::UnixTimeStamp;
 use hmac::digest::InvalidLength;
 use hmac::{Hmac, Mac};
+use log::LevelFilter;
 use serde::{Deserialize, Deserializer};
 use sha2::Sha256;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -30,7 +31,11 @@ pub fn sign_hmac(payload: &str, key: &str) -> Result<String, InvalidLength> {
     Ok(format!("{:x}", result.into_bytes()))
 }
 
-pub fn setup_logger() -> Result<(), fern::InitError> {
+pub fn setup_logger(level: Option<LevelFilter>) -> Result<(), fern::InitError> {
+    let filter = match level {
+        None => { LevelFilter::Debug }
+        Some(v) => { v }
+    };
     fern::Dispatch::new()
         .format(|out, message, record| {
             out.finish(format_args!(
@@ -41,7 +46,7 @@ pub fn setup_logger() -> Result<(), fern::InitError> {
                 message
             ))
         })
-        .level(log::LevelFilter::Debug)
+        .level(filter)
         .chain(std::io::stdout())
         .apply()?;
     Ok(())

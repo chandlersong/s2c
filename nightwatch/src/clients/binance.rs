@@ -98,8 +98,8 @@ impl<T: Display, U: DeserializeOwned> BNCommand<T, U> for GetCommand<T, U> {
         let res = request.send().await?;
         trace!("Response: {:?} {}", res.version(), res.status());
         trace!("Headers: {:#?}\n", res.headers());
-        // let body = res.json().await.e;
         let body = res.text().await?;
+        trace!("body:{}",&body);
         let result: Result<U, JsonError> = serde_json::from_str(&body);
         match result {
             Ok(resp1) => Ok(resp1),
@@ -119,6 +119,7 @@ mod tests {
     use crate::clients::binance_models::{BinanceBase, BinancePath, NormalAPI, PmAPI, TimeStampRequest, UMSwapPosition};
     use crate::models::EmptyObject;
     use crate::utils::setup_logger;
+    use log::LevelFilter;
 
     /**
     因为这里的方法，都是一些直接连接服务器的。所以都ignore了。需要去连接后面。
@@ -138,7 +139,7 @@ mod tests {
     #[ignore]
     #[tokio::test]
     async fn test_pm_swap_position() {
-        let _ = setup_logger();
+        let _ = setup_logger(Some(LevelFilter::Trace));
         let setting = Settings::new("conf/Settings.toml").unwrap();
         let account = setting.get_account(0);
 
@@ -150,7 +151,7 @@ mod tests {
         let get = GetCommand::<TimeStampRequest, Vec<UMSwapPosition>> { phantom: Default::default() };
         let positions = get.execute(info, Some(Default::default())).await.unwrap();
         for p in &positions {
-            println!("symbol:{},持仓未实现盈亏:{}", p.symbol, p.unrealized_profit);
+            println!("symbol:{},持仓未实现盈亏:{},名义价值:{}", p.symbol, p.unrealized_profit, p.notional);
         }
     }
 }

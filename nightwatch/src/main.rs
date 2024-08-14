@@ -7,7 +7,7 @@ use hyper::{
     service::{make_service_fn, service_fn},
     Body, Request, Response, Server,
 };
-use log::{error, info};
+use log::{error, info, LevelFilter};
 use std::env;
 
 mod prometheus_server;
@@ -38,7 +38,7 @@ async fn serve_req(_req: Request<Body>) -> Result<Response<Body>, hyper::Error> 
 
 #[tokio::main]
 async fn main() {
-    let _ = setup_logger();
+    let _ = setup_logger(Some(LevelFilter::Info));
     let mut current_dir = env::current_dir().unwrap();
     current_dir.push("nightwatch/conf/Settings");
     let config_path = current_dir.to_str().unwrap();
