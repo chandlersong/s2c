@@ -1,13 +1,12 @@
 use crate::clients::binance_models::{BinanceBase, BinancePath, CommandInfo, NormalAPI, SecurityInfo};
 use crate::errors::NightWatchError;
 use crate::models::EmptyObject;
-use crate::settings::Settings;
+use crate::settings::{Settings, SETTING};
 use crate::utils::sign_hmac;
 use lazy_static::lazy_static;
 use log::{error, trace};
 use serde::de::DeserializeOwned;
 use serde_json::Error as JsonError;
-use std::env;
 use std::fmt::Display;
 use std::marker::PhantomData;
 use url::Url;
@@ -49,10 +48,8 @@ pub(crate) async fn execute_ping() -> Result<(), NightWatchError> {
 
 
 fn init_client() -> reqwest::Client {
-    let config_path = env::var("NIGHT_WATCH_CONFIG").unwrap_or_else(|_| String::from("conf/Settings.toml"));
-    let setting = Settings::new(&config_path).unwrap();
     let builder = reqwest::Client::builder();
-    let proxy_builder = match setting.proxy {
+    let proxy_builder = match &SETTING.proxy {
         Some(val) => { builder.proxy(reqwest::Proxy::https(val).unwrap()) }
         None => { builder }
     };

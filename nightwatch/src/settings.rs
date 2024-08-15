@@ -1,5 +1,8 @@
 use config::{Config, ConfigError, File};
+use lazy_static::lazy_static;
+use log::info;
 use serde::Deserialize;
+use std::env;
 
 #[derive(Clone, Debug, Deserialize)]
 #[allow(unused)]
@@ -7,6 +10,16 @@ pub struct Account {
     pub name: String,
     pub api_key: String,
     pub secret: String,
+}
+
+lazy_static! {
+   pub  static ref SETTING :  Settings = init_setting();
+}
+
+fn init_setting() -> Settings {
+    let config_path = env::var("NIGHT_WATCH_CONFIG").unwrap_or_else(|_| String::from("conf/Settings.toml"));
+    info!("configuration path:{}", &config_path);
+    Settings::new(&config_path).unwrap()
 }
 
 

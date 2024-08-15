@@ -11,3 +11,6 @@ pub(crate) async fn ping_exchange() -> Result<(), NightWatchError> {
     println!("binance access success");
     Ok(())
 }
+
+
+pub(crate) async fn fetch_prices() {}
