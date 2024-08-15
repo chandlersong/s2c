@@ -57,13 +57,13 @@ fn init_client() -> reqwest::Client {
     proxy_builder.build().unwrap()
 }
 
-trait BNCommand<T: Display, U: DeserializeOwned> {
+pub trait BNCommand<T: Display, U: DeserializeOwned> {
     async fn execute(&self, info: CommandInfo, data: Option<T>) -> Result<U, NightWatchError>;
 }
 
 
 pub struct GetCommand<T: Display, U: DeserializeOwned> {
-    phantom: PhantomData<(T, U)>,
+    pub(crate) phantom: PhantomData<(T, U)>,
 }
 
 impl<T: Display, U: DeserializeOwned> BNCommand<T, U> for GetCommand<T, U> {
@@ -137,7 +137,7 @@ mod tests {
     #[tokio::test]
     async fn test_pm_swap_position() {
         let _ = setup_logger(Some(LevelFilter::Trace));
-        let setting = Settings::new("conf/Settings.toml").unwrap();
+        let setting = &SETTING;
         let account = setting.get_account(0);
 
         let info = CommandInfo::new_with_security(BinanceBase::PortfolioMargin,

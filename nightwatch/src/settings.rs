@@ -17,7 +17,11 @@ lazy_static! {
 }
 
 fn init_setting() -> Settings {
-    let config_path = env::var("NIGHT_WATCH_CONFIG").unwrap_or_else(|_| String::from("conf/Settings.toml"));
+    let mut current_dir = env::current_dir().unwrap();
+    current_dir.push("conf/Settings");
+    let config_path = current_dir.to_str().unwrap();
+    info!("working dir is {:?}",current_dir);
+    let config_path = env::var("NIGHT_WATCH_CONFIG").unwrap_or_else(|_| String::from(config_path));
     info!("configuration path:{}", &config_path);
     Settings::new(&config_path).unwrap()
 }
@@ -27,7 +31,7 @@ fn init_setting() -> Settings {
 #[allow(unused)]
 pub struct Settings {
     pub proxy: Option<String>,
-    accounts: Vec<Account>,
+    pub accounts: Vec<Account>,
 }
 
 impl Settings {

@@ -1,4 +1,4 @@
-use crate::clients::ping_exchange;
+use crate::clients::{fetch_prices, ping_exchange};
 use crate::prometheus_server::PrometheusServer;
 use crate::settings::Settings;
 use crate::utils::setup_logger;
@@ -20,10 +20,9 @@ mod utils;
 
 
 async fn serve_req(_req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
-    let mut server = PrometheusServer::new("stg");
-    server.add_new_symbol("coinA", "field", 1.1f64, "open");
-    server.add_new_symbol("coinB", "field", 2.1f64, "close");
+    let mut server = PrometheusServer::new();
 
+    server.extend_gauges(fetch_prices().await);
 
     let buffer = server.print_metric();
 
@@ -46,13 +45,7 @@ async fn main() {
         error!("connect exchange failed: {}", err);
     }
 
-    let mut current_dir = env::current_dir().unwrap();
-    current_dir.push("nightwatch/conf/Settings");
-    let config_path = current_dir.to_str().unwrap();
 
-    let path = env::var("NIGHT_WATCH_CONFIG").unwrap_or_else(|_|String::from(config_path));
-    info!("Config directory: {:?}", config_path);
-    let _settings = Settings::new(&path).unwrap();
     let addr = ([127, 0, 0, 1], 9898).into();
     info!("Listening on http://{}", addr);
 
