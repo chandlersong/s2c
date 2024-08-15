@@ -3,6 +3,7 @@ use crate::clients::binance_models::{BinanceBase, BinancePath, CommandInfo, PmAP
 use crate::errors::NightWatchError;
 use crate::models::AccountBalance;
 use crate::settings::SETTING;
+use log::error;
 use prometheus::Gauge;
 
 pub(crate) mod binance_deprecated;
@@ -26,8 +27,14 @@ pub(crate) async fn fetch_prices() -> Result<Vec<Gauge>, NightWatchError> {
                                                   &acc.secret);
 
         let get = GetCommand::<TimeStampRequest, Vec<UMSwapPosition>> { phantom: Default::default() };
-        let positions_gauge: Vec<Gauge> = get.execute(info, Some(Default::default())).await.unwrap()
-            .iter().flat_map(|x| x.to_prometheus(&acc.name)).collect();
+        let positions_gauge: Vec<Gauge> = match get.execute(info, Some(Default::default())).await {
+            Ok(result) => result.iter().flat_map(|x| x.to_prometheus(&acc.name)).collect(),
+            Err(error) => {
+                error!("Error: {}", error);
+                vec![]
+            },
+        };
+
         res.extend(positions_gauge)
     }
     Ok(res)
