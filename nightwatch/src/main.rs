@@ -21,9 +21,10 @@ mod utils;
 
 async fn serve_req(_req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
     let mut server = PrometheusServer::new();
-
-    server.extend_gauges(fetch_prices().await);
-
+    match fetch_prices().await {
+        Ok(result) => server.extend_gauges(result),
+        Err(error) => println!("Error: {}", error),
+    };
     let buffer = server.print_metric();
 
 

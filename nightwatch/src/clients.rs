@@ -17,7 +17,7 @@ pub(crate) async fn ping_exchange() -> Result<(), NightWatchError> {
 }
 
 
-pub(crate) async fn fetch_prices() -> Vec<Gauge> {
+pub(crate) async fn fetch_prices() -> Result<Vec<Gauge>, NightWatchError> {
     let mut res = vec![];
     for acc in &SETTING.accounts {
         let info = CommandInfo::new_with_security(BinanceBase::PortfolioMargin,
@@ -30,5 +30,5 @@ pub(crate) async fn fetch_prices() -> Vec<Gauge> {
             .iter().flat_map(|x| x.to_prometheus(&acc.name)).collect();
         res.extend(positions_gauge)
     }
-    res
+    Ok(res)
 }
