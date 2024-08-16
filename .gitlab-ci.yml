@@ -1,0 +1,23 @@
+image: docker:latest
+
+services:
+  - docker:dind
+
+stages:
+  - build
+
+variables:
+  DOCKER_HOST: tcp://docker:2375
+  DOCKER_DRIVER: overlay2
+  CONTAINER_IMAGE: chandlersong/nightwatch:snapshot
+
+before_script:
+  - docker login -u $DOCKER_USERNAME -p $DOCKER_PASSWORD
+  - docker buildx create --name mybuilder
+  - docker buildx use mybuilder
+  - docker buildx inspect --bootstrap
+
+build:
+  stage: build
+  script:
+    - docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 -f nightwatch/Dockerfile -t $CONTAINER_IMAGE .
