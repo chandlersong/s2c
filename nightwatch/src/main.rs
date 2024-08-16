@@ -1,6 +1,6 @@
 use crate::clients::{fetch_prices, ping_exchange};
 use crate::prometheus_server::PrometheusServer;
-use crate::settings::Settings;
+
 use crate::utils::setup_logger;
 use hyper::{
     header::CONTENT_TYPE,
@@ -8,8 +8,6 @@ use hyper::{
     Body, Request, Response, Server,
 };
 use log::{error, info, LevelFilter};
-use std::env;
-
 
 mod prometheus_server;
 mod settings;

@@ -1,7 +1,7 @@
 use crate::clients::binance_models::{BinanceBase, BinancePath, CommandInfo, NormalAPI, SecurityInfo};
 use crate::errors::NightWatchError;
 use crate::models::EmptyObject;
-use crate::settings::{Settings, SETTING};
+use crate::settings::SETTING;
 use crate::utils::sign_hmac;
 use lazy_static::lazy_static;
 use log::{error, trace};

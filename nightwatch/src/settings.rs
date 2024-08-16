@@ -53,6 +53,7 @@ impl Settings {
         })
     }
 
+    #[cfg(test)]
     pub fn get_account(&self, idx: usize) -> &Account {
         &self.accounts[idx]
     }
