@@ -22,10 +22,6 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
       - name: Build and push
         run: |
-          docker buildx build \
-            --platform linux/amd64,linux/arm64,linux/arm/v7 \
-            -t chandlersong/nightwatch:snapshot \
-            -f nightwatch/Dockerfile \
-            --push .
+          docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 -t chandlersong/nightwatch:snapshot  -f nightwatch/Dockerfile --push .
       - name: Image digest
         run: echo ${{ steps.docker_build.outputs.digest }}
