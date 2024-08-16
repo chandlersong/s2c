@@ -9,7 +9,9 @@ stages:
 variables:
   DOCKER_HOST: tcp://docker:2375
   DOCKER_DRIVER: overlay2
-  CONTAINER_IMAGE: chandlersong/nightwatch:snapshot
+  CONTAINER_REPOSITORY: chandlersong
+  COMMON_VERSION: 0.1.0
+  CONTAINER_IMAGE: $CONTAINER_REPOSITORY/nightwatch:$COMMON_VERSION
 
 before_script:
   - echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
