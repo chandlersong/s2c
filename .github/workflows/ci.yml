@@ -32,6 +32,6 @@ jobs:
           file: ${{ github.workspace }}/nightwatch/Dockerfile
           push: true
           tags: chandlersong/nightwatch:snapshot
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
       - name: Image digest
         run: echo ${{ steps.docker_build.outputs.digest }}
