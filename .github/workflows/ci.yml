@@ -28,6 +28,5 @@ jobs:
           push: true
           tags: chandlersong/nightwatch:snapshot
           platforms: linux/amd64,linux/arm64
-          build-args: |
       - name: Image digest
         run: echo ${{ steps.docker_build.outputs.digest }}
