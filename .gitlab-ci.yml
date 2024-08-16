@@ -20,6 +20,7 @@ before_script:
   - docker buildx inspect --bootstrap
 
 build:
+  timeout: 24 hours
   stage: build
   script:
     - docker buildx build --platform linux/amd64,linux/arm64 -f nightwatch/Dockerfile -t $CONTAINER_IMAGE .
