@@ -22,7 +22,6 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
       - name: List current directory
         run: |
-          pwd
           ls -l
       - name: Build and pushx
         uses: docker/build-push-action@v6
