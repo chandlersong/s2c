@@ -23,7 +23,7 @@ jobs:
       - name: Build and pushx
         uses: docker/build-push-action@v2
         with:
-          context: .
+          context: ${{ github.workspace }}
           file: ${{ github.workspace }}/nightwatch/Dockerfile
           push: true
           tags: chandlersong/nightwatch:snapshot
