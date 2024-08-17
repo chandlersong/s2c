@@ -8,7 +8,7 @@ on:
         default: '0.0.9'
 jobs:
   test:
-    runs-on: rust:1.80-bullseye
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
       - name: Run cargo test
