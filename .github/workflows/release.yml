@@ -21,15 +21,15 @@ jobs:
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
-      - name: Build and pushx
+      - name: nightwatch build
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: ${{ github.workspace }}/nightwatch/Dockerfile
           push: true
-          tags: ｜
-            chandlersong/nightwatch:${{ inputs.imageTag }}
-            chandlersong/nightwatch:latest
+          tags:
+            - chandlersong/nightwatch:${{ inputs.imageTag }}
+            - chandlersong/nightwatch:latest
           platforms: linux/amd64,linux/arm64,linux/arm/v7
       - name: Image digest
         run: echo ${{ steps.docker_build.outputs.digest }}
