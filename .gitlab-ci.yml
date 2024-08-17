@@ -14,6 +14,9 @@ variables:
   COMMON_VERSION: 0.0.9
   CONTAINER_IMAGE: $CONTAINER_REPOSITORY/nightwatch:$COMMON_VERSION
 
+before_script:
+  - echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+
 cargo-test:
   stage: test
   image: rust:1.80-bullseye
@@ -28,7 +31,7 @@ build-docker:
     - docker:dind
   when: manual
   script:
-    - echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+
     - docker buildx create --name mybuilder
     - docker buildx use mybuilder
     - docker buildx inspect --bootstrap
