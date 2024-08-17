@@ -1,4 +1,4 @@
-name: CI
+name: snapshot
 on:
   push:
     branches:
