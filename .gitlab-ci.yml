@@ -1,0 +1,27 @@
+image: docker:latest
+
+services:
+  - docker:dind
+
+stages:
+  - build
+
+variables:
+  DOCKER_HOST: tcp://docker:2375
+  DOCKER_DRIVER: overlay2
+  CONTAINER_REPOSITORY: chandlersong
+  COMMON_VERSION: 0.0.9
+  CONTAINER_IMAGE: $CONTAINER_REPOSITORY/nightwatch:$COMMON_VERSION
+
+before_script:
+  - echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+  - docker buildx create --name mybuilder
+  - docker buildx use mybuilder
+  - docker buildx inspect --bootstrap
+
+build:
+  timeout: 24 hours
+  stage: build
+  when: manual
+  script:
+    - docker buildx build --platform linux/amd64 -f nightwatch/Dockerfile -t $CONTAINER_IMAGE --push .
