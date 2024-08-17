@@ -23,4 +23,4 @@ build:
   timeout: 24 hours
   stage: build
   script:
-    - docker buildx build --platform linux/amd64 -f nightwatch/Dockerfile -t $CONTAINER_IMAGE .
+    - docker buildx build --platform linux/amd64 -f nightwatch/Dockerfile -t $CONTAINER_IMAGE -push .
