@@ -1,7 +1,7 @@
 use crate::clients::binance::{BNCommand, GetCommand};
 use crate::clients::binance_models::{BinanceBase, BinancePath, CommandInfo, PmAPI, TimeStampRequest, UMSwapPosition};
 use crate::errors::NightWatchError;
-use crate::models::AccountBalance;
+use crate::models::{AccountBalance, Decimal};
 use crate::settings::SETTING;
 use log::error;
 use prometheus::Gauge;
@@ -10,6 +10,19 @@ pub(crate) mod binance_deprecated;
 pub(crate) mod binance_models;
 mod binance;
 
+
+#[derive(Debug)]
+pub struct AccountBalanceSummary {
+    pub usdt_balance: Decimal,
+    pub negative_balance: Decimal,
+    pub account_pnl: Decimal,
+    pub account_equity: Decimal,
+}
+
+
+pub trait AccountValue<T, U> {
+    fn account_value(&self, balance: &Vec<T>, ticker: &Vec<U>) -> Result<AccountBalanceSummary, NightWatchError>;
+}
 
 pub(crate) async fn ping_exchange() -> Result<(), NightWatchError> {
     binance::execute_ping().await.expect("can't connect to binance");

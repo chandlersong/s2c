@@ -2,8 +2,9 @@ use crate::models::UnixTimeStamp;
 use hmac::digest::InvalidLength;
 use hmac::{Hmac, Mac};
 use log::LevelFilter;
-use serde::{Deserialize, Deserializer};
+use serde::{de, Deserialize, Deserializer};
 use sha2::Sha256;
+use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn unix_time() -> UnixTimeStamp {
@@ -51,3 +52,10 @@ pub fn setup_logger(level: Option<LevelFilter>) -> Result<(), fern::InitError> {
         .apply()?;
     Ok(())
 }
+
+#[cfg(test)]
+pub fn parse_test_json<T: for<'a> de::Deserialize<'a>>(path: &str) -> T {
+    let json = fs::read_to_string(path).unwrap();
+    serde_json::from_str(&json).unwrap()
+}
+

@@ -16,16 +16,7 @@ struct BinanceClient {
 }
 
 impl BinanceClient {
-    fn new(setting_account: &Account, proxy_url: &Option<String>) -> BinanceClient {
-        BinanceClient {
-            api: Box::new(BinancePMAPI::new(setting_account, proxy_url)),
-        }
-    }
 
-    async fn ping(&self) -> Result<(), NightWatchError> {
-        // self.api.ping().await.expect("can't connect to binance");
-        Ok(())
-    }
 
     async fn account_balance(&self) -> Result<AccountBalance, NightWatchError> {
         let swap = self.api.get_swap_position().await?
@@ -41,7 +32,6 @@ impl BinanceClient {
 #[cfg_attr(test, automock)]
 #[async_trait]
 trait BinanceAPI {
-    async fn ping(&self) -> Result<(), NightWatchError>;
     async fn get_balance(&self) -> Result<Vec<PMBalance>, NightWatchError>;
     async fn get_swap_position(&self) -> Result<Vec<UMSwapPosition>, NightWatchError>;
     async fn swap_ticker(&self) -> Result<Vec<Ticker>, NightWatchError>;
@@ -82,20 +72,6 @@ impl BinancePMAPI {
 
 #[async_trait]
 impl BinanceAPI for BinancePMAPI {
-    async fn ping(&self) -> Result<(), NightWatchError> {
-        let mut url = Url::parse(&String::from(BinanceBase::Normal)).expect("Invalid base URL");
-        url.set_path(&String::from(BinancePath::Normal(NormalAPI::PingAPI)));
-        let res = self.client.get(url).send().await?;
-
-        eprintln!("Response: {:?} {}", res.version(), res.status());
-        eprintln!("Headers: {:#?}\n", res.headers());
-
-        let body = res.text().await?;
-
-        println!("{body}");
-
-        Ok(())
-    }
 
     async fn get_balance(&self) -> Result<Vec<PMBalance>, NightWatchError> {
         let timestamp = unix_time();
@@ -169,16 +145,6 @@ mod tests {
     }
 
 
-    #[tokio::main]
-    #[ignore]
-    #[test]
-    async fn test_ping() {
-        let setting = Settings::new("conf/Settings.toml").unwrap();
-        let account = setting.get_account(0);
-        let exchange = BinancePMAPI::new(account, &setting.proxy);
-        assert_eq!("cyc", exchange.account.name);
-        exchange.ping().await.unwrap();
-    }
 
 
     #[tokio::main]

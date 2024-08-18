@@ -1,0 +1,62 @@
+[
+  {
+    "asset":               "SOL",
+    "totalWalletBalance":  "5.9952",
+    "crossMarginAsset":    "5.9952",
+    "crossMarginBorrowed": "0.0",
+    "crossMarginFree":     "5.9952",
+    "crossMarginInterest": "0.0",
+    "crossMarginLocked":   "0.0",
+    "umWalletBalance":     "0.0",
+    "umUnrealizedPNL":     "0.0",
+    "cmWalletBalance":     "0.0",
+    "cmUnrealizedPNL":     "0.0",
+    "updateTime":          1723960451595,
+    "negativeBalance":     "0.0"
+  },
+  {
+    "asset":               "BNB",
+    "totalWalletBalance":  "0.01985368",
+    "crossMarginAsset":    "0.00992595",
+    "crossMarginBorrowed": "0.0",
+    "crossMarginFree":     "0.00992595",
+    "crossMarginInterest": "0.0",
+    "crossMarginLocked":   "0.0",
+    "umWalletBalance":     "0.00992773",
+    "umUnrealizedPNL":     "0.0",
+    "cmWalletBalance":     "0.0",
+    "cmUnrealizedPNL":     "0.0",
+    "updateTime":          1723960451595,
+    "negativeBalance":     "0.0"
+  },
+  {
+    "asset":               "ETH",
+    "totalWalletBalance":  "0.089976",
+    "crossMarginAsset":    "0.089976",
+    "crossMarginBorrowed": "0.0",
+    "crossMarginFree":     "0.089976",
+    "crossMarginInterest": "0.0",
+    "crossMarginLocked":   "0.0",
+    "umWalletBalance":     "0.0",
+    "umUnrealizedPNL":     "0.0",
+    "cmWalletBalance":     "0.0",
+    "cmUnrealizedPNL":     "0.0",
+    "updateTime":          1723960451595,
+    "negativeBalance":     "0.0"
+  },
+  {
+    "asset":               "USDT",
+    "totalWalletBalance":  "-406.38234549",
+    "crossMarginAsset":    "107.15440471",
+    "crossMarginBorrowed": "0.0",
+    "crossMarginFree":     "107.15440471",
+    "crossMarginInterest": "0.0",
+    "crossMarginLocked":   "0.0",
+    "umWalletBalance":     "1",
+    "umUnrealizedPNL":     "328.75345911",
+    "cmWalletBalance":     "1",
+    "cmUnrealizedPNL":     "0.0",
+    "updateTime":          1723960451595,
+    "negativeBalance":     "-406.38234549"
+  }
+]
