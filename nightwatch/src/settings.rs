@@ -10,6 +10,7 @@ pub struct Account {
     pub name: String,
     pub api_key: String,
     pub secret: String,
+    pub funding_rate_arbitrage: Option<Vec<String>>
 }
 
 lazy_static! {
@@ -72,6 +73,12 @@ mod tests {
         assert_eq!(actual.name, "abc");
         assert_eq!(actual.api_key, "189rjfadoisfj8923fjio");
         assert_eq!(actual.secret, "bfsabfsbsfbsfbsfa31bw");
+        let coins = &actual.funding_rate_arbitrage;
+        match coins {
+            None => { assert!(false, "数组为空"); }
+            Some(v) => { assert_eq!(v.len(), 3, "载入数量不对"); }
+        }
+
 
         assert_eq!(setting.proxy, Some(String::from("http://localhost:7890")));
     }
