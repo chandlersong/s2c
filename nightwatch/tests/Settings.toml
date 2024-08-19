@@ -3,6 +3,7 @@ proxy = "http://localhost:7890"
 name = "abc"
 api_key = "189rjfadoisfj8923fjio"
 secret = "bfsabfsbsfbsfbsfa31bw"
+funding_rate_arbitrage = ["Rust", "Python", "Java"]
 
 [[account]]
 name = "aba"
