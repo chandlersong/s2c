@@ -1,7 +1,7 @@
 use crate::clients::binance_models::{BinanceBase, BinancePath, CommandInfo, NormalAPI, PMBalance, SecurityInfo, Ticker};
 use crate::clients::{AccountBalanceSummary, AccountValue};
 use crate::errors::NightWatchError;
-use crate::models::{Decimal, EmptyObject};
+use crate::models::EmptyObject;
 use crate::settings::SETTING;
 use crate::utils::sign_hmac;
 use lazy_static::lazy_static;
@@ -130,7 +130,7 @@ impl AccountValue<PMBalance, Ticker> for PMAccountCalculator {
         for b in balance {
             um_pnl = um_pnl + b.um_unrealized_pnl;
             cm_pnl = cm_pnl + b.cm_unrealized_pnl;
-            if (b.asset == "USDT") {
+            if b.asset == "USDT" {
                 //swap如果有负债的话，USDT就不计算了。
                 let mut swap_usdt = if b.cm_wallet_balance > dec!(0) { b.cm_wallet_balance } else { dec!(0) };
                 swap_usdt = if b.um_wallet_balance > dec!(0) { swap_usdt + b.um_wallet_balance } else { swap_usdt };
@@ -190,11 +190,12 @@ mod tests {
         assert_eq!(dec!(328.75345911), actual.account_pnl);
     }
 
+    /** `test_account_value_with_um_cm_value` 测试计算account价值的单元测试
+            # 测试内容
+            1. um usdt和cm usdt都有值的时候，会加上去
+    */
     #[test]
     fn test_account_value_with_um_cm_value() {
-        /**
-        1. um usdt和cm usdt都有值的时候，会加上去
-        **/
         let _ = setup_logger(Some(LevelFilter::Trace));
         let balance: Vec<PMBalance> = parse_test_json::<Vec<PMBalance>>("tests/data/binance_papi_get_balance_v1.json");
         let ticker: Vec<Ticker> = parse_test_json::<Vec<Ticker>>("tests/data/binance_spot_ticker.json");
