@@ -136,10 +136,6 @@ impl AccountValue<PMBalance, Ticker> for PMAccountCalculator {
                 swap_usdt = if b.um_wallet_balance > dec!(0) { swap_usdt + b.um_wallet_balance } else { swap_usdt };
                 usdt_spot_value = b.cross_margin_free;
                 usdt_balance = usdt_spot_value + swap_usdt;
-                // um_value = um_value + b.um_wallet_balance;
-                // cm_value = cm_value + b.cm_wallet_balance;
-                // cross_margin_borrow = cross_margin_borrow + b.cross_margin_borrowed;
-                // acc_balance = acc_balance + b.cross_margin_free;
                 negative_balance = negative_balance + b.negative_balance;
             } else {
                 let pair = format!("{}USDT", b.asset);
@@ -156,13 +152,12 @@ impl AccountValue<PMBalance, Ticker> for PMAccountCalculator {
         }
 
         let spot_equity = acc_balance + usdt_spot_value;
-        let account_equity = spot_equity + funding_rates_arbitrage_pnl;
         let account_pnl = um_pnl + cm_pnl;
         Ok(AccountBalanceSummary {
             usdt_balance,
             negative_balance,
             account_pnl,
-            account_equity,
+            spot_equity,
         })
     }
 }
@@ -185,7 +180,7 @@ mod tests {
         let actual = calculator.account_value(&balance, &ticker).unwrap();
         println!("{:?}", actual);
         assert_eq!(dec!(107.15440471), actual.usdt_balance);
-        assert_eq!(dec!(1195.9985452450000000), actual.account_equity);
+        assert_eq!(dec!(1195.9985452450000000), actual.spot_equity);
         assert_eq!(dec!(-406.38234549), actual.negative_balance);
         assert_eq!(dec!(328.75345911), actual.account_pnl);
     }
