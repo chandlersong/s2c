@@ -16,7 +16,7 @@ pub struct AccountBalanceSummary {
     pub usdt_balance: Decimal,
     pub negative_balance: Decimal,
     pub account_pnl: Decimal,
-    pub account_equity: Decimal,
+    pub spot_equity: Decimal,
 }
 
 
