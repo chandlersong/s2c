@@ -7,3 +7,5 @@ test:
   stage: test
   script:
     - cargo test --verbose
+  rules:
+    - if: $CI_COMMIT_BRANCH == "dev"
