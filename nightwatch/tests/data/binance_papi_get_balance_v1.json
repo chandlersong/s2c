@@ -30,6 +30,36 @@
     "negativeBalance":     "0.0"
   },
   {
+    "asset":               "TNSRUSDC",
+    "totalWalletBalance":  "1",
+    "crossMarginAsset":    "1",
+    "crossMarginBorrowed": "0.0",
+    "crossMarginFree":     "1",
+    "crossMarginInterest": "0.0",
+    "crossMarginLocked":   "0.0",
+    "umWalletBalance":     "0.0",
+    "umUnrealizedPNL":     "0.0",
+    "cmWalletBalance":     "0.0",
+    "cmUnrealizedPNL":     "0.0",
+    "updateTime":          1723960451595,
+    "negativeBalance":     "0.0"
+  },
+  {
+    "asset":               "IO",
+    "totalWalletBalance":  "1",
+    "crossMarginAsset":    "1",
+    "crossMarginBorrowed": "0.0",
+    "crossMarginFree":     "1",
+    "crossMarginInterest": "0.0",
+    "crossMarginLocked":   "0.0",
+    "umWalletBalance":     "0.0",
+    "umUnrealizedPNL":     "0.0",
+    "cmWalletBalance":     "0.0",
+    "cmUnrealizedPNL":     "0.0",
+    "updateTime":          1723960451595,
+    "negativeBalance":     "0.0"
+  },
+  {
     "asset":               "ETH",
     "totalWalletBalance":  "0.089976",
     "crossMarginAsset":    "0.089976",
