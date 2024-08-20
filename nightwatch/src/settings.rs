@@ -10,7 +10,9 @@ pub struct Account {
     pub name: String,
     pub api_key: String,
     pub secret: String,
-    pub funding_rate_arbitrage: Option<Vec<String>>
+    pub funding_rate_arbitrage: Option<Vec<String>>,
+    #[serde(default)]
+    pub burning_free: bool, //是否燃烧降低手续费
 }
 
 lazy_static! {
@@ -73,6 +75,7 @@ mod tests {
         assert_eq!(actual.name, "abc");
         assert_eq!(actual.api_key, "189rjfadoisfj8923fjio");
         assert_eq!(actual.secret, "bfsabfsbsfbsfbsfa31bw");
+        assert_eq!(actual.burning_free, true);
         let coins = &actual.funding_rate_arbitrage;
         match coins {
             None => { assert!(false, "数组为空"); }

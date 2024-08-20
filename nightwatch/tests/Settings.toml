@@ -4,6 +4,7 @@ name = "abc"
 api_key = "189rjfadoisfj8923fjio"
 secret = "bfsabfsbsfbsfbsfa31bw"
 funding_rate_arbitrage = ["Rust", "Python", "Java"]
+burning_free = true
 
 [[account]]
 name = "aba"
