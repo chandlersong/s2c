@@ -96,7 +96,6 @@ impl<T: Display, U: DeserializeOwned> BNCommand<T, U> for GetCommand<T, U> {
         };
         let res = request.send().await?;
         trace!("Response: {:?} {}", res.version(), res.status());
-        trace!("Headers: {:#?}\n", res.headers());
         let body = res.text().await?;
         trace!("body:{}",&body);
         let result: Result<U, JsonError> = serde_json::from_str(&body);
@@ -113,59 +112,52 @@ impl<T: Display, U: DeserializeOwned> BNCommand<T, U> for GetCommand<T, U> {
 
 
 pub struct PMAccountCalculator {
-    fra_symbols: Vec<String>,
     burning_bnb: bool,
 }
 
 impl AccountValue<PMBalance, Ticker, UMSwapPosition> for PMAccountCalculator {
-    fn account_value(&self, balance: &Vec<PMBalance>, ticker: &Vec<Ticker>, swap_position: &Vec<UMSwapPosition>) -> Result<AccountBalanceSummary, NightWatchError> {
-        let mut um_pnl = dec!(0);
-        let mut cm_pnl = dec!(0);
-        let mut acc_balance = dec!(0); //cross_margin_free
+    fn account_balance(&self, balance: &Vec<PMBalance>, ticker: &Vec<Ticker>) -> Result<AccountBalanceSummary, NightWatchError> {
+        let mut swap_pnl = dec!(0);
+        let mut total_balance = dec!(0); //cross_margin_free
         let mut negative_balance = dec!(0);
-        let mut usdt_balance = dec!(0);
-        let mut usdt_spot_value = dec!(0);
-        //TODO 加入资金套利的配置选项
-        let mut fra_position = dec!(0);
+        let mut usdt_equity = dec!(0);
+        let mut usdt_spot_equity = dec!(0);
         for b in balance {
-            um_pnl = um_pnl + b.um_unrealized_pnl;
-            cm_pnl = cm_pnl + b.cm_unrealized_pnl;
+            swap_pnl = swap_pnl + b.um_unrealized_pnl + b.cm_unrealized_pnl;
 
             match b.asset.as_str() {
                 "USDT" => {  //swap如果有负债的话，USDT就不计算了。
                     let mut swap_usdt = if b.cm_wallet_balance > dec!(0) { b.cm_wallet_balance } else { dec!(0) };
                     swap_usdt = if b.um_wallet_balance > dec!(0) { swap_usdt + b.um_wallet_balance } else { swap_usdt };
-                    usdt_spot_value = b.cross_margin_free;
-                    usdt_balance = usdt_spot_value + swap_usdt;
+                    usdt_spot_equity = b.cross_margin_free;
+                    usdt_equity = usdt_spot_equity + swap_usdt;
+
+
+                    total_balance = total_balance + b.total_wallet_balance;
                     negative_balance = negative_balance + b.negative_balance;
                 }
                 "BNB" => {
                     if !self.burning_bnb {
-                        (acc_balance, negative_balance) = cal_val(b, &acc_balance, &negative_balance, &ticker);
-                    }
-                }
-                word if self.fra_symbols.contains(&String::from(word)) => {
-                    let trading_pair = format!("{}USDT", b.asset);
-                    if let (Some(price), Some(fra_swap)) = (ticker.iter().find(|t| t.symbol == trading_pair),
-                                                            swap_position.iter().find(|t| t.symbol == trading_pair)) {
-                        trace!("费率套利资金{},现货仓位{},现货价格{},永续利润{}",b.asset,b.cross_margin_free,price.price,fra_swap.unrealized_profit);
-                        fra_position = fra_position + b.cross_margin_free * price.price + fra_swap.unrealized_profit;
-                        um_pnl = um_pnl - fra_swap.unrealized_profit;
-                    } else {
-                        error!("{}没有找到对应值",trading_pair)
+                        let (bal, pnl, negative) = cal_equity(b, ticker);
+                        total_balance = total_balance + bal;
+                        negative_balance = negative_balance + negative;
+                        swap_pnl = swap_pnl + pnl
                     }
                 }
                 _ => {
-                    (acc_balance, negative_balance) = cal_val(b, &acc_balance, &negative_balance, &ticker);
+                    let (bal, pnl, negative) = cal_equity(b, ticker);
+                    total_balance = total_balance + bal;
+                    negative_balance = negative_balance + negative;
+                    swap_pnl = swap_pnl + pnl
                 }
             }
         }
 
-        let spot_equity = acc_balance + usdt_spot_value;
-        let account_pnl = um_pnl + cm_pnl;
-        let account_equity = spot_equity + fra_position;
+        trace!("total balance:{},usdt spot_equity:{}",total_balance,usdt_spot_equity);
+        let account_pnl = swap_pnl;
+        let account_equity = total_balance + swap_pnl;
         Ok(AccountBalanceSummary {
-            usdt_balance,
+            usdt_equity,
             negative_balance,
             account_pnl,
             account_equity,
@@ -173,21 +165,28 @@ impl AccountValue<PMBalance, Ticker, UMSwapPosition> for PMAccountCalculator {
     }
 }
 
-fn cal_val(balance: &PMBalance, acc_balance: &Decimal, negative_balance: &Decimal, ticker: &Vec<Ticker>) -> (Decimal, Decimal) {
+/** cal_equity:通过balance和ticker计算几个。
+* 返回的应该是total_balance,pnl和 negative_balance
+*/
+fn cal_equity(balance: &PMBalance, ticker: &Vec<Ticker>) -> (Decimal, Decimal, Decimal) {
     let pair = format!("{}USDT", balance.asset);
     if let Some(price) = ticker.iter().find(|t| t.symbol == pair) {
-        let um_symbol_value = &balance.um_wallet_balance * price.price;
-        let cm_symbol_value = &balance.cm_wallet_balance * price.price;
-        let value = balance.cross_margin_free * price.price;
-        if value < dec!(5) {
-            return (acc_balance.clone(), negative_balance.clone())
+        let p = price.price;
+        let spot_equity = balance.cross_margin_free * p;  //不能进行现货交易
+        let total_balance;
+        if spot_equity < dec!(5) {
+            total_balance = dec!(0);
+        } else {
+            total_balance = balance.total_wallet_balance * p;
         };
-        let acc_balance_res = acc_balance + value + cm_symbol_value + um_symbol_value;
-        let negative_balance_res = negative_balance + balance.negative_balance * price.price;
-        (acc_balance_res, negative_balance_res)
+
+        let negative_balance = balance.negative_balance * p;
+        let swap_pnl = balance.um_unrealized_pnl * p + balance.cm_unrealized_pnl * p;
+        trace!("{},total balance:{},pnl:{},negative balance{}",balance.asset,total_balance,swap_pnl,negative_balance);
+        (total_balance, swap_pnl, negative_balance)
     } else {
         error!("symbol {} not exists!!!",balance.asset);
-        (acc_balance.clone(), negative_balance.clone())
+        (dec!(0), dec!(0), dec!(0))
     }
 }
 
@@ -199,20 +198,20 @@ mod tests {
     use crate::models::EmptyObject;
     use crate::utils::{parse_test_json, setup_logger};
     use log::LevelFilter;
+    use tokio::join;
 
     #[test]
     fn test_account_value() {
         let _ = setup_logger(Some(LevelFilter::Trace));
         let balance: Vec<PMBalance> = parse_test_json::<Vec<PMBalance>>("tests/data/binance_papi_get_balance.json");
         let ticker: Vec<Ticker> = parse_test_json::<Vec<Ticker>>("tests/data/binance_spot_ticker.json");
-        let swap_position: Vec<UMSwapPosition> = parse_test_json::<Vec<UMSwapPosition>>("tests/data/binance_papi_um_position_risk.json");
-        let calculator = PMAccountCalculator { fra_symbols: vec!["ETH".parse().unwrap(), "SOL".parse().unwrap()], burning_bnb: false };
-        let actual = calculator.account_value(&balance, &ticker, &swap_position).unwrap();
+        let calculator = PMAccountCalculator { burning_bnb: false };
+        let actual = calculator.account_balance(&balance, &ticker).unwrap();
         println!("{:?}", actual);
-        assert_eq!(dec!(107.15440471), actual.usdt_balance);
-        assert_eq!(dec!(1442.0434989420000000), actual.account_equity);
+        assert_eq!(dec!(107.15440471), actual.usdt_equity);
+        assert_eq!(dec!(1016.5653078520000000), actual.account_equity);
         assert_eq!(dec!(-406.38234549), actual.negative_balance);
-        assert_eq!(dec!(88.05855911), actual.account_pnl);
+        assert_eq!(dec!(328.75345911), actual.account_pnl);
     }
 
     #[test]
@@ -220,14 +219,13 @@ mod tests {
         let _ = setup_logger(Some(LevelFilter::Trace));
         let balance: Vec<PMBalance> = parse_test_json::<Vec<PMBalance>>("tests/data/binance_papi_get_balance.json");
         let ticker: Vec<Ticker> = parse_test_json::<Vec<Ticker>>("tests/data/binance_spot_ticker.json");
-        let swap_position: Vec<UMSwapPosition> = parse_test_json::<Vec<UMSwapPosition>>("tests/data/binance_papi_um_position_risk.json");
-        let calculator = PMAccountCalculator { fra_symbols: vec!["ETH".parse().unwrap(), "SOL".parse().unwrap()], burning_bnb: true };
-        let actual = calculator.account_value(&balance, &ticker, &swap_position).unwrap();
+        let calculator = PMAccountCalculator { burning_bnb: true };
+        let actual = calculator.account_balance(&balance, &ticker).unwrap();
         println!("{:?}", actual);
-        assert_eq!(dec!(107.15440471), actual.usdt_balance);
-        assert_eq!(dec!(1431.34435079000000), actual.account_equity);
+        assert_eq!(dec!(107.15440471), actual.usdt_equity);
+        assert_eq!(dec!(1005.86615970000000), actual.account_equity);
         assert_eq!(dec!(-406.38234549), actual.negative_balance);
-        assert_eq!(dec!(88.05855911), actual.account_pnl);
+        assert_eq!(dec!(328.75345911), actual.account_pnl);
     }
 
     /** `test_account_value_with_um_cm_value` 测试计算account价值的单元测试
@@ -241,12 +239,11 @@ mod tests {
         let _ = setup_logger(Some(LevelFilter::Trace));
         let balance: Vec<PMBalance> = parse_test_json::<Vec<PMBalance>>("tests/data/binance_papi_get_balance_v1.json");
         let ticker: Vec<Ticker> = parse_test_json::<Vec<Ticker>>("tests/data/binance_spot_ticker.json");
-        let swap_position: Vec<UMSwapPosition> = parse_test_json::<Vec<UMSwapPosition>>("tests/data/binance_papi_um_position_risk.json");
-        let calculator = PMAccountCalculator { fra_symbols: vec![], burning_bnb: false };
-        let actual = calculator.account_value(&balance, &ticker, &swap_position).unwrap();
+        let calculator = PMAccountCalculator { burning_bnb: false };
+        let actual = calculator.account_balance(&balance, &ticker).unwrap();
         println!("{:?}", actual);
-        assert_eq!(dec!(109.15440471), actual.usdt_balance);
-        assert_eq!(dec!(1201.3485989420000000), actual.account_equity);
+        assert_eq!(dec!(109.15440471), actual.usdt_equity);
+        assert_eq!(dec!(1016.5653078520000000), actual.account_equity);
     }
 
 
@@ -302,5 +299,37 @@ mod tests {
         for p in &positions {
             println!("symbol:{}", p.asset);
         }
+    }
+
+
+    #[ignore]
+    #[tokio::test]
+    async fn test_real_pm_balance() {
+        let _ = setup_logger(Some(LevelFilter::Trace));
+        let setting = &SETTING;
+        let account = setting.get_account(0);
+
+        let pm_acc_balance_info = CommandInfo::new_with_security(BinanceBase::PortfolioMargin,
+                                                                 BinancePath::PAPI(PmAPI::BalanceAPI),
+                                                                 &account.api_key,
+                                                                 &account.secret);
+
+        let acc_balance_command = GetCommand::<TimeStampRequest, Vec<PMBalance>> { phantom: Default::default() };
+
+
+        let ticker_info = CommandInfo::new(BinanceBase::Normal, BinancePath::Normal(NormalAPI::SpotTickerAPI));
+
+        let ticker_command = GetCommand::<EmptyObject, Vec<Ticker>> { phantom: Default::default() };
+
+
+        let (acc_balance, ticker) = join!(
+                acc_balance_command.execute(pm_acc_balance_info, Some(Default::default())),
+                ticker_command.execute(ticker_info, None),
+        );
+
+        let calculator = PMAccountCalculator { burning_bnb: false };
+        let actual = calculator.account_balance(&acc_balance.unwrap()
+                                                , &ticker.unwrap()).unwrap();
+        println!("{:?}", actual)
     }
 }
