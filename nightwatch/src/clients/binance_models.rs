@@ -175,7 +175,7 @@ pub struct UMSwapPosition {
     pub position_amt: Decimal, // 头寸数量，符号代表多空方向, 正数为多，负数为空
 
     #[serde(rename = "notional")]
-    pub notional: Decimal, // 爆仓价格
+    pub notional: Decimal, // 名义价值
 
     #[serde(rename = "symbol")]
     pub symbol: String, // 交易对

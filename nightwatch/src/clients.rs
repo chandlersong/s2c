@@ -20,8 +20,20 @@ pub struct AccountBalanceSummary {
 }
 
 
+#[derive(Debug)]
+pub struct SwapSummary {
+    pub long_balance: Decimal,
+    pub long_pnl: Decimal,
+    pub short_balance: Decimal,
+    pub short_pnl: Decimal,
+    pub balance: Decimal,
+    pub pnl: Decimal,
+}
+
 pub trait AccountValue<T, U, X> {
     fn account_balance(&self, balance: &Vec<T>, ticker: &Vec<U>) -> Result<AccountBalanceSummary, NightWatchError>;
+
+    fn um_swap_balance(&self, swap_position: &Vec<X>) -> Result<SwapSummary, NightWatchError>;
 }
 
 pub(crate) async fn ping_exchange() -> Result<(), NightWatchError> {
