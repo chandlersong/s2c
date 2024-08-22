@@ -112,8 +112,8 @@ impl<T: Display, U: DeserializeOwned> BNCommand<T, U> for GetCommand<T, U> {
 
 
 pub struct PMAccountCalculator {
-    funding_rate_arbitrage: Vec<String>,
-    burning_bnb: bool,
+    pub(crate) funding_rate_arbitrage: Vec<String>,
+    pub(crate) burning_bnb: bool,
 }
 
 impl AccountValue<PMBalance, Ticker, UMSwapPosition> for PMAccountCalculator {
