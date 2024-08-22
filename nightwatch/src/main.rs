@@ -1,4 +1,4 @@
-use crate::clients::{fetch_prices, ping_exchange};
+use crate::clients::{fetch_data, ping_exchange};
 use crate::prometheus_server::PrometheusServer;
 
 use crate::utils::setup_logger;
@@ -19,7 +19,7 @@ mod utils;
 
 async fn serve_req(_req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
     let mut server = PrometheusServer::new();
-    match fetch_prices().await {
+    match fetch_data().await {
         Ok(result) => server.extend_gauges(result),
         Err(error) => println!("Error: {}", error),
     };

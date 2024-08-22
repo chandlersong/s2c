@@ -2,8 +2,11 @@ use crate::models::UnixTimeStamp;
 use hmac::digest::InvalidLength;
 use hmac::{Hmac, Mac};
 use log::LevelFilter;
-use serde::{de, Deserialize, Deserializer};
+#[cfg(test)]
+use serde::de;
+use serde::{Deserialize, Deserializer};
 use sha2::Sha256;
+#[cfg(test)]
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
