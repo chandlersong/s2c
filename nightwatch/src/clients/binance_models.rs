@@ -1,4 +1,4 @@
-use crate::models::{Decimal, SwapBalance, UnixTimeStamp};
+use crate::models::{Decimal, UnixTimeStamp};
 use crate::utils;
 use crate::utils::unix_time;
 use prometheus::{Gauge, Opts};
@@ -196,17 +196,6 @@ pub struct UMSwapPosition {
     pub break_even_price: Decimal //表仓位盈亏平衡价
 }
 
-impl From<&UMSwapPosition> for SwapBalance {
-    fn from(value: &UMSwapPosition) -> Self {
-        SwapBalance {
-            symbol: value.symbol.clone(),
-            position: value.position_amt.clone(),
-            cost_price: value.entry_price.clone(),
-            unrealized_profit: value.unrealized_profit.clone(),
-            price: value.mark_price.clone(),
-        }
-    }
-}
 
 impl UMSwapPosition {
     pub fn to_prometheus(&self, strategy: &str) -> Vec<Gauge> {

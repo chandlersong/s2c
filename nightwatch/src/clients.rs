@@ -1,14 +1,13 @@
 use crate::clients::binance::{BNCommand, GetCommand, PMAccountCalculator};
 use crate::clients::binance_models::{BinanceBase, BinancePath, CommandInfo, NormalAPI, PMBalance, PmAPI, Ticker, TimeStampRequest, UMSwapPosition};
 use crate::errors::NightWatchError;
-use crate::models::{AccountBalance, Decimal, EmptyObject};
+use crate::models::{Decimal, EmptyObject};
 use crate::settings::{Account, SETTING};
 use log::error;
 use prometheus::{Gauge, Opts};
 use rust_decimal::prelude::ToPrimitive;
 use tokio::join;
 
-pub(crate) mod binance_deprecated;
 pub(crate) mod binance_models;
 mod binance;
 
