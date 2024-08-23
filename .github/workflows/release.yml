@@ -6,6 +6,13 @@ on:
         description: '统一的version'
         required: true
         default: '0.0.9'
+      platform:
+        description: '支持的平台'
+        required: true
+        default: 'linux/amd64'
+        options:
+          - 'linux/amd64,linux/arm64,linux/arm/v7'
+          - 'linux/amd64'
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -37,6 +44,6 @@ jobs:
           tags: |
             chandlersong/nightwatch:${{ inputs.imageTag }}
             chandlersong/nightwatch:latest
-          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          platforms: ${{ inputs.platform }}
       - name: Image digest
         run: echo ${{ steps.docker_build.outputs.digest }}
