@@ -29,6 +29,7 @@ pub struct SwapSummary {
     pub short_pnl: Decimal,
     pub balance: Decimal,
     pub pnl: Decimal,
+    pub fra_pnl: Decimal, //funding_rate_arbitrage
 }
 
 pub trait AccountValue<T, U, X> {

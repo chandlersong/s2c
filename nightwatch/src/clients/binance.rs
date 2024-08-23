@@ -170,8 +170,11 @@ impl AccountValue<PMBalance, Ticker, UMSwapPosition> for PMAccountCalculator {
         let mut pnl = dec!(0);
         let mut long_pnl = dec!(0);
         let mut short_pnl = dec!(0);
+        let mut fra_pnl = dec!(0);
+
         for swap in swap_position {
             if fra_symbol.contains(&swap.symbol) {
+                fra_pnl = fra_pnl + swap.unrealized_profit;
                 continue;
             }
             trace!("symbol:{}, 名义价值：{},未实现利润{}", swap.symbol, swap.notional, swap.unrealized_profit);
@@ -194,6 +197,7 @@ impl AccountValue<PMBalance, Ticker, UMSwapPosition> for PMAccountCalculator {
             short_pnl,
             balance,
             pnl,
+            fra_pnl,
         })
     }
 }
@@ -260,7 +264,8 @@ mod tests {
         assert_eq!(dec!(922.03584590), actual.short_balance);
         assert_eq!(dec!(14.20620885), actual.short_pnl);
         assert_eq!(dec!(1826.71368746), actual.balance);
-        assert_eq!(dec!(41.06655935 ), actual.pnl)
+        assert_eq!(dec!(41.06655935 ), actual.pnl);
+        assert_eq!(dec!(240.6949 ), actual.fra_pnl);
     }
 
     #[test]
