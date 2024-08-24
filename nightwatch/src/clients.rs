@@ -33,9 +33,9 @@ pub struct SwapSummary {
 }
 
 pub trait AccountValue<T, U, X> {
-    fn account_balance(&self, balance: &Vec<T>, ticker: &Vec<U>) -> Result<AccountBalanceSummary, NightWatchError>;
+    fn account_balance(&self, balance: &Vec<T>, ticker: &Vec<U>) -> AccountBalanceSummary;
 
-    fn um_swap_balance(&self, swap_position: &Vec<X>) -> Result<SwapSummary, NightWatchError>;
+    fn um_swap_balance(&self, swap_position: &Vec<X>) -> SwapSummary;
 }
 
 pub(crate) async fn ping_exchange() -> Result<(), NightWatchError> {
@@ -92,7 +92,7 @@ async fn fetch_account_data(acc: &Account) -> Vec<Gauge> {
 
     let acc_balance = match (acc_position, ticker) {
         (Ok(acc_vec), Ok(ticker_vec)) => {
-            Some(calculator.account_balance(&acc_vec, &ticker_vec).unwrap().to_prometheus(&acc.name))
+            Some(calculator.account_balance(&acc_vec, &ticker_vec).to_prometheus(&acc.name))
         }
         (Err(e1), Err(e2)) => {
             error!("获得账户信息，e1:{},e2{}",e1,e2);
@@ -115,16 +115,9 @@ async fn fetch_account_data(acc: &Account) -> Vec<Gauge> {
                 .filter(|s| !fra.contains(&s.symbol))
                 .flat_map(|x| x.to_prometheus(&acc.name)).collect();
 
-            match calculator.um_swap_balance(&swap_position_vec) {
-                Ok(v) => {
-                    res.extend(v.to_prometheus(&acc.name));
-                    res
-                }
-                Err(_) => {
-                    error!("整合swap account时出错");
-                    res
-                }
-            }
+            let swap_gauge = calculator.um_swap_balance(&swap_position_vec).to_prometheus(&acc.name);
+            res.extend(swap_gauge);
+            res
         }
         Err(e) => {
             error!("获得账户信息，{}",e);
