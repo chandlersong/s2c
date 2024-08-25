@@ -2,7 +2,6 @@ use crate::models::{Decimal, UnixTimeStamp};
 use crate::utils::unix_time;
 use crate::{prometheus_gauge, utils};
 use prometheus::Gauge;
-use rust_decimal::prelude::ToPrimitive;
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 
@@ -10,7 +9,6 @@ use serde::{Deserialize, Serialize};
 pub(crate) enum BinanceBase {
     Normal,
     PortfolioMargin,
-    SWAP,
 }
 
 
@@ -19,8 +17,7 @@ impl From<BinanceBase> for String {
         String::from(
             match url {
                 BinanceBase::Normal => String::from("https://api.binance.com/"),
-                BinanceBase::PortfolioMargin => String::from("https://papi.binance.com/"),
-                BinanceBase::SWAP => String::from("https://fapi.binance.com")
+                BinanceBase::PortfolioMargin => String::from("https://papi.binance.com/")
             }
         )
     }
@@ -29,7 +26,6 @@ impl From<BinanceBase> for String {
 pub(crate) enum BinancePath {
     Normal(NormalAPI),
     PAPI(PmAPI),
-    FAPI(Future),
 }
 
 #[derive(Debug)]
@@ -44,9 +40,6 @@ pub(crate) enum PmAPI { //统一账户
     SwapPositionAPI,
 }
 
-pub(crate) enum Future { //合约账户
-    SwapTickerAPI,
-}
 
 impl From<BinancePath> for String {
     fn from(api: BinancePath) -> Self {
@@ -59,9 +52,6 @@ impl From<BinancePath> for String {
                 BinancePath::PAPI(route) => match route {
                     PmAPI::BalanceAPI => String::from("/papi/v1/balance"),
                     PmAPI::SwapPositionAPI => String::from("/papi/v1/um/positionRisk"),
-                }
-                BinancePath::FAPI(route) => match route {
-                    Future::SwapTickerAPI => String::from("/fapi/v2/ticker/price"),
                 }
             }
         )

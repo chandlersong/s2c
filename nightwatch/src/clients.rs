@@ -6,7 +6,6 @@ use crate::prometheus_gauge;
 use crate::settings::{Account, SETTING};
 use log::error;
 use prometheus::Gauge;
-use rust_decimal::prelude::ToPrimitive;
 use tokio::join;
 
 pub(crate) mod binance_models;
