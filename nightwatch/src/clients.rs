@@ -2,6 +2,7 @@ use crate::clients::binance::{BNCommand, GetCommand, PMAccountCalculator};
 use crate::clients::binance_models::{BinanceBase, BinancePath, CommandInfo, NormalAPI, PMBalance, PmAPI, Ticker, TimeStampRequest, UMSwapPosition};
 use crate::errors::NightWatchError;
 use crate::models::{Decimal, EmptyObject};
+use crate::prometheus_gauge;
 use crate::settings::{Account, SETTING};
 use log::error;
 use prometheus::{Gauge, Opts};
@@ -159,30 +160,14 @@ impl AccountBalanceSummary {
 
 impl SwapSummary {
     pub fn to_prometheus(&self, strategy: &str) -> Vec<Gauge> {
-        let acc = Gauge::with_opts(Opts::new(&format!("{}_acc", strategy),
-                                             format!("{0}_acc_help", strategy))).unwrap();
-        acc.set(self.balance.to_f64().unwrap());
-
-        let pnl = Gauge::with_opts(Opts::new(&format!("{}_acc_pnl", strategy),
-                                             format!("{0}_acc_pnl_help", strategy))).unwrap();
-        pnl.set(self.pnl.to_f64().unwrap());
-
-        let acc_long = Gauge::with_opts(Opts::new(&format!("{}_acc_long", strategy),
-                                                  format!("{0}_acc_long_help", strategy))).unwrap();
-        acc_long.set(self.long_balance.to_f64().unwrap());
-
-        let acc_long_pnl = Gauge::with_opts(Opts::new(&format!("{}_acc_long_pnl", strategy),
-                                                      format!("{0}_acc_long_pnl_help", strategy))).unwrap();
-        acc_long_pnl.set(self.long_pnl.to_f64().unwrap());
-
-        let acc_short = Gauge::with_opts(Opts::new(&format!("{}_acc_short", strategy),
-                                                   format!("{0}_acc_short_help", strategy))).unwrap();
-        acc_short.set(self.short_balance.to_f64().unwrap());
-
-
-        let acc_short_pnl = Gauge::with_opts(Opts::new(&format!("{}_acc_short_pnl", strategy),
-                                                       format!("{0}_acc_short_pnl_help", strategy))).unwrap();
-        acc_short_pnl.set(self.short_pnl.to_f64().unwrap());
-        vec![acc, acc_long, acc_long_pnl, acc_short, acc_short_pnl, pnl]
+        let acc = prometheus_gauge!(format!("{}_acc", strategy),self.balance);
+        let pnl = prometheus_gauge!(format!("{}_pnl", strategy),self.pnl);
+        let acc_long = prometheus_gauge!(format!("{}_acc_long", strategy),self.long_balance);
+        let acc_long_pnl = prometheus_gauge!(format!("{}_acc_long_pnl", strategy),self.long_pnl);
+        let acc_short = prometheus_gauge!(format!("{}_acc_short", strategy),self.short_balance);
+        let acc_short_pnl = prometheus_gauge!(format!("{}_acc_short_pnl", strategy),self.short_pnl);
+        let fra_pnl = prometheus_gauge!(format!("{}_fra_pnl", strategy),self.fra_pnl);
+        vec![acc, acc_long, acc_long_pnl, acc_short, acc_short_pnl, pnl, fra_pnl]
     }
 }
+
