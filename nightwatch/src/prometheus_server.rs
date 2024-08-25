@@ -33,22 +33,25 @@ impl PrometheusServer {
 
 #[macro_export]
 macro_rules! prometheus_gauge {
-    ($a:expr, $b:expr) => {
+    ($name:expr, $value:expr) => {
         {
-            use crate::models::Decimal;
-            use prometheus::Gauge;
-            use prometheus::Opts;
             use rust_decimal::prelude::ToPrimitive;
-            let name:String = $a;
-            let value:Decimal = $b;
-            let res = Gauge::with_opts(Opts::new(&name,format!("{}_help", name))).unwrap();
-            res.set($b.to_f64().unwrap());
+            let res = prometheus::Gauge::with_opts(prometheus::Opts::new(&$name,format!("{}_help", $name))).unwrap();
+            res.set($value.to_f64().unwrap());
             res
         }
     };
-    ($a:expr, $b:expr, $c:expr) => {
-        ($a + $b) * $c
-    };
+    ($name:expr, $value:expr,$(($field:expr => $field_value:expr)),+) => {{
+         use rust_decimal::prelude::ToPrimitive;
+         let mut ops = prometheus::Opts::new(&$name,format!("{}_help", $name));
+        $(
+            print!("{}",$field);
+            ops = ops.clone().const_label($field,$field_value);
+         )*
+         let res = prometheus::Gauge::with_opts(ops).unwrap();
+         res.set($value.to_f64().unwrap());
+         res
+    }};
 }
 
 #[cfg(test)]
@@ -65,6 +68,23 @@ mod tests {
         let actual: Gauge = prometheus_gauge!(name,value);
         print!("{:?}", actual);
         assert_eq!(expected, actual.desc()[0].fq_name, "gauge名字错误");
+        assert_eq!(123.123, actual.get(), "gauge数值错误");
+    }
+
+    #[test]
+    fn test_prometheus_gauge_with_map() {
+        let name = "test".to_string();
+        let expected = name.clone();
+        let value = dec!(123.123);
+        let actual: Gauge = prometheus_gauge!(name,value,("apple" => "3"));
+        println!("{:?}", actual);
+        let desc = actual.desc()[0];
+        assert_eq!(expected, desc.fq_name, "gauge名字错误");
+        let paris = &desc.const_label_pairs;
+        assert_eq!(1, paris.len(), "gauge名字错误");
+        let pair = paris[0].clone();
+        assert_eq!("apple", pair.get_name());
+        assert_eq!("3", pair.get_value());
         assert_eq!(123.123, actual.get(), "gauge数值错误");
     }
 }

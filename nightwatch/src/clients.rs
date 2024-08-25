@@ -138,22 +138,10 @@ async fn fetch_account_data(acc: &Account) -> Vec<Gauge> {
 impl AccountBalanceSummary {
     pub fn to_prometheus(&self, strategy: &str) -> Vec<Gauge> {
         let side_name = format!("{}_acc_detail", strategy);
-        let acc_equity = Gauge::with_opts(Opts::new(&side_name, format!("{0}_acc_help", strategy))
-            .const_label("field", "equity")).unwrap();
-        acc_equity.set(self.account_equity.to_f64().unwrap());
-
-        let negative_balance = Gauge::with_opts(Opts::new(&side_name, format!("{0}_acc_help", strategy))
-            .const_label("field", "negative_balance")).unwrap();
-        negative_balance.set(self.negative_balance.to_f64().unwrap());
-
-        let usdt_equity = Gauge::with_opts(Opts::new(&side_name, format!("{0}_acc_help", strategy))
-            .const_label("field", "usdt_equity")).unwrap();
-        usdt_equity.set(self.usdt_equity.to_f64().unwrap());
-
-        let account_pnl = Gauge::with_opts(Opts::new(&side_name, format!("{0}_acc_help", strategy))
-            .const_label("field", "account_pnl")).unwrap();
-        account_pnl.set(self.account_pnl.to_f64().unwrap());
-
+        let acc_equity = prometheus_gauge!(side_name,self.account_equity,("field" => "acc_equity"));
+        let negative_balance = prometheus_gauge!(side_name,self.negative_balance,("field" => "negative_balance"));
+        let usdt_equity = prometheus_gauge!(side_name,self.usdt_equity,("field" => "usdt_equity"));
+        let account_pnl = prometheus_gauge!(side_name,self.account_pnl,("field" => "account_pnl"));
         vec![acc_equity, negative_balance, usdt_equity, account_pnl]
     }
 }
