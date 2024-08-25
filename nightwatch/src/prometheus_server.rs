@@ -76,12 +76,12 @@ mod tests {
         let name = "test".to_string();
         let expected = name.clone();
         let value = dec!(123.123);
-        let actual: Gauge = prometheus_gauge!(name,value,("apple" => "3"));
+        let actual: Gauge = prometheus_gauge!(name,value,("apple" => "3"),("bb" => "5"));
         println!("{:?}", actual);
         let desc = actual.desc()[0];
         assert_eq!(expected, desc.fq_name, "gauge名字错误");
         let paris = &desc.const_label_pairs;
-        assert_eq!(1, paris.len(), "gauge名字错误");
+        assert_eq!(2, paris.len(), "gauge名字错误");
         let pair = paris[0].clone();
         assert_eq!("apple", pair.get_name());
         assert_eq!("3", pair.get_value());

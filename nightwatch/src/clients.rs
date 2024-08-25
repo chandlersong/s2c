@@ -5,7 +5,7 @@ use crate::models::{Decimal, EmptyObject};
 use crate::prometheus_gauge;
 use crate::settings::{Account, SETTING};
 use log::error;
-use prometheus::{Gauge, Opts};
+use prometheus::Gauge;
 use rust_decimal::prelude::ToPrimitive;
 use tokio::join;
 
