@@ -44,7 +44,7 @@ async fn main() {
     }
 
 
-    let addr = ([127, 0, 0, 1], 9898).into();
+    let addr = ([0, 0, 0, 0], 9898).into();
     info!("Listening on http://{}", addr);
 
     let serve_future = Server::bind(&addr).serve(make_service_fn(|_| async {
