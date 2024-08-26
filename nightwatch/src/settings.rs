@@ -23,7 +23,6 @@ fn init_setting() -> Settings {
     let mut current_dir = env::current_dir().unwrap();
     current_dir.push("conf/Settings");
     let config_path = current_dir.to_str().unwrap();
-    info!("working dir is {:?}",current_dir);
     let config_path = env::var("NIGHT_WATCH_CONFIG").unwrap_or_else(|_| String::from(config_path));
     info!("configuration path:{}", &config_path);
     Settings::new(&config_path).unwrap()
