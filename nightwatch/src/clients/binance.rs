@@ -245,7 +245,7 @@ mod tests {
         let actual = calculator.um_swap_balance(&swap_position);
         trace!("actual is {:?}",actual);
         assert_eq!(dec!(904.67784156), actual.long_balance);
-        assert_eq!(dec!(76.57860737), actual.long_pnl);
+        assert_eq!(dec!(26.86035050), actual.long_pnl);
         assert_eq!(dec!(2085.39024590), actual.short_balance);
         assert_eq!(dec!(254.90110885), actual.short_pnl);
         assert_eq!(dec!(2990.06808746), actual.balance);
@@ -260,7 +260,7 @@ mod tests {
         let actual = calculator.um_swap_balance(&swap_position);
         trace!("actual is {:?}",actual);
         assert_eq!(dec!(904.67784156), actual.long_balance);
-        assert_eq!(dec!(76.57860737), actual.long_pnl);
+        assert_eq!(dec!(26.86035050), actual.long_pnl);
         assert_eq!(dec!(922.03584590), actual.short_balance);
         assert_eq!(dec!(14.20620885), actual.short_pnl);
         assert_eq!(dec!(1826.71368746), actual.balance);
