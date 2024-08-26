@@ -182,7 +182,7 @@ impl AccountValue<PMBalance, Ticker, UMSwapPosition> for PMAccountCalculator {
             if swap.position_amt > dec!(0) {
                 balance = balance + swap.notional;
                 long_balance = long_balance + swap.notional;
-                long_pnl = pnl + swap.unrealized_profit;
+                long_pnl = long_pnl + swap.unrealized_profit;
             } else {
                 let notional = swap.notional.abs();
                 balance = balance + notional;
