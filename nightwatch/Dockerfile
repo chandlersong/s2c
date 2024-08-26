@@ -2,8 +2,10 @@
 FROM rust:1.80.1 as builder
 WORKDIR /app
 COPY . .
-RUN cargo build --release --target x86_64-unknown-linux-musl
+RUN cargo build --release
 
-FROM alpine:3.17
+FROM debian:bookworm-slim as runtime
 COPY --from=builder /app/target/release/nightwatch /app/nightwatch
+RUN  apt update &&\
+     apt install -y libssl-dev
 CMD ["/app/nightwatch"]
