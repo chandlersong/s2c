@@ -264,7 +264,7 @@ mod tests {
         assert_eq!(dec!(922.03584590), actual.short_balance);
         assert_eq!(dec!(14.20620885), actual.short_pnl);
         assert_eq!(dec!(1826.71368746), actual.balance);
-        assert_eq!(dec!(41.06655935 ), actual.pnl);
+        assert_eq!(dec!(41.06655935), actual.pnl);
         assert_eq!(dec!(240.6949 ), actual.fra_pnl);
     }
 

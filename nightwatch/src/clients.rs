@@ -3,6 +3,7 @@ use crate::clients::binance_models::{BinanceBase, BinancePath, CommandInfo, Norm
 use crate::errors::NightWatchError;
 use crate::models::{Decimal, EmptyObject};
 use crate::prometheus_gauge;
+use crate::prometheus_server::ToGauge;
 use crate::settings::{Account, SETTING};
 use log::error;
 use prometheus::Gauge;
@@ -92,7 +93,7 @@ async fn fetch_account_data(acc: &Account) -> Vec<Gauge> {
 
     let acc_balance = match (acc_position, ticker) {
         (Ok(acc_vec), Ok(ticker_vec)) => {
-            Some(calculator.account_balance(&acc_vec, &ticker_vec).to_prometheus(&acc.name))
+            Some(calculator.account_balance(&acc_vec, &ticker_vec).to_prometheus_gauge(&acc.name))
         }
         (Err(e1), Err(e2)) => {
             error!("获得账户信息，e1:{},e2{}",e1,e2);
@@ -113,9 +114,9 @@ async fn fetch_account_data(acc: &Account) -> Vec<Gauge> {
         Ok(swap_position_vec) => {
             let mut res: Vec<Gauge> = swap_position_vec.iter()
                 .filter(|s| !fra.contains(&s.symbol))
-                .flat_map(|x| x.to_prometheus(&acc.name)).collect();
+                .flat_map(|x| x.to_prometheus_gauge(&acc.name)).collect();
 
-            let swap_gauge = calculator.um_swap_balance(&swap_position_vec).to_prometheus(&acc.name);
+            let swap_gauge = calculator.um_swap_balance(&swap_position_vec).to_prometheus_gauge(&acc.name);
             res.extend(swap_gauge);
             res
         }
@@ -134,8 +135,8 @@ async fn fetch_account_data(acc: &Account) -> Vec<Gauge> {
     }
 }
 
-impl AccountBalanceSummary {
-    pub fn to_prometheus(&self, strategy: &str) -> Vec<Gauge> {
+impl ToGauge for AccountBalanceSummary {
+    fn to_prometheus_gauge(&self, strategy: &str) -> Vec<Gauge> {
         let side_name = format!("{}_acc_detail", strategy);
         let acc_equity = prometheus_gauge!(side_name,self.account_equity,("field" => "acc_equity"));
         let negative_balance = prometheus_gauge!(side_name,self.negative_balance,("field" => "negative_balance"));
@@ -145,8 +146,8 @@ impl AccountBalanceSummary {
     }
 }
 
-impl SwapSummary {
-    pub fn to_prometheus(&self, strategy: &str) -> Vec<Gauge> {
+impl ToGauge for SwapSummary {
+    fn to_prometheus_gauge(&self, strategy: &str) -> Vec<Gauge> {
         let acc = prometheus_gauge!(format!("{}_acc", strategy),self.balance);
         let pnl = prometheus_gauge!(format!("{}_pnl", strategy),self.pnl);
         let acc_long = prometheus_gauge!(format!("{}_acc_long", strategy),self.long_balance);

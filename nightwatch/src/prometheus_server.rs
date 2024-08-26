@@ -1,5 +1,9 @@
 use prometheus::{Encoder, Gauge, Registry, TextEncoder};
 
+pub trait ToGauge {
+    fn to_prometheus_gauge(&self, strategy: &str) -> Vec<Gauge>;
+}
+
 pub struct PrometheusServer {
     symbols_gauges: Vec<Gauge>,
     pub format_type: String,

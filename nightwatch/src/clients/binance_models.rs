@@ -1,4 +1,5 @@
 use crate::models::{Decimal, UnixTimeStamp};
+use crate::prometheus_server::ToGauge;
 use crate::utils::unix_time;
 use crate::{prometheus_gauge, utils};
 use prometheus::Gauge;
@@ -187,8 +188,8 @@ pub struct UMSwapPosition {
 }
 
 
-impl UMSwapPosition {
-    pub fn to_prometheus(&self, strategy: &str) -> Vec<Gauge> {
+impl ToGauge for UMSwapPosition {
+    fn to_prometheus_gauge(&self, strategy: &str) -> Vec<Gauge> {
         let side = if self.position_amt > dec!(0) { dec!(1) } else { dec!(-1) };
         let side_name = if side == dec!(1) { format!("{strategy}_long") } else { format!("{strategy}_short") };
 
@@ -264,6 +265,7 @@ impl Default for TimeStampRequest {
 #[cfg(test)]
 mod tests {
     use crate::clients::binance_models::{BinanceBase, BinancePath, NormalAPI, UMSwapPosition};
+    use crate::prometheus_server::ToGauge;
     use rust_decimal_macros::dec;
 
     #[test]
@@ -288,7 +290,7 @@ mod tests {
             update_time: 0,
             break_even_price: Default::default(),
         };
-        let actual = swap_position.to_prometheus("test");
+        let actual = swap_position.to_prometheus_gauge("test");
 
         assert_eq!(5, actual.len());
     }
