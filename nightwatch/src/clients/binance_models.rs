@@ -1,9 +1,6 @@
 use crate::models::{Decimal, UnixTimeStamp};
-use crate::prometheus_server::ToGauge;
+use crate::utils;
 use crate::utils::unix_time;
-use crate::{prometheus_gauge, utils};
-use prometheus::Gauge;
-use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug)]
@@ -187,24 +184,11 @@ pub struct UMSwapPosition {
     pub break_even_price: Decimal //表仓位盈亏平衡价
 }
 
-
-impl ToGauge for UMSwapPosition {
-    fn to_prometheus_gauge(&self, strategy: &str) -> Vec<Gauge> {
-        let side = if self.position_amt > dec!(0) { dec!(1) } else { dec!(-1) };
-        let side_name = if side == dec!(1) { format!("{strategy}_long") } else { format!("{strategy}_short") };
-
-        let cur_price = prometheus_gauge!(side_name,self.mark_price,("field" => "cur_price"),("symbol" => &self.symbol));
-        let avg_price = prometheus_gauge!(side_name,self.entry_price,("field" => "avg_price"),("symbol" => &self.symbol));
-        let pos_u = prometheus_gauge!(side_name,self.position_amt,("field" => "pos_u"),("symbol" => &self.symbol));
-        let pnl_u = prometheus_gauge!(side_name,self.unrealized_profit,("field" => "pnl_u"),("symbol" => &self.symbol));
-
-
-        let change_value: Decimal = (self.mark_price / self.entry_price - dec!(1)) * side;
-        let change = prometheus_gauge!(side_name,change_value,("field" => "change"),("symbol" => &self.symbol));
-        vec![cur_price, pos_u, pnl_u, avg_price, change]
-    }
+pub struct PMRawAccountData {
+    pub account_balance: Vec<PMBalance>,
+    pub spot_ticker: Vec<Ticker>,
+    pub um_swap_position: Vec<UMSwapPosition>,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UMSwapBalance {
@@ -264,9 +248,7 @@ impl Default for TimeStampRequest {
 
 #[cfg(test)]
 mod tests {
-    use crate::clients::binance_models::{BinanceBase, BinancePath, NormalAPI, UMSwapPosition};
-    use crate::prometheus_server::ToGauge;
-    use rust_decimal_macros::dec;
+    use crate::clients::binance_models::{BinanceBase, BinancePath, NormalAPI};
 
     #[test]
     fn test_api_define() {
@@ -274,24 +256,4 @@ mod tests {
         assert_eq!("https://api.binance.com/", String::from(BinanceBase::Normal));
     }
 
-    #[test]
-    fn test_to_prometheus() {
-        let swap_position = UMSwapPosition {
-            entry_price: dec!(1),
-            leverage: 0,
-            mark_price: dec!(2),
-            max_notional_value: Default::default(),
-            position_amt: dec!(3),
-            notional: Default::default(),
-            symbol: "BAC".to_string(),
-            unrealized_profit: dec!(3),
-            liquidation_price: Default::default(),
-            position_side: "".to_string(),
-            update_time: 0,
-            break_even_price: Default::default(),
-        };
-        let actual = swap_position.to_prometheus_gauge("test");
-
-        assert_eq!(5, actual.len());
-    }
 }

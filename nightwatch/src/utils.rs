@@ -56,6 +56,7 @@ pub fn setup_logger(level: Option<LevelFilter>) -> Result<(), fern::InitError> {
     Ok(())
 }
 
+
 #[cfg(test)]
 pub fn parse_test_json<T: for<'a> de::Deserialize<'a>>(path: &str) -> T {
     let json = fs::read_to_string(path).unwrap();
