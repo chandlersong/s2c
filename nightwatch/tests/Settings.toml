@@ -1,10 +1,10 @@
-proxy = "http://localhost:7890"
+proxy = "http://localhost:7890"      #代理服务器
 [[account]]
-name = "abc"
-api_key = "189rjfadoisfj8923fjio"
-secret = "bfsabfsbsfbsfbsfa31bw"
-funding_rate_arbitrage = ["Rust", "Python", "Java"]
-burning_free = true
+name = "abc"                         #账户名称，英文
+api_key = "189rjfadoisfj8923fjio"    #api key
+secret = "bfsabfsbsfbsfbsfa31bw"     #api security
+funding_rate_arbitrage = ["Rust", "Python", "Java"] #是否用统一账户套利
+burning_free = true               #是不是用了类似于BNB一样的来降低手续费
 
 [[account]]
 name = "aba"
