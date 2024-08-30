@@ -75,14 +75,14 @@ impl ToGauge for SwapPosition {
 
         let cur_price = prometheus_gauge!(side_name,self.cur_price,("field" => "cur_price"),("symbol" => &self.symbol));
         let avg_price = prometheus_gauge!(side_name,self.avg_price,("field" => "avg_price"),("symbol" => &self.symbol));
-        let pos_u = prometheus_gauge!(side_name,self.position_amt,("field" => "pos_u"),("symbol" => &self.symbol));
+        let pos = prometheus_gauge!(side_name,self.position_amt,("field" => "pos"),("symbol" => &self.symbol));
         let pnl_u = prometheus_gauge!(side_name,self.pnl_u,("field" => "pnl_u"),("symbol" => &self.symbol));
         let value = prometheus_gauge!(side_name,self.pos_u,("field" => "value"),("symbol" => &self.symbol));
 
 
         let change_value: Decimal = (self.cur_price / self.avg_price - dec!(1)) * side;
         let change = prometheus_gauge!(side_name,change_value,("field" => "change"),("symbol" => &self.symbol));
-        vec![cur_price, pos_u, pnl_u, avg_price, change, value]
+        vec![cur_price, pos, pnl_u, avg_price, change, value]
     }
 }
 
