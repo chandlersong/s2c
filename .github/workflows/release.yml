@@ -5,7 +5,7 @@ on:
       imageTag:
         description: '统一的version'
         required: true
-        default: '0.1.0'
+        default: '0.1.5'
       platform:
         description: '支持的平台'
         required: true
