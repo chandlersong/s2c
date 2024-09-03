@@ -1,4 +1,6 @@
 image: rust:1.80.1
+default:
+  timeout: 15 minutes
 
 stages:
   - test
