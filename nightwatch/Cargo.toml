@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+braavos = { path = "../braavos" }
 prometheus = "0.13.4"
-lazy_static = "^1.4"
 hyper = { version = "^0.14", features = ["server", "http1", "tcp"] }
 config =  { version = "^0.14.0", features = ["toml"] }
 serde = { version = "1.0.204", features = ["derive"] }

@@ -1,8 +1,8 @@
 use config::{Config, ConfigError, File};
-use lazy_static::lazy_static;
 use log::info;
 use serde::Deserialize;
 use std::env;
+use std::sync::LazyLock;
 
 #[derive(Clone, Debug, Deserialize)]
 #[allow(unused)]
@@ -15,9 +15,9 @@ pub struct Account {
     pub burning_free: bool, //是否燃烧降低手续费
 }
 
-lazy_static! {
-   pub  static ref SETTING :  Settings = init_setting();
-}
+pub static SETTING: LazyLock<Settings> = LazyLock::new(|| {
+    init_setting()
+});
 
 fn init_setting() -> Settings {
     let mut current_dir = env::current_dir().unwrap();

@@ -4,19 +4,20 @@ use crate::errors::NightWatchError;
 use crate::models::{Decimal, EmptyObject, SwapPosition};
 use crate::settings::{Account, SETTING};
 use crate::utils::sign_hmac;
-use lazy_static::lazy_static;
 use log::{error, trace};
 use rust_decimal_macros::dec;
 use serde::de::DeserializeOwned;
 use serde_json::Error as JsonError;
 use std::fmt::Display;
 use std::marker::PhantomData;
+use std::sync::LazyLock;
 use tokio::join;
 use url::Url;
 
-lazy_static! {
-    static ref CLIENT:  reqwest::Client = init_client();
-}
+static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    init_client()
+});
+
 
 
 impl CommandInfo<'_> {
