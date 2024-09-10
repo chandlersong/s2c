@@ -5,5 +5,5 @@ pub mod errors;
 pub mod settings;
 pub mod accounts;
 
-mod utils;
+pub mod utils;
 

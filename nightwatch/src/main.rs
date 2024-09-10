@@ -1,7 +1,7 @@
 use crate::clients::{cal_gauge_according_setting, ping_exchange};
 use crate::prometheus_server::PrometheusServer;
 
-use crate::utils::setup_logger;
+use braavos::utils::setup_logger;
 use hyper::{
     header::CONTENT_TYPE,
     service::{make_service_fn, service_fn},
@@ -12,7 +12,6 @@ use log::{error, info, LevelFilter};
 mod prometheus_server;
 mod clients;
 mod errors;
-mod utils;
 
 async fn serve_req(_req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
     let mut server = PrometheusServer::new();

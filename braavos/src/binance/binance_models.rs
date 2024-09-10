@@ -4,7 +4,7 @@ use crate::utils::unix_time;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug)]
-pub(crate) enum BinanceBase {
+pub enum BinanceBase {
     Normal,
     PortfolioMargin,
 }

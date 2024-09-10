@@ -10,14 +10,14 @@ use sha2::Sha256;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub fn unix_time() -> UnixTimeStamp {
+pub(crate) fn unix_time() -> UnixTimeStamp {
     let now = SystemTime::now();
     let since_epoch = now.duration_since(UNIX_EPOCH).unwrap();
     since_epoch.as_secs() * 1000 + u64::from(since_epoch.subsec_nanos()) / 1_000_000
 }
 
 // 自定义反序列化函数，将字符串属性转换为数字
-pub fn str_to_u16<'de, D>(deserializer: D) -> Result<u16, D::Error>
+pub(crate) fn str_to_u16<'de, D>(deserializer: D) -> Result<u16, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -27,13 +27,14 @@ where
 
 
 // 签名方法从官方项目copy https://github.com/binance/binance-spot-connector-rust/blob/main/src/utils.rs#L9
-pub fn sign_hmac(payload: &str, key: &str) -> Result<String, InvalidLength> {
+pub(crate) fn sign_hmac(payload: &str, key: &str) -> Result<String, InvalidLength> {
     let mut mac = Hmac::<Sha256>::new_from_slice(key.as_bytes())?;
 
     mac.update(payload.to_string().as_bytes());
     let result = mac.finalize();
     Ok(format!("{:x}", result.into_bytes()))
 }
+
 
 pub fn setup_logger(level: Option<LevelFilter>) -> Result<(), fern::InitError> {
     let filter = match level {
@@ -55,7 +56,6 @@ pub fn setup_logger(level: Option<LevelFilter>) -> Result<(), fern::InitError> {
         .apply()?;
     Ok(())
 }
-
 
 #[cfg(test)]
 pub fn parse_test_json<T: for<'a> de::Deserialize<'a>>(path: &str) -> T {
