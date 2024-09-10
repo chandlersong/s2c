@@ -15,7 +15,7 @@ pub struct Account {
     pub burning_free: bool, //是否燃烧降低手续费
 }
 
-pub static SETTING: LazyLock<Settings> = LazyLock::new(|| {
+pub static BRAAVOS_SETTING: LazyLock<Settings> = LazyLock::new(|| {
     init_setting()
 });
 
@@ -23,8 +23,8 @@ fn init_setting() -> Settings {
     let mut current_dir = env::current_dir().unwrap();
     current_dir.push("conf/Settings");
     let config_path = current_dir.to_str().unwrap();
-    let config_path = env::var("NIGHT_WATCH_CONFIG").unwrap_or_else(|_| String::from(config_path));
-    info!("configuration path:{}", &config_path);
+    let config_path = env::var("BRAAVOS_CONFIG").unwrap_or_else(|_| String::from(config_path));
+    info!("braavos configuration path:{}", &config_path);
     Settings::new(&config_path).unwrap()
 }
 

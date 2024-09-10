@@ -1,4 +1,4 @@
-use crate::models::UnixTimeStamp;
+use braavos::models::UnixTimeStamp;
 use hmac::digest::InvalidLength;
 use hmac::{Hmac, Mac};
 use log::LevelFilter;

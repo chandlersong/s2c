@@ -1,28 +1,12 @@
-use crate::clients::binance::{PMAccountReader, PMRawDataQuery};
 use crate::errors::NightWatchError;
-use crate::models::{AccountSummary, SwapSummary};
-use crate::prometheus_server::ToGauge;
-use crate::settings::{Account, SETTING};
+
+use braavos::accounts::{AccountReader, RawDataQuery};
+use braavos::binance::binance_commands::{execute_ping, PMAccountReader, PMRawDataQuery};
+use braavos::settings::{Account, BRAAVOS_SETTING};
 use prometheus::Gauge;
 
-pub(crate) mod binance_models;
-mod binance;
-
-
-/** 把一些原始的数据读出
-
-*/
-pub trait RawDataQuery<X> {
-    async fn query_raw_data(&self, account: &Account) -> Result<X, NightWatchError>;
-}
-
-
-pub trait AccountReader<X> {
-    fn account_balance(&self, raw_data: &X) -> AccountSummary;
-}
-
 pub(crate) async fn ping_exchange() -> Result<(), NightWatchError> {
-    binance::execute_ping().await.expect("can't connect to binance");
+    execute_ping().await.expect("can't connect to binance");
     println!("binance access success");
     Ok(())
 }
@@ -30,7 +14,7 @@ pub(crate) async fn ping_exchange() -> Result<(), NightWatchError> {
 
 pub(crate) async fn cal_gauge_according_setting() -> Result<Vec<Gauge>, NightWatchError> {
     let mut res = vec![];
-    for acc in &SETTING.accounts {
+    for acc in &BRAAVOS_SETTING.accounts {
         let positions_gauge = cal_one_account_gauge(&acc).await;
 
         res.extend(positions_gauge)
@@ -53,12 +37,12 @@ async fn cal_one_account_gauge(account: &Account) -> Vec<Gauge> {
 
 
     let mut res = vec![];
-    res.extend(data.to_prometheus_gauge(&account.name));
+    // res.extend(data.to_prometheus_gauge(&account.name));
     let um_swap = data.um_swap_summary;
-    res.extend(um_swap.to_prometheus_gauge(&account.name));
+    // res.extend(um_swap.to_prometheus_gauge(&account.name));
     let um_swap_position = um_swap.positions;
     for p in &um_swap_position {
-        res.extend(p.to_prometheus_gauge(&account.name));
+        // res.extend(p.to_prometheus_gauge(&account.name));
     }
     res
 }

@@ -1,8 +1,8 @@
-use crate::clients::binance_models::{BinanceBase, BinancePath, CommandInfo, NormalAPI, PMBalance, PMRawAccountData, PmAPI, SecurityInfo, Ticker, TimeStampRequest, UMSwapPosition};
-use crate::clients::{AccountReader, AccountSummary, RawDataQuery, SwapSummary};
-use crate::errors::NightWatchError;
-use crate::models::{Decimal, EmptyObject, SwapPosition};
-use crate::settings::{Account, SETTING};
+use crate::accounts::{AccountReader, RawDataQuery};
+use crate::binance::binance_models::{BinanceBase, BinancePath, CommandInfo, NormalAPI, PMBalance, PMRawAccountData, PmAPI, SecurityInfo, Ticker, TimeStampRequest, UMSwapPosition};
+use crate::errors::BraavosError;
+use crate::models::{AccountSummary, Decimal, EmptyObject, SwapPosition, SwapSummary};
+use crate::settings::{Account, BRAAVOS_SETTING};
 use crate::utils::sign_hmac;
 use log::{error, trace};
 use rust_decimal_macros::dec;
@@ -17,7 +17,6 @@ use url::Url;
 static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     init_client()
 });
-
 
 
 impl CommandInfo<'_> {
@@ -42,7 +41,7 @@ impl CommandInfo<'_> {
         }
     }
 }
-pub(crate) async fn execute_ping() -> Result<(), NightWatchError> {
+pub async fn execute_ping() -> Result<(), BraavosError> {
     let info = CommandInfo::new(BinanceBase::Normal, BinancePath::Normal(NormalAPI::PingAPI));
 
     let get = GetCommand::<EmptyObject, EmptyObject> { phantom: Default::default() };
@@ -53,7 +52,7 @@ pub(crate) async fn execute_ping() -> Result<(), NightWatchError> {
 
 fn init_client() -> reqwest::Client {
     let builder = reqwest::Client::builder();
-    let proxy_builder = match &SETTING.proxy {
+    let proxy_builder = match &BRAAVOS_SETTING.proxy {
         Some(val) => { builder.proxy(reqwest::Proxy::https(val).unwrap()) }
         None => { builder }
     };
@@ -62,7 +61,7 @@ fn init_client() -> reqwest::Client {
 }
 
 pub trait BNCommand<T: Display, U: DeserializeOwned> {
-    async fn execute(&self, info: CommandInfo, data: Option<T>) -> Result<U, NightWatchError>;
+    async fn execute(&self, info: CommandInfo, data: Option<T>) -> Result<U, BraavosError>;
 }
 
 
@@ -71,7 +70,7 @@ pub struct GetCommand<T: Display, U: DeserializeOwned> {
 }
 
 impl<T: Display, U: DeserializeOwned> BNCommand<T, U> for GetCommand<T, U> {
-    async fn execute(&self, info: CommandInfo<'_>, data: Option<T>) -> Result<U, NightWatchError> {
+    async fn execute(&self, info: CommandInfo<'_>, data: Option<T>) -> Result<U, BraavosError> {
         let mut url = Url::parse(&String::from(info.base)).expect("Invalid base URL");
         url.set_path(&String::from(&String::from(info.path)));
 
@@ -108,14 +107,13 @@ impl<T: Display, U: DeserializeOwned> BNCommand<T, U> for GetCommand<T, U> {
                 panic!("binance request error!,response:{}", &body)
             }
         }
-
     }
 }
 
 pub struct PMRawDataQuery {}
 
 impl RawDataQuery<PMRawAccountData> for PMRawDataQuery {
-    async fn query_raw_data(&self, account: &Account) -> Result<PMRawAccountData, NightWatchError> {
+    async fn query_raw_data(&self, account: &Account) -> Result<PMRawAccountData, BraavosError> {
         let swap_info = CommandInfo::new_with_security(BinanceBase::PortfolioMargin,
                                                        BinancePath::PAPI(PmAPI::SwapPositionAPI),
                                                        &account.api_key,
@@ -156,8 +154,8 @@ impl RawDataQuery<PMRawAccountData> for PMRawDataQuery {
 
 
 pub struct PMAccountReader {
-    pub(crate) funding_rate_arbitrage: Vec<String>,
-    pub(crate) burning_bnb: bool,
+    pub funding_rate_arbitrage: Vec<String>,
+    pub burning_bnb: bool,
 }
 
 
@@ -266,8 +264,6 @@ impl AccountReader<PMRawAccountData> for PMAccountReader {
         let swap_summary = self.um_swap_balance(&raw_data.um_swap_position);
 
         self.cal_account_summary(&raw_data.account_balance, &raw_data.spot_ticker, swap_summary)
-
-
     }
 }
 
@@ -299,8 +295,6 @@ fn cal_equity(balance: &PMBalance, ticker: &Vec<Ticker>) -> (Decimal, Decimal, D
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::clients::binance::CommandInfo;
-    use crate::clients::binance_models::{BinanceBase, BinancePath, NormalAPI, PMBalance, PmAPI, TimeStampRequest, UMSwapPosition};
     use crate::models::EmptyObject;
     use crate::utils::{parse_test_json, setup_logger};
     use log::LevelFilter;
@@ -388,10 +382,10 @@ mod tests {
     }
 
     /** `test_account_value_with_um_cm_value` 测试计算account价值的单元测试
-            # 测试内容
-            1. um usdt和cm usdt都有值的时候，会加上去
-                  2. 没有小于5u的过滤
-                  3. 不存在币种不回影响最后结果
+                     # 测试内容
+                     1. um usdt和cm usdt都有值的时候，会加上去
+                           2. 没有小于5u的过滤
+                           3. 不存在币种不回影响最后结果
     */
     #[test]
     fn test_account_value_with_um_cm_value() {
@@ -404,7 +398,6 @@ mod tests {
         assert_eq!(dec!(109.15440471), actual.usdt_equity);
         assert_eq!(dec!(1016.5653078520000000), actual.account_equity);
     }
-
 
 
     /**
@@ -426,7 +419,7 @@ mod tests {
     #[tokio::test]
     async fn test_pm_swap_position() {
         let _ = setup_logger(Some(LevelFilter::Trace));
-        let setting = &SETTING;
+        let setting = &BRAAVOS_SETTING;
         let account = setting.get_account(0);
 
         let info = CommandInfo::new_with_security(BinanceBase::PortfolioMargin,
@@ -445,7 +438,7 @@ mod tests {
     #[tokio::test]
     async fn test_pm_balance() {
         let _ = setup_logger(Some(LevelFilter::Trace));
-        let setting = &SETTING;
+        let setting = &BRAAVOS_SETTING;
         let account = setting.get_account(0);
 
         let info = CommandInfo::new_with_security(BinanceBase::PortfolioMargin,
@@ -465,7 +458,7 @@ mod tests {
     #[tokio::test]
     async fn test_real_pm_balance() {
         let _ = setup_logger(Some(LevelFilter::Trace));
-        let setting = &SETTING;
+        let setting = &BRAAVOS_SETTING;
         let account = setting.get_account(0);
         let query = PMRawDataQuery {};
         let raw_data = query.query_raw_data(account).await.unwrap();
@@ -479,7 +472,7 @@ mod tests {
     #[tokio::test]
     async fn test_real_swap_balance() {
         let _ = setup_logger(Some(LevelFilter::Trace));
-        let setting = &SETTING;
+        let setting = &BRAAVOS_SETTING;
         let account = setting.get_account(0);
 
         let pm_acc_balance_info = CommandInfo::new_with_security(BinanceBase::PortfolioMargin,

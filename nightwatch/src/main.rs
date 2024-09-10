@@ -10,9 +10,7 @@ use hyper::{
 use log::{error, info, LevelFilter};
 
 mod prometheus_server;
-mod settings;
 mod clients;
-mod models;
 mod errors;
 mod utils;
 

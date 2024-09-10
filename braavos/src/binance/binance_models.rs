@@ -21,19 +21,19 @@ impl From<BinanceBase> for String {
     }
 }
 
-pub(crate) enum BinancePath {
+pub enum BinancePath {
     Normal(NormalAPI),
     PAPI(PmAPI),
 }
 
 #[derive(Debug)]
-pub(crate) enum NormalAPI {
+pub enum NormalAPI {
     PingAPI,
     SpotTickerAPI,
 }
 
 
-pub(crate) enum PmAPI { //统一账户
+pub enum PmAPI { //统一账户
     BalanceAPI,
     SwapPositionAPI,
 }
@@ -247,7 +247,6 @@ impl Default for TimeStampRequest {
 
 #[cfg(test)]
 mod tests {
-    use crate::binance::binance_models::{BinanceBase, BinancePath, NormalAPI};
     use crate::binance::binance_models::{BinanceBase, BinancePath, NormalAPI};
 
     #[test]
