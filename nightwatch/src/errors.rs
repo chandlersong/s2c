@@ -16,12 +16,3 @@ impl fmt::Display for NightWatchError {
 
 // 实现 Error trait，用于提供错误信息
 impl Error for NightWatchError {}
-
-// 实现 From trait，将 io::Error 转换为 CustomError
-impl From<reqwest::Error> for NightWatchError {
-    fn from(error: reqwest::Error) -> Self {
-        NightWatchError {
-            message: format!("request Error: {}", error),
-        }
-    }
-}

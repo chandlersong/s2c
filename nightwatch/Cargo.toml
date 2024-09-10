@@ -7,20 +7,9 @@ edition = "2021"
 braavos = { path = "../braavos" }
 prometheus = "0.13.4"
 hyper = { workspace = true }
-config = { workspace = true }
-serde = { workspace = true }
-reqwest = { workspace = true }
 tokio = { workspace = true }
-url = { workspace = true }
-sha2 = { workspace = true }
-hmac = { workspace = true }
 rust_decimal = { workspace = true }
 rust_decimal_macros = { workspace = true }
-async-trait = { workspace = true }
-serde_json = { workspace = true }
 log = { workspace = true }
 fern = { workspace = true }
-humantime = { workspace = true }
 
-[dev-dependencies]
-mockall = { workspace = true }
