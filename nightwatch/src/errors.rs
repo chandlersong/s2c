@@ -1,3 +1,4 @@
+use braavos::errors::BraavosError;
 use std::error::Error;
 use std::fmt;
 
@@ -16,3 +17,11 @@ impl fmt::Display for NightWatchError {
 
 // 实现 Error trait，用于提供错误信息
 impl Error for NightWatchError {}
+
+impl From<BraavosError> for NightWatchError {
+    fn from(error: BraavosError) -> Self {
+        NightWatchError {
+            message: format!("request Error: {}", error),
+        }
+    }
+}

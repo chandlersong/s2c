@@ -10,7 +10,8 @@ use serde::de::DeserializeOwned;
 use serde_json::Error as JsonError;
 use std::fmt::Display;
 use std::marker::PhantomData;
-use std::sync::LazyLock;
+use std::sync::{mpsc, LazyLock};
+use std::thread;
 use tokio::join;
 use url::Url;
 
@@ -60,7 +61,7 @@ fn init_client() -> reqwest::Client {
     proxy_builder.build().unwrap()
 }
 
-pub trait BNCommand<T: Display, U: DeserializeOwned> {
+pub(crate) trait BNCommand<T: Display, U: DeserializeOwned> {
     async fn execute(&self, info: CommandInfo, data: Option<T>) -> Result<U, BraavosError>;
 }
 
@@ -104,7 +105,7 @@ impl<T: Display, U: DeserializeOwned> BNCommand<T, U> for GetCommand<T, U> {
             Ok(resp1) => Ok(resp1),
             Err(_) => {
                 error!("binance error response,{}",&body);
-                panic!("binance request error!,response:{}", &body)
+                Err(BraavosError::new(body))
             }
         }
     }
@@ -154,12 +155,15 @@ impl RawDataQuery<PMRawAccountData> for PMRawDataQuery {
 
 
 pub struct PMAccountReader {
-    pub funding_rate_arbitrage: Vec<String>,
-    pub burning_bnb: bool,
+    pub account: Account,
 }
 
 
 impl PMAccountReader {
+    pub fn new(account: Account) -> PMAccountReader {
+        PMAccountReader { account }
+    }
+
     fn cal_account_summary(&self, acc_position: &Vec<PMBalance>, ticker: &Vec<Ticker>, um_swap: SwapSummary) -> AccountSummary {
         let mut swap_pnl = dec!(0);
         let mut total_balance = dec!(0); //cross_margin_free
@@ -179,7 +183,7 @@ impl PMAccountReader {
                     negative_balance = negative_balance + b.negative_balance;
                 }
                 "BNB" => {
-                    if !self.burning_bnb {
+                    if !self.account.burning_free {
                         let (bal, pnl, negative) = cal_equity(b, ticker);
                         total_balance = total_balance + bal;
                         negative_balance = negative_balance + negative;
@@ -209,7 +213,10 @@ impl PMAccountReader {
 
 
     fn um_swap_balance(&self, swap_position: &Vec<UMSwapPosition>) -> SwapSummary {
-        let fra_symbol: Vec<String> = self.funding_rate_arbitrage.iter().map(|x| format!("{}USDT", x)).collect();
+        let fra_symbol: Vec<String> = match &self.account.funding_rate_arbitrage {
+            None => { vec![] }
+            Some(fra) => { fra.iter().map(|x| format!("{}USDT", x)).collect() }
+        };
         let mut balance = dec!(0);
         let mut short_balance = dec!(0);
         let mut long_balance = dec!(0);
@@ -259,11 +266,40 @@ impl PMAccountReader {
 }
 
 
-impl AccountReader<PMRawAccountData> for PMAccountReader {
-    fn account_balance(&self, raw_data: &PMRawAccountData) -> AccountSummary {
-        let swap_summary = self.um_swap_balance(&raw_data.um_swap_position);
+impl AccountReader for PMAccountReader {
+    fn account_balance(&self) -> Result<AccountSummary, BraavosError> {
+        let (tx, rx) = mpsc::channel();
 
-        self.cal_account_summary(&raw_data.account_balance, &raw_data.spot_ticker, swap_summary)
+        let account = self.account.clone();
+        thread::spawn(move || {
+            let query = PMRawDataQuery {};
+            thread::spawn(move || {
+                let result = tokio::runtime::Runtime::new()
+                    .unwrap()
+                    .block_on(query.query_raw_data(&account));
+                tx.send(result).unwrap();
+            });
+        });
+
+        match rx.recv() {
+            Ok(result) => {
+                match result {
+                    Ok(data) => {
+                        let swap_summary = self.um_swap_balance(&data.um_swap_position);
+
+                        Ok(self.cal_account_summary(&data.account_balance, &data.spot_ticker, swap_summary))
+                    }
+                    Err(err) => {
+                        error!("{}", err.to_string());
+                        Err(err)
+                    }
+                }
+            }
+            Err(e) => {
+                error!("{}", e.to_string());
+                Err(BraavosError::new(e.to_string()))
+            }
+        }
     }
 }
 
@@ -299,11 +335,25 @@ mod tests {
     use crate::utils::{parse_test_json, setup_logger};
     use log::LevelFilter;
 
+    impl PMAccountReader {
+        pub fn new_for_ut(funding_rate_arbitrage: Vec<String>, burning_bnb: bool) -> PMAccountReader {
+            PMAccountReader {
+                account: Account {
+                    name: "".to_string(),
+                    api_key: "".to_string(),
+                    secret: "".to_string(),
+                    funding_rate_arbitrage: Some(funding_rate_arbitrage),
+                    burning_free: burning_bnb,
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_cm_swap_balance() {
         let _ = setup_logger(Some(LevelFilter::Trace));
         let swap_position: Vec<UMSwapPosition> = parse_test_json::<Vec<UMSwapPosition>>("tests/data/binance_papi_um_position_risk.json");
-        let calculator = PMAccountReader { funding_rate_arbitrage: vec![], burning_bnb: false };
+        let calculator = PMAccountReader::new_for_ut(vec![], false);
         let actual = calculator.um_swap_balance(&swap_position);
         trace!("actual is {:?}",actual);
         assert_eq!(dec!(904.67784156), actual.long_balance);
@@ -319,7 +369,7 @@ mod tests {
     fn test_cm_swap_balance_with_fra() {
         let _ = setup_logger(Some(LevelFilter::Trace));
         let swap_position: Vec<UMSwapPosition> = parse_test_json::<Vec<UMSwapPosition>>("tests/data/binance_papi_um_position_risk.json");
-        let calculator = PMAccountReader { funding_rate_arbitrage: vec!["SOL".to_string(), "ETH".to_string()], burning_bnb: false };
+        let calculator = PMAccountReader::new_for_ut(vec!["SOL".to_string(), "ETH".to_string()], false);
         let actual = calculator.um_swap_balance(&swap_position);
         trace!("actual is {:?}",actual);
         assert_eq!(dec!(904.67784156), actual.long_balance, "long_balance错误");
@@ -345,7 +395,7 @@ mod tests {
         let _ = setup_logger(Some(LevelFilter::Trace));
         let balance: Vec<PMBalance> = parse_test_json::<Vec<PMBalance>>("tests/data/binance_papi_get_balance.json");
         let ticker: Vec<Ticker> = parse_test_json::<Vec<Ticker>>("tests/data/binance_spot_ticker.json");
-        let calculator = PMAccountReader { funding_rate_arbitrage: vec![], burning_bnb: false };
+        let calculator = PMAccountReader::new_for_ut(vec![], false);
         let actual = calculator.cal_account_summary(&balance, &ticker, mock_empty_swap_summary());
         println!("{:?}", actual);
         assert_eq!(dec!(107.15440471), actual.usdt_equity);
@@ -372,7 +422,7 @@ mod tests {
         let _ = setup_logger(Some(LevelFilter::Trace));
         let balance: Vec<PMBalance> = parse_test_json::<Vec<PMBalance>>("tests/data/binance_papi_get_balance.json");
         let ticker: Vec<Ticker> = parse_test_json::<Vec<Ticker>>("tests/data/binance_spot_ticker.json");
-        let calculator = PMAccountReader { funding_rate_arbitrage: vec![], burning_bnb: true };
+        let calculator = PMAccountReader::new_for_ut(vec![], true);
         let actual = calculator.cal_account_summary(&balance, &ticker, mock_empty_swap_summary());
         println!("{:?}", actual);
         assert_eq!(dec!(107.15440471), actual.usdt_equity);
@@ -392,7 +442,7 @@ mod tests {
         let _ = setup_logger(Some(LevelFilter::Trace));
         let balance: Vec<PMBalance> = parse_test_json::<Vec<PMBalance>>("tests/data/binance_papi_get_balance_v1.json");
         let ticker: Vec<Ticker> = parse_test_json::<Vec<Ticker>>("tests/data/binance_spot_ticker.json");
-        let calculator = PMAccountReader { funding_rate_arbitrage: vec![], burning_bnb: false };
+        let calculator = PMAccountReader::new_for_ut(vec![], false);
         let actual = calculator.cal_account_summary(&balance, &ticker, mock_empty_swap_summary());
         println!("{:?}", actual);
         assert_eq!(dec!(109.15440471), actual.usdt_equity);
@@ -459,12 +509,8 @@ mod tests {
     async fn test_real_pm_balance() {
         let _ = setup_logger(Some(LevelFilter::Trace));
         let setting = &BRAAVOS_SETTING;
-        let account = setting.get_account(0);
-        let query = PMRawDataQuery {};
-        let raw_data = query.query_raw_data(account).await.unwrap();
-
-        let calculator = PMAccountReader { funding_rate_arbitrage: vec![], burning_bnb: false };
-        let actual = calculator.account_balance(&raw_data);
+        let calculator = PMAccountReader::new(setting.accounts[0].clone());
+        let actual = calculator.account_balance();
         println!("{:?}", actual)
     }
 
@@ -486,7 +532,7 @@ mod tests {
         let swap = um_swap_position.execute(pm_acc_balance_info, Some(Default::default())).await.unwrap();
 
 
-        let calculator = PMAccountReader { funding_rate_arbitrage: vec!["SOL".to_string(), "ETH".to_string()], burning_bnb: false };
+        let calculator = PMAccountReader::new(account.clone());
         let actual = calculator.um_swap_balance(&swap);
         println!("{:?}", actual)
     }

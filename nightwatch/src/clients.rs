@@ -1,9 +1,10 @@
 use crate::errors::NightWatchError;
+use log::error;
 
 use crate::prometheus_gauge;
 use crate::prometheus_server::ToGauge;
-use braavos::accounts::{AccountReader, RawDataQuery};
-use braavos::binance::binance_commands::{execute_ping, PMAccountReader, PMRawDataQuery};
+use braavos::accounts::AccountReader;
+use braavos::binance::binance_commands::{execute_ping, PMAccountReader};
 use braavos::models::{AccountSummary, Decimal, SwapPosition, SwapSummary};
 use braavos::settings::{Account, BRAAVOS_SETTING};
 use prometheus::Gauge;
@@ -71,28 +72,25 @@ impl ToGauge for SwapPosition {
 
 
 async fn cal_one_account_gauge(account: &Account) -> Vec<Gauge> {
-    let query = PMRawDataQuery {};
-    let raw_data = query.query_raw_data(account).await.unwrap();
+    let calculator = PMAccountReader::new(account.clone());
+    match calculator.account_balance() {
+        Ok(data) => {
+            let mut res = vec![];
+            res.extend(data.to_prometheus_gauge(&account.name));
+            let um_swap = data.um_swap_summary;
+            res.extend(um_swap.to_prometheus_gauge(&account.name));
+            let um_swap_position = um_swap.positions;
+            for p in &um_swap_position {
+                res.extend(p.to_prometheus_gauge(&account.name));
+            }
+            res
+        },
 
-
-    let funding_rate_arbitrage = match &account.funding_rate_arbitrage {
-        None => { vec![] }
-        Some(v) => { v.clone() }
-    };
-
-    let calculator = PMAccountReader { funding_rate_arbitrage, burning_bnb: account.burning_free };
-    let data = calculator.account_balance(&raw_data);
-
-
-    let mut res = vec![];
-    res.extend(data.to_prometheus_gauge(&account.name));
-    let um_swap = data.um_swap_summary;
-    res.extend(um_swap.to_prometheus_gauge(&account.name));
-    let um_swap_position = um_swap.positions;
-    for p in &um_swap_position {
-        res.extend(p.to_prometheus_gauge(&account.name));
+        Err(e) => {
+            error!("Error getting account balance: {}", e);
+            vec![]
+        }
     }
-    res
 }
 
 #[cfg(test)]

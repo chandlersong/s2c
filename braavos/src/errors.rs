@@ -13,6 +13,12 @@ impl fmt::Display for BraavosError {
     }
 }
 
+impl BraavosError {
+    pub fn new(message: String) -> BraavosError {
+        BraavosError { message }
+    }
+}
+
 // 实现 Error trait，用于提供错误信息
 impl Error for BraavosError {}
 
