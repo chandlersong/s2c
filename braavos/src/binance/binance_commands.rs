@@ -286,7 +286,6 @@ impl AccountReader for PMAccountReader {
                 match result {
                     Ok(data) => {
                         let swap_summary = self.um_swap_balance(&data.um_swap_position);
-
                         Ok(self.cal_account_summary(&data.account_balance, &data.spot_ticker, swap_summary))
                     }
                     Err(err) => {
