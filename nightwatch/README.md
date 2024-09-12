@@ -17,11 +17,11 @@ nightwatch:
   volumes:
     - ./conf/nightwatch-settings.toml:/app/Settings.toml
   environment:
-    - NIGHT_WATCH_CONFIG=/app/Settings.toml
+    - BRAAVOS_CONFIG=/app/Settings.toml
 ```
 
 1. 环境变量为必须。指向容器内的地址
-2. 配置文件参考[Settings.toml](tests/Settings.toml)
+2. 配置文件参考[Settings.toml](../braavos/tests/Settings.toml)
 
 
 
