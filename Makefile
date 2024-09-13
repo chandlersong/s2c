@@ -5,6 +5,7 @@ APP_VERSION= 0.1.0
 build_night_watch:
 	docker build \
 	  -f nightwatch/Dockerfile \
+	  --build-arg APP_NAME=nightwatch \
       -t chandlersong/nightwatch:0.1.0\
       .
 
