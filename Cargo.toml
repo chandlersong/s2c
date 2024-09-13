@@ -3,7 +3,7 @@ resolver = "2"
 
 
 
-members = [
+members = ["direwolf",
     "braavos",
     "nightwatch",
 ]
