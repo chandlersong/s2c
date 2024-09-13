@@ -45,6 +45,8 @@ jobs:
           tags: |
             chandlersong/nightwatch:${{ inputs.imageTag }}
             chandlersong/nightwatch:latest
+          build-args: |
+            APP_NAME=nightwatch
           platforms: ${{ inputs.platform }}
       - name: Image digest
         run: echo ${{ steps.docker_build.outputs.digest }}

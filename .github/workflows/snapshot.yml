@@ -37,7 +37,6 @@ jobs:
           tags: chandlersong/nightwatch:snapshot
           build-args: |
             APP_NAME=nightwatch
-            Test=123
           platforms: linux/amd64
       - name: Image digest
         run: echo ${{ steps.docker_build.outputs.digest }}
