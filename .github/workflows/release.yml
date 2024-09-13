@@ -40,7 +40,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
-          file: ${{ github.workspace }}/nightwatch/Dockerfile
+          file: ${{ github.workspace }}/Dockerfile
           push: true
           tags: |
             chandlersong/nightwatch:${{ inputs.imageTag }}
