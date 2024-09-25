@@ -1,7 +1,7 @@
 use crate::models::{Decimal, UnixTimeStamp};
 use crate::utils;
 use crate::utils::unix_time;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Debug)]
 pub enum BinanceBase {
@@ -70,6 +70,33 @@ impl From<WsMethod> for String {
                 WsMethod::Time => { String::from("time") }
             }
         )
+    }
+}
+
+
+// 自定义序列化函数
+pub fn serialize_wx_method<S>(shape: &WsMethod, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match shape {
+        WsMethod::Ping => serializer.serialize_str("ping"),
+        WsMethod::Time => serializer.serialize_str("time"),
+    }
+}
+
+// 自定义反序列化函数
+pub fn deserialize_wx_method<'de, D>(deserializer: D) -> Result<WsMethod, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s: String = String::deserialize(deserializer)?;
+    match s.as_str() {
+        "ping" => { Ok(WsMethod::Ping) }
+        "time" => { Ok(WsMethod::Time) }
+        _ => {
+            panic!("not found command")
+        }
     }
 }
 
