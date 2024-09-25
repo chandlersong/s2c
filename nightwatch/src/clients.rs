@@ -4,7 +4,7 @@ use log::error;
 use crate::prometheus_gauge;
 use crate::prometheus_server::ToGauge;
 use braavos::accounts::AccountReader;
-use braavos::binance::binance_commands::{execute_ping, PMAccountReader};
+use braavos::binance::bn_commands::{execute_ping, PMAccountReader};
 use braavos::models::{AccountSummary, Decimal, SwapPosition, SwapSummary};
 use braavos::settings::{Account, BRAAVOS_SETTING};
 use prometheus::Gauge;

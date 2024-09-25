@@ -17,3 +17,7 @@ hmac = { workspace = true }
 url = { workspace = true }
 tokio = { workspace = true }
 config = { workspace = true }
+sonyflake = { workspace = true }
+
+tokio-tungstenite = { version = "0.24.0", features = ["native-tls"] }
+futures-util = "0.3.30"

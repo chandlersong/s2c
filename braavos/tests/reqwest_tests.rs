@@ -17,7 +17,7 @@ mod tests {
         let https_proxy = reqwest::Proxy::https("http://localhost:7890")?;
 
         let client = reqwest::Client::builder()
-            .proxy(https_proxy)
+            // .proxy(https_proxy)
             .build().unwrap();
 
         let res = client.get(url).send().await?;

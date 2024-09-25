@@ -6,8 +6,10 @@ use log::LevelFilter;
 use serde::de;
 use serde::{Deserialize, Deserializer};
 use sha2::Sha256;
+use sonyflake::Sonyflake;
 #[cfg(test)]
 use std::fs;
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) fn unix_time() -> UnixTimeStamp {
@@ -55,6 +57,25 @@ pub fn setup_logger(level: Option<LevelFilter>) -> Result<(), fern::InitError> {
         .chain(std::io::stdout())
         .apply()?;
     Ok(())
+}
+
+
+pub struct SnowyFlakeWrapper {
+    sf: Mutex<Sonyflake>,
+}
+
+impl SnowyFlakeWrapper {
+    pub fn new() -> SnowyFlakeWrapper {
+        let sf = Sonyflake::new().unwrap();
+        SnowyFlakeWrapper {
+            sf: Mutex::new(sf),
+        }
+    }
+
+    pub fn next_id_string(&self) -> String {
+        let mut value = self.sf.lock().unwrap();
+        value.next_id().unwrap().to_string()
+    }
 }
 
 #[cfg(test)]

@@ -1,5 +1,5 @@
 use crate::accounts::{AccountReader, RawDataQuery};
-use crate::binance::binance_models::{BinanceBase, BinancePath, CommandInfo, NormalAPI, PMBalance, PMRawAccountData, PmAPI, SecurityInfo, Ticker, TimeStampRequest, UMSwapPosition};
+use crate::binance::bn_models::{BinanceBase, BinancePath, CommandInfo, NormalAPI, PMBalance, PMRawAccountData, PmAPI, SecurityInfo, Ticker, TimeStampRequest, UMSwapPosition};
 use crate::errors::BraavosError;
 use crate::models::{AccountSummary, Decimal, EmptyObject, SwapPosition, SwapSummary};
 use crate::settings::{Account, BRAAVOS_SETTING};

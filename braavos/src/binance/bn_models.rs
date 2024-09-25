@@ -44,13 +44,30 @@ impl From<BinancePath> for String {
         String::from(
             match api {
                 BinancePath::Normal(route) => match route {
-                    NormalAPI::PingAPI => String::from("api/v3/ping"),
+                    NormalAPI::PingAPI => String::from("api/v3/Ping"),
                     NormalAPI::SpotTickerAPI => String::from("/api/v3/ticker/price"),
                 }
                 BinancePath::PAPI(route) => match route {
                     PmAPI::BalanceAPI => String::from("/papi/v1/balance"),
                     PmAPI::SwapPositionAPI => String::from("/papi/v1/um/positionRisk"),
                 }
+            }
+        )
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum WsMethod {
+    Ping,
+    Time,
+}
+
+impl From<WsMethod> for String {
+    fn from(command: WsMethod) -> Self {
+        String::from(
+            match command {
+                WsMethod::Ping => { String::from("ping") }
+                WsMethod::Time => { String::from("time") }
             }
         )
     }
@@ -247,11 +264,11 @@ impl Default for TimeStampRequest {
 
 #[cfg(test)]
 mod tests {
-    use crate::binance::binance_models::{BinanceBase, BinancePath, NormalAPI};
+    use crate::binance::bn_models::{BinanceBase, BinancePath, NormalAPI};
 
     #[test]
     fn test_api_define() {
-        assert_eq!("api/v3/ping", String::from(BinancePath::Normal(NormalAPI::PingAPI)));
+        assert_eq!("api/v3/Ping", String::from(BinancePath::Normal(NormalAPI::PingAPI)));
         assert_eq!("https://api.binance.com/", String::from(BinanceBase::Normal));
     }
 }
