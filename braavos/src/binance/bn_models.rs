@@ -60,17 +60,7 @@ impl From<BinancePath> for String {
 pub enum WsMethod {
     Ping,
     Time,
-}
-
-impl From<WsMethod> for String {
-    fn from(command: WsMethod) -> Self {
-        String::from(
-            match command {
-                WsMethod::Ping => { String::from("ping") }
-                WsMethod::Time => { String::from("time") }
-            }
-        )
-    }
+    SUBSCRIBE,
 }
 
 
@@ -82,6 +72,7 @@ where
     match shape {
         WsMethod::Ping => serializer.serialize_str("ping"),
         WsMethod::Time => serializer.serialize_str("time"),
+        WsMethod::SUBSCRIBE => serializer.serialize_str("SUBSCRIBE"),
     }
 }
 
@@ -94,6 +85,7 @@ where
     match s.as_str() {
         "ping" => { Ok(WsMethod::Ping) }
         "time" => { Ok(WsMethod::Time) }
+        "SUBSCRIBE" => { Ok(WsMethod::SUBSCRIBE) }
         _ => {
             panic!("not found command")
         }

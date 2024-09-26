@@ -12,15 +12,27 @@ pub struct WsRequest {
     id: String,
     #[serde(serialize_with = "serialize_wx_method", deserialize_with = "deserialize_wx_method")]
     method: WsMethod,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    params: Option<Vec<String>>
 }
 
 
 impl WsRequest {
-    pub fn new(method: WsMethod) -> WsRequest {
+    pub fn new(method: WsMethod, params: Option<Vec<String>>) -> WsRequest {
         let id = SF.next_id_string();
         WsRequest {
             id,
             method,
+            params
+        }
+    }
+
+    pub fn empty_new(method: WsMethod) -> WsRequest {
+        let id = SF.next_id_string();
+        WsRequest {
+            id,
+            method,
+            params: None,
         }
     }
 
@@ -36,7 +48,7 @@ mod tests {
 
     #[test]
     fn test_ws_request_2_json() {
-        let request = WsRequest { id: "abc".to_string(), method: Ping };
+        let request = WsRequest { id: "abc".to_string(), method: Ping, params: None };
         let expected = "{\"id\":\"abc\",\"method\":\"ping\"}";
         assert_eq!(expected, request.to_json(), "序列化出错")
     }
