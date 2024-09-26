@@ -48,5 +48,17 @@ jobs:
           build-args: |
             APP_NAME=nightwatch
           platforms: ${{ inputs.platform }}
+      - name: direwolf build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: ${{ github.workspace }}/Dockerfile
+          push: true
+          tags: |
+            chandlersong/nightwatch:${{ inputs.imageTag }}
+            chandlersong/nightwatch:latest
+          build-args: |
+            APP_NAME=direwolf
+          platforms: ${{ inputs.platform }}
       - name: Image digest
         run: echo ${{ steps.docker_build.outputs.digest }}
