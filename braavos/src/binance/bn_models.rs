@@ -1,6 +1,6 @@
 use crate::models::{Decimal, UnixTimeStamp};
 use crate::utils;
-use crate::utils::unix_time;
+use crate::utils::{string_to_float, unix_time};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Debug)]
@@ -278,6 +278,52 @@ impl Default for TimeStampRequest {
             rec_window: 5000,
         }
     }
+}
+
+#[derive(PartialEq, Debug, Serialize, Deserialize, Clone)]
+pub struct Bids {
+    #[serde(with = "string_to_float")]
+    pub price: f64,
+    #[serde(with = "string_to_float")]
+    pub quantity: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Asks {
+    #[serde(with = "string_to_float")]
+    pub price: f64,
+    #[serde(with = "string_to_float")]
+    pub quantity: f64,
+}
+
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SymbolDepthData {
+    #[serde(rename = "e")]
+    pub event_type: String, // 事件类型：depthUpdate
+
+    #[serde(rename = "E")]
+    pub event_time: u64,
+
+    #[serde(rename = "s")]
+    pub symbol: String,
+
+    #[serde(rename = "U")]
+    pub first_update_id: u64,
+
+    #[serde(rename = "u")]
+    pub final_update_id: u64,
+
+    #[serde(rename = "pu")]
+    #[serde(default)]
+    pub previous_final_update_id: Option<u64>,
+
+    #[serde(rename = "b")]
+    pub bids: Vec<Bids>,
+
+    #[serde(rename = "a")]
+    pub asks: Vec<Asks>,
 }
 
 

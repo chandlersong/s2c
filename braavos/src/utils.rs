@@ -78,6 +78,26 @@ impl SnowyFlakeWrapper {
     }
 }
 
+pub mod string_to_float {
+    use serde::{Deserialize, Deserializer, Serializer};
+    use std::str::FromStr;
+
+    pub fn serialize<S>(value: &f64, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_f64(*value)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<f64, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        f64::from_str(&s).map_err(serde::de::Error::custom)
+    }
+}
+
 #[cfg(test)]
 pub fn parse_test_json<T: for<'a> de::Deserialize<'a>>(path: &str) -> T {
     let json = fs::read_to_string(path).unwrap();

@@ -1,4 +1,4 @@
-use crate::binance::bn_models::{deserialize_wx_method, serialize_wx_method, WsMethod};
+use crate::binance::bn_models::{deserialize_wx_method, serialize_wx_method, SymbolDepthData, WsMethod};
 use crate::utils::SnowyFlakeWrapper;
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
@@ -41,15 +41,38 @@ impl WsRequest {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(untagged)]
+enum WsSpotResponse {
+    Depth(SymbolDepthData),
+}
+
 #[cfg(test)]
 mod tests {
     use crate::binance::bn_models::WsMethod::Ping;
-    use crate::binance::bn_ws_commands::WsRequest;
+    use crate::binance::bn_ws_commands::{WsRequest, WsSpotResponse};
+    use crate::utils::{parse_test_json, setup_logger};
+    use log::LevelFilter;
 
     #[test]
     fn test_ws_request_2_json() {
         let request = WsRequest { id: "abc".to_string(), method: Ping, params: None };
         let expected = "{\"id\":\"abc\",\"method\":\"ping\"}";
         assert_eq!(expected, request.to_json(), "序列化出错")
+    }
+
+    #[test]
+    fn test_deserialize_spot_ws_response() {
+        let _ = setup_logger(Some(LevelFilter::Debug));
+        let entities: Vec<WsSpotResponse> = parse_test_json::<Vec<WsSpotResponse>>("tests/data/ws_stream_btc_usdt_depth.json");
+        assert_eq!(entities.len(), 1, "{:?}", entities);
+        match &entities[0] {
+            WsSpotResponse::Depth(v) => {
+                assert_eq!(v.symbol, "BTCUSDT", "symbol mismatch");
+                assert_eq!(v.bids.len(), 32, "{:?}", v.bids.len());
+                assert_eq!(v.asks.len(), 51, "{:?}", v.asks.len());
+                print!("{:?}", v);
+            }
+        }
     }
 }
