@@ -1,4 +1,4 @@
-use crate::binance::bn_models::{deserialize_wx_method, serialize_wx_method, SymbolDepthData, WsMethod};
+use crate::binance::bn_models::{deserialize_wx_method, serialize_wx_method, SymbolDepthData, WsCommandResponse, WsMethod};
 use crate::utils::SnowyFlakeWrapper;
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
@@ -43,7 +43,8 @@ impl WsRequest {
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(untagged)]
-enum WsSpotResponse {
+pub enum WsSpotResponse {
+    CommonResponse(WsCommandResponse),
     Depth(SymbolDepthData),
 }
 
@@ -73,6 +74,7 @@ mod tests {
                 assert_eq!(v.asks.len(), 51, "{:?}", v.asks.len());
                 print!("{:?}", v);
             }
+            _ => {}
         }
     }
 }

@@ -1,8 +1,8 @@
 use braavos::binance::bn_models::WsMethod::SUBSCRIBE;
-use braavos::binance::bn_ws_commands::WsRequest;
+use braavos::binance::bn_ws_commands::{WsRequest, WsSpotResponse};
 use braavos::utils::setup_logger;
 use futures_util::{SinkExt, StreamExt};
-use log::{info, LevelFilter};
+use log::{error, info, LevelFilter};
 use std::sync::Arc;
 use tokio::sync::Barrier;
 use tokio_tungstenite::connect_async;
@@ -17,7 +17,8 @@ async fn main() {
     let (mut write, mut read) = ws_stream.split();
 
     // let subscribe_message = r#"{ "method": "SUBSCRIBE", "params": ["btcusdt@aggTrade"], "id": 1 }"#;
-    let params = Some(vec!["btcusdt@aggTrade".to_string(), "btcusdt@depth".to_string()]);
+    // let params = Some(vec!["btcusdt@aggTrade".to_string(), "btcusdt@depth".to_string()]);
+    let params = Some(vec!["btcusdt@depth".to_string()]);
     let subscribe_request = WsRequest::new(SUBSCRIBE, params);
     let request_body = subscribe_request.to_json();
     println!("request body is {}", request_body);
@@ -35,6 +36,16 @@ async fn main() {
                 match msg {
                     Message::Text(txt) => {
                         info!("Received: {}", txt);
+                        let entity: WsSpotResponse = serde_json::from_str(&txt).unwrap();
+                        match entity {
+                            WsSpotResponse::Depth(v) => {
+                                info!("{:?} at {:?}", v.symbol,v.event_time);
+                            }
+                            a => {
+                                error!("Received unexpected: {:?}", a);
+                            }
+                        }
+
                     }
                     Message::Ping(ping) => {
                         // Respond to Ping messages with Pong

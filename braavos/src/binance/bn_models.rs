@@ -280,6 +280,17 @@ impl Default for TimeStampRequest {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WsCommandResponse {
+    #[serde(rename = "id")]
+    pub id: String,
+
+    #[serde(rename = "result")]
+    pub result: Option<String>,
+
+}
+
 #[derive(PartialEq, Debug, Serialize, Deserialize, Clone)]
 pub struct Bids {
     #[serde(with = "string_to_float")]
