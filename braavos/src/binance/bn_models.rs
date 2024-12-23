@@ -44,7 +44,7 @@ impl From<BinancePath> for String {
         String::from(
             match api {
                 BinancePath::Normal(route) => match route {
-                    NormalAPI::PingAPI => String::from("api/v3/Ping"),
+                    NormalAPI::PingAPI => String::from("/api/v3/ping"),
                     NormalAPI::SpotTickerAPI => String::from("/api/v3/ticker/price"),
                 }
                 BinancePath::PAPI(route) => match route {
