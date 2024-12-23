@@ -344,7 +344,7 @@ mod tests {
 
     #[test]
     fn test_api_define() {
-        assert_eq!("api/v3/Ping", String::from(BinancePath::Normal(NormalAPI::PingAPI)));
+        assert_eq!("/api/v3/ping", String::from(BinancePath::Normal(NormalAPI::PingAPI)));
         assert_eq!("https://api.binance.com/", String::from(BinanceBase::Normal));
     }
 }
