@@ -44,13 +44,13 @@ async fn start_listen(mut ws_read: SplitStream<WebSocketStream<MaybeTlsStream<Tc
                             let entity: WsSpotResponse = response;
                             match entity {
                                 WsSpotResponse::Depth(v) => {
-                                    info!("{:?} at {:?}", v.symbol,v.event_time);
+                                    debug!("{:?} at {:?}", v.symbol,v.event_time);
                                 }
                                 WsSpotResponse::AllMiniTicker(v) => {
-                                    info!("receive mini ticker,num:{:?}", v.tickers.len());
+                                    debug!("receive mini ticker,num:{:?}", v.tickers.len());
                                 }
                                 WsSpotResponse::CommonResponse(v) => {
-                                    info!("receive common result {:?}", v.result);
+                                    debug!("receive common result {:?}", v.result);
                                 }
                             }
                         }
@@ -63,12 +63,12 @@ async fn start_listen(mut ws_read: SplitStream<WebSocketStream<MaybeTlsStream<Tc
                 Message::Ping(ping) => {
                     // Respond to Ping messages with Pong
                     let ping_text = String::from_utf8_lossy(&ping).to_string();
-                    info!("收到ping消息:{:?}", ping_text);
+                    debug!("收到ping消息:{:?}", ping_text);
                     if sender.send_message(Message::Pong(ping)).await.is_err() {
                         error!("Failed to send Pong");
                         return;
                     }
-                    info!("发送pong消息");
+                    debug!("发送pong消息");
                 }
                 Message::Pong(_) => {
                     // Optionally handle Pong messages
