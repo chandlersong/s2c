@@ -9,6 +9,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 pub enum BinanceBase {
     Normal,
     PortfolioMargin,
+    WsUrl,
 }
 
 
@@ -17,7 +18,8 @@ impl From<BinanceBase> for String {
         String::from(
             match url {
                 BinanceBase::Normal => String::from("https://api.binance.com/"),
-                BinanceBase::PortfolioMargin => String::from("https://papi.binance.com/")
+                BinanceBase::PortfolioMargin => String::from("https://papi.binance.com/"),
+                BinanceBase::WsUrl => String::from("https://papi.binance.com/"),
             }
         )
     }

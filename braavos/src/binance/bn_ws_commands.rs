@@ -1,6 +1,4 @@
-use crate::binance::bn_models::{
-    deserialize_wx_method, serialize_wx_method, SymbolDepthData, WsCommandResponse, WsMethod,
-};
+use crate::binance::bn_models::{deserialize_wx_method, serialize_wx_method, BinanceBase, SymbolDepthData, WsCommandResponse, WsMethod};
 use crate::utils::SnowyFlakeWrapper;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
@@ -89,7 +87,7 @@ impl BinanceWSClient {
         在思考了之后，我绝对，整个client只是负责保存channel。
         然后通过channel对这个websocket做通行。这样比较符合websocket的处理方式
         */
-        let url = "wss://stream.binance.com:9443/ws/bbb";
+        let url = String::from(BinanceBase::WsUrl);
         let (ws_stream, _) = connect_async(url).await.expect("Failed to connect");
         info!("WebSocket handshake has been successfully completed");
         let (write, read): (SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>, SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>) = ws_stream.split();
