@@ -98,6 +98,26 @@ pub mod string_to_float {
     }
 }
 
+pub mod string_to_int {
+    use serde::{Deserialize, Deserializer, Serializer};
+    use std::str::FromStr;
+
+    pub fn serialize<S>(value: &u64, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u64(*value)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<u64, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        u64::from_str(&s).map_err(serde::de::Error::custom)
+    }
+}
+
 #[cfg(test)]
 pub fn parse_test_json<T: for<'a> de::Deserialize<'a>>(path: &str) -> T {
     let json = fs::read_to_string(path).unwrap();

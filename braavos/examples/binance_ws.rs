@@ -1,4 +1,4 @@
-use braavos::binance::bn_models::WsMethod::SUBSCRIBE;
+use braavos::binance::bn_models::WsMethod::GetProperty;
 use braavos::binance::bn_ws_commands::{BinanceWSClient, WsRequest};
 use braavos::utils::setup_logger;
 use log::LevelFilter;
@@ -13,8 +13,8 @@ async fn main() {
 
     let barrier = Arc::new(Barrier::new(2));
 
-    let params = Some(vec!["btcusdt@depth".to_string()]);
-    let subscribe_request = WsRequest::new(SUBSCRIBE, params);
+    let params = Some(vec!["combined".to_string()]);
+    let subscribe_request = WsRequest::new(GetProperty, params);
     ws_client.send_command(subscribe_request).await.expect("message send failed");
     barrier.wait().await;
 }

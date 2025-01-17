@@ -9,7 +9,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 pub enum BinanceBase {
     Normal,
     PortfolioMargin,
-    WsUrl,
+    WsSwapStreamUrl,
 }
 
 
@@ -19,7 +19,7 @@ impl From<BinanceBase> for String {
             match url {
                 BinanceBase::Normal => String::from("https://api.binance.com/"),
                 BinanceBase::PortfolioMargin => String::from("https://papi.binance.com/"),
-                BinanceBase::WsUrl => String::from("https://papi.binance.com/"),
+                BinanceBase::WsSwapStreamUrl => String::from("wss://fstream.binance.com"),
             }
         )
     }
@@ -65,6 +65,8 @@ pub enum WsMethod {
     Ping,
     Time,
     SUBSCRIBE,
+    SetProperty,
+    GetProperty
 }
 
 
@@ -77,6 +79,8 @@ where
         WsMethod::Ping => serializer.serialize_str("ping"),
         WsMethod::Time => serializer.serialize_str("time"),
         WsMethod::SUBSCRIBE => serializer.serialize_str("SUBSCRIBE"),
+        WsMethod::SetProperty => serializer.serialize_str("SET_PROPERTY"),
+        WsMethod::GetProperty => serializer.serialize_str("GET_PROPERTY"),
     }
 }
 
@@ -339,6 +343,51 @@ pub struct SymbolDepthData {
 
     #[serde(rename = "a")]
     pub asks: Vec<Asks>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AllMiniTickerResponse {
+    #[serde(rename = "stream")]
+    pub stream: String, // 事件类型：!miniTicker@arr
+
+    #[serde(rename = "data")]
+    pub tickers: Vec<MiniTicker>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct MiniTicker {
+    #[serde(rename = "e")]
+    pub event_type: String, // 事件类型：24hrMiniTicker
+
+    #[serde(rename = "E")]
+    pub event_time: u64,
+    //
+    #[serde(rename = "s")]
+    pub symbol: String,
+    //
+    #[serde(rename = "c")]
+    #[serde(with = "string_to_float")]
+    pub close: f64,
+
+    #[serde(rename = "o")]
+    #[serde(with = "string_to_float")]
+    pub open: f64,
+
+    #[serde(rename = "h")]
+    #[serde(with = "string_to_float")]
+    pub high: f64,
+
+    #[serde(rename = "l")]
+    #[serde(with = "string_to_float")]
+    pub low: f64,
+
+    #[serde(rename = "v")]
+    #[serde(with = "string_to_float")]
+    pub volume: f64,
+
+    #[serde(rename = "q")]
+    #[serde(with = "string_to_float")]
+    pub quote_volume: f64,
 }
 
 struct BinanceTickDashBoard {

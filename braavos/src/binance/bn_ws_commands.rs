@@ -1,4 +1,4 @@
-use crate::binance::bn_models::{deserialize_wx_method, serialize_wx_method, BinanceBase, SymbolDepthData, WsCommandResponse, WsMethod};
+use crate::binance::bn_models::{deserialize_wx_method, serialize_wx_method, AllMiniTickerResponse, BinanceBase, SymbolDepthData, WsCommandResponse, WsMethod};
 use crate::utils::SnowyFlakeWrapper;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
@@ -38,14 +38,25 @@ async fn start_listen(mut ws_read: SplitStream<WebSocketStream<MaybeTlsStream<Tc
         if let Ok(msg) = message {
             match msg {
                 Message::Text(txt) => {
-                    info!("Received: {}", txt);
-                    let entity: WsSpotResponse = serde_json::from_str(&txt).unwrap();
-                    match entity {
-                        WsSpotResponse::Depth(v) => {
-                            info!("{:?} at {:?}", v.symbol,v.event_time);
+                    let response = serde_json::from_str(&txt);
+                    match response {
+                        Ok(response) => {
+                            let entity: WsSpotResponse = response;
+                            match entity {
+                                WsSpotResponse::Depth(v) => {
+                                    info!("{:?} at {:?}", v.symbol,v.event_time);
+                                }
+                                WsSpotResponse::AllMiniTicker(v) => {
+                                    info!("receive mini ticker,num:{:?}", v.tickers.len());
+                                }
+                                WsSpotResponse::CommonResponse(v) => {
+                                    info!("receive common result {:?}", v.result);
+                                }
+                            }
                         }
-                        a => {
-                            error!("Received unexpected: {:?}", a);
+                        Err(e) => {
+                            error!("error deserializing depth: {:?}", e);
+                            error!("Received error context: {}", txt);
                         }
                     }
                 }
@@ -87,7 +98,7 @@ impl BinanceWSClient {
         在思考了之后，我绝对，整个client只是负责保存channel。
         然后通过channel对这个websocket做通行。这样比较符合websocket的处理方式
         */
-        let url = String::from(BinanceBase::WsUrl);
+        let url = format!("{}/stream?streams=!miniTicker@arr", String::from(BinanceBase::WsSwapStreamUrl));
         let (ws_stream, _) = connect_async(url).await.expect("Failed to connect");
         info!("WebSocket handshake has been successfully completed");
         let (write, read): (SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>, SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>) = ws_stream.split();
@@ -164,6 +175,7 @@ impl WsRequest {
 pub enum WsSpotResponse {
     CommonResponse(WsCommandResponse),
     Depth(SymbolDepthData),
+    AllMiniTicker(AllMiniTickerResponse),
 }
 
 #[cfg(test)]
@@ -196,6 +208,19 @@ mod tests {
                 assert_eq!(v.bids.len(), 32, "{:?}", v.bids.len());
                 assert_eq!(v.asks.len(), 51, "{:?}", v.asks.len());
                 print!("{:?}", v);
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn test_deserialize_swap_ws_all_mini_ticker_response() {
+        let _ = setup_logger(Some(LevelFilter::Debug));
+        let entry: WsSpotResponse =
+            parse_test_json::<WsSpotResponse>("tests/data/ws_stream_binance_miniTicker_all.json");
+        match entry {
+            WsSpotResponse::AllMiniTicker(v) => {
+                println!("{:?}", v);
             }
             _ => {}
         }
