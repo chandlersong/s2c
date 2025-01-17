@@ -9,7 +9,7 @@ async fn main() {
     // In most cases, you should create/build a reqwest::Client and reuse
     // it for all requests.
     // let http_proxy = reqwest::Proxy::http("http://localhost:7890")?;
-    let https_proxy = reqwest::Proxy::https("http://localhost:7890").unwrap();
+    let https_proxy = reqwest::Proxy::https("http://localhost:7891").unwrap();
 
     let client = reqwest::Client::builder()
         .proxy(https_proxy)

@@ -1,6 +1,8 @@
-use crate::models::{Decimal, UnixTimeStamp};
+use crate::models::{DashBoard, Decimal, UnixTimeStamp};
 use crate::utils;
 use crate::utils::{string_to_float, unix_time};
+use async_trait::async_trait;
+use moka::future::Cache;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Debug)]
@@ -337,6 +339,28 @@ pub struct SymbolDepthData {
     pub asks: Vec<Asks>,
 }
 
+struct BinanceTickDashBoard {
+    cache: Cache<String, Ticker>,
+}
+
+impl BinanceTickDashBoard {
+    pub fn new() -> Self {
+        BinanceTickDashBoard {
+            cache: Cache::new(10_000)
+        }
+    }
+}
+
+#[async_trait]
+impl DashBoard<Ticker> for BinanceTickDashBoard {
+    async fn set_value(&mut self, key: String, value: Ticker) {
+        self.cache.insert(key, value).await;
+    }
+
+    async fn get_value(&mut self, key: String) -> Ticker {
+        self.cache.get(&key).await.unwrap()
+    }
+}
 
 #[cfg(test)]
 mod tests {
