@@ -1,3 +1,4 @@
+use braavos::binance::bn_models::BinanceBase;
 use braavos::binance::bn_models::WsMethod::GetProperty;
 use braavos::binance::bn_ws_commands::{BinanceWSClient, WsRequest};
 use braavos::utils::setup_logger;
@@ -8,7 +9,8 @@ use tokio::sync::Barrier;
 #[tokio::main]
 async fn main() {
     let _ = setup_logger(Some(LevelFilter::Debug));
-    let mut ws_client = BinanceWSClient::connect_and_listen().await;
+    let url = format!("{}/stream?streams=!miniTicker@arr", String::from(BinanceBase::WsSwapStreamUrl));
+    let mut ws_client = BinanceWSClient::connect_and_listen(url).await;
 
 
     let barrier = Arc::new(Barrier::new(2));

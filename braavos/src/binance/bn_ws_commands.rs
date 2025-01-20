@@ -1,24 +1,24 @@
-use crate::binance::bn_models::{deserialize_wx_method, serialize_wx_method, AllMiniTickerResponse, BinanceBase, SymbolDepthData, WsCommandResponse, WsMethod};
+use crate::binance::bn_models::{deserialize_wx_method, serialize_wx_method, AllMiniTickerResponse, SymbolDepthData, WsCommandResponse, WsMethod};
 use crate::utils::SnowyFlakeWrapper;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
 const SF: LazyLock<SnowyFlakeWrapper> = LazyLock::new(|| SnowyFlakeWrapper::new());
 
-
-async fn do_send(mut req_recv: Receiver<(Message, oneshot::Sender<String>)>, mut write: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>) {
+type ShareWsWriter = Arc<Mutex<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>>;
+async fn do_send(mut req_recv: Receiver<(Message, oneshot::Sender<String>)>, write: ShareWsWriter) {
     while let Some((req, rx)) = req_recv.recv().await {
-        if let Err(e) = write.send(req).await {
+        if let Err(e) = write.lock().await.send(req).await {
             error!("error sending request to BN: {}",  e);
             match rx.send("fail".to_string()) {
                 Ok(_) => {}
@@ -33,57 +33,73 @@ async fn do_send(mut req_recv: Receiver<(Message, oneshot::Sender<String>)>, mut
     }
 }
 
-async fn start_listen(mut ws_read: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>, mut sender: BinanceWSClient) {
-    while let Some(message) = ws_read.next().await {
-        if let Ok(msg) = message {
-            match msg {
-                Message::Text(txt) => {
-                    let response = serde_json::from_str(&txt);
-                    match response {
-                        Ok(response) => {
-                            let entity: WsSpotResponse = response;
-                            match entity {
-                                WsSpotResponse::Depth(v) => {
-                                    debug!("{:?} at {:?}", v.symbol,v.event_time);
-                                }
-                                WsSpotResponse::AllMiniTicker(v) => {
-                                    debug!("receive mini ticker,num:{:?}", v.tickers.len());
-                                }
-                                WsSpotResponse::CommonResponse(v) => {
-                                    debug!("receive common result {:?}", v.result);
+pub async fn connect(url: String) -> (SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>, SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>) {
+    let (ws_stream, _) = connect_async(url).await.expect("Failed to connect");
+    info!("WebSocket handshake has been successfully completed");
+    ws_stream.split()
+}
+
+async fn start_listen(ws_read: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>, writer: ShareWsWriter, url: String) {
+    let mut reader = ws_read;
+    loop {
+        while let Some(message) = reader.next().await {
+            if let Ok(msg) = message {
+                match msg {
+                    Message::Text(txt) => {
+                        let response = serde_json::from_str(&txt);
+                        match response {
+                            Ok(response) => {
+                                let entity: WsSpotResponse = response;
+                                match entity {
+                                    WsSpotResponse::Depth(v) => {
+                                        debug!("{:?} at {:?}", v.symbol,v.event_time);
+                                    }
+                                    WsSpotResponse::AllMiniTicker(v) => {
+                                        debug!("receive mini ticker,num:{:?}", v.tickers.len());
+                                    }
+                                    WsSpotResponse::CommonResponse(v) => {
+                                        debug!("receive common result {:?}", v.result);
+                                    }
                                 }
                             }
-                        }
-                        Err(e) => {
-                            error!("error deserializing depth: {:?}", e);
-                            error!("Received error context: {}", txt);
+                            Err(e) => {
+                                error!("error deserializing depth: {:?}", e);
+                                error!("Received error context: {}", txt);
+                            }
                         }
                     }
-                }
-                Message::Ping(ping) => {
-                    // Respond to Ping messages with Pong
-                    let ping_text = String::from_utf8_lossy(&ping).to_string();
-                    debug!("收到ping消息:{:?}", ping_text);
-                    if sender.send_message(Message::Pong(ping)).await.is_err() {
-                        error!("Failed to send Pong");
-                        return;
+                    Message::Ping(ping) => {
+                        // Respond to Ping messages with Pong
+                        let ping_text = String::from_utf8_lossy(&ping).to_string();
+                        debug!("收到ping消息:{:?}", ping_text);
+                        if writer.lock().await.send(Message::Pong(ping)).await.is_err() {
+                            error!("Failed to send Pong");
+                            return;
+                        }
+                        debug!("发送pong消息");
                     }
-                    debug!("发送pong消息");
-                }
-                Message::Pong(_) => {
-                    // Optionally handle Pong messages
-                    println!("Received Pong");
-                }
-                Message::Close(_) => {
-                    // Handle close messages if needed
-                    info!("Received Close message");
-                    return;
-                }
-                a => {
-                    info!("收到其他消息,{:?}",a);
+                    Message::Pong(_) => {
+                        // Optionally handle Pong messages
+                        debug!("Received Pong");
+                    }
+                    Message::Close(_) => {
+                        // Handle close messages if needed
+                        info!("Received Close message");
+                        break;
+                    }
+                    a => {
+                        info!("收到其他消息,{:?}",a);
+                    }
                 }
             }
         }
+        info!("ws断开，重新连接");
+        let (hew_writer, new_read) = connect(url.clone()).await;
+
+        reader = new_read;
+        let mut writer_pr = writer.lock().await;
+        *writer_pr = hew_writer;
+        info!("ws断开，重新连接完成");
     }
 }
 
@@ -92,29 +108,31 @@ pub struct BinanceWSClient {
     req_sender: Sender<(Message, oneshot::Sender<String>)>,
 }
 
+
 impl BinanceWSClient {
-    pub async fn connect_and_listen() -> Self {
+    pub async fn connect_and_listen(url: String) -> Self {
         /*
         在思考了之后，我绝对，整个client只是负责保存channel。
         然后通过channel对这个websocket做通行。这样比较符合websocket的处理方式
         */
-        let url = format!("{}/stream?streams=!miniTicker@arr", String::from(BinanceBase::WsSwapStreamUrl));
-        let (ws_stream, _) = connect_async(url).await.expect("Failed to connect");
-        info!("WebSocket handshake has been successfully completed");
-        let (write, read): (SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>, SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>) = ws_stream.split();
+        let (write, read) = connect(url.clone()).await;
         let (tx, rx) = mpsc::channel(1);
+        let share_writer = Arc::new(Mutex::new(write));
         let res = BinanceWSClient { req_sender: tx };
-        let client = res.clone();
-        tokio::spawn(async move {
-            do_send(rx, write).await;
-        });
+
+        let send_clone = Arc::clone(&share_writer);
 
         tokio::spawn(async move {
-            start_listen(read, client).await;
+            do_send(rx, send_clone).await;
+        });
+        let listen_clone = Arc::clone(&share_writer);
+        tokio::spawn(async move {
+            start_listen(read, listen_clone, url).await;
         });
 
         res
     }
+
 
     pub async fn send_command(&mut self, req: WsRequest) -> Result<(), String> {
         let request_body = req.to_json();
