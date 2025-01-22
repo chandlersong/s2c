@@ -1,4 +1,4 @@
-use log::{error, info, trace, warn};
+use log::{debug, error, info, trace, warn};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::fmt::Display;
@@ -56,7 +56,7 @@ impl<S: Send + Clone + Display> SymbolRefresher<S> {
                     }
                 }
                 _ => {
-                    info!("Cache not initialized");
+                    debug!("Cache not initialized");
                 }
             }
 
