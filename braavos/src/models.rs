@@ -1,4 +1,6 @@
 use async_trait::async_trait;
+#[cfg(test)]
+use mockall::automock;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 
@@ -76,6 +78,7 @@ impl<'de> Deserialize<'de> for EmptyObject {
     }
 }
 
+#[cfg_attr(test, automock)]
 #[async_trait]
 pub trait DashBoard<T: Send> {
     /*
@@ -86,4 +89,5 @@ pub trait DashBoard<T: Send> {
 
     async fn get_value(&mut self, key: String) -> T;
 }
+
 

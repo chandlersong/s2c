@@ -1,9 +1,11 @@
+use crate::binance::bn_tools::unix_2_readable;
 use crate::models::{DashBoard, Decimal, UnixTimeStamp};
 use crate::utils;
 use crate::utils::{string_to_float, unix_time};
 use async_trait::async_trait;
 use moka::future::Cache;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::fmt;
 
 #[derive(Debug)]
 pub enum BinanceBase {
@@ -354,7 +356,7 @@ pub struct AllMiniTickerResponse {
     pub tickers: Vec<MiniTicker>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct MiniTicker {
     #[serde(rename = "e")]
     pub event_type: String, // 事件类型：24hrMiniTicker
@@ -390,6 +392,12 @@ pub struct MiniTicker {
     pub quote_volume: f64,
 }
 
+impl fmt::Display for MiniTicker {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "MiniTicker: symbol:{},time:{}", self.symbol, unix_2_readable(&self.event_time))
+    }
+}
+
 struct BinanceTickDashBoard {
     cache: Cache<String, Ticker>,
 }
@@ -416,10 +424,29 @@ impl DashBoard<Ticker> for BinanceTickDashBoard {
 #[cfg(test)]
 mod tests {
     use crate::binance::bn_models::{BinanceBase, BinancePath, NormalAPI};
+    use crate::binance::bn_ws_commands::WsSpotResponse;
+    use crate::utils::{parse_test_json, setup_logger};
+    use log::LevelFilter;
 
     #[test]
     fn test_api_define() {
         assert_eq!("/api/v3/ping", String::from(BinancePath::Normal(NormalAPI::PingAPI)));
         assert_eq!("https://api.binance.com/", String::from(BinanceBase::Normal));
     }
+
+
+    #[test]
+    fn test_deserialize_swap_ws_all_mini_ticker_response() {
+        let _ = setup_logger(Some(LevelFilter::Debug));
+        let entry: WsSpotResponse =
+            parse_test_json::<WsSpotResponse>("tests/data/ws_stream_binance_miniTicker_all.json");
+        match entry {
+            WsSpotResponse::AllMiniTicker(v) => {
+                println!("{:?}", v);
+            }
+            _ => {}
+        }
+    }
+
+
 }

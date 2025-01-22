@@ -231,16 +231,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_deserialize_swap_ws_all_mini_ticker_response() {
-        let _ = setup_logger(Some(LevelFilter::Debug));
-        let entry: WsSpotResponse =
-            parse_test_json::<WsSpotResponse>("tests/data/ws_stream_binance_miniTicker_all.json");
-        match entry {
-            WsSpotResponse::AllMiniTicker(v) => {
-                println!("{:?}", v);
-            }
-            _ => {}
-        }
-    }
 }
