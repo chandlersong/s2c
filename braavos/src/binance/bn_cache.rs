@@ -49,7 +49,7 @@ impl<S: Send + Clone + Display> SymbolRefresher<S> {
                     self.cache_sender.send((data.clone(), rx)).await.expect("TODO: panic message");
                     match timeout(Duration::from_millis(200), tx).await {
                         Ok(response_result) => match response_result {
-                            Ok(_) => { trace!("data refresher received successfully") }
+                            Ok(_) => { trace!("data refresher successfully") }
                             Err(e) => { error!("Error refresh cache: error:{}", e) }
                         },
                         Err(_) => { warn!("cache response timeout,{}",&data) }
