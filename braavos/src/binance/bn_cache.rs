@@ -1,4 +1,4 @@
-use log::{debug, error, info, trace, warn};
+use log::{debug, error, trace, warn};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::fmt::Display;
@@ -19,21 +19,22 @@ use tokio::time::{sleep, timeout};
 ///
 ///
 
-type ShareCache<S> = Arc<RwLock<Option<S>>>;
+pub(crate) type ShareCache<S> = Arc<RwLock<Option<S>>>;
 type CacheSender<S> = Sender<(S, oneshot::Sender<S>)>;
 
-async fn refresh_cache<S>(cache: &ShareCache<S>, value: S) {
+
+pub async fn refresh_cache<S>(cache: &ShareCache<S>, value: S) {
     *cache.write().await = Some(value);
 }
 #[derive(Clone)]
-pub struct SymbolRefresher<S: Send + Clone + Display> {
+pub struct CacheRefresher<S: Send + Clone + Display> {
     cache: ShareCache<S>,
     symbol_key: String,
     cache_sender: CacheSender<S>,
 }
 
 
-impl<S: Send + Clone + Display> SymbolRefresher<S> {
+impl<S: Send + Clone + Display> CacheRefresher<S> {
     pub fn new(cache: ShareCache<S>, symbol_key: String, cache_sender: CacheSender<S>) -> Self {
         Self { cache, symbol_key, cache_sender }
     }
@@ -68,7 +69,7 @@ impl<S: Send + Clone + Display> SymbolRefresher<S> {
 
 #[cfg(test)]
 mod tests {
-    use crate::binance::bn_cache::{refresh_cache, SymbolRefresher};
+    use crate::binance::bn_cache::{refresh_cache, CacheRefresher};
     use crate::binance::bn_models::MiniTicker;
     use crate::utils::setup_logger;
     use log::LevelFilter;
@@ -119,7 +120,7 @@ mod tests {
     pub async fn test_start_cache_is_none() {
         let (tx, _) = mpsc::channel(1000);
         let cache = Arc::new(RwLock::new(None));
-        let refresher: SymbolRefresher<MiniTicker> = SymbolRefresher::new(cache, "abc".to_string(), tx);
+        let refresher: CacheRefresher<MiniTicker> = CacheRefresher::new(cache, "abc".to_string(), tx);
         let share_refresher = Arc::new(refresher);
         let cache_send = share_refresher.clone();
         tokio::spawn(async move {
@@ -137,7 +138,7 @@ mod tests {
         let _ = setup_logger(Some(LevelFilter::Debug));
         let (tx, mut rx) = mpsc::channel(1000);
         let cache = Arc::new(RwLock::new(None));
-        let refresher: SymbolRefresher<MiniTicker> = SymbolRefresher::new(cache.clone(), "abc".to_string(), tx);
+        let refresher: CacheRefresher<MiniTicker> = CacheRefresher::new(cache.clone(), "abc".to_string(), tx);
         let cache_send = refresher.clone();
         tokio::spawn(async move {
             cache_send.start().await;

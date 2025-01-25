@@ -1,14 +1,16 @@
-use crate::binance::bn_models::{deserialize_wx_method, serialize_wx_method, AllMiniTickerResponse, SymbolDepthData, WsCommandResponse, WsMethod};
+use crate::binance::bn_cache::{refresh_cache, ShareCache};
+use crate::binance::bn_models::{deserialize_wx_method, serialize_wx_method, AllMiniTickerResponse, MiniTicker, SymbolDepthData, WsCommandResponse, WsMethod};
 use crate::utils::SnowyFlakeWrapper;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
@@ -196,12 +198,136 @@ pub enum WsSpotResponse {
     AllMiniTicker(AllMiniTickerResponse),
 }
 
+
+/**
+* 这里的代码的主要作用还是为了把消息的处理单独抽离出来。
+* 其实之后的想法，每一个需要订阅的消息。都会有一个专门的处理类
+*/
+pub struct MiniTickerHandler
+where
+{
+    caches: HashMap<String, ShareCache<MiniTicker>>,
+    cache_initial: Box<dyn FnMut(MiniTicker, ShareCache<MiniTicker>)>,
+}
+
+impl<> MiniTickerHandler<>
+{
+    pub fn new(initial: Box<dyn FnMut(MiniTicker, ShareCache<MiniTicker>)>) -> Self {
+        MiniTickerHandler {
+            caches: HashMap::new(),
+            cache_initial: initial,
+        }
+    }
+
+    pub async fn handle(&mut self, msg: AllMiniTickerResponse) {
+        let tickers = msg.tickers;
+        for ticker in tickers {
+            let cache = &self.caches.get(&ticker.symbol);
+            match cache {
+                Some(cache) => {
+                    refresh_cache(cache, ticker).await;
+                }
+                None => {
+                    let symbol = ticker.symbol.clone();
+                    let cache = Arc::new(RwLock::new(Some(ticker.clone())));
+                    self.caches.insert(symbol, cache.clone());
+
+                    (self.cache_initial)(ticker, cache);
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::binance::bn_cache::ShareCache;
     use crate::binance::bn_models::WsMethod::Ping;
-    use crate::binance::bn_ws_commands::{WsRequest, WsSpotResponse};
+    use crate::binance::bn_models::{AllMiniTickerResponse, MiniTicker};
+    use crate::binance::bn_ws_commands::{MiniTickerHandler, WsRequest, WsSpotResponse};
     use crate::utils::{parse_test_json, setup_logger};
     use log::LevelFilter;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::RwLock;
+
+    #[tokio::test]
+    async fn test_mini_ticker_handler_exits() {
+        let cache_initial = |_ticker: MiniTicker, _cache: ShareCache<MiniTicker>| {};
+
+        let mut caches: HashMap<String, ShareCache<MiniTicker>> = HashMap::new();
+        let symbol_cache = Arc::new(RwLock::new(Some(create_mock_mini_ticker("bb".to_string(), 0.3))));
+        caches.insert("a1".to_string(), symbol_cache);
+        let mut handler = MiniTickerHandler {
+            caches,
+            cache_initial: Box::new(cache_initial),
+        };
+
+        let response = AllMiniTickerResponse {
+            stream: "".to_string(),
+            tickers: vec![
+                create_mock_mini_ticker("a1".to_string(), 0.1)
+            ],
+        };
+
+        handler.handle(response).await;
+
+        let actual_cache = &*handler.caches["a1"].read().await;
+
+        if let Some(actual) = actual_cache {
+            assert_eq!(actual.close, 0.1, "缓存没有被调换")
+        } else {
+            assert!(false, "cache被清空")
+        }
+    }
+
+    #[tokio::test]
+    async fn test_mini_ticker_handler_new() {
+        let flag = Arc::new(Mutex::new(false));
+        let flag_clone = flag.clone();
+        let cache_initial = move |_ticker: MiniTicker, _cache: ShareCache<MiniTicker>| {
+            *flag_clone.lock().unwrap() = true
+        };
+
+        let mut handler = MiniTickerHandler {
+            caches: HashMap::new(),
+            cache_initial: Box::new(cache_initial),
+        };
+
+        let response = AllMiniTickerResponse {
+            stream: "".to_string(),
+            tickers: vec![
+                create_mock_mini_ticker("a1".to_string(), 0.1)
+            ],
+        };
+
+        handler.handle(response).await;
+
+        let actual_cache = &*handler.caches["a1"].read().await;
+
+        if let Some(actual) = actual_cache {
+            assert_eq!(actual.close, 0.1, "缓存没有被调换")
+        } else {
+            assert!(false, "cache被清空")
+        }
+
+        let execute_initial = *flag.lock().unwrap();
+        assert!(execute_initial, "初始化方法没有运行");
+    }
+
+    fn create_mock_mini_ticker(symbol: String, val: f64) -> MiniTicker {
+        MiniTicker {
+            event_type: "abc".to_string(),
+            event_time: 0,
+            symbol,
+            close: val,
+            open: val,
+            high: val,
+            low: val,
+            volume: val,
+            quote_volume: val,
+        }
+    }
 
     #[test]
     fn test_ws_request_2_json() {

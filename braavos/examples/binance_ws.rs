@@ -6,6 +6,16 @@ use log::LevelFilter;
 use std::sync::Arc;
 use tokio::sync::Barrier;
 
+///
+/// 这个用例，主要是为了演示一个websocket启动的监听过程。
+/// 整个过程应该
+/// 1. 准备应对各种消息的处理。
+///     - 缓存的初始化。
+/// 2. 开启监听。
+/// 3. 发送命令。
+///
+///
+
 #[tokio::main]
 async fn main() {
     let _ = setup_logger(Some(LevelFilter::Debug));
