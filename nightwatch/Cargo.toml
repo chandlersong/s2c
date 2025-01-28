@@ -11,5 +11,5 @@ tokio = { workspace = true }
 rust_decimal = { workspace = true }
 rust_decimal_macros = { workspace = true }
 log = { workspace = true }
-fern = { workspace = true }
+
 

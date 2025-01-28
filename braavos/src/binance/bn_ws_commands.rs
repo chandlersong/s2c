@@ -10,7 +10,7 @@ use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
+use tokio::sync::{broadcast, mpsc, oneshot, Mutex, RwLock};
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
@@ -41,7 +41,7 @@ pub async fn connect(url: String) -> (SplitSink<WebSocketStream<MaybeTlsStream<T
     ws_stream.split()
 }
 
-async fn start_listen(ws_read: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>, writer: ShareWsWriter, url: String) {
+async fn start_listen(ws_read: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>, writer: ShareWsWriter, url: String, mut mini_ticker_handler: MiniTickerHandler) {
     let mut reader = ws_read;
     loop {
         while let Some(message) = reader.next().await {
@@ -58,6 +58,7 @@ async fn start_listen(ws_read: SplitStream<WebSocketStream<MaybeTlsStream<TcpStr
                                     }
                                     WsSpotResponse::AllMiniTicker(v) => {
                                         debug!("receive mini ticker,num:{:?}", v.tickers.len());
+                                        mini_ticker_handler.handle(v.tickers).await;
                                     }
                                     WsSpotResponse::CommonResponse(v) => {
                                         debug!("receive common result {:?}", v.result);
@@ -105,31 +106,36 @@ async fn start_listen(ws_read: SplitStream<WebSocketStream<MaybeTlsStream<TcpStr
     }
 }
 
+///
+/// 对外的结构
 #[derive(Clone)]
 pub struct BinanceWSClient {
-    req_sender: Sender<(Message, oneshot::Sender<String>)>,
+    command_tx: Sender<(Message, oneshot::Sender<String>)>,
+    pub mini_ticker_tx: broadcast::Sender<MiniTicker>,
 }
 
 
 impl BinanceWSClient {
     pub async fn connect_and_listen(url: String) -> Self {
+        let (mini_ticker_tx, _) = broadcast::channel(500);
         /*
         在思考了之后，我绝对，整个client只是负责保存channel。
         然后通过channel对这个websocket做通行。这样比较符合websocket的处理方式
         */
         let (write, read) = connect(url.clone()).await;
-        let (tx, rx) = mpsc::channel(1);
         let share_writer = Arc::new(Mutex::new(write));
-        let res = BinanceWSClient { req_sender: tx };
-
+        let (command_tx, command_rx) = mpsc::channel(1);
+        let res = BinanceWSClient { command_tx, mini_ticker_tx: mini_ticker_tx.clone() };
         let send_clone = Arc::clone(&share_writer);
-
         tokio::spawn(async move {
-            do_send(rx, send_clone).await;
+            do_send(command_rx, send_clone).await;
         });
         let listen_clone = Arc::clone(&share_writer);
+        let mini_ticker_handler = MiniTickerHandler {
+            mini_ticker_tx: mini_ticker_tx.clone(),
+        };
         tokio::spawn(async move {
-            start_listen(read, listen_clone, url).await;
+            start_listen(read, listen_clone, url, mini_ticker_handler).await;
         });
 
         res
@@ -144,7 +150,7 @@ impl BinanceWSClient {
 
     pub async fn send_message(&mut self, msg: Message) -> Result<(), String> {
         let (response_tx, response_rx) = oneshot::channel();
-        if self.req_sender.send((msg, response_tx)).await.is_err() {
+        if self.command_tx.send((msg, response_tx)).await.is_err() {
             Err("websocket may be close".to_string())
         } else {
             match timeout(Duration::from_secs(2), response_rx).await {
@@ -206,114 +212,32 @@ pub enum WsSpotResponse {
 pub struct MiniTickerHandler
 where
 {
-    caches: HashMap<String, ShareCache<MiniTicker>>,
-    cache_initial: Box<dyn FnMut(MiniTicker, ShareCache<MiniTicker>)>,
+    mini_ticker_tx: broadcast::Sender<MiniTicker>,
 }
 
 impl<> MiniTickerHandler<>
 {
-    pub fn new(initial: Box<dyn FnMut(MiniTicker, ShareCache<MiniTicker>)>) -> Self {
+    pub fn new(mini_ticker_tx: broadcast::Sender<MiniTicker>) -> Self {
         MiniTickerHandler {
-            caches: HashMap::new(),
-            cache_initial: initial,
+            mini_ticker_tx
         }
     }
 
-    pub async fn handle(&mut self, msg: AllMiniTickerResponse) {
-        let tickers = msg.tickers;
+    pub async fn handle(&mut self, tickers: Vec<MiniTicker>) {
         for ticker in tickers {
-            let cache = &self.caches.get(&ticker.symbol);
-            match cache {
-                Some(cache) => {
-                    refresh_cache(cache, ticker).await;
-                }
-                None => {
-                    let symbol = ticker.symbol.clone();
-                    let cache = Arc::new(RwLock::new(Some(ticker.clone())));
-                    self.caches.insert(symbol, cache.clone());
-
-                    (self.cache_initial)(ticker, cache);
-                }
-            }
+            self.mini_ticker_tx.send(ticker).unwrap();
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::binance::bn_cache::ShareCache;
+    use crate::binance::bn_models::MiniTicker;
     use crate::binance::bn_models::WsMethod::Ping;
-    use crate::binance::bn_models::{AllMiniTickerResponse, MiniTicker};
-    use crate::binance::bn_ws_commands::{MiniTickerHandler, WsRequest, WsSpotResponse};
+    use crate::binance::bn_ws_commands::{WsRequest, WsSpotResponse};
     use crate::utils::{parse_test_json, setup_logger};
     use log::LevelFilter;
-    use std::collections::HashMap;
-    use std::sync::{Arc, Mutex};
-    use tokio::sync::RwLock;
 
-    #[tokio::test]
-    async fn test_mini_ticker_handler_exits() {
-        let cache_initial = |_ticker: MiniTicker, _cache: ShareCache<MiniTicker>| {};
-
-        let mut caches: HashMap<String, ShareCache<MiniTicker>> = HashMap::new();
-        let symbol_cache = Arc::new(RwLock::new(Some(create_mock_mini_ticker("bb".to_string(), 0.3))));
-        caches.insert("a1".to_string(), symbol_cache);
-        let mut handler = MiniTickerHandler {
-            caches,
-            cache_initial: Box::new(cache_initial),
-        };
-
-        let response = AllMiniTickerResponse {
-            stream: "".to_string(),
-            tickers: vec![
-                create_mock_mini_ticker("a1".to_string(), 0.1)
-            ],
-        };
-
-        handler.handle(response).await;
-
-        let actual_cache = &*handler.caches["a1"].read().await;
-
-        if let Some(actual) = actual_cache {
-            assert_eq!(actual.close, 0.1, "缓存没有被调换")
-        } else {
-            assert!(false, "cache被清空")
-        }
-    }
-
-    #[tokio::test]
-    async fn test_mini_ticker_handler_new() {
-        let flag = Arc::new(Mutex::new(false));
-        let flag_clone = flag.clone();
-        let cache_initial = move |_ticker: MiniTicker, _cache: ShareCache<MiniTicker>| {
-            *flag_clone.lock().unwrap() = true
-        };
-
-        let mut handler = MiniTickerHandler {
-            caches: HashMap::new(),
-            cache_initial: Box::new(cache_initial),
-        };
-
-        let response = AllMiniTickerResponse {
-            stream: "".to_string(),
-            tickers: vec![
-                create_mock_mini_ticker("a1".to_string(), 0.1)
-            ],
-        };
-
-        handler.handle(response).await;
-
-        let actual_cache = &*handler.caches["a1"].read().await;
-
-        if let Some(actual) = actual_cache {
-            assert_eq!(actual.close, 0.1, "缓存没有被调换")
-        } else {
-            assert!(false, "cache被清空")
-        }
-
-        let execute_initial = *flag.lock().unwrap();
-        assert!(execute_initial, "初始化方法没有运行");
-    }
 
     fn create_mock_mini_ticker(symbol: String, val: f64) -> MiniTicker {
         MiniTicker {

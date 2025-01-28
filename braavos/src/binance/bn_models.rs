@@ -394,7 +394,7 @@ pub struct MiniTicker {
 
 impl fmt::Display for MiniTicker {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "MiniTicker: symbol:{},time:{}", self.symbol, unix_2_readable(&self.event_time))
+        write!(f, "MiniTicker: symbol:{},time:{},close:{}", self.symbol, unix_2_readable(&self.event_time), self.close)
     }
 }
 

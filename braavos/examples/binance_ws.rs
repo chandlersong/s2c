@@ -28,5 +28,17 @@ async fn main() {
     let params = Some(vec!["combined".to_string()]);
     let subscribe_request = WsRequest::new(GetProperty, params);
     ws_client.send_command(subscribe_request).await.expect("message send failed");
+
+
+    let mut listener = ws_client.mini_ticker_tx.subscribe();
+
+    tokio::spawn(async move {
+        loop {
+            if let ticker = listener.recv().await.unwrap() {
+                println!("Got ticker from {:?}", &ticker);
+            }
+        }
+    });
+
     barrier.wait().await;
 }
