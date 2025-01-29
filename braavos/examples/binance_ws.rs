@@ -1,6 +1,6 @@
 use braavos::binance::bn_models::BinanceBase;
 use braavos::binance::bn_models::WsMethod::GetProperty;
-use braavos::binance::bn_ws_commands::{BinanceWSClient, WsRequest};
+use braavos::binance::bn_ws_commands::{connect_and_listen, WsRequest};
 use braavos::utils::setup_logger;
 use log::LevelFilter;
 use std::sync::Arc;
@@ -20,7 +20,7 @@ use tokio::sync::Barrier;
 async fn main() {
     let _ = setup_logger(Some(LevelFilter::Debug));
     let url = format!("{}/stream?streams=!miniTicker@arr", String::from(BinanceBase::WsSwapStreamUrl));
-    let mut ws_client = BinanceWSClient::connect_and_listen(url).await;
+    let mut ws_client = connect_and_listen(url).await;
 
 
     let barrier = Arc::new(Barrier::new(2));
@@ -34,9 +34,8 @@ async fn main() {
 
     tokio::spawn(async move {
         loop {
-            if let ticker = listener.recv().await.unwrap() {
-                println!("Got ticker from {:?}", &ticker);
-            }
+            let ticker = listener.recv().await;
+            println!("Got ticker from {:?}", &ticker);
         }
     });
 
