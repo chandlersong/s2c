@@ -1,4 +1,3 @@
-use crate::binance::bn_cache::ShareCache;
 use crate::binance::bn_models::{deserialize_wx_method, serialize_wx_method, AllMiniTickerResponse, MiniTicker, SymbolDepthData, WsCommandResponse, WsMethod};
 use crate::utils::SnowyFlakeWrapper;
 use async_trait::async_trait;
@@ -6,7 +5,6 @@ use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use tokio::net::TcpStream;
@@ -151,9 +149,7 @@ pub async fn connect_and_listen(url: String) -> BinanceWSClient {
         do_send(command_rx, send_clone).await;
     });
     let listen_clone = Arc::clone(&share_writer);
-    let mini_ticker_handler = MiniTickerHandler {
-        mini_ticker_tx: mini_ticker_tx.clone(),
-    };
+    let mini_ticker_handler = MiniTickerHandler::new(mini_ticker_tx);
     let text_handler = SpotTextMessageHandler {
         mini_ticker_handler
     };
@@ -174,8 +170,6 @@ pub struct BinanceWSClient {
 
 
 impl BinanceWSClient {
-
-
 
     pub async fn send_command(&mut self, req: WsRequest) -> Result<(), String> {
         let request_body = req.to_json();
@@ -269,9 +263,37 @@ impl<> MiniTickerHandler<>
 mod tests {
     use crate::binance::bn_models::MiniTicker;
     use crate::binance::bn_models::WsMethod::Ping;
-    use crate::binance::bn_ws_commands::{WsRequest, WsSpotResponse};
+    use crate::binance::bn_ws_commands::{MiniTickerHandler, WsRequest, WsSpotResponse};
     use crate::utils::{parse_test_json, setup_logger};
     use log::LevelFilter;
+    use tokio::sync::broadcast;
+
+    #[tokio::test]
+    async fn test_mini_ticker_handler_new() {
+        let (tx, mut rx) = broadcast::channel(2);
+
+        let mut handler = MiniTickerHandler::new(tx);
+
+        let tickers = vec![
+            create_mock_mini_ticker("a".to_string(), 1.0),
+        ];
+
+        tokio::spawn(async move {
+            handler.handle(tickers).await;
+        });
+
+
+        let actual = rx.recv().await;
+        match actual {
+            Ok(v) => {
+                assert_eq!(v.symbol, String::from("a"));
+                assert_eq!(v.close, 1.0);
+            }
+            Err(_) => {
+                assert!(false, "")
+            }
+        }
+    }
 
 
     fn create_mock_mini_ticker(symbol: String, val: f64) -> MiniTicker {
