@@ -1,7 +1,7 @@
 use crate::models::UnixTimeStamp;
 use hmac::digest::InvalidLength;
 use hmac::{Hmac, Mac};
-use log::LevelFilter;
+use log::{error, LevelFilter};
 #[cfg(test)]
 use serde::de;
 use serde::{Deserialize, Deserializer};
@@ -10,7 +10,9 @@ use sonyflake::Sonyflake;
 #[cfg(test)]
 use std::fs;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::sync::{broadcast, watch};
+use tokio::time;
 
 pub(crate) fn unix_time() -> UnixTimeStamp {
     let now = SystemTime::now();
@@ -122,5 +124,124 @@ pub mod string_to_int {
 pub fn parse_test_json<T: for<'a> de::Deserialize<'a>>(path: &str) -> T {
     let json = fs::read_to_string(path).unwrap();
     serde_json::from_str(&json).unwrap()
+}
+
+/// `FrequencyReducer` 用来把速度来进行降频处理。
+/// 比如在处理websocket信息的时候，因为所有信息都是1s一次，如果后续做不出来的时候，就有可能出现堵塞。
+/// 比如保存的时候，其实主要保存分钟信息就好了。没有必要保存所有信息。
+/// 所以做了这个奖品的操作。
+/// 这里，是以最新的数据为准
+///
+/// 这样做的主要原因是：
+/// 1. 因为是协程，应该不是很大。
+/// 2. Websocket的数据是每秒推送。同时，只会推送过去1s的数据。如果每个都存，没有丢弃机制，可能会堵塞。
+/// 3. 如果每一次推送，作为一个整体。因为那么些
+#[derive(Clone)]
+pub struct FrequencyReducer<S: Send + Clone + Sync> {
+    cache_tx: watch::Sender<Option<S>>,
+}
+
+
+impl<V: Send + Clone + Sync + 'static> FrequencyReducer<V> {
+    pub async fn new(out_tx: broadcast::Sender<V>, frequency_mill_seconds: u64) -> Self {
+        let (cache_tx, cache_rx) = watch::channel(None);
+        let res = Self { cache_tx };
+        tokio::spawn(
+            async move {
+                frequency_reducer_output(cache_rx, out_tx, frequency_mill_seconds).await;
+            }
+        );
+        res
+    }
+
+    pub async fn update(&mut self, value: V) {
+        self.cache_tx.send(Some(value)).unwrap();
+    }
+}
+
+async fn frequency_reducer_output<V: Send + Clone + Sync>(mut cache_rx: watch::Receiver<Option<V>>,
+                                                          out_tx: broadcast::Sender<V>,
+                                                          frequency_mill_seconds: u64) {
+    let mut interval = time::interval(Duration::from_millis(frequency_mill_seconds));
+    loop {
+        interval.tick().await; // 等待下一个间隔
+        if let Some(v) = cache_rx.borrow_and_update().clone() {
+            match out_tx.send(v) {
+                Ok(_) => {}
+                Err(e) => {
+                    error!("failed to send: {}", e);
+                }
+            };
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::utils::FrequencyReducer;
+    use std::time::Duration;
+    use tokio::sync::broadcast;
+    use tokio::time;
+
+    #[tokio::test]
+    pub async fn test_update_cache() {
+        let (tx, mut rx) = broadcast::channel(10);
+        let reducer: FrequencyReducer<i32> = FrequencyReducer::new(tx.clone(), 1000).await;
+
+
+        let mut reducer_clone = reducer.clone();
+        tokio::spawn(async move {
+            reducer_clone.update(1).await;
+        });
+
+        let timeout_duration = Duration::from_secs(3);
+        match time::timeout(timeout_duration, rx.recv()).await {
+            Ok(res) => {
+                match res {
+                    Ok(value) => {
+                        assert_eq!(value, 1, "wrong value");
+                    }
+                    Err(_) => {
+                        assert!(false, "not fresh");
+                    }
+                }
+            }
+            Err(_) => {
+                assert!(false, "channel timeout");
+            }
+        }
+    }
+
+
+    /// 有一个新的出来后，旧的应该被替换掉。
+    #[tokio::test]
+    pub async fn test_update_cache_replace() {
+        let (tx, mut rx) = broadcast::channel(10);
+        let reducer: FrequencyReducer<i32> = FrequencyReducer::new(tx.clone(), 1000).await;
+
+
+        let mut reducer_clone = reducer.clone();
+        tokio::spawn(async move {
+            reducer_clone.update(1).await;
+            reducer_clone.update(2).await;
+        });
+
+        let timeout_duration = Duration::from_secs(3);
+        match time::timeout(timeout_duration, rx.recv()).await {
+            Ok(res) => {
+                match res {
+                    Ok(value) => {
+                        assert_eq!(value, 2, "wrong value");
+                    }
+                    Err(_) => {
+                        assert!(false, "not fresh");
+                    }
+                }
+            }
+            Err(_) => {
+                assert!(false, "channel timeout");
+            }
+        }
+    }
 }
 

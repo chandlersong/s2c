@@ -261,8 +261,8 @@ impl<> MiniTickerHandler<>
 
 #[cfg(test)]
 mod tests {
-    use crate::binance::bn_models::MiniTicker;
     use crate::binance::bn_models::WsMethod::Ping;
+    use crate::binance::bn_tools::create_mock_mini_ticker;
     use crate::binance::bn_ws_commands::{MiniTickerHandler, WsRequest, WsSpotResponse};
     use crate::utils::{parse_test_json, setup_logger};
     use log::LevelFilter;
@@ -292,21 +292,6 @@ mod tests {
             Err(_) => {
                 assert!(false, "")
             }
-        }
-    }
-
-
-    fn create_mock_mini_ticker(symbol: String, val: f64) -> MiniTicker {
-        MiniTicker {
-            event_type: "abc".to_string(),
-            event_time: 0,
-            symbol,
-            close: val,
-            open: val,
-            high: val,
-            low: val,
-            volume: val,
-            quote_volume: val,
         }
     }
 

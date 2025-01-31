@@ -1,6 +1,8 @@
+use braavos::binance::bn_cache::BinanceTickDashBoard;
 use braavos::binance::bn_models::BinanceBase;
 use braavos::binance::bn_models::WsMethod::GetProperty;
 use braavos::binance::bn_ws_commands::{connect_and_listen, WsRequest};
+use braavos::models::DashBoard;
 use braavos::utils::setup_logger;
 use log::LevelFilter;
 use std::sync::Arc;
@@ -33,9 +35,14 @@ async fn main() {
     let mut listener = ws_client.mini_ticker_tx.subscribe();
 
     tokio::spawn(async move {
+
         loop {
             let ticker = listener.recv().await;
             println!("Got ticker from {:?}", &ticker);
+            let mut dashboard = BinanceTickDashBoard::new();
+            if let Ok(t) = ticker {
+                dashboard.set_value(t.symbol.clone(), t).await;
+            }
         }
     });
 
