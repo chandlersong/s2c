@@ -1,4 +1,4 @@
-use braavos::binance::bn_cache::BinanceTickDashBoard;
+use braavos::binance::bn_cache::RealTimeDashBoard;
 use braavos::binance::bn_models::BinanceBase;
 use braavos::binance::bn_models::WsMethod::GetProperty;
 use braavos::binance::bn_ws_commands::{connect_and_listen, WsRequest};
@@ -39,7 +39,7 @@ async fn main() {
         loop {
             let ticker = listener.recv().await;
             println!("Got ticker from {:?}", &ticker);
-            let mut dashboard = BinanceTickDashBoard::new();
+            let mut dashboard = RealTimeDashBoard::new();
             if let Ok(t) = ticker {
                 dashboard.set_value(t.symbol.clone(), t).await;
             }

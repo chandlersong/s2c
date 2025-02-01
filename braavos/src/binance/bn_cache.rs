@@ -1,4 +1,3 @@
-use crate::binance::bn_models::MiniTicker;
 use crate::models::DashBoard;
 use async_trait::async_trait;
 use moka::future::Cache;
@@ -6,25 +5,25 @@ use rand::{Rng, SeedableRng};
 
 
 #[derive(Clone)]
-pub struct BinanceTickDashBoard {
-    cache: Cache<String, MiniTicker>,
+pub struct RealTimeDashBoard<T: Send + Clone+ Sync + 'static> {
+    cache: Cache<String, T>,
 }
 
-impl BinanceTickDashBoard {
+impl<T: Send+ Clone+ Sync + 'static> RealTimeDashBoard<T> {
     pub fn new() -> Self {
-        BinanceTickDashBoard {
+        RealTimeDashBoard {
             cache: Cache::new(500)
         }
     }
 }
 
 #[async_trait]
-impl DashBoard<MiniTicker> for BinanceTickDashBoard {
-    async fn set_value(&mut self, key: String, value: MiniTicker) {
+impl<T: Send+ Clone+ Sync + 'static> DashBoard<T> for RealTimeDashBoard<T> {
+    async fn set_value(&mut self, key: String, value: T) {
         self.cache.insert(key, value).await;
     }
 
-    async fn get_value(&mut self, key: String) -> MiniTicker {
+    async fn get_value(&mut self, key: String) -> T {
         self.cache.get(&key).await.unwrap()
     }
 }
@@ -32,13 +31,13 @@ impl DashBoard<MiniTicker> for BinanceTickDashBoard {
 
 #[cfg(test)]
 mod tests {
-    use crate::binance::bn_cache::BinanceTickDashBoard;
+    use crate::binance::bn_cache::RealTimeDashBoard;
     use crate::binance::bn_tools::create_mock_mini_ticker;
     use crate::models::DashBoard;
 
     #[tokio::test]
-    async fn test_bn_cache_normal() {
-        let mut dashboard = BinanceTickDashBoard::new();
+    async fn test_bn_realtime_board() {
+        let mut dashboard = RealTimeDashBoard::new();
         let mini_ticker = create_mock_mini_ticker("a1".to_string(), 1.0);
 
         dashboard.set_value("a1".to_string(), mini_ticker.clone()).await;
