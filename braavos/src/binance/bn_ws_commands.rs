@@ -1,5 +1,5 @@
 use crate::binance::bn_models::{deserialize_wx_method, serialize_wx_method, AllMiniTickerResponse, MiniTicker, SymbolDepthData, WsCommandResponse, WsMethod};
-use crate::utils::SnowyFlakeWrapper;
+use crate::tools::SnowyFlakeWrapper;
 use async_trait::async_trait;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
@@ -264,7 +264,7 @@ mod tests {
     use crate::binance::bn_models::WsMethod::Ping;
     use crate::binance::bn_tools::create_mock_mini_ticker;
     use crate::binance::bn_ws_commands::{MiniTickerHandler, WsRequest, WsSpotResponse};
-    use crate::utils::{parse_test_json, setup_logger};
+    use crate::tools::{parse_test_json, setup_logger};
     use log::LevelFilter;
     use tokio::sync::broadcast;
 

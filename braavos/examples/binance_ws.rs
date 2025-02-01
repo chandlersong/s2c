@@ -3,7 +3,7 @@ use braavos::binance::bn_models::BinanceBase;
 use braavos::binance::bn_models::WsMethod::GetProperty;
 use braavos::binance::bn_ws_commands::{connect_and_listen, WsRequest};
 use braavos::models::DashBoard;
-use braavos::utils::setup_logger;
+use braavos::tools::setup_logger;
 use log::LevelFilter;
 use std::sync::Arc;
 use tokio::sync::Barrier;

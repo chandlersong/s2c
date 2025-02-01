@@ -1,6 +1,6 @@
 use braavos::binance::bn_models::WsMethod::SUBSCRIBE;
 use braavos::binance::bn_ws_commands::{WsRequest, WsSpotResponse};
-use braavos::utils::setup_logger;
+use braavos::tools::setup_logger;
 use futures_util::{SinkExt, StreamExt};
 use log::{error, info, LevelFilter};
 use std::sync::Arc;

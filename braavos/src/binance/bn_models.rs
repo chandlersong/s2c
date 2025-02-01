@@ -1,7 +1,7 @@
 use crate::binance::bn_tools::unix_2_readable;
 use crate::models::{Decimal, UnixTimeStamp};
-use crate::utils;
-use crate::utils::{string_to_float, unix_time};
+use crate::tools;
+use crate::tools::{string_to_float, unix_time};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 
@@ -194,7 +194,7 @@ pub struct UMSwapPosition {
     #[serde(rename = "entryPrice")]
     pub entry_price: Decimal, // 开仓均价
 
-    #[serde(rename = "leverage", deserialize_with = "utils::str_to_u16")]
+    #[serde(rename = "leverage", deserialize_with = "tools::str_to_u16")]
     pub leverage: u16, // 当前杠杆倍数
 
     #[serde(rename = "markPrice")]
@@ -402,7 +402,7 @@ impl fmt::Display for MiniTicker {
 mod tests {
     use crate::binance::bn_models::{BinanceBase, BinancePath, NormalAPI};
     use crate::binance::bn_ws_commands::WsSpotResponse;
-    use crate::utils::{parse_test_json, setup_logger};
+    use crate::tools::{parse_test_json, setup_logger};
     use log::LevelFilter;
 
     #[test]

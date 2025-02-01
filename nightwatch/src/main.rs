@@ -1,7 +1,7 @@
 use crate::clients::{cal_gauge_according_setting, ping_exchange};
 use crate::prometheus_server::PrometheusServer;
 
-use braavos::utils::setup_logger;
+use braavos::tools::setup_logger;
 use hyper::{
     header::CONTENT_TYPE,
     service::{make_service_fn, service_fn},

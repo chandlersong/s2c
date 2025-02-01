@@ -178,7 +178,7 @@ async fn frequency_reducer_output<V: Send + Clone + Sync>(mut cache_rx: watch::R
 
 #[cfg(test)]
 mod tests {
-    use crate::utils::FrequencyReducer;
+    use crate::tools::FrequencyReducer;
     use std::time::Duration;
     use tokio::sync::broadcast;
     use tokio::time;

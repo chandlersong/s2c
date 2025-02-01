@@ -32,7 +32,19 @@ impl DashBoard<MiniTicker> for BinanceTickDashBoard {
 
 #[cfg(test)]
 mod tests {
+    use crate::binance::bn_cache::BinanceTickDashBoard;
+    use crate::binance::bn_tools::create_mock_mini_ticker;
+    use crate::models::DashBoard;
 
+    #[tokio::test]
+    async fn test_bn_cache_normal() {
+        let mut dashboard = BinanceTickDashBoard::new();
+        let mini_ticker = create_mock_mini_ticker("a1".to_string(), 1.0);
 
+        dashboard.set_value("a1".to_string(), mini_ticker.clone()).await;
+
+        let actual = dashboard.get_value("a1".to_string()).await;
+        assert_eq!(mini_ticker, actual);
+    }
 
 }

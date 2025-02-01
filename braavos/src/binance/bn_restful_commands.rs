@@ -3,7 +3,7 @@ use crate::binance::bn_models::{BinanceBase, BinancePath, CommandInfo, NormalAPI
 use crate::errors::BraavosError;
 use crate::models::{AccountSummary, Decimal, EmptyObject, SwapPosition, SwapSummary};
 use crate::settings::{Account, BRAAVOS_SETTING};
-use crate::utils::sign_hmac;
+use crate::tools::sign_hmac;
 use log::{error, trace};
 use rust_decimal_macros::dec;
 use serde::de::DeserializeOwned;
@@ -331,7 +331,7 @@ fn cal_equity(balance: &PMBalance, ticker: &Vec<Ticker>) -> (Decimal, Decimal, D
 mod tests {
     use super::*;
     use crate::models::EmptyObject;
-    use crate::utils::{parse_test_json, setup_logger};
+    use crate::tools::{parse_test_json, setup_logger};
     use log::LevelFilter;
 
     impl PMAccountReader {
