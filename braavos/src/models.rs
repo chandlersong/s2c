@@ -1,6 +1,3 @@
-use async_trait::async_trait;
-#[cfg(test)]
-use mockall::automock;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 
@@ -78,16 +75,6 @@ impl<'de> Deserialize<'de> for EmptyObject {
     }
 }
 
-#[cfg_attr(test, automock)]
-#[async_trait]
-pub trait DashBoard<T: Send> {
-    /*
-     像是价格，还有一些乱七八糟的信息这类，计划在缓存作为一个中转站。
-     所以在这里对来类似于一个dashboard
-    */
-    async fn set_value(&mut self, key: String, value: T);
 
-    async fn get_value(&mut self, key: String) -> T;
-}
 
 
