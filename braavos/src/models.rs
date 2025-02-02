@@ -7,6 +7,8 @@ pub type UnixTimeStamp = u64;
 pub type Decimal = rust_decimal::Decimal;
 
 
+
+
 #[derive(Debug)]
 pub struct AccountSummary {
     pub usdt_equity: Decimal,

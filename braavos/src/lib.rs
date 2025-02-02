@@ -6,5 +6,5 @@ pub mod settings;
 pub mod accounts;
 
 pub mod tools;
-mod cache;
+pub mod cache;
 

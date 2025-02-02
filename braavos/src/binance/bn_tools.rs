@@ -1,3 +1,4 @@
+#[cfg(test)]
 use crate::binance::bn_models::MiniTicker;
 use chrono::{DateTime, Utc};
 use std::time::UNIX_EPOCH;
@@ -32,7 +33,7 @@ pub fn create_mock_mini_ticker(symbol: String, val: f64) -> MiniTicker {
     }
 }
 
-
+#[cfg(test)]
 mod tests {
     use crate::binance::bn_tools::unix_2_readable;
 
