@@ -84,6 +84,14 @@ impl<T: Send + Clone + Sync + 'static> FrequencyDashBoard<T> {
             frequency_reducers: HashMap::new(),
         }
     }
+
+    pub fn get_all_entries(&self)->Vec<T> {
+        let mut res: Vec<T> = Vec::new();
+        for (_, value) in &self.cache {
+            res.push(value.clone());
+        };
+        res
+    }
 }
 
 #[async_trait]

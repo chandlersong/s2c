@@ -3,7 +3,7 @@ use crate::tools::SnowyFlakeWrapper;
 use async_trait::async_trait;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
-use log::{debug, error, info};
+use log::{debug, error, info, trace};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
@@ -58,14 +58,14 @@ impl TextMessageHandler for SpotTextMessageHandler {
                 let entity: WsSpotResponse = response;
                 match entity {
                     WsSpotResponse::Depth(v) => {
-                        debug!("{:?} at {:?}", v.symbol,v.event_time);
+                        trace!("{:?} at {:?}", v.symbol,v.event_time);
                     }
                     WsSpotResponse::AllMiniTicker(v) => {
-                        debug!("receive mini ticker,num:{:?}", v.tickers.len());
+                        trace!("receive mini ticker,num:{:?}", v.tickers.len());
                         self.mini_ticker_handler.handle(v.tickers).await;
                     }
                     WsSpotResponse::CommonResponse(v) => {
-                        debug!("receive common result {:?}", v.result);
+                        trace!("receive common result {:?}", v.result);
                     }
                 }
                 Ok(true)
@@ -173,7 +173,7 @@ impl BinanceWSClient {
 
     pub async fn send_command(&mut self, req: WsRequest) -> Result<(), String> {
         let request_body = req.to_json();
-        debug!("request body is {}", request_body);
+        trace!("request body is {}", request_body);
         self.send_message(Message::Text(request_body)).await
     }
 
