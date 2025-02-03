@@ -40,6 +40,7 @@ pub enum NormalAPI {
 pub enum PmAPI { //统一账户
     BalanceAPI,
     SwapPositionAPI,
+    ListenKey,
 }
 
 
@@ -54,6 +55,7 @@ impl From<BinancePath> for String {
                 BinancePath::PAPI(route) => match route {
                     PmAPI::BalanceAPI => String::from("/papi/v1/balance"),
                     PmAPI::SwapPositionAPI => String::from("/papi/v1/um/positionRisk"),
+                    PmAPI::ListenKey => String::from("/papi/v1/listenKey"),
                 }
             }
         )
@@ -273,8 +275,8 @@ pub struct TimeStampRequest {
     pub rec_window: u16,
 }
 
-impl std::fmt::Display for TimeStampRequest {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl fmt::Display for TimeStampRequest {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "timestamp={}&recvWindow={}", self.timestamp, self.rec_window)
     }
 }
@@ -288,6 +290,7 @@ impl Default for TimeStampRequest {
     }
 }
 
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct WsCommandResponse {
@@ -296,6 +299,15 @@ pub struct WsCommandResponse {
 
     #[serde(rename = "result")]
     pub result: Option<String>,
+
+}
+
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ListenKeyResponse {
+    #[serde(rename = "listenKey")]
+    pub listen_key: String,
 
 }
 

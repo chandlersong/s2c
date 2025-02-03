@@ -7,7 +7,7 @@ use crate::tools::sign_hmac;
 use log::{error, trace};
 use rust_decimal_macros::dec;
 use serde::de::DeserializeOwned;
-use serde_json::Error as JsonError;
+use serde_json::{Error as JsonError, Value};
 use std::fmt::Display;
 use std::marker::PhantomData;
 use std::sync::{mpsc, LazyLock};
@@ -46,7 +46,7 @@ pub async fn execute_ping() -> Result<(), BraavosError> {
     let info = CommandInfo::new(BinanceBase::Normal, BinancePath::Normal(NormalAPI::PingAPI));
 
     let get = GetCommand::<EmptyObject, EmptyObject> { phantom: Default::default() };
-    let _ = get.execute(info, None).await?;
+    let _ = get.execute(info, None, None).await?;
     Ok(())
 }
 
@@ -61,23 +61,77 @@ fn init_client() -> reqwest::Client {
     proxy_builder.build().unwrap()
 }
 
-pub(crate) trait BNCommand<T: Display, U: DeserializeOwned> {
-    async fn execute(&self, info: CommandInfo, data: Option<T>) -> Result<U, BraavosError>;
-}
 
 
 pub struct GetCommand<T: Display, U: DeserializeOwned> {
     pub(crate) phantom: PhantomData<(T, U)>,
 }
 
-impl<T: Display, U: DeserializeOwned> BNCommand<T, U> for GetCommand<T, U> {
-    async fn execute(&self, info: CommandInfo<'_>, data: Option<T>) -> Result<U, BraavosError> {
+impl<T: Display, U: DeserializeOwned> GetCommand<T, U> {
+    pub fn new() -> GetCommand<T, U> {
+        GetCommand {
+            phantom: Default::default()
+        }
+    }
+
+    pub async fn execute(&self, info: CommandInfo<'_>, param: Option<T>, _: Option<Value>) -> Result<U, BraavosError> {
         let mut url = Url::parse(&String::from(info.base)).expect("Invalid base URL");
         url.set_path(&String::from(&String::from(info.path)));
 
-        data.map(|request| {
+        param.map(|request| {
             let query_param = format!("{}", request);
+            let real_param = match &info.security {
+                None => { query_param }
+                Some(security) => {
+                    let signature = sign_hmac(&query_param, &security.api_secret).unwrap();
+                    format!("{query_param}&signature={signature}")
+                }
+            };
 
+            url.set_query(Some(&real_param));
+        });
+
+        let request = match &info.security {
+            None => { info.client.get(url) }
+            Some(security) => {
+                info.client.get(url).header(
+                    "X-MBX-APIKEY", &security.api_key,
+                )
+            }
+        };
+        let res = request.send().await?;
+        trace!("Response: {:?} {}", res.version(), res.status());
+        let body = res.text().await?;
+        trace!("body:{}",&body);
+        let result: Result<U, JsonError> = serde_json::from_str(&body);
+        match result {
+            Ok(resp1) => Ok(resp1),
+            Err(_) => {
+                error!("binance error response,{}",&body);
+                Err(BraavosError::new(body))
+            }
+        }
+    }
+}
+
+
+pub struct PostCommand<T: Display, U: DeserializeOwned> {
+    pub phantom: PhantomData<(T, U)>,
+}
+
+impl<T: Display, U: DeserializeOwned> PostCommand<T, U> {
+    pub fn new() -> PostCommand<T, U> {
+        PostCommand {
+            phantom: Default::default()
+        }
+    }
+
+    pub async fn execute(&self, info: CommandInfo<'_>, param: Option<T>, body: Option<Value>) -> Result<U, BraavosError> {
+        let mut url = Url::parse(&String::from(info.base)).expect("Invalid base URL");
+        url.set_path(&String::from(&String::from(info.path)));
+
+        param.map(|request| {
+            let query_param = format!("{}", request);
             let real_param = match &info.security {
                 None => { query_param }
                 Some(security) => {
@@ -89,11 +143,12 @@ impl<T: Display, U: DeserializeOwned> BNCommand<T, U> for GetCommand<T, U> {
             url.set_query(Some(&real_param));
         });
         let request = match &info.security {
-            None => { info.client.get(url) }
+            None => { info.client.post(url) }
             Some(security) => {
-                info.client.get(url).header(
+                info.client.post(url).header(
                     "X-MBX-APIKEY", &security.api_key,
                 )
+                //TODO：处理body
             }
         };
         let res = request.send().await?;
@@ -133,9 +188,9 @@ impl RawDataQuery<PMRawAccountData> for PMRawDataQuery {
 
         let (acc_position_res, ticker_res, um_swap_position_res)
             = join!(
-                acc_balance_command.execute(pm_acc_balance_info, Some(Default::default())),
-                ticker_command.execute(ticker_info, None),
-                swap_position_command.execute(swap_info,Some(Default::default()))
+                acc_balance_command.execute(pm_acc_balance_info, Some(Default::default()),None),
+                ticker_command.execute(ticker_info, None,None),
+                swap_position_command.execute(swap_info,Some(Default::default()),None)
 
         );
 
@@ -459,7 +514,7 @@ mod tests {
         let info = CommandInfo::new(BinanceBase::Normal, BinancePath::Normal(NormalAPI::PingAPI));
 
         let get = GetCommand::<EmptyObject, EmptyObject> { phantom: Default::default() };
-        let x = get.execute(info, None).await.unwrap();
+        let x = get.execute(info, None, None).await.unwrap();
         assert_eq!(x, EmptyObject {})
     }
 
@@ -477,7 +532,7 @@ mod tests {
                                                   &account.secret);
 
         let get = GetCommand::<TimeStampRequest, Vec<UMSwapPosition>> { phantom: Default::default() };
-        let positions = get.execute(info, Some(Default::default())).await.unwrap();
+        let positions = get.execute(info, Some(Default::default()), None).await.unwrap();
         for p in &positions {
             println!("symbol:{},持仓未实现盈亏:{},名义价值:{}", p.symbol, p.unrealized_profit, p.notional);
         }
@@ -496,7 +551,7 @@ mod tests {
                                                   &account.secret);
 
         let get = GetCommand::<TimeStampRequest, Vec<PMBalance>> { phantom: Default::default() };
-        let positions = get.execute(info, Some(Default::default())).await.unwrap();
+        let positions = get.execute(info, Some(Default::default()), None).await.unwrap();
         for p in &positions {
             println!("symbol:{}", p.asset);
         }
@@ -528,7 +583,7 @@ mod tests {
         let um_swap_position = GetCommand::<TimeStampRequest, Vec<UMSwapPosition>> { phantom: Default::default() };
 
 
-        let swap = um_swap_position.execute(pm_acc_balance_info, Some(Default::default())).await.unwrap();
+        let swap = um_swap_position.execute(pm_acc_balance_info, Some(Default::default()), None).await.unwrap();
 
 
         let calculator = PMAccountReader::new(account.clone());

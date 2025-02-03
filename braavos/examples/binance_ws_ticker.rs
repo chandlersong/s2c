@@ -10,6 +10,7 @@ use tokio::sync::Barrier;
 use tokio::time::sleep;
 
 ///
+/// 主要是对事实数据的监控
 /// 这个用例，主要是为了演示一个websocket启动的监听过程。
 /// 整个过程应该
 /// 1. 准备应对各种消息的处理。
