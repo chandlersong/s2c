@@ -76,7 +76,7 @@ impl<T: Display, U: DeserializeOwned> GetCommand<T, U> {
     }
 
     pub async fn execute(&self, info: CommandInfo<'_>, param: Option<T>, _: Option<Value>) -> Result<U, BraavosError> {
-        let request = create_request_with_param_and_security(&info, param);
+        let request = create_request_with_param_and_security(&info, param,|url| info.client.get(url));
         let res = request.send().await?;
         trace!("Response: {:?} {}", res.version(), res.status());
         let body = res.text().await?;
@@ -105,7 +105,7 @@ impl<T: Display, U: DeserializeOwned> PostCommand<T, U> {
     }
 
     pub async fn execute(&self, info: CommandInfo<'_>, param: Option<T>, body: Option<Value>) -> Result<U, BraavosError> {
-        let request_with_security = create_request_with_param_and_security(&info, param);
+        let request_with_security = create_request_with_param_and_security(&info, param,|url| info.client.post(url));
         let request_with_body = match body {
             None => {
                 request_with_security
@@ -128,11 +128,50 @@ impl<T: Display, U: DeserializeOwned> PostCommand<T, U> {
             }
         }
     }
-
-
 }
 
-fn create_request_with_param_and_security<T: Display>(info: &CommandInfo, param: Option<T>) -> RequestBuilder {
+
+pub struct PutCommand<T: Display, U: DeserializeOwned> {
+    pub phantom: PhantomData<(T, U)>,
+}
+
+impl<T: Display, U: DeserializeOwned> PutCommand<T, U> {
+    pub fn new() -> PutCommand<T, U> {
+        PutCommand {
+            phantom: Default::default()
+        }
+    }
+
+    pub async fn execute(&self, info: CommandInfo<'_>, param: Option<T>, body: Option<Value>) -> Result<U, BraavosError> {
+        let request_with_security = create_request_with_param_and_security(&info, param, |url| info.client.put(url));
+        let request_with_body = match body {
+            None => {
+                request_with_security
+            }
+            Some(body_json) => {
+                request_with_security.json(&body_json)
+                //TODO：处理body
+            }
+        };
+        let res = request_with_body.send().await?;
+        trace!("Response: {:?} {}", res.version(), res.status());
+        let body = res.text().await?;
+        trace!("body:{}",&body);
+        let result: Result<U, JsonError> = serde_json::from_str(&body);
+        match result {
+            Ok(resp1) => Ok(resp1),
+            Err(_) => {
+                error!("binance error response,{}",&body);
+                Err(BraavosError::new(body))
+            }
+        }
+    }
+}
+
+fn create_request_with_param_and_security<T: Display, F>(info: &CommandInfo, param: Option<T>, method: F) -> RequestBuilder
+where
+    F: Fn(Url) -> RequestBuilder,
+{
     let mut url = Url::parse(&String::from(info.base.clone())).expect("Invalid base URL");
     url.set_path(&String::from(&String::from(info.path.clone())));
 
@@ -148,7 +187,7 @@ fn create_request_with_param_and_security<T: Display>(info: &CommandInfo, param:
 
         url.set_query(Some(&real_param));
     });
-    let request_builder = info.client.post(url);
+    let request_builder = method(url);
     let request_with_security = match &info.security {
         None => {
             request_builder
