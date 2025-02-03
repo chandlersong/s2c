@@ -142,16 +142,28 @@ impl<T: Display, U: DeserializeOwned> PostCommand<T, U> {
 
             url.set_query(Some(&real_param));
         });
-        let request = match &info.security {
-            None => { info.client.post(url) }
+        let request_builder = info.client.post(url);
+        let request_with_security = match &info.security {
+            None => {
+                request_builder
+            }
             Some(security) => {
-                info.client.post(url).header(
+                request_builder.header(
                     "X-MBX-APIKEY", &security.api_key,
                 )
                 //TODO：处理body
             }
         };
-        let res = request.send().await?;
+        let request_with_body = match body {
+            None => {
+                request_with_security
+            }
+            Some(body_json) => {
+                request_with_security.json(&body_json)
+                //TODO：处理body
+            }
+        };
+        let res = request_with_body.send().await?;
         trace!("Response: {:?} {}", res.version(), res.status());
         let body = res.text().await?;
         trace!("body:{}",&body);
