@@ -5,6 +5,7 @@ use crate::models::{AccountSummary, Decimal, EmptyObject, SwapPosition, SwapSumm
 use crate::settings::{Account, BRAAVOS_SETTING};
 use crate::tools::sign_hmac;
 use log::{error, trace};
+use reqwest::RequestBuilder;
 use rust_decimal_macros::dec;
 use serde::de::DeserializeOwned;
 use serde_json::{Error as JsonError, Value};
@@ -75,30 +76,7 @@ impl<T: Display, U: DeserializeOwned> GetCommand<T, U> {
     }
 
     pub async fn execute(&self, info: CommandInfo<'_>, param: Option<T>, _: Option<Value>) -> Result<U, BraavosError> {
-        let mut url = Url::parse(&String::from(info.base)).expect("Invalid base URL");
-        url.set_path(&String::from(&String::from(info.path)));
-
-        param.map(|request| {
-            let query_param = format!("{}", request);
-            let real_param = match &info.security {
-                None => { query_param }
-                Some(security) => {
-                    let signature = sign_hmac(&query_param, &security.api_secret).unwrap();
-                    format!("{query_param}&signature={signature}")
-                }
-            };
-
-            url.set_query(Some(&real_param));
-        });
-
-        let request = match &info.security {
-            None => { info.client.get(url) }
-            Some(security) => {
-                info.client.get(url).header(
-                    "X-MBX-APIKEY", &security.api_key,
-                )
-            }
-        };
+        let request = create_request_with_param_and_security(&info, param);
         let res = request.send().await?;
         trace!("Response: {:?} {}", res.version(), res.status());
         let body = res.text().await?;
@@ -127,33 +105,7 @@ impl<T: Display, U: DeserializeOwned> PostCommand<T, U> {
     }
 
     pub async fn execute(&self, info: CommandInfo<'_>, param: Option<T>, body: Option<Value>) -> Result<U, BraavosError> {
-        let mut url = Url::parse(&String::from(info.base)).expect("Invalid base URL");
-        url.set_path(&String::from(&String::from(info.path)));
-
-        param.map(|request| {
-            let query_param = format!("{}", request);
-            let real_param = match &info.security {
-                None => { query_param }
-                Some(security) => {
-                    let signature = sign_hmac(&query_param, &security.api_secret).unwrap();
-                    format!("{query_param}&signature={signature}")
-                }
-            };
-
-            url.set_query(Some(&real_param));
-        });
-        let request_builder = info.client.post(url);
-        let request_with_security = match &info.security {
-            None => {
-                request_builder
-            }
-            Some(security) => {
-                request_builder.header(
-                    "X-MBX-APIKEY", &security.api_key,
-                )
-                //TODO：处理body
-            }
-        };
+        let request_with_security = create_request_with_param_and_security(&info, param);
         let request_with_body = match body {
             None => {
                 request_with_security
@@ -176,6 +128,38 @@ impl<T: Display, U: DeserializeOwned> PostCommand<T, U> {
             }
         }
     }
+
+
+}
+
+fn create_request_with_param_and_security<T: Display>(info: &CommandInfo, param: Option<T>) -> RequestBuilder {
+    let mut url = Url::parse(&String::from(info.base.clone())).expect("Invalid base URL");
+    url.set_path(&String::from(&String::from(info.path.clone())));
+
+    param.map(|request| {
+        let query_param = format!("{}", request);
+        let real_param = match &info.security {
+            None => { query_param }
+            Some(security) => {
+                let signature = sign_hmac(&query_param, &security.api_secret).unwrap();
+                format!("{query_param}&signature={signature}")
+            }
+        };
+
+        url.set_query(Some(&real_param));
+    });
+    let request_builder = info.client.post(url);
+    let request_with_security = match &info.security {
+        None => {
+            request_builder
+        }
+        Some(security) => {
+            request_builder.header(
+                "X-MBX-APIKEY", &security.api_key,
+            )
+        }
+    };
+    request_with_security
 }
 
 pub struct PMRawDataQuery {}

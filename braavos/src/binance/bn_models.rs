@@ -5,7 +5,7 @@ use crate::tools::{string_to_float, unix_time};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub enum BinanceBase {
     Normal,
     PortfolioMargin,
@@ -24,19 +24,19 @@ impl From<BinanceBase> for String {
         )
     }
 }
-
+#[derive(Debug,Clone)]
 pub enum BinancePath {
     Normal(NormalAPI),
     PAPI(PmAPI),
 }
 
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub enum NormalAPI {
     PingAPI,
     SpotTickerAPI,
 }
 
-
+#[derive(Debug,Clone)]
 pub enum PmAPI { //统一账户
     BalanceAPI,
     SwapPositionAPI,
