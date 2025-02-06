@@ -112,7 +112,6 @@ impl<T: Display, U: DeserializeOwned> PostCommand<T, U> {
             }
             Some(body_json) => {
                 request_with_security.json(&body_json)
-                //TODO：处理body
             }
         };
         let res = request_with_body.send().await?;
