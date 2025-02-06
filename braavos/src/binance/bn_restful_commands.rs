@@ -241,7 +241,8 @@ impl RawDataQuery<PMRawAccountData> for PMRawDataQuery {
     }
 }
 
-
+///
+/// 读取统一账户的账户信息的工具。
 pub struct PMAccountReader {
     pub account: Account,
 }
@@ -361,14 +362,13 @@ impl AccountReader for PMAccountReader {
         let account = self.account.clone();
         thread::spawn(move || {
             let query = PMRawDataQuery {};
-            thread::spawn(move || {
-                let result = tokio::runtime::Runtime::new()
-                    .unwrap()
-                    .block_on(query.query_raw_data(&account));
-                tx.send(result).unwrap();
-            });
+            let result = tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(query.query_raw_data(&account));
+            tx.send(result).unwrap();
         });
 
+        //调用restful api获取信息
         match rx.recv() {
             Ok(result) => {
                 match result {
