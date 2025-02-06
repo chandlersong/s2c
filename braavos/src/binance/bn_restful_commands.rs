@@ -150,7 +150,6 @@ impl<T: Display, U: DeserializeOwned> PutCommand<T, U> {
             }
             Some(body_json) => {
                 request_with_security.json(&body_json)
-                //TODO：处理body
             }
         };
         let res = request_with_body.send().await?;
@@ -600,7 +599,7 @@ mod tests {
         let setting = &BRAAVOS_SETTING;
         let calculator = PMAccountReader::new(setting.accounts[0].clone());
         let actual = calculator.account_balance();
-        println!("{:?}", actual)
+        println!("account balance:{:?}", actual)
     }
 
     #[ignore]
