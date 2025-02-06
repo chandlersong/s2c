@@ -301,6 +301,64 @@ impl PMAccountReader {
     }
 
 
+    ///
+    /// [字段解释](https://developers.binance.com/docs/zh-CN/derivatives/portfolio-margin/account)
+    /// 在统一账户里面，现货有点搞，即可以是投资标的，也可以是作为保证金。甚至可以通过以自己为保证金。来开杠杆。
+    /// 第一版本，就用简单的来算。就是把这个当成一个简单的数据
+    ///
+    fn spot_balance(&self, swap_position: &Vec<UMSwapPosition>) -> SwapSummary {
+        let fra_symbol: Vec<String> = match &self.account.funding_rate_arbitrage {
+            None => { vec![] }
+            Some(fra) => { fra.iter().map(|x| format!("{}USDT", x)).collect() }
+        };
+        let mut balance = dec!(0);
+        let mut short_balance = dec!(0);
+        let mut long_balance = dec!(0);
+        let mut pnl = dec!(0);
+        let mut long_pnl = dec!(0);
+        let mut short_pnl = dec!(0);
+        let mut fra_pnl = dec!(0);
+
+        let mut positions: Vec<SwapPosition> = vec![];
+        for swap in swap_position {
+            if fra_symbol.contains(&swap.symbol) {
+                fra_pnl = fra_pnl + swap.unrealized_profit;
+                continue;
+            }
+            trace!("symbol:{}, 名义价值：{},未实现利润{}", swap.symbol, swap.notional, swap.unrealized_profit);
+            pnl = pnl + swap.unrealized_profit;
+            if swap.position_amt > dec!(0) {
+                balance = balance + swap.notional;
+                long_balance = long_balance + swap.notional;
+                long_pnl = long_pnl + swap.unrealized_profit;
+            } else {
+                let notional = swap.notional.abs();
+                balance = balance + notional;
+                short_balance = short_balance + notional;
+                short_pnl = short_pnl + swap.unrealized_profit;
+            }
+            positions.push(SwapPosition {
+                symbol: swap.symbol.clone(),
+                cur_price: swap.mark_price,
+                avg_price: swap.entry_price,
+                pos_u: swap.notional,
+                pnl_u: swap.unrealized_profit,
+                position_amt: swap.position_amt,
+            });
+        }
+        SwapSummary {
+            long_balance,
+            long_pnl,
+            short_balance,
+            short_pnl,
+            balance,
+            pnl,
+            fra_pnl,
+            positions,
+        }
+    }
+
+
     fn um_swap_balance(&self, swap_position: &Vec<UMSwapPosition>) -> SwapSummary {
         let fra_symbol: Vec<String> = match &self.account.funding_rate_arbitrage {
             None => { vec![] }
@@ -360,6 +418,7 @@ impl AccountReader for PMAccountReader {
         let (tx, rx) = mpsc::channel();
 
         let account = self.account.clone();
+        //从远端读取数据。
         thread::spawn(move || {
             let query = PMRawDataQuery {};
             let result = tokio::runtime::Runtime::new()

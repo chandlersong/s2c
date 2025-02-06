@@ -31,7 +31,6 @@ pub struct SwapSummary {
     pub positions: Vec<SwapPosition>,
 }
 
-
 #[derive(Debug)]
 pub struct SwapPosition {
     pub symbol: String,         //交易对
@@ -40,6 +39,20 @@ pub struct SwapPosition {
     pub pos_u: Decimal,         //持仓
     pub pnl_u: Decimal,         //仓位
     pub position_amt: Decimal,  //持仓数量
+}
+
+
+//Spot的汇总信息。暂时先不管那么多。
+#[derive(Debug)]
+pub struct SpotSummary {
+    pub equity: Decimal,
+    pub positions: Vec<SpotPosition>,
+}
+
+#[derive(Debug)]
+pub struct SpotPosition {
+    pub symbol: String,
+    pub asset_amount: Decimal,  //资产数量
 }
 
 
