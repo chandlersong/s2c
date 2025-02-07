@@ -15,6 +15,7 @@ pub struct AccountSummary {
     pub negative_balance: Decimal,
     pub account_pnl: Decimal,
     pub account_equity: Decimal,
+    pub spot_summary: SpotSummary,
     pub um_swap_summary: SwapSummary,
 }
 
@@ -53,6 +54,10 @@ pub struct SpotSummary {
 pub struct SpotPosition {
     pub symbol: String,
     pub asset_amount: Decimal,  //资产数量
+    pub price: Decimal,
+    pub total_balance: Decimal,
+    pub swap_pnl: Decimal,
+    pub negative_balance: Decimal,
 }
 
 

@@ -1,7 +1,7 @@
 use crate::accounts::{AccountReader, RawDataQuery};
 use crate::binance::bn_models::{BinanceBase, BinancePath, CommandInfo, NormalAPI, PMBalance, PMRawAccountData, PmAPI, SecurityInfo, Ticker, TimeStampRequest, UMSwapPosition};
 use crate::errors::BraavosError;
-use crate::models::{AccountSummary, Decimal, EmptyObject, SwapPosition, SwapSummary};
+use crate::models::{AccountSummary, EmptyObject, SpotPosition, SpotSummary, SwapPosition, SwapSummary};
 use crate::settings::{Account, BRAAVOS_SETTING};
 use crate::tools::sign_hmac;
 use log::{error, trace};
@@ -247,20 +247,35 @@ pub struct PMAccountReader {
     pub account: Account,
 }
 
+macro_rules! update_balances {
+    ($b:expr, $ticker:expr, $total_balance:expr, $negative_balance:expr, $swap_pnl:expr, $spot_asserts:expr) => {
+        if let Some(spot_value) = cal_equity($b, $ticker) {
+            $total_balance += spot_value.total_balance;
+            $negative_balance += spot_value.negative_balance;
+            $swap_pnl += spot_value.swap_pnl;
+            $spot_asserts.push(spot_value);
+        }
+    };
+}
 
 impl PMAccountReader {
     pub fn new(account: Account) -> PMAccountReader {
         PMAccountReader { account }
     }
 
+    ///
+
     fn cal_account_summary(&self, acc_position: &Vec<PMBalance>, ticker: &Vec<Ticker>, um_swap: SwapSummary) -> AccountSummary {
         let mut swap_pnl = dec!(0);
         let mut total_balance = dec!(0); //cross_margin_free
         let mut negative_balance = dec!(0);
         let mut usdt_equity = dec!(0);
+        let mut spot_asserts: Vec<SpotPosition> = vec![];
+
+        // 这里有计算现货
         for b in acc_position {
             swap_pnl = swap_pnl + b.um_unrealized_pnl + b.cm_unrealized_pnl;
-
+            //TODO 加入资金费率的过滤
             match b.asset.as_str() {
                 "USDT" => {  //swap如果有负债的话，USDT就不计算了。
                     let mut swap_usdt = if b.cm_wallet_balance > dec!(0) { b.cm_wallet_balance } else { dec!(0) };
@@ -272,30 +287,26 @@ impl PMAccountReader {
                     negative_balance = negative_balance + b.negative_balance;
                 }
                 "BNB" => {
-                    if !self.account.burning_free {
-                        let (bal, pnl, negative) = cal_equity(b, ticker);
-                        total_balance = total_balance + bal;
-                        negative_balance = negative_balance + negative;
-                        swap_pnl = swap_pnl + pnl
-                    }
+                    update_balances!(b,ticker, total_balance, negative_balance, swap_pnl, spot_asserts);
                 }
                 _ => {
-                    let (bal, pnl, negative) = cal_equity(b, ticker);
-                    total_balance = total_balance + bal;
-                    negative_balance = negative_balance + negative;
-                    swap_pnl = swap_pnl + pnl
+                    update_balances!(b,ticker, total_balance, negative_balance, swap_pnl, spot_asserts);
                 }
             }
         }
 
         let account_pnl = swap_pnl;
         let account_equity = total_balance + swap_pnl;
-
+        let spot_summary = SpotSummary{
+            equity: total_balance,
+            positions: spot_asserts,
+        };
         AccountSummary {
             usdt_equity,
             negative_balance,
             account_pnl,
             account_equity,
+            spot_summary,
             um_swap_summary: um_swap,
         }
     }
@@ -393,7 +404,7 @@ impl AccountReader for PMAccountReader {
 /** cal_equity:通过balance和ticker计算几个。
 * 返回的应该是total_balance,pnl和 negative_balance
 */
-fn cal_equity(balance: &PMBalance, ticker: &Vec<Ticker>) -> (Decimal, Decimal, Decimal) {
+fn cal_equity(balance: &PMBalance, ticker: &Vec<Ticker>) -> Option<SpotPosition> {
     let pair = format!("{}USDT", balance.asset);
     if let Some(price) = ticker.iter().find(|t| t.symbol == pair) {
         let p = price.price;
@@ -408,10 +419,23 @@ fn cal_equity(balance: &PMBalance, ticker: &Vec<Ticker>) -> (Decimal, Decimal, D
         let negative_balance = balance.negative_balance * p;
         let swap_pnl = balance.um_unrealized_pnl * p + balance.cm_unrealized_pnl * p;
         trace!("{},total balance:{},pnl:{},negative balance{}",balance.asset,total_balance,swap_pnl,negative_balance);
-        (total_balance, swap_pnl, negative_balance)
+
+        /*
+         在计算的现货价格时候，这里其实是非常依赖实现的。
+         因为现货可以放在杠杆账户，合约的账户里面，还有锁定这些东西。
+         所以这里为了简单，就用了total。以后在处理仓位的时候，请注意。
+         */
+        Some(SpotPosition {
+            symbol: balance.asset.clone(),
+            asset_amount: balance.total_wallet_balance,
+            price: p,
+            total_balance,
+            swap_pnl,
+            negative_balance,
+        })
     } else {
         error!("symbol {} not exists!!!",balance.asset);
-        (dec!(0), dec!(0), dec!(0))
+        None
     }
 }
 
@@ -489,6 +513,7 @@ mod tests {
         assert_eq!(dec!(1016.5653078520000000), actual.account_equity);
         assert_eq!(dec!(-406.38234549), actual.negative_balance);
         assert_eq!(dec!(328.75345911), actual.account_pnl);
+        assert_eq!(3, actual.spot_summary.positions.len());
     }
 
     fn mock_empty_swap_summary() -> SwapSummary {
