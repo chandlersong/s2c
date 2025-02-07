@@ -96,7 +96,7 @@ async fn cal_one_account_gauge(account: &Account) -> Vec<Gauge> {
 #[cfg(test)]
 mod tests {
     use crate::prometheus_server::ToGauge;
-    use braavos::models::{AccountSummary, SwapPosition, SwapSummary};
+    use braavos::models::{AccountSummary, SpotSummary, SwapPosition, SwapSummary};
     use rust_decimal_macros::dec;
 
     #[test]
@@ -138,6 +138,10 @@ mod tests {
             negative_balance: Default::default(),
             account_pnl: Default::default(),
             account_equity: Default::default(),
+            spot_summary: SpotSummary {
+                equity: Default::default(),
+                positions: vec![],
+            },
             um_swap_summary: SwapSummary {
                 long_balance: Default::default(),
                 long_pnl: Default::default(),

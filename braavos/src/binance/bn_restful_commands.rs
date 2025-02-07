@@ -287,7 +287,9 @@ impl PMAccountReader {
                     negative_balance = negative_balance + b.negative_balance;
                 }
                 "BNB" => {
-                    update_balances!(b,ticker, total_balance, negative_balance, swap_pnl, spot_asserts);
+                    if !self.account.burning_free {
+                        update_balances!(b,ticker, total_balance, negative_balance, swap_pnl, spot_asserts);
+                    }
                 }
                 _ => {
                     update_balances!(b,ticker, total_balance, negative_balance, swap_pnl, spot_asserts);
