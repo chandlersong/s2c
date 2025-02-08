@@ -102,6 +102,22 @@ where
     }
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub enum WsSubscribe {
+    AllMiniTicker,
+}
+
+impl From<WsSubscribe> for String {
+    fn from(subscription: WsSubscribe) -> Self {
+        String::from(
+            match subscription {
+                WsSubscribe::AllMiniTicker=> String::from("!miniTicker@arr"),
+            }
+        )
+    }
+}
+
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PMBalance {
     pub asset: String,
@@ -357,7 +373,7 @@ pub struct SymbolDepthData {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct AllMiniTickerResponse {
+pub struct StreamAllMiniTickerResponse {
     #[serde(rename = "stream")]
     pub stream: String, // 事件类型：!miniTicker@arr
 
@@ -429,7 +445,7 @@ mod tests {
         let entry: WsSpotResponse =
             parse_test_json::<WsSpotResponse>("tests/data/ws_stream_binance_miniTicker_all.json");
         match entry {
-            WsSpotResponse::AllMiniTicker(v) => {
+            WsSpotResponse::StreamAllMiniTicker(v) => {
                 println!("{:?}", v);
             }
             _ => {}

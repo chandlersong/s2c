@@ -1,4 +1,4 @@
-use crate::binance::bn_models::{deserialize_wx_method, serialize_wx_method, AllMiniTickerResponse, MiniTicker, SymbolDepthData, WsCommandResponse, WsMethod};
+use crate::binance::bn_models::{deserialize_wx_method, serialize_wx_method, MiniTicker, StreamAllMiniTickerResponse, SymbolDepthData, WsCommandResponse, WsMethod};
 use crate::tools::SnowyFlakeWrapper;
 use async_trait::async_trait;
 use futures_util::stream::{SplitSink, SplitStream};
@@ -60,9 +60,13 @@ impl TextMessageHandler for SpotTextMessageHandler {
                     WsSpotResponse::Depth(v) => {
                         trace!("{:?} at {:?}", v.symbol,v.event_time);
                     }
-                    WsSpotResponse::AllMiniTicker(v) => {
+                    WsSpotResponse::StreamAllMiniTicker(v) => {
                         trace!("receive mini ticker,num:{:?}", v.tickers.len());
                         self.mini_ticker_handler.handle(v.tickers).await;
+                    }
+                    WsSpotResponse::SubAllMiniTicker(v) => {
+                        trace!("receive mini ticker,num:{:?}", v.len());
+                        self.mini_ticker_handler.handle(v).await;
                     }
                     WsSpotResponse::CommonResponse(v) => {
                         trace!("receive common result {:?}", v.result);
@@ -230,7 +234,8 @@ impl WsRequest {
 pub enum WsSpotResponse {
     CommonResponse(WsCommandResponse),
     Depth(SymbolDepthData),
-    AllMiniTicker(AllMiniTickerResponse),
+    StreamAllMiniTicker(StreamAllMiniTickerResponse),
+    SubAllMiniTicker(Vec<MiniTicker>),
 }
 
 
@@ -244,7 +249,7 @@ where
     mini_ticker_tx: broadcast::Sender<MiniTicker>,
 }
 
-impl<> MiniTickerHandler<>
+impl MiniTickerHandler
 {
     pub fn new(mini_ticker_tx: broadcast::Sender<MiniTicker>) -> Self {
         MiniTickerHandler {
