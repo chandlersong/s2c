@@ -1,12 +1,7 @@
-use braavos::binance::bn_models::BinanceBase;
-use braavos::binance::bn_models::WsMethod::GetProperty;
-use braavos::binance::bn_ws_commands::{connect_and_listen, WsRequest};
-use braavos::cache::{DashBoard, FrequencyDashBoard};
+use braavos::binance::bn_dashboard::get_spot_mini_ticker;
 use braavos::tools::setup_logger;
 use log::{debug, info, LevelFilter};
-use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Barrier;
 use tokio::time::sleep;
 
 ///
@@ -23,36 +18,12 @@ use tokio::time::sleep;
 #[tokio::main]
 async fn main() {
     let _ = setup_logger(Some(LevelFilter::Debug));
-    let url = format!("{}/stream?streams=!miniTicker@arr", String::from(BinanceBase::WsSwapStreamUrl));
-    let mut ws_client = connect_and_listen(url).await;
-
-
-    let barrier = Arc::new(Barrier::new(2));
-
-    let params = Some(vec!["combined".to_string()]);
-    let subscribe_request = WsRequest::new(GetProperty, params);
-    ws_client.send_command(subscribe_request).await.expect("message send failed");
-
-
-    let mut listener = ws_client.mini_ticker_tx.subscribe();
-    let dashboard = FrequencyDashBoard::new(1000).await;
-    let mut dashboard_read = dashboard.clone();
-    tokio::spawn(async move {
-        debug!("start receive data");
-        loop {
-            let ticker = listener.recv().await;
-
-            if let Ok(t) = ticker {
-                dashboard_read.set_value(t.symbol.clone(), t).await;
-            }
-        }
-    });
+    let dashboard = get_spot_mini_ticker(1000).await;
 
     let dashboard_read = dashboard.clone();
     tokio::spawn(async move {
-
         loop {
-            info!("=====================================");
+            info!("============one loop started==============");
             let tickers = dashboard_read.get_all_entries();
             for t in &tickers {
                 debug!("{:?}", t);
@@ -62,5 +33,8 @@ async fn main() {
         }
     });
 
-    barrier.wait().await;
+    loop {
+        sleep(Duration::from_secs(60)).await;
+        info!("运行了1分钟")
+    }
 }
