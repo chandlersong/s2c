@@ -9,7 +9,7 @@ pub type Decimal = rust_decimal::Decimal;
 
 
 
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub struct AccountSummary {
     pub usdt_equity: Decimal,
     pub negative_balance: Decimal,
@@ -20,7 +20,7 @@ pub struct AccountSummary {
 }
 
 
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub struct SwapSummary {
     pub long_balance: Decimal,
     pub long_pnl: Decimal,
@@ -32,7 +32,7 @@ pub struct SwapSummary {
     pub positions: Vec<SwapPosition>,
 }
 
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub struct SwapPosition {
     pub symbol: String,         //交易对
     pub cur_price: Decimal,     //现在价格
@@ -44,13 +44,13 @@ pub struct SwapPosition {
 
 
 //Spot的汇总信息。暂时先不管那么多。
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub struct SpotSummary {
     pub equity: Decimal,
     pub positions: Vec<SpotPosition>,
 }
 
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub struct SpotPosition {
     pub symbol: String,
     pub asset_amount: Decimal,  //资产数量

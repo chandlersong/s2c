@@ -18,6 +18,17 @@ pub trait DashBoard<T: Send> {
     async fn get_value(&mut self, key: String) -> Option<T>;
 }
 
+///
+/// 1. 对于Arc的一个封装
+/// 2. 定时更新
+///
+#[cfg_attr(test, automock)]
+#[async_trait]
+pub trait AutoUpdateValue<T: Send> {
+    async fn get_value(&mut self) -> Result<T, String>;
+}
+
+
 /// 这个估计用的不多。
 #[derive(Clone)]
 pub struct RealTimeDashBoard<T: Send + Clone+ Sync + 'static> {
