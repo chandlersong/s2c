@@ -1,4 +1,4 @@
-use crate::clients::{cal_gauge_according_setting, ping_exchange};
+use crate::clients::{get_server_from_config, ping_exchange};
 use crate::prometheus_server::PrometheusServer;
 
 use braavos::tools::setup_logger;
@@ -14,8 +14,10 @@ mod clients;
 mod errors;
 
 async fn serve_req(_req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
+    
+    let nightwatch_server = get_server_from_config().await;
     let mut server = PrometheusServer::new();
-    match cal_gauge_according_setting().await {
+    match nightwatch_server.cal_gauge_according_setting().await {
         Ok(result) => server.extend_gauges(result),
         Err(error) => println!("Error: {}", error),
     };

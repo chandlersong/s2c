@@ -22,10 +22,11 @@ pub trait DashBoard<T: Send> {
 /// 1. 对于Arc的一个封装
 /// 2. 定时更新
 ///
+///
 #[cfg_attr(test, automock)]
 #[async_trait]
-pub trait AutoUpdateValue<T: Send> {
-    async fn get_value(&mut self) -> Result<T, String>;
+pub trait AutoUpdateValue<T: Send + Sync> {
+    async fn get_value(&self) -> Result<T, String>;
 }
 
 

@@ -53,7 +53,6 @@ macro_rules! prometheus_gauge {
          use rust_decimal::prelude::ToPrimitive;
          let mut ops = prometheus::Opts::new(&$name,format!("{}_help", $name));
         $(
-            print!("{}",$field);
             ops = ops.clone().const_label($field,$field_value);
          )*
          let res = prometheus::Gauge::with_opts(ops).unwrap();

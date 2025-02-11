@@ -1,15 +1,54 @@
 use crate::errors::NightWatchError;
 use log::error;
+use std::collections::HashMap;
 
 use crate::prometheus_gauge;
 use crate::prometheus_server::ToGauge;
-use braavos::accounts::AccountReader;
-use braavos::binance::bn_restful_commands::{execute_ping, PMAccountReader};
+use braavos::binance::bn_dashboard::AccountDashBoard;
+use braavos::binance::bn_restful_commands::execute_ping;
+use braavos::cache::AutoUpdateValue;
 use braavos::models::{AccountSummary, Decimal, SwapPosition, SwapSummary};
 use braavos::settings::{Account, BRAAVOS_SETTING};
 use prometheus::Gauge;
 use rust_decimal_macros::dec;
+use tokio::sync::OnceCell;
 
+static NIGHT_WATCH_SERVER_FROM_CONFIG: OnceCell<NightWatchServer> = OnceCell::const_new();
+
+
+pub async fn get_server_from_config() -> NightWatchServer {
+    NIGHT_WATCH_SERVER_FROM_CONFIG.get_or_init(|| {
+        NightWatchServer::new(&BRAAVOS_SETTING.accounts)
+    }).await.clone()
+}
+
+
+#[derive(Clone)]
+pub struct NightWatchServer {
+    pub account_dash_boards: HashMap<String, AccountDashBoard>,
+}
+
+
+impl NightWatchServer {
+    pub async fn new(accounts: &Vec<Account>) -> Self {
+        let mut dashboards = HashMap::new();
+        for acc in accounts {
+            let dashboard = AccountDashBoard::new(acc, 1000 * 60 * 3).await;
+            dashboards.insert(acc.name.clone(), dashboard);
+        };
+        Self { account_dash_boards: dashboards }
+    }
+
+    pub(crate) async fn cal_gauge_according_setting(&self) -> Result<Vec<Gauge>, NightWatchError> {
+        let mut res = vec![];
+        for (name, dashboard) in &self.account_dash_boards {
+            let positions_gauge = cal_one_account_gauge(name, dashboard).await;
+
+            res.extend(positions_gauge)
+        }
+        Ok(res)
+    }
+}
 pub(crate) async fn ping_exchange() -> Result<(), NightWatchError> {
     execute_ping().await.expect("can't connect to binance");
     println!("binance access success");
@@ -17,15 +56,7 @@ pub(crate) async fn ping_exchange() -> Result<(), NightWatchError> {
 }
 
 
-pub(crate) async fn cal_gauge_according_setting() -> Result<Vec<Gauge>, NightWatchError> {
-    let mut res = vec![];
-    for acc in &BRAAVOS_SETTING.accounts {
-        let positions_gauge = cal_one_account_gauge(&acc).await;
 
-        res.extend(positions_gauge)
-    }
-    Ok(res)
-}
 
 
 impl ToGauge for AccountSummary {
@@ -71,21 +102,19 @@ impl ToGauge for SwapPosition {
 }
 
 
-async fn cal_one_account_gauge(account: &Account) -> Vec<Gauge> {
-    let calculator = PMAccountReader::new(account.clone());
-    match calculator.account_balance() {
+async fn cal_one_account_gauge(account_name: &String, account: &AccountDashBoard) -> Vec<Gauge> {
+    match account.get_value().await {
         Ok(data) => {
             let mut res = vec![];
-            res.extend(data.to_prometheus_gauge(&account.name));
+            res.extend(data.to_prometheus_gauge(account_name));
             let um_swap = data.um_swap_summary;
-            res.extend(um_swap.to_prometheus_gauge(&account.name));
+            res.extend(um_swap.to_prometheus_gauge(account_name));
             let um_swap_position = um_swap.positions;
             for p in &um_swap_position {
-                res.extend(p.to_prometheus_gauge(&account.name));
+                res.extend(p.to_prometheus_gauge(account_name));
             }
             res
         },
-
         Err(e) => {
             error!("Error getting account balance: {}", e);
             vec![]

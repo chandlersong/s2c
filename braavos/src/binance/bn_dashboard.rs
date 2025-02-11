@@ -112,7 +112,7 @@ impl AccountDashBoard {
 
 #[async_trait]
 impl AutoUpdateValue<AccountSummary> for AccountDashBoard {
-    async fn get_value(&mut self) -> Result<AccountSummary, String> {
+    async fn get_value(&self) -> Result<AccountSummary, String> {
         let value = self.value.write().await.clone();
         match value {
             None => {
