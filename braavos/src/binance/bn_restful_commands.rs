@@ -4,6 +4,7 @@ use crate::errors::BraavosError;
 use crate::models::{AccountSummary, EmptyObject, SpotPosition, SpotSummary, SwapPosition, SwapSummary};
 use crate::settings::{Account, BRAAVOS_SETTING};
 use crate::tools::sign_hmac;
+use async_trait::async_trait;
 use log::{error, trace};
 use reqwest::RequestBuilder;
 use rust_decimal_macros::dec;
@@ -244,7 +245,7 @@ impl RawDataQuery<PMRawAccountData> for PMRawDataQuery {
 ///
 /// 读取统一账户的账户信息的工具。
 pub struct PMAccountReader {
-    pub account: Account,
+    pub account: Account
 }
 
 macro_rules! update_balances {
@@ -259,7 +260,7 @@ macro_rules! update_balances {
 }
 
 impl PMAccountReader {
-    pub fn new(account: Account) -> PMAccountReader {
+    pub async fn new(account: Account) -> PMAccountReader {
         PMAccountReader { account }
     }
 
@@ -366,9 +367,9 @@ impl PMAccountReader {
     }
 }
 
-
+#[async_trait]
 impl AccountReader for PMAccountReader {
-    fn account_balance(&self) -> Result<AccountSummary, BraavosError> {
+    async fn account_balance(&self) -> Result<AccountSummary, BraavosError> {
         let (tx, rx) = mpsc::channel();
 
         let account = self.account.clone();
@@ -623,8 +624,8 @@ mod tests {
     async fn test_real_pm_balance() {
         let _ = setup_logger(Some(LevelFilter::Trace));
         let setting = &BRAAVOS_SETTING;
-        let calculator = PMAccountReader::new(setting.accounts[0].clone());
-        let actual = calculator.account_balance();
+        let calculator = PMAccountReader::new(setting.accounts[0].clone()).await;
+        let actual = calculator.account_balance().await;
         println!("account balance:{:?}", actual)
     }
 
@@ -646,7 +647,7 @@ mod tests {
         let swap = um_swap_position.execute(pm_acc_balance_info, Some(Default::default()), None).await.unwrap();
 
 
-        let calculator = PMAccountReader::new(account.clone());
+        let calculator = PMAccountReader::new(account.clone()).await;
         let actual = calculator.um_swap_balance(&swap);
         println!("{:?}", actual)
     }

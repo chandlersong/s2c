@@ -1,6 +1,7 @@
 use crate::errors::BraavosError;
 use crate::models::AccountSummary;
 use crate::settings::Account;
+use async_trait::async_trait;
 
 /** 把一些原始的数据读出
 
@@ -10,6 +11,7 @@ pub(crate) trait RawDataQuery<X> {
 }
 
 
+#[async_trait]
 pub trait AccountReader {
-    fn account_balance(&self) -> Result<AccountSummary, BraavosError>;
+    async fn account_balance(&self) -> Result<AccountSummary, BraavosError>;
 }

@@ -34,6 +34,7 @@ pub async fn get_spot_client() -> BinanceWSClient {
 
 ///
 /// TODO: 初始化所有的symbol数据
+/// TODO: 参数放入配置文件
 pub async fn get_spot_mini_ticker(frequency_mill_seconds: u64) -> FrequencyDashBoard<MiniTicker> {
     let res = SPOT_TICKER_DASHBOARD.get_or_init(|| async {
         let res = FrequencyDashBoard::new(frequency_mill_seconds).await;
@@ -68,8 +69,8 @@ pub struct AccountDashBoard {
 
 impl AccountDashBoard {
     pub async fn new(account: &Account, frequency_mill_seconds: u64) -> Self {
-        let calculator = PMAccountReader::new(account.clone());
-        let result = calculator.account_balance();
+        let calculator = PMAccountReader::new(account.clone()).await;
+        let result = calculator.account_balance().await;
 
 
         let arc_value = match result {
@@ -83,12 +84,13 @@ impl AccountDashBoard {
         };
 
         let update_value = arc_value.clone();
-
+        let account_name = account.name.clone();
         tokio::spawn(
             async move {
                 sleep(Duration::from_millis(frequency_mill_seconds)).await;
                 loop {
-                    let balance = calculator.account_balance();
+                    let balance = calculator.account_balance().await;
+                    debug!("start update account {} value",account_name);
                     match balance {
                         Ok(b) => {
                             update_value.write().await.replace(b);
