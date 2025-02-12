@@ -1,12 +1,16 @@
 use crate::accounts::{AccountReader, RawDataQuery};
-use crate::binance::bn_models::{BinanceBase, BinancePath, CommandInfo, NormalAPI, PMBalance, PMRawAccountData, PmAPI, SecurityInfo, Ticker, TimeStampRequest, UMSwapPosition};
+use crate::binance::bn_dashboard::get_spot_mini_ticker;
+use crate::binance::bn_models::{BinanceBase, BinancePath, CommandInfo, MiniTicker, NormalAPI, PMBalance, PMRawAccountData, PmAPI, SecurityInfo, TimeStampRequest, UMSwapPosition};
+use crate::cache::{DashBoard, FrequencyDashBoard};
 use crate::errors::BraavosError;
 use crate::models::{AccountSummary, EmptyObject, SpotPosition, SpotSummary, SwapPosition, SwapSummary};
 use crate::settings::{Account, BRAAVOS_SETTING};
 use crate::tools::sign_hmac;
 use async_trait::async_trait;
-use log::{error, trace};
+use log::{error, info, trace};
 use reqwest::RequestBuilder;
+use rust_decimal::prelude::FromPrimitive;
+use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde::de::DeserializeOwned;
 use serde_json::{Error as JsonError, Value};
@@ -213,30 +217,25 @@ impl RawDataQuery<PMRawAccountData> for PMRawDataQuery {
                                                                  BinancePath::PAPI(PmAPI::BalanceAPI),
                                                                  &account.api_key,
                                                                  &account.secret);
-        let ticker_info = CommandInfo::new(BinanceBase::Normal, BinancePath::Normal(NormalAPI::SpotTickerAPI));
 
         let acc_balance_command = GetCommand::<TimeStampRequest, Vec<PMBalance>> { phantom: Default::default() };
-        let ticker_command = GetCommand::<EmptyObject, Vec<Ticker>> { phantom: Default::default() };
         let swap_position_command = GetCommand::<TimeStampRequest, Vec<UMSwapPosition>> { phantom: Default::default() };
 
 
-        let (acc_position_res, ticker_res, um_swap_position_res)
+        let (acc_position_res, um_swap_position_res)
             = join!(
                 acc_balance_command.execute(pm_acc_balance_info, Some(Default::default()),None),
-                ticker_command.execute(ticker_info, None,None),
                 swap_position_command.execute(swap_info,Some(Default::default()),None)
 
         );
 
 
         let account_balance = acc_position_res?;
-        let spot_ticker = ticker_res?;
         let um_swap_position = um_swap_position_res?;
 
 
         Ok(PMRawAccountData {
             account_balance,
-            spot_ticker,
             um_swap_position,
         })
     }
@@ -245,12 +244,13 @@ impl RawDataQuery<PMRawAccountData> for PMRawDataQuery {
 ///
 /// 读取统一账户的账户信息的工具。
 pub struct PMAccountReader {
-    pub account: Account
+    pub account: Account,
+    pub spot_ticker: FrequencyDashBoard<MiniTicker>
 }
 
 macro_rules! update_balances {
-    ($b:expr, $ticker:expr, $total_balance:expr, $negative_balance:expr, $swap_pnl:expr, $spot_asserts:expr) => {
-        if let Some(spot_value) = cal_equity($b, $ticker) {
+    ($b:expr, $dash_board:expr, $total_balance:expr, $negative_balance:expr, $swap_pnl:expr, $spot_asserts:expr) => {
+        if let Some(spot_value) = cal_equity($b, $dash_board).await {
             $total_balance += spot_value.total_balance;
             $negative_balance += spot_value.negative_balance;
             $swap_pnl += spot_value.swap_pnl;
@@ -261,12 +261,13 @@ macro_rules! update_balances {
 
 impl PMAccountReader {
     pub async fn new(account: Account) -> PMAccountReader {
-        PMAccountReader { account }
+        let spot_ticker = get_spot_mini_ticker(1000).await;
+        PMAccountReader { account, spot_ticker }
     }
 
     ///
 
-    fn cal_account_summary(&self, acc_position: &Vec<PMBalance>, ticker: &Vec<Ticker>, um_swap: SwapSummary) -> AccountSummary {
+    async fn cal_account_summary(&self, acc_position: &Vec<PMBalance>, um_swap: SwapSummary) -> AccountSummary {
         let mut swap_pnl = dec!(0);
         let mut total_balance = dec!(0); //cross_margin_free
         let mut negative_balance = dec!(0);
@@ -289,11 +290,11 @@ impl PMAccountReader {
                 }
                 "BNB" => {
                     if !self.account.burning_free {
-                        update_balances!(b,ticker, total_balance, negative_balance, swap_pnl, spot_asserts);
+                        update_balances!(b,&self.spot_ticker, total_balance, negative_balance, swap_pnl, spot_asserts);
                     }
                 }
                 _ => {
-                    update_balances!(b,ticker, total_balance, negative_balance, swap_pnl, spot_asserts);
+                    update_balances!(b,&self.spot_ticker, total_balance, negative_balance, swap_pnl, spot_asserts);
                 }
             }
         }
@@ -388,7 +389,7 @@ impl AccountReader for PMAccountReader {
                 match result {
                     Ok(data) => {
                         let swap_summary = self.um_swap_balance(&data.um_swap_position);
-                        Ok(self.cal_account_summary(&data.account_balance, &data.spot_ticker, swap_summary))
+                        Ok(self.cal_account_summary(&data.account_balance, swap_summary).await)
                     }
                     Err(err) => {
                         error!("{}", err.to_string());
@@ -407,10 +408,12 @@ impl AccountReader for PMAccountReader {
 /** cal_equity:通过balance和ticker计算几个。
 * 返回的应该是total_balance,pnl和 negative_balance
 */
-fn cal_equity(balance: &PMBalance, ticker: &Vec<Ticker>) -> Option<SpotPosition> {
-    let pair = format!("{}USDT", balance.asset);
-    if let Some(price) = ticker.iter().find(|t| t.symbol == pair) {
-        let p = price.price;
+async fn cal_equity(balance: &PMBalance, dashboard: &FrequencyDashBoard<MiniTicker>) -> Option<SpotPosition> {
+    let symbol_pair = balance.asset.clone() + "USDT";
+    info!("symbol:{}, ", symbol_pair);
+    let mini_ticker = dashboard.get_value(symbol_pair).await;
+    if let Some(price) = mini_ticker {
+        let p = Decimal::from_f64(price.close)?;
         let spot_equity = balance.cross_margin_free * p;  //不能进行现货交易
         let total_balance;
         if spot_equity < dec!(5) {
@@ -445,12 +448,37 @@ fn cal_equity(balance: &PMBalance, ticker: &Vec<Ticker>) -> Option<SpotPosition>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::binance::bn_models::Ticker;
     use crate::models::EmptyObject;
     use crate::tools::{parse_test_json, setup_logger};
     use log::LevelFilter;
+    use moka::future::Cache;
+    use rust_decimal::prelude::ToPrimitive;
 
     impl PMAccountReader {
-        pub fn new_for_ut(funding_rate_arbitrage: Vec<String>, burning_bnb: bool) -> PMAccountReader {
+        pub async fn new_for_ut(funding_rate_arbitrage: Vec<String>, burning_bnb: bool) -> PMAccountReader {
+            let tickers: Vec<Ticker> = parse_test_json::<Vec<Ticker>>("tests/data/binance_spot_ticker.json");
+            let cache: Cache<String, MiniTicker> = Cache::new(3000);
+
+            for ticker in tickers {
+                let price = ticker.price.to_f64().unwrap();
+                let symbol = ticker.symbol.clone();
+                let mini_ticker = MiniTicker {
+                    event_type: "bbbb".to_string(),
+                    event_time: 0,
+                    symbol: symbol.clone(),
+                    close: price,
+                    open: price,
+                    high: price,
+                    low: price,
+                    volume: price,
+                    quote_volume: price,
+                };
+                cache.insert(symbol, mini_ticker).await;
+            }
+
+            let spot_ticker: FrequencyDashBoard<MiniTicker> = FrequencyDashBoard::new_for_ut(cache);
+
             PMAccountReader {
                 account: Account {
                     name: "".to_string(),
@@ -458,16 +486,17 @@ mod tests {
                     secret: "".to_string(),
                     funding_rate_arbitrage: Some(funding_rate_arbitrage),
                     burning_free: burning_bnb,
-                }
+                },
+                spot_ticker,
             }
         }
     }
 
-    #[test]
-    fn test_cm_swap_balance() {
+    #[tokio::test]
+    async fn test_cm_swap_balance() {
         let _ = setup_logger(Some(LevelFilter::Trace));
         let swap_position: Vec<UMSwapPosition> = parse_test_json::<Vec<UMSwapPosition>>("tests/data/binance_papi_um_position_risk.json");
-        let calculator = PMAccountReader::new_for_ut(vec![], false);
+        let calculator = PMAccountReader::new_for_ut(vec![], false).await;
         let actual = calculator.um_swap_balance(&swap_position);
         trace!("actual is {:?}",actual);
         assert_eq!(dec!(904.67784156), actual.long_balance);
@@ -479,11 +508,11 @@ mod tests {
         assert_eq!(8, actual.positions.len())
     }
 
-    #[test]
-    fn test_cm_swap_balance_with_fra() {
+    #[tokio::test]
+    async fn test_cm_swap_balance_with_fra() {
         let _ = setup_logger(Some(LevelFilter::Trace));
         let swap_position: Vec<UMSwapPosition> = parse_test_json::<Vec<UMSwapPosition>>("tests/data/binance_papi_um_position_risk.json");
-        let calculator = PMAccountReader::new_for_ut(vec!["SOL".to_string(), "ETH".to_string()], false);
+        let calculator = PMAccountReader::new_for_ut(vec!["SOL".to_string(), "ETH".to_string()], false).await;
         let actual = calculator.um_swap_balance(&swap_position);
         trace!("actual is {:?}",actual);
         assert_eq!(dec!(904.67784156), actual.long_balance, "long_balance错误");
@@ -504,13 +533,12 @@ mod tests {
         assert!(has_mew, "mew获取不对")
     }
 
-    #[test]
-    fn test_account_value() {
+    #[tokio::test]
+    async fn test_account_value() {
         let _ = setup_logger(Some(LevelFilter::Trace));
         let balance: Vec<PMBalance> = parse_test_json::<Vec<PMBalance>>("tests/data/binance_papi_get_balance.json");
-        let ticker: Vec<Ticker> = parse_test_json::<Vec<Ticker>>("tests/data/binance_spot_ticker.json");
-        let calculator = PMAccountReader::new_for_ut(vec![], false);
-        let actual = calculator.cal_account_summary(&balance, &ticker, mock_empty_swap_summary());
+        let calculator = PMAccountReader::new_for_ut(vec![], false).await;
+        let actual = calculator.cal_account_summary(&balance, mock_empty_swap_summary()).await;
         println!("{:?}", actual);
         assert_eq!(dec!(107.15440471), actual.usdt_equity);
         assert_eq!(dec!(1016.5653078520000000), actual.account_equity);
@@ -532,13 +560,12 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_account_value_burn_bnb() {
+    #[tokio::test]
+    async fn test_account_value_burn_bnb() {
         let _ = setup_logger(Some(LevelFilter::Trace));
         let balance: Vec<PMBalance> = parse_test_json::<Vec<PMBalance>>("tests/data/binance_papi_get_balance.json");
-        let ticker: Vec<Ticker> = parse_test_json::<Vec<Ticker>>("tests/data/binance_spot_ticker.json");
-        let calculator = PMAccountReader::new_for_ut(vec![], true);
-        let actual = calculator.cal_account_summary(&balance, &ticker, mock_empty_swap_summary());
+        let calculator = PMAccountReader::new_for_ut(vec![], true).await;
+        let actual = calculator.cal_account_summary(&balance, mock_empty_swap_summary()).await;
         println!("{:?}", actual);
         assert_eq!(dec!(107.15440471), actual.usdt_equity);
         assert_eq!(dec!(1005.86615970000000), actual.account_equity);
@@ -552,13 +579,12 @@ mod tests {
                            2. 没有小于5u的过滤
                            3. 不存在币种不回影响最后结果
     */
-    #[test]
-    fn test_account_value_with_um_cm_value() {
+    #[tokio::test]
+    async fn test_account_value_with_um_cm_value() {
         let _ = setup_logger(Some(LevelFilter::Trace));
         let balance: Vec<PMBalance> = parse_test_json::<Vec<PMBalance>>("tests/data/binance_papi_get_balance_v1.json");
-        let ticker: Vec<Ticker> = parse_test_json::<Vec<Ticker>>("tests/data/binance_spot_ticker.json");
-        let calculator = PMAccountReader::new_for_ut(vec![], false);
-        let actual = calculator.cal_account_summary(&balance, &ticker, mock_empty_swap_summary());
+        let calculator = PMAccountReader::new_for_ut(vec![], false).await;
+        let actual = calculator.cal_account_summary(&balance, mock_empty_swap_summary()).await;
         println!("{:?}", actual);
         assert_eq!(dec!(109.15440471), actual.usdt_equity);
         assert_eq!(dec!(1016.5653078520000000), actual.account_equity);

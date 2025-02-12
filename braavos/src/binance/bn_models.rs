@@ -248,7 +248,6 @@ pub struct UMSwapPosition {
 
 pub struct PMRawAccountData {
     pub account_balance: Vec<PMBalance>,
-    pub spot_ticker: Vec<Ticker>,
     pub um_swap_position: Vec<UMSwapPosition>,
 }
 

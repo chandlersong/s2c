@@ -6,16 +6,17 @@ use moka::future::Cache;
 use std::collections::HashMap;
 use tokio::sync::broadcast;
 
+
 #[cfg_attr(test, automock)]
 #[async_trait]
-pub trait DashBoard<T: Send> {
+pub trait DashBoard<T: Send + Sync> {
     /*
      像是价格，还有一些乱七八糟的信息这类，计划在缓存作为一个中转站。
      所以在这里对来类似于一个dashboard
     */
     async fn set_value(&mut self, key: String, value: T);
 
-    async fn get_value(&mut self, key: String) -> Option<T>;
+    async fn get_value(&self, key: String) -> Option<T>;
 }
 
 ///
@@ -50,7 +51,7 @@ impl<T: Send+ Clone+ Sync + 'static> DashBoard<T> for RealTimeDashBoard<T> {
         self.cache.insert(key, value).await;
     }
 
-    async fn get_value(&mut self, key: String) -> Option<T> {
+    async fn get_value(&self, key: String) -> Option<T> {
         self.cache.get(&key).await
     }
 }
@@ -81,6 +82,17 @@ async fn cache_update<T: Send + Clone + Sync + 'static>(cache: Cache<String, T>,
 /// TODO：
 /// 1. 可以配置cache. channel的capacity和cache的都要。
 impl<T: Send + Clone + Sync + 'static> FrequencyDashBoard<T> {
+    #[cfg(test)]
+    pub fn new_for_ut(cache: Cache<String, T>) -> Self {
+        let (tx, _) = broadcast::channel(500);
+        FrequencyDashBoard {
+            cache,
+            frequency_mill_seconds: 1000,
+            cache_tx: tx,
+            frequency_reducers: HashMap::new(),
+        }
+    }
+
     pub async fn new(frequency_mill_seconds: u64) -> Self {
         let (tx, rx) = broadcast::channel(500);
         let cache: Cache<String, T> = Cache::new(500);
@@ -122,7 +134,7 @@ impl<T: Send + Clone + Sync + 'static> DashBoard<T> for FrequencyDashBoard<T> {
         }
     }
 
-    async fn get_value(&mut self, key: String) -> Option<T> {
+    async fn get_value(&self, key: String) -> Option<T> {
         self.cache.get(&key).await
     }
 }
