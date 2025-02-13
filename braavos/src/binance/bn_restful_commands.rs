@@ -440,7 +440,7 @@ async fn cal_equity(balance: &PMBalance, dashboard: &FrequencyDashBoard<MiniTick
             negative_balance,
         })
     } else {
-        error!("symbol {} not exists!!!",balance.asset);
+        debug!("symbol {} not exists!!!",balance.asset);
         None
     }
 }

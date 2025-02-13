@@ -35,6 +35,7 @@ async fn do_send(mut req_recv: Receiver<(Message, oneshot::Sender<String>)>, wri
 }
 
 pub async fn connect(url: String) -> (SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>, SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>) {
+    info!("connect to websocket: {}",&url);
     let (ws_stream, _) = connect_async(url).await.expect("Failed to connect");
     info!("WebSocket handshake has been successfully completed");
     ws_stream.split()
