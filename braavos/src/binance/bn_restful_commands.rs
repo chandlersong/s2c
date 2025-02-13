@@ -7,7 +7,7 @@ use crate::models::{AccountSummary, EmptyObject, SpotPosition, SpotSummary, Swap
 use crate::settings::{Account, BRAAVOS_SETTING};
 use crate::tools::sign_hmac;
 use async_trait::async_trait;
-use log::{debug, error, trace};
+use log::{debug, error, trace, warn};
 use reqwest::RequestBuilder;
 use rust_decimal::prelude::FromPrimitive;
 use rust_decimal::Decimal;
@@ -440,7 +440,7 @@ async fn cal_equity(balance: &PMBalance, dashboard: &FrequencyDashBoard<MiniTick
             negative_balance,
         })
     } else {
-        debug!("symbol {} not exists!!!",balance.asset);
+        warn!("symbol {} not exists!!!",balance.asset);
         None
     }
 }
