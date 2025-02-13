@@ -7,7 +7,7 @@ use crate::models::{AccountSummary, EmptyObject, SpotPosition, SpotSummary, Swap
 use crate::settings::{Account, BRAAVOS_SETTING};
 use crate::tools::sign_hmac;
 use async_trait::async_trait;
-use log::{error, info, trace};
+use log::{debug, error, trace};
 use reqwest::RequestBuilder;
 use rust_decimal::prelude::FromPrimitive;
 use rust_decimal::Decimal;
@@ -410,7 +410,7 @@ impl AccountReader for PMAccountReader {
 */
 async fn cal_equity(balance: &PMBalance, dashboard: &FrequencyDashBoard<MiniTicker>) -> Option<SpotPosition> {
     let symbol_pair = balance.asset.clone() + "USDT";
-    info!("symbol:{}, ", symbol_pair);
+    debug!("symbol:{}, ", symbol_pair);
     let mini_ticker = dashboard.get_value(symbol_pair).await;
     if let Some(price) = mini_ticker {
         let p = Decimal::from_f64(price.close)?;
