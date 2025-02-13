@@ -40,7 +40,7 @@ pub struct RealTimeDashBoard<T: Send + Clone+ Sync + 'static> {
 impl<T: Send+ Clone+ Sync + 'static> RealTimeDashBoard<T> {
     pub fn new() -> Self {
         RealTimeDashBoard {
-            cache: Cache::new(500)
+            cache: Cache::new(3000)
         }
     }
 }
@@ -84,7 +84,7 @@ async fn cache_update<T: Send + Clone + Sync + 'static>(cache: Cache<String, T>,
 impl<T: Send + Clone + Sync + 'static> FrequencyDashBoard<T> {
     #[cfg(test)]
     pub fn new_for_ut(cache: Cache<String, T>) -> Self {
-        let (tx, _) = broadcast::channel(500);
+        let (tx, _) = broadcast::channel(3000);
         FrequencyDashBoard {
             cache,
             frequency_mill_seconds: 1000,
