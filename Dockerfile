@@ -8,5 +8,7 @@ FROM debian:bookworm-slim AS runtime
 ARG APP_NAME=test
 COPY --from=builder /app/target/release/${APP_NAME} /app/app
 RUN  apt update &&\
-     apt install -y pkg-config libssl-dev openssl
-CMD ["/app/app"]
+     apt install -y pkg-config libssl-dev openssl ca-certificates
+
+ADD dockerscripts/start.sh /app/start.sh
+CMD ["sh","/app/start.sh"]
