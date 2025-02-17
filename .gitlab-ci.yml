@@ -5,6 +5,7 @@ stages:
 
 test:
   stage: test
+  parallel: 4  # 并行运行测试
   script:
     - cargo test
   timeout: 10 minutes
