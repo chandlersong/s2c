@@ -2,7 +2,9 @@
 FROM rust:1.80.1 AS builder
 WORKDIR /app
 COPY . .
-RUN cargo build --release
+RUN RUN  apt update &&\
+         apt install -y pkg-config libssl-dev openssl ca-certificates librocksdb-dev clang lld  \
+    cargo build --release
 
 FROM debian:bookworm-slim AS runtime
 ARG APP_NAME=test
