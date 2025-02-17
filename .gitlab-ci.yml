@@ -5,6 +5,9 @@ stages:
 
 test:
   stage: test
+  before_script:
+    - apt-get update -qq
+    - apt-get install -y librocksdb-dev clang lld
   script:
     - cargo test
   timeout: 10 minutes
