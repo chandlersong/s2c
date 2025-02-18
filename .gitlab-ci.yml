@@ -5,6 +5,8 @@ stages:
 
 test:
   stage: test
+  variables:
+    ROCKSDB_LIB_DIR: /usr/include/rocksdb
   before_script:
     - apt-get update -qq
     - apt-get install -y librocksdb-dev clang lld
