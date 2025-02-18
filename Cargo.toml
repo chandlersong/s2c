@@ -27,6 +27,7 @@ fern = "0.6"
 humantime = "2.1.0"
 sonyflake = "0.1"
 chrono = "0.4.39"
+rocksdb = "0.23.0"
 
 ### DEV ####
 mockall = "0.13.0"

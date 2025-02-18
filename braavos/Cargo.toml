@@ -20,6 +20,8 @@ tokio = { workspace = true }
 config = { workspace = true }
 sonyflake = { workspace = true }
 chrono = { workspace = true }
+rocksdb = { workspace = true }
+
 
 tokio-tungstenite = { version = "0.24.0", features = ["native-tls"] }
 futures-util = "0.3.30"
