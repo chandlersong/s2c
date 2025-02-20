@@ -19,8 +19,6 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: chandlersong/rust_with_rocksdb:1.80.1_9.9.3  # 替换为你的镜像
-    env:
-      ROCKSDB_LIB_DIR: "/usr/include/rocksdb"
     steps:
       - uses: actions/checkout@v4
       - name: Run cargo test
