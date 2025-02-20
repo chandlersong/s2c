@@ -1,15 +1,10 @@
-image: rust:1.80.1
+image: chandlersong/rust_with_rocksdb:1.80.1_9.9.3
 
 stages:
   - test
 
 test:
   stage: test
-  variables:
-    ROCKSDB_LIB_DIR: /usr/include/rocksdb
-  before_script:
-    - apt-get update -qq
-    - apt-get install -y librocksdb-dev clang lld
   script:
     - cargo test
   timeout: 10 minutes

@@ -2,6 +2,7 @@
 FROM rust:1.80.1 AS builder
 WORKDIR /app
 COPY . .
+ENV ROCKSDB_LIB_DIR /usr/include/rocksdb
 RUN RUN  apt update &&\
          apt install -y pkg-config libssl-dev openssl ca-certificates librocksdb-dev clang lld  \
     cargo build --release

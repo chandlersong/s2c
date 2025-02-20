@@ -9,12 +9,10 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    container:
+      image: chandlersong/rust_with_rocksdb:1.80.1_9.9.3  # 替换为你的镜像
     steps:
       - uses: actions/checkout@v4
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y librocksdb-dev clang lld
       - name: Run cargo test
         run: cargo test
   build:
