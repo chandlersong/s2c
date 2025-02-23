@@ -25,6 +25,13 @@ exchange:tradeType:symbol:id:millSeconds
 
 id:自动生成的序列
 
+### index
+
+#### 价格分布
+主要用于存储分布的数据。
+key: exchange:tradeType:price:millSeconds 
+value: id的对象
+
 ## 深度数据
 
 exchange:tradeType:symbol:millSeconds
