@@ -100,7 +100,7 @@ pub mod string_to_float {
     }
 }
 
-pub mod string_to_int {
+pub mod string_to_u64 {
     use serde::{Deserialize, Deserializer, Serializer};
     use std::str::FromStr;
 

@@ -5,6 +5,27 @@ use crate::tools::{string_to_float, unix_time};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 
+
+pub mod bin {
+    use crate::binance::bn_models::TradeRaw;
+
+    include!(concat!(env!("OUT_DIR"), "/binance.rs"));
+
+    impl From<TradeRaw> for Trade {
+        fn from(value: TradeRaw) -> Self {
+            Self {
+                timestamp: value.event_time,
+                symbol: value.symbol,
+                trade_id: value.trade_id,
+                price: value.price,
+                quantity: value.quantity,
+                trade_timestamp: value.trade_timestamp,
+                is_marker: value.is_marker,
+            }
+        }
+    }
+}
+
 #[derive(Debug,Clone)]
 pub enum BinanceBase {
     Normal,
@@ -343,7 +364,6 @@ pub struct Asks {
 
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
 pub struct SymbolDepthData {
     #[serde(rename = "e")]
     pub event_type: String, // 事件类型：depthUpdate
@@ -420,6 +440,33 @@ impl fmt::Display for MiniTicker {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "MiniTicker: symbol:{},time:{},close:{}", self.symbol, unix_2_readable(&self.event_time), self.close)
     }
+}
+
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct TradeRaw {
+    #[serde(rename = "E")]
+    pub event_time: u64,
+
+    #[serde(rename = "s")]
+    pub symbol: String,
+
+    #[serde(rename = "t")]
+    pub trade_id: u64,
+
+    #[serde(rename = "p")]
+    #[serde(with = "string_to_float")]
+    pub price: f64,
+
+    #[serde(rename = "q")]
+    #[serde(with = "string_to_float")]
+    pub quantity: f64,
+
+    #[serde(rename = "T")]
+    pub trade_timestamp: u64,
+
+    #[serde(rename = "m")]
+    pub is_marker: bool, //则此次成交是一个主动卖出单，否则是一个主动买入单。
 }
 
 
