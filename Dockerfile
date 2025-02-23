@@ -6,7 +6,7 @@ COPY . .
 ENV ROCKSDB_LIB_DIR /usr/lib/x86_64-linux-gnu
 COPY --from=Rocksdb /usr/lib/x86_64-linux-gnu/librocksdb* /usr/lib/x86_64-linux-gnu/
 RUN RUN  apt update &&\
-         apt install -y pkg-config libssl-dev openssl ca-certificates clang llvm libgflags-dev\
+         apt install -y pkg-config libssl-dev openssl ca-certificates clang llvm libgflags-dev protobuf-compiler\
     cargo build --release
 
 FROM debian:bookworm-slim AS runtime
