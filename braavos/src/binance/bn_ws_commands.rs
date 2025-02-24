@@ -5,12 +5,11 @@ use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, info, trace};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::{broadcast, mpsc, oneshot, Mutex, RwLock};
+use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
@@ -51,7 +50,7 @@ struct SpotTextMessageHandler
 where
 {
     mini_ticker_handler: MiniTickerHandler,
-    trade_handler: ChannelHandler<TradeRaw>
+    trade_handler: SingleHandler<TradeRaw>
 }
 
 #[async_trait]
@@ -154,8 +153,8 @@ pub async fn connect_and_listen(url: String) -> BinanceSpotWSClient {
     let (write, read) = connect(url.clone()).await;
     let share_writer = Arc::new(Mutex::new(write));
     let (command_tx, command_rx) = mpsc::channel(1);
-    let (trade_tx, trade_rx) = mpsc::channel(100);
-    let res = BinanceSpotWSClient::new(command_tx, mini_ticker_tx.clone(), trade_rx);
+    let (trade_tx, _) = broadcast::channel(100);
+    let res = BinanceSpotWSClient::new(command_tx, mini_ticker_tx.clone(), trade_tx.clone());
     let send_clone = Arc::clone(&share_writer);
     tokio::spawn(async move {
         do_send(command_rx, send_clone).await;
@@ -164,7 +163,7 @@ pub async fn connect_and_listen(url: String) -> BinanceSpotWSClient {
     let mini_ticker_handler = MiniTickerHandler::new(mini_ticker_tx);
     let text_handler = SpotTextMessageHandler {
         mini_ticker_handler,
-        trade_handler: ChannelHandler { trade_tx },
+        trade_handler: SingleHandler { trade_tx },
     };
     tokio::spawn(async move {
         ws_listen(read, listen_clone, url, text_handler).await;
@@ -179,61 +178,24 @@ pub async fn connect_and_listen(url: String) -> BinanceSpotWSClient {
 pub struct BinanceSpotWSClient {
     command_tx: Sender<(Message, oneshot::Sender<String>)>,
     pub mini_ticker_tx: broadcast::Sender<MiniTicker>,
-    trade_broadcast: Arc<RwLock<HashMap<String, broadcast::Sender<TradeRaw>>>>,
+    trade_rx: broadcast::Sender<TradeRaw>,
 }
 
 
 impl BinanceSpotWSClient {
     pub fn new(command_tx: Sender<(Message, oneshot::Sender<String>)>,
                mini_ticker_tx: broadcast::Sender<MiniTicker>,
-               mut trade_rx: Receiver<TradeRaw>) -> BinanceSpotWSClient {
-        let trade_broadcast: Arc<RwLock<HashMap<String, broadcast::Sender<TradeRaw>>>> = Arc::new(RwLock::new(HashMap::new()));
-        let refresh = trade_broadcast.clone();
-        tokio::spawn(async move {
-            loop {
-                if let Some(v) = trade_rx.recv().await {
-                    let symbol = v.symbol.clone();
-                    {
-                        let read_guard = refresh.read().await;
-                        if let Some(s) = read_guard.get(&symbol).clone() {
-                            s.send(v).unwrap();
-                            continue;
-                        }
-                        // 读锁自动释放
-                    }
-                    {
-                        let mut writer_guard = refresh.write().await;
-                        let (tx, _) = broadcast::channel(100);
-                        tx.send(v).unwrap();
-                        writer_guard.insert(symbol, tx);
-                    }
-                }
-            }
-        });
+               trade_rx: broadcast::Sender<TradeRaw>) -> BinanceSpotWSClient {
         BinanceSpotWSClient {
             command_tx,
             mini_ticker_tx,
-
-            trade_broadcast,
+            trade_rx,
         }
     }
 
 
-    pub async fn get_trade_tx(&mut self, symbol: &String) -> broadcast::Sender<TradeRaw> {
-        {
-            let read_guard = self.trade_broadcast.read().await;
-            if let Some(s) = read_guard.get(symbol).clone() {
-                let sender: broadcast::Sender<TradeRaw> = s.clone();
-                return sender;
-            }
-            // 读锁自动释放
-        }
-        {
-            let mut writer_guard = self.trade_broadcast.write().await;
-            let (tx, _) = broadcast::channel(1000);
-            writer_guard.insert(symbol.clone(), tx.clone());
-            tx
-        }
+    pub async fn get_trade_rx(&mut self) -> broadcast::Receiver<TradeRaw> {
+        self.trade_rx.subscribe()
     }
 
     pub async fn send_command(&mut self, req: WsRequest) -> Result<(), String> {
@@ -326,22 +288,25 @@ impl MiniTickerHandler
     }
 }
 
-/// 主要处理收和发的数据。因为有些数据。只是做一个二传手。为下一的处理环节处理。
-/// 所以这里的目的其实挺简单的。
-pub struct ChannelHandler<T>
+/// 有像Trade这样的接口，你需要按照Symbol进行分发。然后不同的Symbol，可能有不同的处理。
+/// 之所以分不同的
+pub struct SingleHandler<T>
 {
-    trade_tx: Sender<T>,
+    trade_tx: broadcast::Sender<T>,
 }
 
-impl<T> ChannelHandler<T> {
-    pub fn new(trade_tx: Sender<T>) -> Self {
+impl<T> SingleHandler<T> {
+    pub fn new(trade_tx: broadcast::Sender<T>) -> Self {
         Self {
             trade_tx
         }
     }
 
     pub async fn handle(&mut self, trade: T) {
-        self.trade_tx.send(trade).await.unwrap();
+        match self.trade_tx.send(trade) {
+            Ok(_) => {}
+            Err(e) => { error!("failed to send trade message: {}", e); }
+        }
     }
 }
 
@@ -349,12 +314,11 @@ impl<T> ChannelHandler<T> {
 mod tests {
     use crate::binance::bn_models::WsMethod::Ping;
     use crate::binance::bn_tools::create_mock_mini_ticker;
-    use crate::binance::bn_ws_commands::{ChannelHandler, MiniTickerHandler, WsRequest, WsSpotResponse};
+    use crate::binance::bn_ws_commands::{MiniTickerHandler, SingleHandler, WsRequest, WsSpotResponse};
     use crate::tools::{parse_test_json, setup_logger};
     use log::LevelFilter;
     use std::time::Duration;
     use tokio::sync::broadcast;
-    use tokio::sync::mpsc;
     use tokio::time;
 
     #[tokio::test]
@@ -386,8 +350,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_channel_handler_new() {
-        let (tx, mut rx) = mpsc::channel(1);
-        let mut channel_handler:ChannelHandler<String> = ChannelHandler::new(tx);
+        let (tx, mut rx) = broadcast::channel(1);
+        let mut channel_handler: SingleHandler<String> = SingleHandler::new(tx);
 
         tokio::spawn(async move {
             channel_handler.handle("ok".to_string()).await;
@@ -395,15 +359,12 @@ mod tests {
 
         let result = time::timeout(Duration::from_secs(2), async {
             // 接收消息
-            rx.recv().await
+            rx.recv().await.unwrap()
         }).await;
 
         match result {
-            Ok(Some(message)) => {
+            Ok(message) => {
                 assert_eq!(message, "ok","消息传递错误");
-            }
-            Ok(None) => {
-                panic!("Channel closed before receiving a message");
             }
             Err(_) => {
                 panic!("接收消息超时");
