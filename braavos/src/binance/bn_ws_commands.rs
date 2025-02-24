@@ -1,15 +1,16 @@
-use crate::binance::bn_models::{deserialize_wx_method, serialize_wx_method, MiniTicker, StreamAllMiniTickerResponse, SymbolDepthData, WsCommandResponse, WsMethod};
+use crate::binance::bn_models::{deserialize_wx_method, serialize_wx_method, MiniTicker, StreamAllMiniTickerResponse, SymbolDepthData, TradeRaw, WsCommandResponse, WsMethod};
 use crate::tools::SnowyFlakeWrapper;
 use async_trait::async_trait;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, info, trace};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
+use tokio::sync::{broadcast, mpsc, oneshot, Mutex, RwLock};
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
@@ -46,12 +47,16 @@ trait TextMessageHandler {
     async fn handler_message(&mut self, text: String) -> Result<bool, String>;
 }
 
-struct SpotTextMessageHandler {
+struct SpotTextMessageHandler
+where
+{
     mini_ticker_handler: MiniTickerHandler,
+    trade_handler: TradeHandler
 }
 
 #[async_trait]
-impl TextMessageHandler for SpotTextMessageHandler {
+impl TextMessageHandler for SpotTextMessageHandler
+{
     async fn handler_message(&mut self, text: String) -> Result<bool, String> {
         let response = serde_json::from_str(&text);
         match response {
@@ -62,12 +67,13 @@ impl TextMessageHandler for SpotTextMessageHandler {
                         trace!("{:?} at {:?}", v.symbol,v.event_time);
                     }
                     WsSpotResponse::StreamAllMiniTicker(v) => {
-                        trace!("receive mini ticker,num:{:?}", v.tickers.len());
                         self.mini_ticker_handler.handle(v.tickers).await;
                     }
                     WsSpotResponse::SubAllMiniTicker(v) => {
-                        trace!("receive mini ticker,num:{:?}", v.len());
                         self.mini_ticker_handler.handle(v).await;
+                    }
+                    WsSpotResponse::Trade(v) => {
+                        self.trade_handler.handle(v).await;
                     }
                     WsSpotResponse::CommonResponse(v) => {
                         trace!("receive common result {:?}", v.result);
@@ -139,7 +145,7 @@ async fn ws_listen<TH: TextMessageHandler>(ws_read: SplitStream<WebSocketStream<
     }
 }
 
-pub async fn connect_and_listen(url: String) -> BinanceWSClient {
+pub async fn connect_and_listen(url: String) -> BinanceSpotWSClient {
     let (mini_ticker_tx, _) = broadcast::channel(500);
     /*
     在思考了之后，我绝对，整个client只是负责保存channel。
@@ -148,7 +154,8 @@ pub async fn connect_and_listen(url: String) -> BinanceWSClient {
     let (write, read) = connect(url.clone()).await;
     let share_writer = Arc::new(Mutex::new(write));
     let (command_tx, command_rx) = mpsc::channel(1);
-    let res = BinanceWSClient { command_tx, mini_ticker_tx: mini_ticker_tx.clone() };
+    let (trade_tx, trade_rx) = mpsc::channel(100);
+    let res = BinanceSpotWSClient::new(command_tx, mini_ticker_tx.clone(), trade_rx);
     let send_clone = Arc::clone(&share_writer);
     tokio::spawn(async move {
         do_send(command_rx, send_clone).await;
@@ -156,7 +163,8 @@ pub async fn connect_and_listen(url: String) -> BinanceWSClient {
     let listen_clone = Arc::clone(&share_writer);
     let mini_ticker_handler = MiniTickerHandler::new(mini_ticker_tx);
     let text_handler = SpotTextMessageHandler {
-        mini_ticker_handler
+        mini_ticker_handler,
+        trade_handler: TradeHandler { trade_tx },
     };
     tokio::spawn(async move {
         ws_listen(read, listen_clone, url, text_handler).await;
@@ -168,13 +176,65 @@ pub async fn connect_and_listen(url: String) -> BinanceWSClient {
 ///
 /// 对外的结构
 #[derive(Clone)]
-pub struct BinanceWSClient {
+pub struct BinanceSpotWSClient {
     command_tx: Sender<(Message, oneshot::Sender<String>)>,
     pub mini_ticker_tx: broadcast::Sender<MiniTicker>,
+    trade_broadcast: Arc<RwLock<HashMap<String, broadcast::Sender<TradeRaw>>>>,
 }
 
 
-impl BinanceWSClient {
+impl BinanceSpotWSClient {
+    pub fn new(command_tx: Sender<(Message, oneshot::Sender<String>)>,
+               mini_ticker_tx: broadcast::Sender<MiniTicker>,
+               mut trade_rx: Receiver<TradeRaw>) -> BinanceSpotWSClient {
+        let trade_broadcast: Arc<RwLock<HashMap<String, broadcast::Sender<TradeRaw>>>> = Arc::new(RwLock::new(HashMap::new()));
+        let refresh = trade_broadcast.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Some(v) = trade_rx.recv().await {
+                    let symbol = v.symbol.clone();
+                    {
+                        let read_guard = refresh.read().await;
+                        if let Some(s) = read_guard.get(&symbol).clone() {
+                            s.send(v).unwrap();
+                            continue;
+                        }
+                        // 读锁自动释放
+                    }
+                    {
+                        let mut writer_guard = refresh.write().await;
+                        let (tx, _) = broadcast::channel(100);
+                        tx.send(v).unwrap();
+                        writer_guard.insert(symbol, tx);
+                    }
+                }
+            }
+        });
+        BinanceSpotWSClient {
+            command_tx,
+            mini_ticker_tx,
+
+            trade_broadcast,
+        }
+    }
+
+
+    pub async fn get_trade_tx(&mut self, symbol: &String) -> broadcast::Sender<TradeRaw> {
+        {
+            let read_guard = self.trade_broadcast.read().await;
+            if let Some(s) = read_guard.get(symbol).clone() {
+                let sender: broadcast::Sender<TradeRaw> = s.clone();
+                return sender;
+            }
+            // 读锁自动释放
+        }
+        {
+            let mut writer_guard = self.trade_broadcast.write().await;
+            let (tx, _) = broadcast::channel(1000);
+            writer_guard.insert(symbol.clone(), tx.clone());
+            tx
+        }
+    }
 
     pub async fn send_command(&mut self, req: WsRequest) -> Result<(), String> {
         let request_body = req.to_json();
@@ -237,6 +297,7 @@ pub enum WsSpotResponse {
     Depth(SymbolDepthData),
     StreamAllMiniTicker(StreamAllMiniTickerResponse),
     SubAllMiniTicker(Vec<MiniTicker>),
+    Trade(TradeRaw),
 }
 
 
@@ -262,6 +323,23 @@ impl MiniTickerHandler
         for ticker in tickers {
             self.mini_ticker_tx.send(ticker).unwrap();
         }
+    }
+}
+
+pub struct TradeHandler
+{
+    trade_tx: Sender<TradeRaw>,
+}
+
+impl TradeHandler {
+    pub fn new(trade_tx: Sender<TradeRaw>) -> Self {
+        Self {
+            trade_tx
+        }
+    }
+
+    pub async fn handle(&mut self, trade: TradeRaw) {
+        self.trade_tx.send(trade).await.unwrap();
     }
 }
 

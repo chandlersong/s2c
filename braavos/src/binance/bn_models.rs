@@ -123,16 +123,20 @@ where
     }
 }
 
+pub fn get_trade_command(symbol: &str) -> String {
+    format!("{}@trade", symbol.to_lowercase())
+}
 #[derive(Serialize, Deserialize, Debug)]
-pub enum WsSubscribe {
+pub enum SpotWsSubscribe {
     AllMiniTicker,
 }
 
-impl From<WsSubscribe> for String {
-    fn from(subscription: WsSubscribe) -> Self {
+
+impl From<SpotWsSubscribe> for String {
+    fn from(subscription: SpotWsSubscribe) -> Self {
         String::from(
             match subscription {
-                WsSubscribe::AllMiniTicker=> String::from("!miniTicker@arr"),
+                SpotWsSubscribe::AllMiniTicker => String::from("!miniTicker@arr"),
             }
         )
     }
