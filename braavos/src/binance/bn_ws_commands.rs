@@ -150,11 +150,13 @@ pub async fn connect_and_listen(url: String) -> BinanceSpotWSClient {
     在思考了之后，我绝对，整个client只是负责保存channel。
     然后通过channel对这个websocket做通行。这样比较符合websocket的处理方式
     */
+
+    let trade_handler = SingleHandler::new();
+    
     let (write, read) = connect(url.clone()).await;
     let share_writer = Arc::new(Mutex::new(write));
     let (command_tx, command_rx) = mpsc::channel(1);
-    let (trade_tx, _) = broadcast::channel(100);
-    let res = BinanceSpotWSClient::new(command_tx, mini_ticker_tx.clone(), trade_tx.clone());
+    let res = BinanceSpotWSClient::new(command_tx, mini_ticker_tx.clone(), trade_handler.clone_tx());
     let send_clone = Arc::clone(&share_writer);
     tokio::spawn(async move {
         do_send(command_rx, send_clone).await;
@@ -163,7 +165,7 @@ pub async fn connect_and_listen(url: String) -> BinanceSpotWSClient {
     let mini_ticker_handler = MiniTickerHandler::new(mini_ticker_tx);
     let text_handler = SpotTextMessageHandler {
         mini_ticker_handler,
-        trade_handler: SingleHandler { trade_tx },
+        trade_handler,
     };
     tokio::spawn(async move {
         ws_listen(read, listen_clone, url, text_handler).await;
@@ -290,16 +292,21 @@ impl MiniTickerHandler
 
 /// 有像Trade这样的接口，你需要按照Symbol进行分发。然后不同的Symbol，可能有不同的处理。
 /// 之所以分不同的
-pub struct SingleHandler<T>
+pub struct SingleHandler<T: Clone>
 {
     trade_tx: broadcast::Sender<T>,
 }
 
-impl<T> SingleHandler<T> {
-    pub fn new(trade_tx: broadcast::Sender<T>) -> Self {
+impl<T: Clone> SingleHandler<T> {
+    pub fn new() -> Self {
+        let (trade_tx, _) = broadcast::channel(100);
         Self {
             trade_tx
         }
+    }
+
+    pub fn clone_tx(&self) -> broadcast::Sender<T> {
+        self.trade_tx.clone()
     }
 
     pub async fn handle(&mut self, trade: T) {
@@ -350,13 +357,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_channel_handler_new() {
-        let (tx, mut rx) = broadcast::channel(1);
-        let mut channel_handler: SingleHandler<String> = SingleHandler::new(tx);
-
+        let mut channel_handler: SingleHandler<String> = SingleHandler::new();
+        let mut rx = channel_handler.trade_tx.subscribe();
         tokio::spawn(async move {
             channel_handler.handle("ok".to_string()).await;
         });
-
         let result = time::timeout(Duration::from_secs(2), async {
             // 接收消息
             rx.recv().await.unwrap()
