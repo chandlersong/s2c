@@ -16,7 +16,7 @@ async fn main() {
     ]);
     let subscribe_request = WsRequest::new(SUBSCRIBE, params);
     ws_client.send_command(subscribe_request).await.expect("subscribe spot mini ticker failed");
-    let mut tx = ws_client.get_trade_tx(&"BTCUSDT".to_string()).await;
+    let tx = ws_client.get_trade_tx(&"BTCUSDT".to_string()).await;
     let barrier = Arc::new(Barrier::new(2));
     tokio::spawn(async move {
         debug!("start receive data");

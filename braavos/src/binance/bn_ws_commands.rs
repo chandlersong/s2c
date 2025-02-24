@@ -51,7 +51,7 @@ struct SpotTextMessageHandler
 where
 {
     mini_ticker_handler: MiniTickerHandler,
-    trade_handler: TradeHandler
+    trade_handler: ChannelHandler<TradeRaw>
 }
 
 #[async_trait]
@@ -164,7 +164,7 @@ pub async fn connect_and_listen(url: String) -> BinanceSpotWSClient {
     let mini_ticker_handler = MiniTickerHandler::new(mini_ticker_tx);
     let text_handler = SpotTextMessageHandler {
         mini_ticker_handler,
-        trade_handler: TradeHandler { trade_tx },
+        trade_handler: ChannelHandler { trade_tx },
     };
     tokio::spawn(async move {
         ws_listen(read, listen_clone, url, text_handler).await;
@@ -326,19 +326,21 @@ impl MiniTickerHandler
     }
 }
 
-pub struct TradeHandler
+/// 主要处理收和发的数据。因为有些数据。只是做一个二传手。为下一的处理环节处理。
+/// 所以这里的目的其实挺简单的。
+pub struct ChannelHandler<T>
 {
-    trade_tx: Sender<TradeRaw>,
+    trade_tx: Sender<T>,
 }
 
-impl TradeHandler {
-    pub fn new(trade_tx: Sender<TradeRaw>) -> Self {
+impl<T> ChannelHandler<T> {
+    pub fn new(trade_tx: Sender<T>) -> Self {
         Self {
             trade_tx
         }
     }
 
-    pub async fn handle(&mut self, trade: TradeRaw) {
+    pub async fn handle(&mut self, trade: T) {
         self.trade_tx.send(trade).await.unwrap();
     }
 }
@@ -347,10 +349,13 @@ impl TradeHandler {
 mod tests {
     use crate::binance::bn_models::WsMethod::Ping;
     use crate::binance::bn_tools::create_mock_mini_ticker;
-    use crate::binance::bn_ws_commands::{MiniTickerHandler, WsRequest, WsSpotResponse};
+    use crate::binance::bn_ws_commands::{ChannelHandler, MiniTickerHandler, WsRequest, WsSpotResponse};
     use crate::tools::{parse_test_json, setup_logger};
     use log::LevelFilter;
+    use std::time::Duration;
     use tokio::sync::broadcast;
+    use tokio::sync::mpsc;
+    use tokio::time;
 
     #[tokio::test]
     async fn test_mini_ticker_handler_new() {
@@ -377,6 +382,34 @@ mod tests {
                 assert!(false, "")
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_channel_handler_new() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let mut channel_handler:ChannelHandler<String> = ChannelHandler::new(tx);
+
+        tokio::spawn(async move {
+            channel_handler.handle("ok".to_string()).await;
+        });
+
+        let result = time::timeout(Duration::from_secs(2), async {
+            // 接收消息
+            rx.recv().await
+        }).await;
+
+        match result {
+            Ok(Some(message)) => {
+                assert_eq!(message, "ok","消息传递错误");
+            }
+            Ok(None) => {
+                panic!("Channel closed before receiving a message");
+            }
+            Err(_) => {
+                panic!("接收消息超时");
+            }
+        }
+
     }
 
     #[test]
