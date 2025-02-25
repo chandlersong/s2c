@@ -13,6 +13,7 @@ async fn main() {
     let mut ws_client = get_spot_client().await;
     let params: Option<Vec<String>> = Some(vec![
         get_trade_command("BTCUSDT"),
+        get_trade_command("ETHUSDT"),
     ]);
     let subscribe_request = WsRequest::new(SUBSCRIBE, params);
     ws_client.send_command(subscribe_request).await.expect("subscribe spot mini ticker failed");
