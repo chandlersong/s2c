@@ -3,7 +3,7 @@ use crate::binance::bn_models::SpotWsSubscribe::AllMiniTicker;
 use crate::binance::bn_models::WsMethod::SUBSCRIBE;
 use crate::binance::bn_models::{BinanceBase, MiniTicker};
 use crate::binance::bn_restful_commands::PMAccountReader;
-use crate::binance::bn_ws_commands::{connect_and_listen, BinanceSpotWSClient, WsRequest};
+use crate::binance::bn_ws_commands::{BNSpotWSClient, WsRequest};
 use crate::cache::{AutoUpdateValue, DashBoard, FrequencyDashBoard};
 use crate::models::AccountSummary;
 use crate::settings::Account;
@@ -19,16 +19,15 @@ use tokio::time::sleep;
 /// 1. 对于每秒的ticker这类数据，其实订阅一次也就够了。所以用单利，然后clone一下
 /// 2. 账户信息这种，websocket的连接则是需要一个一个建立。
 
-static SPOT_WS_CLIENT: OnceCell<BinanceSpotWSClient> = OnceCell::const_new();
+static SPOT_WS_CLIENT: OnceCell<BNSpotWSClient> = OnceCell::const_new();
 
 static SPOT_TICKER_DASHBOARD: OnceCell<FrequencyDashBoard<MiniTicker>> = OnceCell::const_new();
 
-async fn initial_spot_client() -> BinanceSpotWSClient {
-    let url = format!("{}/ws/spot", String::from(BinanceBase::WsSwapStreamUrl));
-    connect_and_listen(url).await
+async fn initial_spot_client() -> BNSpotWSClient {
+    BNSpotWSClient::new().await
 }
 
-pub async fn get_spot_client() -> BinanceSpotWSClient {
+pub async fn get_spot_client() -> BNSpotWSClient {
     SPOT_WS_CLIENT.get_or_init(initial_spot_client).await.clone()
 }
 
@@ -39,23 +38,23 @@ pub async fn get_spot_mini_ticker(frequency_mill_seconds: u64) -> FrequencyDashB
     let res = SPOT_TICKER_DASHBOARD.get_or_init(|| async {
         let res = FrequencyDashBoard::new(frequency_mill_seconds).await;
         let mut dashboard_write = res.clone();
-        tokio::spawn(async move {
-            debug!("start receive data");
-            loop {
-                let mut ws_client = get_spot_client().await;
-                let params:Option<Vec<String>> = Some(vec![String::from(AllMiniTicker)]);
-                let subscribe_request = WsRequest::new(SUBSCRIBE, params);
-                ws_client.send_command(subscribe_request).await.expect("subscribe spot mini ticker failed");
-                
-                let mut listener = ws_client.mini_ticker_tx.subscribe();
-                loop {
-                    let ticker = listener.recv().await;
-                    if let Ok(t) = ticker {
-                        dashboard_write.set_value(t.symbol.clone(), t).await;
-                    }
-                }
-            }
-        });
+        // tokio::spawn(async move {
+        //     debug!("start receive data");
+        //     loop {
+        //         let mut ws_client = get_spot_client().await;
+        //         let params:Option<Vec<String>> = Some(vec![String::from(AllMiniTicker)]);
+        //         let subscribe_request = WsRequest::new(SUBSCRIBE, params);
+        //         ws_client.send_command(subscribe_request).await.expect("subscribe spot mini ticker failed");
+        //         
+        //         let mut listener = ws_client.mini_ticker_tx.subscribe();
+        //         loop {
+        //             let ticker = listener.recv().await;
+        //             if let Ok(t) = ticker {
+        //                 dashboard_write.set_value(t.symbol.clone(), t).await;
+        //             }
+        //         }
+        //     }
+        // });
         res
     }).await;
     res.clone()

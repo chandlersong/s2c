@@ -1,62 +1,73 @@
-use crate::binance::bn_models::{deserialize_wx_method, serialize_wx_method, MiniTicker, StreamAllMiniTickerResponse, SymbolDepthData, TradeRaw, WsCommandResponse, WsMethod};
+use crate::binance::bn_models::bin::Trade;
+use crate::binance::bn_models::{deserialize_wx_method, serialize_wx_method, BinanceBase, MiniTicker, StreamAllMiniTickerResponse, SymbolDepthData, TradeRaw, WsCommandResponse, WsMethod};
 use crate::tools::SnowyFlakeWrapper;
+use crate::websockets::WebSocketClient;
 use async_trait::async_trait;
-use futures_util::stream::{SplitSink, SplitStream};
-use futures_util::{SinkExt, StreamExt};
-use log::{debug, error, info, trace};
+use futures_util::stream::SplitStream;
+use futures_util::SinkExt;
+use log::{error, trace};
 use serde::{Deserialize, Serialize};
+use std::ops::Deref;
 use std::sync::{Arc, LazyLock};
-use std::time::Duration;
-use tokio::net::TcpStream;
-use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
-use tokio::time::timeout;
-use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
+use tokio::sync::{broadcast, oneshot, Mutex, OnceCell, RwLock};
+
+static BN_SPOT_WS_CLIENT: OnceCell<WebSocketClient> = OnceCell::const_new();
+
+
+async fn initial_spot_ws_client() -> WebSocketClient {
+    let url = String::from(BinanceBase::WsSwapStreamUrl);
+    WebSocketClient::new(&url, None).await.unwrap()
+}
+
+pub async fn get_spot_client() -> WebSocketClient {
+    BN_SPOT_WS_CLIENT.get_or_init(initial_spot_ws_client).await.clone()
+}
 
 const SF: LazyLock<SnowyFlakeWrapper> = LazyLock::new(|| SnowyFlakeWrapper::new());
 
-type ShareWsWriter = Arc<Mutex<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>>;
-async fn do_send(mut req_recv: Receiver<(Message, oneshot::Sender<String>)>, write: ShareWsWriter) {
-    while let Some((req, rx)) = req_recv.recv().await {
-        if let Err(e) = write.lock().await.send(req).await {
-            error!("error sending request to BN: {}",  e);
-            match rx.send("fail".to_string()) {
-                Ok(_) => {}
-                Err(e) => { error!("error while sending message: {}",  e); }
+#[derive(Clone)]
+pub struct BNSpotWSClient {
+    mini_ticker_tx: Arc<RwLock<Option<broadcast::Sender<MiniTicker>>>>,
+    trade_tx: Arc<RwLock<Option<broadcast::Sender<TradeRaw>>>>,
+}
+
+impl BNSpotWSClient {
+    pub async fn new() -> Self {
+        let res = Self {
+            mini_ticker_tx: Arc::new(RwLock::new(None)),
+            trade_tx: Arc::new(RwLock::new(None)),
+        };
+        let mut text_message_rx = get_spot_client().await.subscribe_text_message_sender().await;
+        let mut listener = res.clone();
+
+        tokio::spawn(async move {
+            loop {
+                if let Ok(msg) = text_message_rx.recv().await {
+                   match  listener.handler_message(msg).await{
+                       Ok(m) => {}
+                       _ => {} //TODO 我没想好怎么处理。
+                   } ;
+                }
             }
-        } else {
-            match rx.send("ok".to_string()) {
-                Ok(_) => {}
-                Err(e) => { error!("error while sending message: {}",  e); }
-            }
-        }
+        });
+        res
     }
-}
 
-pub async fn connect(url: String) -> (SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>, SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>) {
-    info!("connect to websocket: {}",&url);
-    let (ws_stream, _) = connect_async(url).await.expect("Failed to connect");
-    info!("WebSocket handshake has been successfully completed");
-    ws_stream.split()
-}
+    async fn subscribe_mini_ticker_tx(&self) -> broadcast::Receiver<MiniTicker> {
+        if let Some(sender) = &self.mini_ticker_tx.read().await.deref(){
+            return sender.subscribe();
+        }
+        let (tx, rx) = broadcast::channel(100);
+        self.mini_ticker_tx.write().await.replace(tx);
+        rx
+    }
 
-#[async_trait]
-trait TextMessageHandler {
-    async fn handler_message(&mut self, text: String) -> Result<bool, String>;
-}
+    fn subscribe_all_mini_ticker(&mut self) -> broadcast::Receiver<MiniTicker> {
+        let (tx, rx) = broadcast::channel(10);
+        rx
+    }
 
-struct SpotTextMessageHandler
-where
-{
-    mini_ticker_handler: MiniTickerHandler,
-    trade_handler: SingleHandler<TradeRaw>
-}
-
-#[async_trait]
-impl TextMessageHandler for SpotTextMessageHandler
-{
-    async fn handler_message(&mut self, text: String) -> Result<bool, String> {
+    async fn handler_message(&self, text: String) -> Result<bool, String> {
         let response = serde_json::from_str(&text);
         match response {
             Ok(response) => {
@@ -66,13 +77,23 @@ impl TextMessageHandler for SpotTextMessageHandler
                         trace!("{:?} at {:?}", v.symbol,v.event_time);
                     }
                     WsSpotResponse::StreamAllMiniTicker(v) => {
-                        self.mini_ticker_handler.handle(v.tickers).await;
+                        if let Some(sender) = self.mini_ticker_tx.read().await.as_ref() {
+                            for t in v.tickers {
+                                sender.send(t).unwrap();
+                            }
+                        }
                     }
                     WsSpotResponse::SubAllMiniTicker(v) => {
-                        self.mini_ticker_handler.handle(v).await;
+                        if let Some(sender) = self.mini_ticker_tx.read().await.as_ref() {
+                            for t in v {
+                                sender.send(t).unwrap();
+                            }
+                        }
                     }
                     WsSpotResponse::Trade(v) => {
-                        self.trade_handler.handle(v).await;
+                        if let Some(sender) = self.trade_tx.read().await.as_ref() {
+                            sender.send(v).unwrap();
+                        }
                     }
                     WsSpotResponse::CommonResponse(v) => {
                         trace!("receive common result {:?}", v.result);
@@ -90,137 +111,6 @@ impl TextMessageHandler for SpotTextMessageHandler
     }
 }
 
-///
-/// 此方法的作用，主要是为了开启一个方法来开启websocket的监听。
-/// 但是在BN这一块来说，因为其websocket是分开的。spot，swap这些是完全分开的。
-/// 所以来说，这需要不同的处理。
-/// 1. 对一些共性的做一些简单的业务处理。比如重连，ping/pong的处理。
-/// 2. 对业务做不同级别的抽象。
-async fn ws_listen<TH: TextMessageHandler>(ws_read: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>, writer: ShareWsWriter, url: String, mut text_handler: TH) {
-    let mut reader = ws_read;
-    loop {
-        while let Some(message) = reader.next().await {
-            if let Ok(msg) = message {
-                match msg {
-                    Message::Text(txt) => {
-                        match text_handler.handler_message(txt).await {
-                            //其实没有想好怎么处理好。
-                            Ok(_) => {}
-                            Err(_) => {}
-                        };
-                    }
-                    Message::Ping(ping) => {
-                        // Respond to Ping messages with Pong
-                        let ping_text = String::from_utf8_lossy(&ping).to_string();
-                        debug!("收到ping消息:{:?}", ping_text);
-                        if writer.lock().await.send(Message::Pong(ping)).await.is_err() {
-                            error!("Failed to send Pong");
-                            return;
-                        }
-                        debug!("发送pong消息");
-                    }
-                    Message::Pong(_) => {
-                        // Optionally handle Pong messages
-                        debug!("Received Pong");
-                    }
-                    Message::Close(_) => {
-                        // Handle close messages if needed
-                        info!("Received Close message");
-                        break;
-                    }
-                    a => {
-                        info!("收到其他消息,{:?}",a);
-                    }
-                }
-            }
-        }
-        info!("ws断开，重新连接");
-        let (hew_writer, new_read) = connect(url.clone()).await;
-
-        reader = new_read;
-        let mut writer_pr = writer.lock().await;
-        *writer_pr = hew_writer;
-        info!("ws断开，重新连接完成");
-    }
-}
-
-pub async fn connect_and_listen(url: String) -> BinanceSpotWSClient {
-    let (mini_ticker_tx, _) = broadcast::channel(500);
-    /*
-    在思考了之后，我绝对，整个client只是负责保存channel。
-    然后通过channel对这个websocket做通行。这样比较符合websocket的处理方式
-    */
-
-    let trade_handler = SingleHandler::new();
-    
-    let (write, read) = connect(url.clone()).await;
-    let share_writer = Arc::new(Mutex::new(write));
-    let (command_tx, command_rx) = mpsc::channel(1);
-    let res = BinanceSpotWSClient::new(command_tx, mini_ticker_tx.clone(), trade_handler.clone_tx());
-    let send_clone = Arc::clone(&share_writer);
-    tokio::spawn(async move {
-        do_send(command_rx, send_clone).await;
-    });
-    let listen_clone = Arc::clone(&share_writer);
-    let mini_ticker_handler = MiniTickerHandler::new(mini_ticker_tx);
-    let text_handler = SpotTextMessageHandler {
-        mini_ticker_handler,
-        trade_handler,
-    };
-    tokio::spawn(async move {
-        ws_listen(read, listen_clone, url, text_handler).await;
-    });
-
-    res
-}
-
-///
-/// 对外的结构
-#[derive(Clone)]
-pub struct BinanceSpotWSClient {
-    command_tx: Sender<(Message, oneshot::Sender<String>)>,
-    pub mini_ticker_tx: broadcast::Sender<MiniTicker>,
-    trade_rx: broadcast::Sender<TradeRaw>,
-}
-
-
-impl BinanceSpotWSClient {
-    pub fn new(command_tx: Sender<(Message, oneshot::Sender<String>)>,
-               mini_ticker_tx: broadcast::Sender<MiniTicker>,
-               trade_rx: broadcast::Sender<TradeRaw>) -> BinanceSpotWSClient {
-        BinanceSpotWSClient {
-            command_tx,
-            mini_ticker_tx,
-            trade_rx,
-        }
-    }
-
-
-    pub async fn get_trade_rx(&mut self) -> broadcast::Receiver<TradeRaw> {
-        self.trade_rx.subscribe()
-    }
-
-    pub async fn send_command(&mut self, req: WsRequest) -> Result<(), String> {
-        let request_body = req.to_json();
-        trace!("request body is {}", request_body);
-        self.send_message(Message::Text(request_body)).await
-    }
-
-    pub async fn send_message(&mut self, msg: Message) -> Result<(), String> {
-        let (response_tx, response_rx) = oneshot::channel();
-        if self.command_tx.send((msg, response_tx)).await.is_err() {
-            Err("websocket may be close".to_string())
-        } else {
-            match timeout(Duration::from_secs(2), response_rx).await {
-                Ok(response_result) => match response_result {
-                    Ok(_) => Ok(()),
-                    Err(_) => Err("websocket closed".to_string()),
-                },
-                Err(_) => Err("connection time out".to_string()),
-            }
-        }
-    }
-}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct WsRequest {
@@ -265,118 +155,15 @@ pub enum WsSpotResponse {
 }
 
 
-/**
-* 这里的代码的主要作用还是为了把消息的处理单独抽离出来。
-* 其实之后的想法，每一个需要订阅的消息。都会有一个专门的处理类
-*/
-pub struct MiniTickerHandler
-where
-{
-    mini_ticker_tx: broadcast::Sender<MiniTicker>,
-}
 
-impl MiniTickerHandler
-{
-    pub fn new(mini_ticker_tx: broadcast::Sender<MiniTicker>) -> Self {
-        MiniTickerHandler {
-            mini_ticker_tx
-        }
-    }
-
-    pub async fn handle(&mut self, tickers: Vec<MiniTicker>) {
-        for ticker in tickers {
-            self.mini_ticker_tx.send(ticker).unwrap();
-        }
-    }
-}
-
-/// 有像Trade这样的接口，你需要按照Symbol进行分发。然后不同的Symbol，可能有不同的处理。
-/// 之所以分不同的
-pub struct SingleHandler<T: Clone>
-{
-    trade_tx: broadcast::Sender<T>,
-}
-
-impl<T: Clone> SingleHandler<T> {
-    pub fn new() -> Self {
-        let (trade_tx, _) = broadcast::channel(100);
-        Self {
-            trade_tx
-        }
-    }
-
-    pub fn clone_tx(&self) -> broadcast::Sender<T> {
-        self.trade_tx.clone()
-    }
-
-    pub async fn handle(&mut self, trade: T) {
-        match self.trade_tx.send(trade) {
-            Ok(_) => {}
-            Err(e) => { error!("failed to send trade message: {}", e); }
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
     use crate::binance::bn_models::WsMethod::Ping;
-    use crate::binance::bn_tools::create_mock_mini_ticker;
-    use crate::binance::bn_ws_commands::{MiniTickerHandler, SingleHandler, WsRequest, WsSpotResponse};
+    use crate::binance::bn_ws_commands::{WsRequest, WsSpotResponse};
     use crate::tools::{parse_test_json, setup_logger};
     use log::LevelFilter;
-    use std::time::Duration;
-    use tokio::sync::broadcast;
-    use tokio::time;
 
-    #[tokio::test]
-    async fn test_mini_ticker_handler_new() {
-        let (tx, mut rx) = broadcast::channel(2);
-
-        let mut handler = MiniTickerHandler::new(tx);
-
-        let tickers = vec![
-            create_mock_mini_ticker("a".to_string(), 1.0),
-        ];
-
-        tokio::spawn(async move {
-            handler.handle(tickers).await;
-        });
-
-
-        let actual = rx.recv().await;
-        match actual {
-            Ok(v) => {
-                assert_eq!(v.symbol, String::from("a"));
-                assert_eq!(v.close, 1.0);
-            }
-            Err(_) => {
-                assert!(false, "")
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn test_channel_handler_new() {
-        let mut channel_handler: SingleHandler<String> = SingleHandler::new();
-        let mut rx = channel_handler.trade_tx.subscribe();
-        tokio::spawn(async move {
-            channel_handler.handle("ok".to_string()).await;
-        });
-        let result = time::timeout(Duration::from_secs(2), async {
-            // 接收消息
-            rx.recv().await.unwrap()
-        }).await;
-
-        match result {
-            Ok(message) => {
-                assert_eq!(message, "ok","消息传递错误");
-            }
-            Err(_) => {
-                panic!("接收消息超时");
-            }
-        }
-
-    }
 
     #[test]
     fn test_ws_request_2_json() {

@@ -1,0 +1,183 @@
+use crate::errors::BraavosError;
+use futures_util::{SinkExt, StreamExt};
+use log::{debug, error, info};
+use std::error::Error;
+use std::sync::Arc;
+use tokio::sync::{broadcast, mpsc, oneshot, RwLock};
+use tokio::time::{sleep, timeout, Duration, Instant};
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+
+#[derive(Debug, Clone)]
+pub enum ResponseCode {
+    Ok,
+    Failed,
+    TimedOut,
+}
+
+#[derive(Clone)]
+pub struct WebSocketConfig {
+    reconnect_duration: Duration,
+}
+
+impl Default for WebSocketConfig {
+    fn default() -> Self {
+        Self { reconnect_duration: Duration::from_secs(5) }
+    }
+}
+
+type TextMessageSender = Arc<RwLock<Option<broadcast::Sender<String>>>>;
+#[derive(Clone)]
+pub struct WebSocketClient {
+    url: String,
+    text_message_tx: Arc<RwLock<Option<broadcast::Sender<String>>>>,
+    command_tx: mpsc::Sender<(Message, oneshot::Sender<ResponseCode>)>,
+    config: WebSocketConfig,
+}
+
+impl WebSocketClient {
+    pub async fn new(url: &str, config: Option<WebSocketConfig>) -> Result<Self, Box<dyn Error>> {
+        let (tx, rx) = mpsc::channel::<(Message, oneshot::Sender<ResponseCode>)>(100);
+        let real_config = config.unwrap_or_default();
+        let client = WebSocketClient {
+            url: url.to_string(),
+            text_message_tx: Arc::new(RwLock::new(None)),
+            command_tx: tx,
+            config: real_config,
+        };
+
+        client.start_connection(rx).await;
+        Ok(client)
+    }
+
+    pub async fn subscribe_text_message_sender(&self) -> broadcast::Receiver<String> {
+        if let Some(sender) = self.text_message_tx.read().await.as_ref() {
+            return sender.subscribe();
+        };
+
+        let (tx, rx) = broadcast::channel(100);
+        *self.text_message_tx.write().await = Some(tx);
+        rx
+    }
+
+    async fn start_connection(&self, mut rx: mpsc::Receiver<(Message, oneshot::Sender<ResponseCode>)>) {
+        let url = self.url.clone();
+        let tx = self.command_tx.clone();
+        let reconnect_duration = self.config.reconnect_duration.clone();
+        let text_message_tx = self.text_message_tx.clone();
+        tokio::spawn(async move {
+            loop {
+                match Self::run_connection(&url, &text_message_tx, &tx, &mut rx).await {
+                    Ok(()) => info!("WebSocket closed normally"),
+                    Err(e) => error!("WebSocket error: {}", e),
+                }
+
+                info!("Reconnecting in 5 seconds...");
+                sleep(reconnect_duration).await;
+            }
+        });
+    }
+
+    async fn run_connection(
+        url: &str,
+        text_message_tx: &TextMessageSender,
+        _: &mpsc::Sender<(Message, oneshot::Sender<ResponseCode>)>, //为扩展准备。可以发送命令
+        command: &mut mpsc::Receiver<(Message, oneshot::Sender<ResponseCode>)>,
+    ) -> Result<(), Box<dyn Error>> {
+        let (ws_stream, _) = connect_async(url).await?;
+        info!("WebSocket connected to {}", url);
+        let (mut write, mut read) = ws_stream.split();
+
+        let ping_interval = Duration::from_secs(10);
+        let pong_timeout = Duration::from_secs(30);
+        let mut last_pong = Instant::now();
+
+        loop {
+            tokio::select! {
+                // 处理接收消息
+                Some(msg) = read.next() => {
+                    match msg {
+                        Ok(Message::Text(text)) => {
+                            if let Some(sender)= text_message_tx.read().await.as_ref() {
+                                match sender.send(text){
+                                    Ok(..) => info!("WebSocket closed normally"),
+                                    Err(e) => error!("WebSocket error: {}", e),
+                                };
+                            };
+                        }
+                        Ok(Message::Ping(data)) => {
+                            debug!("Received Ping: {:?}", data);
+                        }
+                        Ok(Message::Pong(_)) => {
+                            last_pong = Instant::now();
+                            debug!("Received Pong");
+                        }
+                        Ok(Message::Close(_)) => {
+                            debug!("Server closed connection");
+                            return Ok(());
+                        }
+                        Ok(_) => {} // 忽略其他类型
+                        Err(e) => {
+                            return Err(Box::new(e));
+                        }
+                    }
+
+                    // 检查 Pong 超时
+                    if last_pong.elapsed() > pong_timeout {
+                        return Err("No Pong received for 30 seconds".into());
+                    }
+                }
+
+            // 处理发送消息或 Ping
+            Some((msg, tx)) = command.recv() => {
+                match timeout(Duration::from_secs(1), write.send(msg)).await {
+                    Ok(result) => match result {
+                        Ok(_) => {
+                            match tx.send(ResponseCode::Ok) {
+                                Ok(_) => {}
+                                Err(e) => { error!("error while sending ok message: {:?}",  e); }
+                            }
+                        }
+                        Err(e) => {
+                                error!("error while sending ok message: {:?}", e);
+                                match tx.send(ResponseCode::Failed) {
+                                    Ok(_) => {}
+                                    Err(e) => { error!("error while sending error notification: {:?}",  e); }
+                                }
+                        }
+                    },
+                    Err(_) => {
+                        match tx.send(ResponseCode::TimedOut) {
+                            Ok(_) => {}
+                            Err(e) => { error!("error while sending timeout notification: {:?}",  e); }
+                        }
+                    }
+                }
+            }
+            _ = sleep(ping_interval) => {
+                let ping = Message::Ping(vec![1, 2, 3]);
+                write.send(ping).await?;
+                debug!("Sent Ping");
+            }
+        }
+        }
+    }
+
+    pub async fn send(&self, message: Message) -> Result<(), Box<dyn Error>> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx.send((message, tx)).await?;
+
+        match rx.await {
+            Ok(result) => {
+                match result {
+                    ResponseCode::Ok => Ok(()),
+                    ResponseCode::Failed => Err(Box::new(BraavosError::new("request error".to_string()))),
+                    ResponseCode::TimedOut => Err(Box::new(BraavosError::new("request timeout error".to_string()))),
+                }
+            }
+            Err(error) => {
+                error!("request error: {}", error);
+                Err(Box::new(BraavosError::new("request error".to_string())))
+            }
+        }
+    }
+}
