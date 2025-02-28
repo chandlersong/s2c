@@ -2,7 +2,8 @@ image: chandlersong/rust_ci:1.85-slim-bookworm-1
 
 stages:
   - test
-
+variables:
+  OPENSSL_DIR: "/usr/local/ssl"
 test:
   stage: test
   before_script:
