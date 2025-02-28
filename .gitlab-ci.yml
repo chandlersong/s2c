@@ -7,9 +7,6 @@ variables:
   OPENSSL_LIB_DIR: "/usr/lib/x86_64-linux-gnu"
 test:
   stage: test
-  before_script:
-    - apt-get update  # 更新包列表
-    - apt-get install -y libssl-dev pkg-config # 安装所需的包
   script:
     - cargo test
   timeout: 10 minutes
