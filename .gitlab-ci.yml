@@ -3,12 +3,13 @@ image: chandlersong/rust_ci:1.85-slim-bookworm-1
 stages:
   - test
 variables:
-  OPENSSL_DIR: "/usr/lib/x86_64-linux-gnu"
+  OPENSSL_DIR: "/usr/lib/ssl"
+  PKG_CONFIG_PATH: "/usr/lib/x86_64-linux-gnu/pkgconfig
 test:
   stage: test
   before_script:
     - apt-get update  # 更新包列表
-    - apt-get install -y libssl-dev  # 安装所需的包
+    - apt-get install -y libssl-dev pkg-config # 安装所需的包
   script:
     - cargo test
   timeout: 10 minutes
