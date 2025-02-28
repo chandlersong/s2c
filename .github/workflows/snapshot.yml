@@ -10,7 +10,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     container:
-      image: chandlersong/rust:1.85-slim-bookworm.1  # 替换为你的镜像
+      image: chandlersong/rust_ci:1.85-slim-bookworm.1  # 替换为你的镜像
     steps:
       - uses: actions/checkout@v4
       - name: Run cargo test
