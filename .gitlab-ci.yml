@@ -3,8 +3,8 @@ image: chandlersong/rust_ci:1.85-slim-bookworm-1
 stages:
   - test
 variables:
-  OPENSSL_DIR: "/usr/lib/ssl"
-  PKG_CONFIG_PATH: "/usr/lib/x86_64-linux-gnu/pkgconfig"
+  OPENSSL_INCLUDE_DIR: "/usr/include/openssl"
+  OPENSSL_LIB_DIR: "/usr/lib/x86_64-linux-gnu"
 test:
   stage: test
   before_script:
