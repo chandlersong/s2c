@@ -1,9 +1,7 @@
 use crate::accounts::AccountReader;
-use crate::binance::bn_models::SpotWsSubscribe::AllMiniTicker;
-use crate::binance::bn_models::WsMethod::SUBSCRIBE;
-use crate::binance::bn_models::{BinanceBase, MiniTicker};
+use crate::binance::bn_models::MiniTicker;
 use crate::binance::bn_restful_commands::PMAccountReader;
-use crate::binance::bn_ws_commands::{BNSpotWSClient, WsRequest};
+use crate::binance::bn_ws_commands::BNSpotWSClient;
 use crate::cache::{AutoUpdateValue, DashBoard, FrequencyDashBoard};
 use crate::models::AccountSummary;
 use crate::settings::Account;
@@ -38,23 +36,20 @@ pub async fn get_spot_mini_ticker(frequency_mill_seconds: u64) -> FrequencyDashB
     let res = SPOT_TICKER_DASHBOARD.get_or_init(|| async {
         let res = FrequencyDashBoard::new(frequency_mill_seconds).await;
         let mut dashboard_write = res.clone();
-        // tokio::spawn(async move {
-        //     debug!("start receive data");
-        //     loop {
-        //         let mut ws_client = get_spot_client().await;
-        //         let params:Option<Vec<String>> = Some(vec![String::from(AllMiniTicker)]);
-        //         let subscribe_request = WsRequest::new(SUBSCRIBE, params);
-        //         ws_client.send_command(subscribe_request).await.expect("subscribe spot mini ticker failed");
-        //         
-        //         let mut listener = ws_client.mini_ticker_tx.subscribe();
-        //         loop {
-        //             let ticker = listener.recv().await;
-        //             if let Ok(t) = ticker {
-        //                 dashboard_write.set_value(t.symbol.clone(), t).await;
-        //             }
-        //         }
-        //     }
-        // });
+        tokio::spawn(async move {
+            debug!("start receive data");
+            loop {
+                let ws_client = get_spot_client().await;
+        
+                let mut listener = ws_client.subscribe_all_mini_ticker().await;
+                loop {
+                    let ticker = listener.recv().await;
+                    if let Ok(t) = ticker {
+                        dashboard_write.set_value(t.symbol.clone(), t).await;
+                    }
+                }
+            }
+        });
         res
     }).await;
     res.clone()

@@ -1,6 +1,6 @@
 use braavos::binance::bn_dashboard::get_spot_mini_ticker;
 use braavos::tools::setup_logger;
-use log::{debug, info, LevelFilter};
+use log::{info, LevelFilter};
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -23,18 +23,20 @@ async fn main() {
     let dashboard_read = dashboard.clone();
     tokio::spawn(async move {
         loop {
-            info!("============one loop started==============");
+            info!("============one loop started=============");
             let tickers = dashboard_read.get_all_entries();
-            for t in &tickers {
-                debug!("{:?}", t);
-            }
+            // for t in &tickers {
+            //     debug!("{:?}", t);
+            // }
             info!("total cache size: {}", tickers.len());
-            sleep(Duration::from_millis(1000)).await;
+            sleep(Duration::from_millis(10 * 1000)).await;
         }
     });
 
+    let mut minutes = 1;
     loop {
         sleep(Duration::from_secs(60)).await;
-        info!("运行了1分钟")
+        info!("运行了{}分钟",minutes);
+        minutes = minutes + 1;
     }
 }

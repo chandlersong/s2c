@@ -20,7 +20,7 @@ pub mod bin {
                 price: value.price,
                 quantity: value.quantity,
                 trade_timestamp: value.trade_timestamp,
-                is_marker: value.is_marker,
+                is_marker: value.buyer_is_marker,
             }
         }
     }
@@ -40,7 +40,7 @@ impl From<BinanceBase> for String {
             match url {
                 BinanceBase::Normal => String::from("https://api.binance.com/"),
                 BinanceBase::PortfolioMargin => String::from("https://papi.binance.com/"),
-                BinanceBase::WsSwapStreamUrl => String::from("wss://fstream.binance.com"),
+                BinanceBase::WsSwapStreamUrl => String::from("wss://fstream.binance.com/"),
             }
         )
     }
@@ -123,9 +123,6 @@ where
     }
 }
 
-pub fn get_trade_command(symbol: &str) -> String {
-    format!("{}@trade", symbol.to_lowercase())
-}
 #[derive(Serialize, Deserialize, Debug)]
 pub enum SpotWsSubscribe {
     AllMiniTicker,
@@ -470,7 +467,7 @@ pub struct TradeRaw {
     pub trade_timestamp: u64,
 
     #[serde(rename = "m")]
-    pub is_marker: bool, //则此次成交是一个主动卖出单，否则是一个主动买入单。
+    pub buyer_is_marker: bool, //买方是否是做市方。如true，则此次成交是一个主动卖出单，否则是一个主动买入单。
 }
 
 

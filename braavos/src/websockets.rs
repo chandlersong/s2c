@@ -1,10 +1,10 @@
 use crate::errors::BraavosError;
 use futures_util::{SinkExt, StreamExt};
-use log::{debug, error, info};
+use log::{debug, error, info, trace};
 use std::error::Error;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, oneshot, RwLock};
-use tokio::time::{sleep, timeout, Duration, Instant};
+use tokio::time::{sleep, timeout, Duration};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 
 #[derive(Debug, Clone)]
@@ -88,9 +88,6 @@ impl WebSocketClient {
         let (mut write, mut read) = ws_stream.split();
 
         let ping_interval = Duration::from_secs(10);
-        let pong_timeout = Duration::from_secs(30);
-        let mut last_pong = Instant::now();
-
         loop {
             tokio::select! {
                 // 处理接收消息
@@ -99,17 +96,16 @@ impl WebSocketClient {
                         Ok(Message::Text(text)) => {
                             if let Some(sender)= text_message_tx.read().await.as_ref() {
                                 match sender.send(text){
-                                    Ok(..) => info!("WebSocket closed normally"),
+                                    Ok(..) => {},
                                     Err(e) => error!("WebSocket error: {}", e),
                                 };
                             };
                         }
                         Ok(Message::Ping(data)) => {
-                            debug!("Received Ping: {:?}", data);
+                            trace!("Received Ping: {:?}", data);
                         }
                         Ok(Message::Pong(_)) => {
-                            last_pong = Instant::now();
-                            debug!("Received Pong");
+                             trace!("Received Pong");
                         }
                         Ok(Message::Close(_)) => {
                             debug!("Server closed connection");
@@ -120,11 +116,7 @@ impl WebSocketClient {
                             return Err(Box::new(e));
                         }
                     }
-
-                    // 检查 Pong 超时
-                    if last_pong.elapsed() > pong_timeout {
-                        return Err("No Pong received for 30 seconds".into());
-                    }
+                    
                 }
 
             // 处理发送消息或 Ping
