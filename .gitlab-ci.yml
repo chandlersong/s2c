@@ -4,7 +4,7 @@ stages:
   - test
 variables:
   OPENSSL_DIR: "/usr/lib/ssl"
-  PKG_CONFIG_PATH: "/usr/lib/x86_64-linux-gnu/pkgconfig
+  PKG_CONFIG_PATH: "/usr/lib/x86_64-linux-gnu/pkgconfig"
 test:
   stage: test
   before_script:
