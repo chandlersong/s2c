@@ -1,4 +1,4 @@
-image: chandlersong/rust_ci:v1
+image: chandlersong/rust_ci:1.85-slim-bookworm
 
 stages:
   - test

@@ -1,6 +1,6 @@
 # Dockerfile
 FROM chandlersong/rocksdb:bookworm-slim-9.9.3 AS rocksdb
-FROM rust:1.80.1 AS builder
+FROM rust:1.85-slim-bookworm AS builder
 WORKDIR /app
 COPY . .
 ENV ROCKSDB_LIB_DIR=/usr/lib/x86_64-linux-gnu
