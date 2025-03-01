@@ -25,9 +25,9 @@ async fn main() {
         loop {
             info!("============one loop started=============");
             let tickers = dashboard_read.get_all_entries();
-            // for t in &tickers {
-            //     debug!("{:?}", t);
-            // }
+            for t in &tickers {
+                info!("{:?}", t);
+            }
             info!("total cache size: {}", tickers.len());
             sleep(Duration::from_millis(10 * 1000)).await;
         }
