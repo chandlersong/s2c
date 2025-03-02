@@ -69,8 +69,8 @@ jobs:
           file: ${{ github.workspace }}/Dockerfile
           push: true
           tags: |
-            chandlersong/direwolf:${{ inputs.imageTag }}
-            chandlersong/direwolf:latest
+            chandlersong/varys:${{ inputs.imageTag }}
+            chandlersong/varys:latest
           build-args: |
             APP_NAME=varys
           platforms: ${{ inputs.platform }}
