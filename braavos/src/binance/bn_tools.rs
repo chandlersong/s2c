@@ -1,5 +1,3 @@
-#[cfg(test)]
-use crate::binance::bn_models::MiniTicker;
 use chrono::{DateTime, Utc};
 use std::time::UNIX_EPOCH;
 
@@ -15,22 +13,6 @@ pub fn unix_2_readable(unix_timestamp_millis: &u64) -> DateTime<Utc> {
     let system_time = UNIX_EPOCH + std::time::Duration::new(seconds, nanoseconds);
 
     system_time.into()
-}
-
-
-#[cfg(test)]
-pub fn create_mock_mini_ticker(symbol: String, val: f64) -> MiniTicker {
-    MiniTicker {
-        event_type: "abc".to_string(),
-        event_time: 0,
-        symbol,
-        close: val,
-        open: val,
-        high: val,
-        low: val,
-        volume: val,
-        quote_volume: val,
-    }
 }
 
 #[cfg(test)]
