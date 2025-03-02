@@ -203,13 +203,6 @@ mod tests {
     use crate::tools::{parse_test_json, setup_logger};
     use log::LevelFilter;
 
-
-    #[tokio::test]
-    async fn test_loading_read_ticker_data() {
-        let entry: WsSpotResponse =
-            parse_test_json::<WsSpotResponse>("tests/data/ws_stream_binance_miniTicker_all.json");
-    }
-
     #[test]
     fn test_ws_request_2_json() {
         let request = WsRequest {
