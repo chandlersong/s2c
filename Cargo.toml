@@ -5,7 +5,7 @@ resolver = "2"
 
 members = ["direwolf",
     "braavos",
-    "nightwatch",
+    "nightwatch", "varys", "maester",
 ]
 
 
