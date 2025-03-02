@@ -50,5 +50,17 @@ jobs:
           build-args: |
             APP_NAME=direwolf
           platforms: linux/amd64
+      - name: varys build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: ${{ github.workspace }}/Dockerfile
+          push: true
+          tags: |
+            chandlersong/direwolf:${{ inputs.imageTag }}
+            chandlersong/direwolf:latest
+          build-args: |
+            APP_NAME=varys
+          platforms: ${{ inputs.platform }}
       - name: Image digest
         run: echo ${{ steps.docker_build.outputs.digest }}
