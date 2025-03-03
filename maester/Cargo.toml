@@ -5,3 +5,5 @@ edition = "2024"
 
 [dependencies]
 rocksdb = { workspace = true }
+tokio = { workspace = true }
+log = { workspace = true }

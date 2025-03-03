@@ -28,7 +28,6 @@ tokio-tungstenite = { version = "0.24.0", features = ["native-tls"] }
 futures-util = "0.3.30"
 moka = { version = "0.12.10", features = ["future"] }
 async-trait = "0.1.81"
-rand = "0.8.5"
 
 
 [dev-dependencies]
