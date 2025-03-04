@@ -8,7 +8,7 @@ use crate::settings::{Account, BRAAVOS_SETTING};
 use crate::tools::sign_hmac;
 use async_trait::async_trait;
 use log::{debug, error, trace, warn};
-use reqwest::RequestBuilder;
+use reqwest::{RequestBuilder, Url};
 use rust_decimal::prelude::FromPrimitive;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
@@ -19,7 +19,6 @@ use std::marker::PhantomData;
 use std::sync::{mpsc, LazyLock};
 use std::thread;
 use tokio::join;
-use url::Url;
 
 static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     init_client()
@@ -450,8 +449,9 @@ mod tests {
     use super::*;
     use crate::binance::bn_models::Ticker;
     use crate::models::EmptyObject;
-    use crate::tools::{parse_test_json, setup_logger};
+    use crate::tools::parse_test_json;
     use log::LevelFilter;
+    use maester::tools::logs::setup_logger;
     use moka::future::Cache;
     use rust_decimal::prelude::ToPrimitive;
 

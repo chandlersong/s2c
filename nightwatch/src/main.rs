@@ -1,13 +1,13 @@
 use crate::clients::{get_server_from_config, ping_exchange};
 use crate::prometheus_server::PrometheusServer;
 
-use braavos::tools::setup_logger;
 use hyper::{
     header::CONTENT_TYPE,
     service::{make_service_fn, service_fn},
     Body, Request, Response, Server,
 };
 use log::{error, info, LevelFilter};
+use maester::tools::logs::setup_logger;
 
 mod prometheus_server;
 mod clients;

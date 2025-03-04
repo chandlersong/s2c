@@ -1,6 +1,6 @@
 use braavos::binance::bn_dashboard::get_spot_mini_ticker;
-use braavos::tools::setup_logger;
 use log::{info, LevelFilter};
+use maester::tools::logs::setup_logger;
 use std::time::Duration;
 use tokio::time::sleep;
 

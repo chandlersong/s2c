@@ -1,9 +1,9 @@
 use braavos::binance::bn_models::SpotWsSubscribe::AllMiniTicker;
 use braavos::binance::bn_models::WsMethod::SUBSCRIBE;
 use braavos::binance::bn_ws_commands::WsRequest;
-use braavos::tools::setup_logger;
 use braavos::websockets::WebSocketClient;
 use log::{info, LevelFilter};
+use maester::tools::logs::setup_logger;
 use std::time::Duration;
 use tokio::time::sleep;
 

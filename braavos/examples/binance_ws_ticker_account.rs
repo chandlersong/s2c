@@ -2,8 +2,8 @@ use braavos::binance::bn_models::{BinanceBase, BinancePath, CommandInfo, ListenK
 use braavos::binance::bn_restful_commands::{PostCommand, PutCommand};
 use braavos::models::EmptyObject;
 use braavos::settings::BRAAVOS_SETTING;
-use braavos::tools::setup_logger;
 use log::{error, info, LevelFilter};
+use maester::tools::logs::setup_logger;
 
 ///
 /// 主要是对对账户的监控

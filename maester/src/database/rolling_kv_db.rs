@@ -1,4 +1,4 @@
-use crate::tools::times::current_date_string;
+use crate::tools::time::current_date_string;
 use chrono::{Datelike, Duration as ChronoDuration, TimeZone, Utc};
 use log::{error, info, trace};
 use rocksdb::{OptimisticTransactionDB, Options};
@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tokio::time::{sleep, sleep_until, Instant};
+use tokio::time::{sleep_until, Instant};
 
 pub struct RollingKVDBConfiguration {
     start: Instant,

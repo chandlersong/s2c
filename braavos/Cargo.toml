@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+maester = { path = "../maester" }
+
 serde = { workspace = true }
 serde_json = { workspace = true }
 
@@ -11,11 +13,8 @@ rust_decimal = { workspace = true }
 rust_decimal_macros = { workspace = true }
 reqwest = { workspace = true }
 log = { workspace = true }
-fern = { workspace = true }
-humantime = { workspace = true }
 sha2 = { workspace = true }
 hmac = { workspace = true }
-url = { workspace = true }
 tokio = { workspace = true }
 config = { workspace = true }
 sonyflake = { workspace = true }

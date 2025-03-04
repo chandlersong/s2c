@@ -200,8 +200,9 @@ pub enum WsSpotResponse {
 mod tests {
     use crate::binance::bn_models::WsMethod::Ping;
     use crate::binance::bn_ws_commands::{WsRequest, WsSpotResponse};
-    use crate::tools::{parse_test_json, setup_logger};
+    use crate::tools::parse_test_json;
     use log::LevelFilter;
+    use maester::tools::logs::setup_logger;
 
     #[test]
     fn test_ws_request_2_json() {

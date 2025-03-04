@@ -476,8 +476,9 @@ pub struct TradeRaw {
 mod tests {
     use crate::binance::bn_models::{BinanceBase, BinancePath, NormalAPI};
     use crate::binance::bn_ws_commands::WsSpotResponse;
-    use crate::tools::{parse_test_json, setup_logger};
+    use crate::tools::parse_test_json;
     use log::LevelFilter;
+    use maester::tools::logs::setup_logger;
 
     #[test]
     fn test_api_define() {

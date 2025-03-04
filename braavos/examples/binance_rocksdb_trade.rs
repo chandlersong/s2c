@@ -1,6 +1,6 @@
 use braavos::binance::bn_dashboard::get_spot_client;
-use braavos::tools::setup_logger;
 use log::{debug, info, LevelFilter};
+use maester::tools::logs::setup_logger;
 use std::time::Duration;
 use tokio::time::sleep;
 
