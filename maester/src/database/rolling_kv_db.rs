@@ -1,3 +1,4 @@
+use crate::tools::times::current_date_string;
 use chrono::{Datelike, Duration as ChronoDuration, TimeZone, Utc};
 use log::{error, info, trace};
 use rocksdb::{OptimisticTransactionDB, Options};
@@ -78,16 +79,19 @@ where
     });
 }
 impl RollingKVDB {
-    pub async fn new(config: RollingKVDBConfiguration) -> Self {
+    pub async fn new(config: RollingKVDBConfiguration, cf_name: Option<String>) -> Self {
         let mut options = Options::default();
         options.create_if_missing(true);
         let db = OptimisticTransactionDB::open(&options, config.path).unwrap();
-        let current_cf = Arc::new(RwLock::new(String::from("test")));
+        let current_cf = match cf_name {
+            Some(name) => Arc::new(RwLock::new(name)),
+            None => Arc::new(RwLock::new(current_date_string())),
+        };
         let cf = current_cf.clone();
         let (tx, rx) = mpsc::channel::<()>(1);
 
         let swap_cf_func = move || {
-            *cf.write().unwrap() = "test22".to_string();
+            *cf.write().unwrap() = current_date_string();
         };
 
         loop_func(config.start, config.duration, swap_cf_func, rx).await;
@@ -137,10 +141,11 @@ mod tests {
         }
         fs::create_dir_all(&config.path).unwrap();
         println!("path: {:?}", config.path.canonicalize());
-        let rolling_db = RollingKVDB::new(config).await;
+        let rolling_db = RollingKVDB::new(config, Some("test".to_string())).await;
         let prev_cf = rolling_db.current_cf.read().unwrap().clone();
         sleep(Duration::from_millis(500)).await;
         let actual_cf = rolling_db.current_cf.read().unwrap().clone();
+        println!("new cf: {:?}", actual_cf);
         assert_ne!(prev_cf, actual_cf);
         rolling_db.close().await;
     }
