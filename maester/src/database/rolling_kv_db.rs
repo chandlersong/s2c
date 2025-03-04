@@ -1,3 +1,5 @@
+use chrono::{Datelike, Duration as ChronoDuration, TimeZone, Utc};
+use log::{error, info, trace};
 use rocksdb::{OptimisticTransactionDB, Options};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -6,8 +8,41 @@ use tokio::sync::mpsc;
 use tokio::time::{sleep, sleep_until, Instant};
 
 pub struct RollingKVDBConfiguration {
+    start: Instant,
     duration: Duration,
     path: PathBuf,
+}
+
+impl RollingKVDBConfiguration {
+    pub fn new_with_path(path: PathBuf) -> Self {
+        let now = Utc::now();
+        // 计算今天的 00:00 UTC
+        let today_midnight = Utc
+            .with_ymd_and_hms(now.year(), now.month(), now.day(), 0, 0, 0)
+            .single()
+            .expect("Failed to create UTC midnight");
+
+        // 计算今天的 24:00（即下一天的 00:00）
+        let today_end = today_midnight + ChronoDuration::days(1);
+
+        // 使用 UNIX_EPOCH 作为基准
+        let unix_epoch = chrono::DateTime::<Utc>::UNIX_EPOCH;
+
+        // 计算时间差
+        let now_duration = now - unix_epoch;
+        let today_end_duration = today_end - unix_epoch;
+
+        // 转换为 Instant
+        let instant_now = Instant::now();
+        let start = instant_now + (today_end_duration - now_duration).to_std().expect("Duration out of range");
+        let duration = Duration::from_secs(24 * 60 * 60);
+
+        Self {
+            start,
+            duration,
+            path,
+        }
+    }
 }
 
 
@@ -29,17 +64,17 @@ where
             tokio::select! {
                 // 接收停止信号
                 _ = close_refresh_cf_rx.recv() => {
+                    info!("Closing loop");
                     break;
                 }
                 // 循环任务
                 _ = sleep_until(next_tick) => {
-                    println!("Sleeping until next tick");
+                    trace!("Sleeping until next tick");
                     func();
                 }
             }
         }
-
-        println!("Loop task ended");
+        error!("Loop task ended");
     });
 }
 impl RollingKVDB {
@@ -49,24 +84,14 @@ impl RollingKVDB {
         let db = OptimisticTransactionDB::open(&options, config.path).unwrap();
         let current_cf = Arc::new(RwLock::new(String::from("test")));
         let cf = current_cf.clone();
-        let (tx, mut rx) = mpsc::channel::<()>(1);
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                // 接收停止信号
-                _ = rx.recv() => {
-                    println!("Received stop signal, stop refresh column familly");
-                    break;
-                }
-                // 循环任务
-                _ = sleep(config.duration) => {
-                   *cf.write().unwrap() = String::from("test111");
-                }
-            }
-            }
+        let (tx, rx) = mpsc::channel::<()>(1);
 
-            println!("Loop task ended");
-        });
+        let swap_cf_func = move || {
+            *cf.write().unwrap() = "test22".to_string();
+        };
+
+        loop_func(config.start, config.duration, swap_cf_func, rx).await;
+
         RollingKVDB { db, current_cf, close_refresh_cf_tx: tx }
     }
 
@@ -86,6 +111,7 @@ impl RollingKVDB {
 #[cfg(test)]
 mod tests {
     use crate::database::rolling_kv_db::{loop_func, RollingKVDB, RollingKVDBConfiguration};
+    use chrono::{DateTime, Datelike, Timelike, Utc};
     use std::fs;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
@@ -96,6 +122,7 @@ mod tests {
     impl RollingKVDBConfiguration {
         pub fn new(mill_seconds: u64, path: &str) -> Self {
             Self {
+                start: Instant::now() + Duration::from_millis(50),
                 duration: Duration::from_millis(mill_seconds),
                 path: PathBuf::from(path),
             }
@@ -133,5 +160,43 @@ mod tests {
         tx.send(()).await.unwrap();
 
         assert_eq!(data.lock().unwrap().as_str(), "change");
+    }
+
+    #[test]
+    fn test_default_configuration() {
+        let config = RollingKVDBConfiguration::new_with_path(PathBuf::new());
+        let target_datetime = instant_to_datetime(config.start);
+        let year = target_datetime.year();
+        let month = target_datetime.month();
+        let day = target_datetime.day();
+        let hour = target_datetime.hour();
+        let minute = target_datetime.minute();
+        let second = target_datetime.second();
+        println!("UTC DateTime: {}", target_datetime);
+        println!("Year: {}, Month: {}, Day: {}, hour: {} ,minute: {}, second:   {}", year, month, day, hour, minute, second);
+        assert_eq!(hour, 0);
+        assert_eq!(minute, 0);
+        assert_eq!(second, 0);
+    }
+
+
+    pub fn instant_to_datetime(instant: Instant) -> DateTime<Utc> {
+        // 获取当前时间作为基准
+        let now_instant = Instant::now();
+        let now_utc = Utc::now();
+
+        // 计算时间差
+        let duration = if instant >= now_instant {
+            instant - now_instant
+        } else {
+            now_instant - instant
+        };
+
+        // 将时间差应用于当前 UTC 时间
+        if instant >= now_instant {
+            now_utc + chrono::Duration::from_std(duration).expect("Duration out of range")
+        } else {
+            now_utc - chrono::Duration::from_std(duration).expect("Duration out of range")
+        }
     }
 }
