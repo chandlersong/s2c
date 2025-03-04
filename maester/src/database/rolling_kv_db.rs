@@ -78,6 +78,7 @@ where
         error!("Loop task ended");
     });
 }
+
 impl RollingKVDB {
     pub async fn new(config: RollingKVDBConfiguration, cf_name: Option<String>) -> Self {
         let mut options = Options::default();

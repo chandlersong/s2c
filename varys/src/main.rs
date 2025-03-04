@@ -1,3 +1,5 @@
+mod settings;
+
 use log::{info, LevelFilter};
 use maester::tools::logs::setup_logger;
 use std::time::Duration;

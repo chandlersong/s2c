@@ -259,3 +259,4 @@ fabric.properties
 /nightwatch/conf/Settings.toml
 /braavos/conf/Settings.toml
 /maester/tests/db/
+/varys/conf/Settings.toml

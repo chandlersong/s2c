@@ -9,3 +9,5 @@ maester = { path = "../maester" }
 tokio = "1.39.2"
 chrono = "0.4.39"
 log = { workspace = true }
+serde = { version = "1.0.204", features = ["derive"] }
+config = { workspace = true }
