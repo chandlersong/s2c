@@ -11,6 +11,8 @@ pub struct VarysSpotConfig {
 
 #[derive(Debug, Deserialize)]
 pub struct VarysConfig {
+    #[serde(rename = "dbPath")]
+    pub db_path: String,
     pub spot: VarysSpotConfig,
 }
 
@@ -20,9 +22,10 @@ impl VarysConfig {
             // Start off by merging in the "default" configuration file
             .add_source(File::with_name(path))
             .build()?;
-
+        let db_path = s.get("dbPath")?;
         let spot: VarysSpotConfig = s.get("spot")?;
         Ok(Self {
+            db_path,
             spot
         })
     }
@@ -36,6 +39,8 @@ mod tests {
     #[test]
     fn test_load_setting() {
         let setting = VarysConfig::new("tests/Settings.toml").unwrap();
+        assert_eq!(setting.db_path, "test/db/all");
+
         let spot_config = &setting.spot;
 
         assert_eq!(spot_config.mini_ticker, true);

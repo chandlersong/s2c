@@ -260,3 +260,4 @@ fabric.properties
 /braavos/conf/Settings.toml
 /maester/tests/db/
 /varys/conf/Settings.toml
+/varys/tests/db/
