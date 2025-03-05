@@ -1,5 +1,8 @@
 mod settings;
+mod binance;
+mod database;
 
+use crate::binance::jobs::start_binance_job;
 use log::{info, LevelFilter};
 use maester::tools::logs::setup_logger;
 use std::time::Duration;
@@ -10,22 +13,23 @@ use tokio::time::sleep;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let _ = setup_logger(Some(LevelFilter::Debug));
-    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
 
     // 启动后台任务
     tokio::spawn(async move {
+        start_binance_job().await;
+        let mut days = 1;
         loop {
-            info!("Running at {}", chrono::Local::now());
-            sleep(Duration::from_secs(1)).await;
-            if let Ok(()) = rx.try_recv() {
-                break;
+            tokio::select! {
+                _ = signal::ctrl_c() => {
+                    info!("server shutdown");
+                }
+                _ = sleep(Duration::from_secs(24 * 60 * 60))=>{
+                    info!("Running {} days at {}", days, chrono::Local::now());
+                }
             }
+            days = days + 1;
         }
     });
-
-    // 等待关闭信号
     signal::ctrl_c().await?;
-    info!("Received shutdown signal, sending exit...");
-    tx.send(()).await.unwrap();
     Ok(())
 }

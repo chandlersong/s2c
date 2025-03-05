@@ -2,6 +2,7 @@ use crate::tools::time::current_date_string;
 use chrono::{Datelike, Duration as ChronoDuration, TimeZone, Utc};
 use log::{error, info, trace};
 use rocksdb::{OptimisticTransactionDB, Options};
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -12,6 +13,12 @@ pub struct RollingKVDBConfiguration {
     start: Instant,
     duration: Duration,
     path: PathBuf,
+}
+
+impl fmt::Display for RollingKVDBConfiguration {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "rolling db configuration: path: {:?}, start time : {:?}, duration: {:?} }}", self.path, self.start, self.duration)
+    }
 }
 
 impl RollingKVDBConfiguration {

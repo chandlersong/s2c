@@ -1,5 +1,22 @@
 use config::{Config, ConfigError, File};
+use log::info;
 use serde::Deserialize;
+use std::env;
+use std::sync::LazyLock;
+
+pub static VARYS_CONFIG: LazyLock<VarysConfig> = LazyLock::new(|| {
+    init_setting()
+});
+
+
+fn init_setting() -> VarysConfig {
+    let mut current_dir = env::current_dir().unwrap();
+    current_dir.push("conf/varys/Settings.toml");
+    let config_path = current_dir.to_str().unwrap();
+    let config_path = env::var("VARYS_CONFIG").unwrap_or_else(|_| String::from(config_path));
+    info!("varys configuration path:{}", &config_path);
+    VarysConfig::new(&config_path).unwrap()
+}
 
 #[derive(Debug, Deserialize)]
 pub struct VarysSpotConfig {
