@@ -1,4 +1,4 @@
-use crate::tools::time::current_date_string;
+use crate::tools::time::{current_date_string, instant_to_datetime};
 use chrono::{Datelike, Duration as ChronoDuration, TimeZone, Utc};
 use log::{error, info, trace};
 use rocksdb::{OptimisticTransactionDB, Options};
@@ -17,7 +17,10 @@ pub struct RollingKVDBConfiguration {
 
 impl fmt::Display for RollingKVDBConfiguration {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "rolling db configuration: path: {:?}, start time : {:?}, duration: {:?} }}", self.path, self.start, self.duration)
+        write!(f, "rolling db configuration: path: {:?}, start time : {:?}, duration: {:?} }}",
+               self.path,
+               instant_to_datetime(self.start),
+               self.duration)
     }
 }
 
@@ -123,7 +126,8 @@ impl RollingKVDB {
 #[cfg(test)]
 mod tests {
     use crate::database::rolling_kv_db::{loop_func, RollingKVDB, RollingKVDBConfiguration};
-    use chrono::{DateTime, Datelike, Timelike, Utc};
+    use crate::tools::time::instant_to_datetime;
+    use chrono::{Datelike, Timelike};
     use std::fs;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
@@ -193,23 +197,5 @@ mod tests {
     }
 
 
-    pub fn instant_to_datetime(instant: Instant) -> DateTime<Utc> {
-        // 获取当前时间作为基准
-        let now_instant = Instant::now();
-        let now_utc = Utc::now();
 
-        // 计算时间差
-        let duration = if instant >= now_instant {
-            instant - now_instant
-        } else {
-            now_instant - instant
-        };
-
-        // 将时间差应用于当前 UTC 时间
-        if instant >= now_instant {
-            now_utc + chrono::Duration::from_std(duration).expect("Duration out of range")
-        } else {
-            now_utc - chrono::Duration::from_std(duration).expect("Duration out of range")
-        }
-    }
 }

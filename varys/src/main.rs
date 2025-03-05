@@ -1,8 +1,8 @@
 mod settings;
-mod binance;
 mod database;
 
-use crate::binance::jobs::start_binance_job;
+use crate::database::get_db_write_tx;
+use crate::settings::VARYS_CONFIG;
 use log::{info, LevelFilter};
 use maester::tools::logs::setup_logger;
 use std::time::Duration;
@@ -16,7 +16,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 启动后台任务
     tokio::spawn(async move {
-        start_binance_job().await;
         let mut days = 1;
         loop {
             tokio::select! {

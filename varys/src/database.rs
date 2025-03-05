@@ -16,7 +16,7 @@ static DB_WRITER_TX: OnceCell<mpsc::Sender<Entry2Persistence>> = OnceCell::const
 
 type Entry2Persistence = HashMap<&'static [u8], &'static [u8]>;
 
-async fn get_db_write_tx() -> mpsc::Sender<Entry2Persistence> {
+pub async fn get_db_write_tx() -> mpsc::Sender<Entry2Persistence> {
     DB_WRITER_TX.get_or_init(initial_db).await.clone()
 }
 
