@@ -9,12 +9,10 @@ pub fn setup_logger(level: Option<LevelFilter>) -> Result<(), fern::InitError> {
     fern::Dispatch::new()
         .format(|out, message, record| {
             out.finish(format_args!(
-                "[{} {} {} {}:{}] {}",
+                "[{} {} {}] {}",
                 humantime::format_rfc3339_seconds(SystemTime::now()),
                 record.level(),
                 record.target(),
-                line!(),
-                column!(),
                 message
             ))
         })

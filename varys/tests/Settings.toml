@@ -1,4 +1,5 @@
 dbPath = "test/db/all"
-[spot]
+
+[binance.spot]
 trade = ['BTCUSDT']
 miniticker = true

@@ -2,6 +2,7 @@ use crate::tools::time::{current_date_string, instant_to_datetime};
 use chrono::{Datelike, Duration as ChronoDuration, TimeZone, Utc};
 use log::{error, info, trace};
 use rocksdb::{OptimisticTransactionDB, Options};
+use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -23,6 +24,9 @@ impl fmt::Display for RollingKVDBConfiguration {
                self.duration)
     }
 }
+
+
+pub type BatchData = HashMap<&'static [u8], &'static [u8]>;
 
 impl RollingKVDBConfiguration {
     pub fn new_with_path(path: PathBuf) -> Self {
@@ -110,15 +114,18 @@ impl RollingKVDB {
         RollingKVDB { db, current_cf, close_refresh_cf_tx: tx }
     }
 
-    pub fn write(&self, key: &[u8], value: &[u8]) -> Result<(), rocksdb::Error> {
+    pub fn write_batch(&self, data:BatchData) -> Result<(), rocksdb::Error> {
         let txn = self.db.transaction();
         let result = self.current_cf.read().unwrap();
         let default_cf = self.db.cf_handle(result.as_str()).unwrap();
-        txn.put_cf(default_cf, key, value)?;
+        for (key, value) in &data{
+            txn.put_cf(default_cf, key, value)?;
+        }
         txn.commit()
     }
 
     pub async fn close(&self) {
+        info!("Closing RollingKVDB");
         self.close_refresh_cf_tx.send(()).await.expect("TODO: panic message");
     }
 }
@@ -195,7 +202,5 @@ mod tests {
         assert_eq!(minute, 0);
         assert_eq!(second, 0);
     }
-
-
-
+    
 }

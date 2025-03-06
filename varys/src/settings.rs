@@ -21,8 +21,14 @@ fn init_setting() -> VarysConfig {
 #[derive(Debug, Deserialize)]
 pub struct VarysSpotConfig {
     pub trade: Vec<String>,
+    
     #[serde(rename = "miniticker")]
     pub mini_ticker: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExchangeData {
+    pub spot: VarysSpotConfig,
 }
 
 
@@ -30,7 +36,7 @@ pub struct VarysSpotConfig {
 pub struct VarysConfig {
     #[serde(rename = "dbPath")]
     pub db_path: String,
-    pub spot: VarysSpotConfig,
+    pub binance: ExchangeData,
 }
 
 impl VarysConfig {
@@ -40,10 +46,10 @@ impl VarysConfig {
             .add_source(File::with_name(path))
             .build()?;
         let db_path = s.get("dbPath")?;
-        let spot: VarysSpotConfig = s.get("spot")?;
+        let binance : ExchangeData = s.get("binance")?;
         Ok(Self {
             db_path,
-            spot
+            binance
         })
     }
 }
@@ -58,10 +64,10 @@ mod tests {
         let setting = VarysConfig::new("tests/Settings.toml").unwrap();
         assert_eq!(setting.db_path, "test/db/all");
 
-        let spot_config = &setting.spot;
+        let binance_spot_config = &setting.binance.spot;
 
-        assert_eq!(spot_config.mini_ticker, true);
-        let trade = &spot_config.trade;
+        assert_eq!(binance_spot_config.mini_ticker, true);
+        let trade = &binance_spot_config.trade;
         assert_eq!(trade.len(), 1, "载入数量不对");
         assert_eq!(trade[0], "BTCUSDT");
     }
