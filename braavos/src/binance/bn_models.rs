@@ -5,7 +5,6 @@ use crate::tools::{string_to_float, unix_time};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 
-
 pub mod bin {
     use crate::binance::bn_models::TradeRaw;
 

@@ -36,7 +36,7 @@ pub struct WebSocketClient {
 
 impl WebSocketClient {
     pub async fn new(url: &str, config: Option<WebSocketConfig>) -> Result<Self, Box<dyn Error>> {
-        let (tx, rx) = mpsc::channel::<(Message, oneshot::Sender<ResponseCode>)>(100);
+        let (tx, rx) = mpsc::channel::<(Message, oneshot::Sender<ResponseCode>)>(1000);
         let real_config = config.unwrap_or_default();
         let client = WebSocketClient {
             url: url.to_string(),

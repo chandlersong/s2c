@@ -26,7 +26,7 @@ impl fmt::Display for RollingKVDBConfiguration {
 }
 
 
-pub type BatchData = HashMap<&'static [u8], &'static [u8]>;
+pub type BatchData = HashMap<Vec<u8>, Vec<u8>>;
 
 impl RollingKVDBConfiguration {
     pub fn new_with_path(path: PathBuf) -> Self {

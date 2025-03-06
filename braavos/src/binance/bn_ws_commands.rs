@@ -95,7 +95,7 @@ impl BNSpotWSClient {
             }
         }
 
-        let (tx, rx) = broadcast::channel(100);
+        let (tx, rx) = broadcast::channel(1000);
         self.trade_tx_map.write().await.insert(symbol.to_string(), tx.clone());
         rx
     }
@@ -125,7 +125,6 @@ impl BNSpotWSClient {
                         }
                     }
                     WsSpotResponse::Trade(v) => {
-                        //因为websocket可能是共享的，其他地方也可能订阅这个消息。
                         if let Some(sender) = self.trade_tx_map.read().await.get(&v.symbol) {
                             sender.send(v).unwrap();
                         }

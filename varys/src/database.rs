@@ -1,7 +1,6 @@
 use crate::settings::VARYS_CONFIG;
 use log::info;
 use maester::database::rolling_kv_db::{BatchData, RollingKVDB, RollingKVDBConfiguration};
-use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::signal;
 use tokio::sync::{mpsc, OnceCell};
@@ -32,19 +31,19 @@ async fn initial_db() -> mpsc::Sender<BatchData> {
         let db = RollingKVDB::new(config, None).await;
         loop {
             tokio::select! {
-             _ = signal::ctrl_c() => {
-                    db.close().await;
-                    info!("stop writing db");
-                }
-            record = persist_rx.recv()=> {
-                    if let Some(kv) = record {
-                        for (key, val) in kv {
-                            info!("Writing entry: {}", String::from_utf8_lossy(key));
-                        }
+                 _ = signal::ctrl_c() => {
+                        db.close().await;
+                        info!("stop writing db");
                     }
-                    
+                record = persist_rx.recv()=> {
+                        if let Some(kv) = record {
+                              match db.write_batch(kv){
+                                    Ok(_) => {}
+                                    Err(_) => {}
+                              }}
+                        
+                    }
                 }
-            }
         }
     });
     persist_tx
