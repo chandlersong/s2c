@@ -97,7 +97,7 @@ impl WebSocketClient {
                             if let Some(sender)= text_message_tx.read().await.as_ref() {
                                 match sender.send(text){
                                     Ok(..) => {},
-                                    Err(e) => error!("WebSocket error: {}", e),
+                                    Err(e) => error!("发送文字消息失败: {}", e),
                                 };
                             };
                         }
