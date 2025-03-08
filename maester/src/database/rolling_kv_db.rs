@@ -1,7 +1,7 @@
 use crate::tools::time::{current_date_string, instant_to_datetime};
 use chrono::{Datelike, Duration as ChronoDuration, TimeZone, Utc};
 use log::{error, info, trace};
-use rocksdb::{OptimisticTransactionDB, Options};
+use rocksdb::{MultiThreaded, OptimisticTransactionDB, Options};
 use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
@@ -62,7 +62,7 @@ impl RollingKVDBConfiguration {
 
 
 pub struct RollingKVDB {
-    db: OptimisticTransactionDB,
+    db: OptimisticTransactionDB<MultiThreaded>,
     current_cf: Arc<RwLock<String>>, // 持有 ColumnFamily 句柄
     close_refresh_cf_tx: mpsc::Sender<()>,
 }
@@ -106,7 +106,17 @@ impl RollingKVDB {
         let cfs = vec![
             current_cf.read().unwrap().clone()
         ];
-        let db = OptimisticTransactionDB::open_cf(&options, &config.path, cfs).unwrap();
+        let db = match OptimisticTransactionDB::open_cf(&options, &config.path, cfs) {
+            Ok(db) => db,
+            Err(e) => {
+                //这里就是想到这里一种情况。在12点切的时候重启。
+                error!("Failed to open database: {:?}", e);
+                let db = OptimisticTransactionDB::open(&options, &config.path).unwrap();
+                let current_cf = current_cf.read().unwrap();
+                db.create_cf(current_cf.as_str(), &options).expect(format!("Error creating cf {}", current_cf).as_str());
+                db
+            }
+        };
 
         let cf = current_cf.clone();
         let (tx, rx) = mpsc::channel::<()>(1);
@@ -132,7 +142,7 @@ impl RollingKVDB {
         };
         let txn = self.db.transaction();
         for (key, value) in &data{
-            txn.put_cf(default_cf, key, value)?;
+            txn.put_cf(&default_cf, key, value)?;
         }
         txn.commit()
     }
@@ -140,7 +150,7 @@ impl RollingKVDB {
     pub fn read_value(&self, key: &Vec<u8>) -> Option<Vec<u8>> {
         let result = self.current_cf.read().unwrap();
         let default_cf = self.db.cf_handle(result.as_str()).unwrap();
-        match self.db.get_cf(default_cf, key) {
+        match self.db.get_cf(&default_cf, key) {
             Ok(Some(value)) => Some(value.to_vec()),
             Ok(None) => { None }
             Err(e) => {
@@ -209,8 +219,8 @@ mod tests {
 
         let value = rolling_db.read_value(&b"key".to_vec()).unwrap();
         assert_eq!(value, b"value");
- 
-        
+
+
         rolling_db.close().await;
     }
 
