@@ -97,14 +97,19 @@ impl RollingKVDB {
     pub async fn new(config: RollingKVDBConfiguration, cf_name: Option<String>) -> Self {
         let mut options = Options::default();
         options.create_if_missing(true);
-        let db = OptimisticTransactionDB::open(&options, config.path).unwrap();
+        options.create_missing_column_families(true);
         let current_cf = match cf_name {
             Some(name) => Arc::new(RwLock::new(name)),
             None => Arc::new(RwLock::new(current_date_string())),
         };
+
+        let cfs = vec![
+            current_cf.read().unwrap().clone()
+        ];
+        let db = OptimisticTransactionDB::open_cf(&options, &config.path, cfs).unwrap();
+
         let cf = current_cf.clone();
         let (tx, rx) = mpsc::channel::<()>(1);
-
         let swap_cf_func = move || {
             *cf.write().unwrap() = current_date_string();
         };
@@ -114,14 +119,35 @@ impl RollingKVDB {
         RollingKVDB { db, current_cf, close_refresh_cf_tx: tx }
     }
 
-    pub fn write_batch(&self, data:BatchData) -> Result<(), rocksdb::Error> {
+    pub fn write_batch(&mut self, data: BatchData) -> Result<(), rocksdb::Error> {
+        let current_cf_name = &self.current_cf.read().unwrap();
+        let default_cf = match self.db.cf_handle(current_cf_name.as_str()) {
+            Some(cf) => cf,
+            None => {
+                let result = self.current_cf.read().unwrap();
+                let options = Options::default();
+                self.db.create_cf(result.as_str(), &options).expect("TODO: panic message");
+                self.db.cf_handle(result.as_str()).unwrap()
+            }
+        };
         let txn = self.db.transaction();
-        let result = self.current_cf.read().unwrap();
-        let default_cf = self.db.cf_handle(result.as_str()).unwrap();
         for (key, value) in &data{
             txn.put_cf(default_cf, key, value)?;
         }
         txn.commit()
+    }
+
+    pub fn read_value(&self, key: &Vec<u8>) -> Option<Vec<u8>> {
+        let result = self.current_cf.read().unwrap();
+        let default_cf = self.db.cf_handle(result.as_str()).unwrap();
+        match self.db.get_cf(default_cf, key) {
+            Ok(Some(value)) => Some(value.to_vec()),
+            Ok(None) => { None }
+            Err(e) => {
+                error!("Error reading value from DB: key is {},error is {}",String::from_utf8_lossy(key),e);
+                None
+            }
+        }
     }
 
     pub async fn close(&self) {
@@ -135,8 +161,10 @@ mod tests {
     use crate::database::rolling_kv_db::{loop_func, RollingKVDB, RollingKVDBConfiguration};
     use crate::tools::time::instant_to_datetime;
     use chrono::{Datelike, Timelike};
+    use rocksdb::{Options, DB};
+    use std::collections::HashMap;
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use tokio::sync::mpsc;
@@ -152,20 +180,61 @@ mod tests {
         }
     }
 
+    const DATA_FOLDER: &str = "./tests/db/rolling_db";
+
+    /// 做CF切换的时候，需要能够存入
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_create_db() {
-        let config = RollingKVDBConfiguration::new(100, "tests/db/rolling_db");
-        if config.path.exists() {
-            fs::remove_dir_all(&config.path).unwrap();
+    async fn test_create_cf_change() {
+        let db_folder = &format!("{}/cf_change",DATA_FOLDER);
+        let config = RollingKVDBConfiguration::new(100, db_folder);
+        let mut options = Options::default();
+        options.create_if_missing(true);
+        if Path::new(db_folder).exists() {
+            DB::destroy(&options, db_folder).unwrap();
         }
         fs::create_dir_all(&config.path).unwrap();
         println!("path: {:?}", config.path.canonicalize());
-        let rolling_db = RollingKVDB::new(config, Some("test".to_string())).await;
+        let mut rolling_db = RollingKVDB::new(config, Some("test".to_string())).await;
         let prev_cf = rolling_db.current_cf.read().unwrap().clone();
         sleep(Duration::from_millis(500)).await;
         let actual_cf = rolling_db.current_cf.read().unwrap().clone();
         println!("new cf: {:?}", actual_cf);
         assert_ne!(prev_cf, actual_cf);
+
+
+        let mut data = HashMap::new();
+        data.insert(b"key".to_vec(), b"value".to_vec());
+
+        rolling_db.write_batch(data).unwrap();
+
+        let value = rolling_db.read_value(&b"key".to_vec()).unwrap();
+        assert_eq!(value, b"value");
+ 
+        
+        rolling_db.close().await;
+    }
+
+    /// 如果一个新的数据库。没有任何CF。应该能够完成处理
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_with_new_cf() {
+        let db_folder = &format!("{}/new_cf",DATA_FOLDER);
+        let config = RollingKVDBConfiguration::new(60 * 1000, db_folder);
+        let mut options = Options::default();
+        options.create_if_missing(true);
+        if Path::new(db_folder).exists() {
+            DB::destroy(&options, db_folder).unwrap();
+        }
+        fs::create_dir_all(&config.path).unwrap();
+        println!("path: {:?}", config.path.canonicalize());
+        let mut rolling_db = RollingKVDB::new(config, Some("test".to_string())).await;
+
+        let mut data = HashMap::new();
+        data.insert(b"key".to_vec(), b"value".to_vec());
+
+        rolling_db.write_batch(data).unwrap();
+
+        let value = rolling_db.read_value(&b"key".to_vec()).unwrap();
+        assert_eq!(value, b"value");
         rolling_db.close().await;
     }
 
