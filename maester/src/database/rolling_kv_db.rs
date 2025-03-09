@@ -1,11 +1,11 @@
 use crate::tools::time::{current_date_string, instant_to_datetime};
 use chrono::{Datelike, Duration as ChronoDuration, TimeZone, Utc};
-use log::{error, info, trace};
-use rocksdb::{MultiThreaded, OptimisticTransactionDB, Options};
+use log::{error, info};
+use rocksdb::{MultiThreaded, OptimisticTransactionDB, Options, DB};
 use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::{sleep_until, Instant};
@@ -14,6 +14,7 @@ pub struct RollingKVDBConfiguration {
     start: Instant,
     duration: Duration,
     path: PathBuf,
+    report_frequency: Duration, //用于一些统计数据的周期。
 }
 
 impl fmt::Display for RollingKVDBConfiguration {
@@ -56,15 +57,38 @@ impl RollingKVDBConfiguration {
             start,
             duration,
             path,
+            report_frequency: Duration::from_secs(5),
         }
     }
 }
 
 
+struct RollingKvDBReport {
+    record_count: u32, //存入多少数据
+}
+
+impl RollingKvDBReport {
+    pub fn increment_record_count(&mut self, record_count: u32) {
+        self.record_count += record_count;
+    }
+
+    pub fn record_count(&self) -> u32 {
+        self.record_count
+    }
+}
+
+impl Default for RollingKvDBReport {
+    fn default() -> Self {
+        Self { record_count: 0 }
+    }
+}
+
 pub struct RollingKVDB {
     db: OptimisticTransactionDB<MultiThreaded>,
     current_cf: Arc<RwLock<String>>, // 持有 ColumnFamily 句柄
     close_refresh_cf_tx: mpsc::Sender<()>,
+    report: Arc<Mutex<RollingKvDBReport>>,
+    report_tx: mpsc::Sender<()>,
 }
 
 
@@ -79,13 +103,16 @@ where
             tokio::select! {
                 // 接收停止信号
                 _ = close_refresh_cf_rx.recv() => {
-                    info!("Closing loop");
+                    info!("收到关闭信号");
                     break;
                 }
                 // 循环任务
                 _ = sleep_until(next_tick) => {
-                    trace!("Sleeping until next tick");
                     func();
+                }
+                _=tokio::signal::ctrl_c() => {
+                    info!("程序主动关闭");
+                    break;
                 }
             }
         }
@@ -95,38 +122,50 @@ where
 
 impl RollingKVDB {
     pub async fn new(config: RollingKVDBConfiguration, cf_name: Option<String>) -> Self {
-        let mut options = Options::default();
-        options.create_if_missing(true);
-        options.create_missing_column_families(true);
+
         let current_cf = match cf_name {
             Some(name) => Arc::new(RwLock::new(name)),
             None => Arc::new(RwLock::new(current_date_string())),
         };
 
-        let cfs = vec![
-            current_cf.read().unwrap().clone()
-        ];
-        let db = match OptimisticTransactionDB::open_cf(&options, &config.path, cfs) {
-            Ok(db) => db,
-            Err(e) => {
-                //这里就是想到这里一种情况。在12点切的时候重启。
-                error!("Failed to open database: {:?}", e);
-                let db = OptimisticTransactionDB::open(&options, &config.path).unwrap();
-                let current_cf = current_cf.read().unwrap();
-                db.create_cf(current_cf.as_str(), &options).expect(format!("Error creating cf {}", current_cf).as_str());
-                db
-            }
-        };
+        //open DB
+        let mut options = Options::default();
+        options.create_if_missing(true);
+        options.create_missing_column_families(true);
+        let mut cfs = DB::list_cf(&options, &config.path).unwrap();
 
+        let current_cf_name = current_cf.read().unwrap().clone();
+        if !cfs.contains(&current_cf_name) {
+            cfs.push(current_cf_name);
+        }
+
+        let db = OptimisticTransactionDB::open_cf(&options, &config.path, cfs)
+            .expect("Failed to open DB");
+
+        // 刷新CF
         let cf = current_cf.clone();
-        let (tx, rx) = mpsc::channel::<()>(1);
+        let (close_refresh_cf_tx, rx) = mpsc::channel::<()>(1);
         let swap_cf_func = move || {
             *cf.write().unwrap() = current_date_string();
         };
 
         loop_func(config.start, config.duration, swap_cf_func, rx).await;
 
-        RollingKVDB { db, current_cf, close_refresh_cf_tx: tx }
+
+        //开启监控
+        let report = Arc::new(Mutex::new(RollingKvDBReport::default()));
+        let report_refresh = report.clone();
+        let report_start = Instant::now() + Duration::from_secs(1);
+        let report_report_seconds = config.report_frequency.as_secs() as u32;
+        let report_func = move || {
+            let mut current_report = report_refresh.lock().unwrap();
+            info!("过去每秒总共存入了{} 条记录", current_report.record_count()/report_report_seconds);
+            *current_report = RollingKvDBReport::default()
+        };
+        let (report_tx, report_rx) = mpsc::channel::<()>(1);
+        loop_func(report_start, config.report_frequency, report_func, report_rx).await;
+
+        RollingKVDB { db, current_cf, close_refresh_cf_tx, report, report_tx }
     }
 
     pub fn write_batch(&mut self, data: BatchData) -> Result<(), rocksdb::Error> {
@@ -144,6 +183,8 @@ impl RollingKVDB {
         for (key, value) in &data{
             txn.put_cf(&default_cf, key, value)?;
         }
+
+        self.report.lock().unwrap().increment_record_count(data.len() as u32);
         txn.commit()
     }
 
@@ -162,7 +203,8 @@ impl RollingKVDB {
 
     pub async fn close(&self) {
         info!("Closing RollingKVDB");
-        self.close_refresh_cf_tx.send(()).await.expect("TODO: panic message");
+        self.close_refresh_cf_tx.send(()).await.expect("关闭cf刷新失败");
+        self.report_tx.send(()).await.expect("关闭监控失败");
     }
 }
 
@@ -186,6 +228,7 @@ mod tests {
                 start: Instant::now() + Duration::from_millis(50),
                 duration: Duration::from_millis(mill_seconds),
                 path: PathBuf::from(path),
+                report_frequency: Duration::from_secs(mill_seconds),
             }
         }
     }
