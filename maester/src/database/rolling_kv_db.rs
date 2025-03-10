@@ -1,7 +1,7 @@
 use crate::tools::time::{current_date_string, instant_to_datetime};
 use chrono::{Datelike, Duration as ChronoDuration, TimeZone, Utc};
 use log::{error, info};
-use rocksdb::{MultiThreaded, OptimisticTransactionDB, Options, DB};
+use rocksdb::{ColumnFamilyDescriptor, MultiThreaded, OptimisticTransactionDB, Options, DB};
 use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
@@ -132,14 +132,20 @@ impl RollingKVDB {
         let mut options = Options::default();
         options.create_if_missing(true);
         options.create_missing_column_families(true);
-        let mut cfs = DB::list_cf(&options, &config.path).unwrap();
 
-        let current_cf_name = current_cf.read().unwrap().clone();
-        if !cfs.contains(&current_cf_name) {
-            cfs.push(current_cf_name);
+        let existing_cfs = DB::list_cf(&options, &config.path).unwrap_or_else(|_| vec!["default".to_string()]);
+
+        let mut cfs = Vec::new();
+        for cf in &existing_cfs {
+            cfs.push(ColumnFamilyDescriptor::new(cf, Options::default()));
+        }
+        let open_cf_arc = current_cf.clone();
+        let open_cf = &open_cf_arc.read().unwrap();
+        if !existing_cfs.contains(open_cf) {
+            cfs.push(ColumnFamilyDescriptor::new(open_cf.to_string(), Options::default()));
         }
 
-        let db = OptimisticTransactionDB::open_cf(&options, &config.path, cfs)
+        let db = OptimisticTransactionDB::open_cf_descriptors(&options, config.path, cfs)
             .expect("Failed to open DB");
 
         // 刷新CF
@@ -159,7 +165,7 @@ impl RollingKVDB {
         let report_report_seconds = config.report_frequency.as_secs() as u32;
         let report_func = move || {
             let mut current_report = report_refresh.lock().unwrap();
-            info!("过去每秒总共存入了{} 条记录", current_report.record_count()/report_report_seconds);
+            info!("过去每秒平均存入了{} 条记录", current_report.record_count()/report_report_seconds);
             *current_report = RollingKvDBReport::default()
         };
         let (report_tx, report_rx) = mpsc::channel::<()>(1);
@@ -240,8 +246,7 @@ mod tests {
     async fn test_create_cf_change() {
         let db_folder = &format!("{}/cf_change",DATA_FOLDER);
         let config = RollingKVDBConfiguration::new(100, db_folder);
-        let mut options = Options::default();
-        options.create_if_missing(true);
+        let options = Options::default();
         if Path::new(db_folder).exists() {
             DB::destroy(&options, db_folder).unwrap();
         }
@@ -272,10 +277,9 @@ mod tests {
     async fn test_with_new_cf() {
         let db_folder = &format!("{}/new_cf",DATA_FOLDER);
         let config = RollingKVDBConfiguration::new(60 * 1000, db_folder);
-        let mut options = Options::default();
-        options.create_if_missing(true);
+        let _options = Options::default();
         if Path::new(db_folder).exists() {
-            DB::destroy(&options, db_folder).unwrap();
+            DB::destroy(&_options, db_folder).unwrap();
         }
         fs::create_dir_all(&config.path).unwrap();
         println!("path: {:?}", config.path.canonicalize());

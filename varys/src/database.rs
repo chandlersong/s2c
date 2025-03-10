@@ -26,9 +26,8 @@ async fn initial_db() -> mpsc::Sender<BatchData> {
     info!("Starting RollingKVDB DB with {}",config);
 
     let (persist_tx, mut persist_rx) = mpsc::channel(1000);
-
+    let mut db = RollingKVDB::new(config, None).await;
     tokio::spawn(async move {
-        let mut db = RollingKVDB::new(config, None).await;
         loop {
             tokio::select! {
                  _ = signal::ctrl_c() => {
