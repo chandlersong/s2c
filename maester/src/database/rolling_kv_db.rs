@@ -1,5 +1,5 @@
-use crate::tools::time::{current_date_string, instant_to_datetime};
-use chrono::{Datelike, Duration as ChronoDuration, TimeZone, Utc};
+use crate::tools::time::{current_date_string, get_next_utc_day_begin, instant_to_datetime};
+use chrono::{Datelike, TimeZone, Utc};
 use log::{error, info};
 use rocksdb::{ColumnFamilyDescriptor, MultiThreaded, OptimisticTransactionDB, Options, DB};
 use std::collections::HashMap;
@@ -13,8 +13,7 @@ use tokio::time::{sleep_until, Instant};
 pub struct RollingKVDBConfiguration {
     start: Instant,
     duration: Duration,
-    path: PathBuf,
-    report_frequency: Duration, //用于一些统计数据的周期。
+    path: PathBuf
 }
 
 impl fmt::Display for RollingKVDBConfiguration {
@@ -31,39 +30,18 @@ pub type BatchData = HashMap<Vec<u8>, Vec<u8>>;
 
 impl RollingKVDBConfiguration {
     pub fn new_with_path(path: PathBuf) -> Self {
-        let now = Utc::now();
-        // 计算今天的 00:00 UTC
-        let today_midnight = Utc
-            .with_ymd_and_hms(now.year(), now.month(), now.day(), 0, 0, 0)
-            .single()
-            .expect("Failed to create UTC midnight");
-
-        // 计算今天的 24:00（即下一天的 00:00）
-        let today_end = today_midnight + ChronoDuration::days(1);
-
-        // 使用 UNIX_EPOCH 作为基准
-        let unix_epoch = chrono::DateTime::<Utc>::UNIX_EPOCH;
-
-        // 计算时间差
-        let now_duration = now - unix_epoch;
-        let today_end_duration = today_end - unix_epoch;
-
-        // 转换为 Instant
-        let instant_now = Instant::now();
-        let start = instant_now + (today_end_duration - now_duration).to_std().expect("Duration out of range");
+        let start = get_next_utc_day_begin();
         let duration = Duration::from_secs(24 * 60 * 60);
-
         Self {
             start,
             duration,
-            path,
-            report_frequency: Duration::from_secs(5),
+            path
         }
     }
 }
 
 
-struct RollingKvDBReport {
+pub struct RollingKvDBReport {
     record_count: u32, //存入多少数据
 }
 
@@ -87,8 +65,7 @@ pub struct RollingKVDB {
     db: OptimisticTransactionDB<MultiThreaded>,
     current_cf: Arc<RwLock<String>>, // 持有 ColumnFamily 句柄
     close_refresh_cf_tx: mpsc::Sender<()>,
-    report: Arc<Mutex<RollingKvDBReport>>,
-    report_tx: mpsc::Sender<()>,
+    report: Arc<Mutex<RollingKvDBReport>>
 }
 
 
@@ -157,21 +134,7 @@ impl RollingKVDB {
 
         loop_func(config.start, config.duration, swap_cf_func, rx).await;
 
-
-        //开启监控
-        let report = Arc::new(Mutex::new(RollingKvDBReport::default()));
-        let report_refresh = report.clone();
-        let report_start = Instant::now() + Duration::from_secs(1);
-        let report_report_seconds = config.report_frequency.as_secs() as u32;
-        let report_func = move || {
-            let mut current_report = report_refresh.lock().unwrap();
-            info!("过去每秒平均存入了{} 条记录", current_report.record_count()/report_report_seconds);
-            *current_report = RollingKvDBReport::default()
-        };
-        let (report_tx, report_rx) = mpsc::channel::<()>(1);
-        loop_func(report_start, config.report_frequency, report_func, report_rx).await;
-
-        RollingKVDB { db, current_cf, close_refresh_cf_tx, report, report_tx }
+        RollingKVDB { db, current_cf, close_refresh_cf_tx, report: Arc::new(Mutex::new(Default::default()))}
     }
 
     pub fn write_batch(&mut self, data: BatchData) -> Result<(), rocksdb::Error> {
@@ -210,7 +173,10 @@ impl RollingKVDB {
     pub async fn close(&self) {
         info!("Closing RollingKVDB");
         self.close_refresh_cf_tx.send(()).await.expect("关闭cf刷新失败");
-        self.report_tx.send(()).await.expect("关闭监控失败");
+    }
+
+    pub async fn get_report(&self) -> Arc<Mutex<RollingKvDBReport>> {
+        self.report.clone()
     }
 }
 
@@ -233,8 +199,7 @@ mod tests {
             Self {
                 start: Instant::now() + Duration::from_millis(50),
                 duration: Duration::from_millis(mill_seconds),
-                path: PathBuf::from(path),
-                report_frequency: Duration::from_secs(mill_seconds),
+                path: PathBuf::from(path)
             }
         }
     }

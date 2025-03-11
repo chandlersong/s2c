@@ -1,9 +1,12 @@
 use crate::settings::VARYS_CONFIG;
 use log::info;
 use maester::database::rolling_kv_db::{BatchData, RollingKVDB, RollingKVDBConfiguration};
+use maester::tools::time::get_next_utc_day_begin;
 use std::path::PathBuf;
+use std::time::Duration;
 use tokio::signal;
 use tokio::sync::{mpsc, OnceCell};
+use tokio::time::sleep_until;
 
 ///
 /// 这里会设计有两类数据库。
@@ -27,6 +30,7 @@ async fn initial_db() -> mpsc::Sender<BatchData> {
 
     let (persist_tx, mut persist_rx) = mpsc::channel(1000);
     let mut db = RollingKVDB::new(config, None).await;
+    let report = db.get_report().await;
     tokio::spawn(async move {
         loop {
             tokio::select! {
@@ -43,6 +47,20 @@ async fn initial_db() -> mpsc::Sender<BatchData> {
                         
                     }
                 }
+        }
+    });
+    tokio::spawn(async move {
+        let mut start = get_next_utc_day_begin() + Duration::from_secs(60 * 18);
+        loop {
+            tokio::select! {
+                 _ = signal::ctrl_c() => {
+                        info!("database analysis");
+                    }
+                _ = sleep_until(start) => {
+                        let number = report.lock().unwrap().record_count();
+                    }
+                }
+            start = start + Duration::from_secs(60 * 60 * 24);
         }
     });
     persist_tx
