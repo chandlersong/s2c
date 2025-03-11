@@ -1,7 +1,7 @@
+use crate::robots::OPS_ROBOTS;
 use crate::settings::VARYS_CONFIG;
 use log::info;
-use maester::database::rolling_kv_db::{BatchData, RollingKVDB, RollingKVDBConfiguration};
-use maester::notification::telegrams::OpsBot;
+use maester::database::rolling_kv_db::{BatchData, RollingKVDB, RollingKVDBConfiguration, RollingKvDBReport};
 use maester::tools::time::get_next_utc_day_begin;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -52,21 +52,22 @@ async fn initial_db() -> mpsc::Sender<BatchData> {
         }
     });
     tokio::spawn(async move {
-        let mut start = get_next_utc_day_begin() + Duration::from_secs(5);
+        let mut start = get_next_utc_day_begin() + Duration::from_secs(18 * 60);
 
         loop {
+            let sleep_seconds = ONE_DAY_SECONDS;
             tokio::select! {
                  _ = signal::ctrl_c() => {
-                        info!("database analysis");
+                        info!("database analysis stop");
                     }
                 _ = sleep_until(start) => {
                         let number = report.lock().unwrap().record_count();
-                        let robot = OpsBot::new("ABC",123);
-                        let message = format!("过去一天，平均每秒存入{}条数据",number/ONE_DAY_SECONDS);
-                        robot.send(&message).await;
+                        *report.lock().unwrap() = RollingKvDBReport::default();
+                        let message = format!("过去一天，平均每秒存入{}条数据",number/sleep_seconds);
+                        let _ = &OPS_ROBOTS.send(&message).await;
                     }
                 }
-            start = start + Duration::from_secs(5);
+            start = start + Duration::from_secs(sleep_seconds as u64);
         }
     });
     persist_tx

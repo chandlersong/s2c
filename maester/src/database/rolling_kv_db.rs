@@ -38,6 +38,7 @@ impl RollingKVDBConfiguration {
     }
 }
 
+#[derive(Debug)]
 pub struct RollingKvDBReport {
     record_count: u32, //存入多少数据
 }
