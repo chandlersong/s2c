@@ -18,7 +18,7 @@ impl OpsBot {
     async fn send(&self, text: &str) {
         match self.bot.send_message(self.chat_id, text).await{
             Ok(_) => trace!("消息已发送！"),
-            Err(e) => println!("发送失败: {:?}", e),
+            Err(e) => error!("发送失败: {:?}", e),
         }
     }
 }
