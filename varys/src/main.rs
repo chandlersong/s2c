@@ -1,6 +1,7 @@
 mod settings;
 mod database;
 mod binance;
+mod notification;
 
 use crate::binance::start_binance_job;
 use log::{info, LevelFilter};
