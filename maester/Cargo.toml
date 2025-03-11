@@ -10,3 +10,5 @@ log = { workspace = true }
 chrono =  { workspace = true }
 fern = { workspace = true }
 humantime = { workspace = true }
+
+teloxide = { version = "0.13.0", features = ["macros"] }
