@@ -1,5 +1,4 @@
 use crate::tools::time::{current_date_string, get_next_utc_day_begin, instant_to_datetime};
-use chrono::{Datelike, TimeZone, Utc};
 use log::{error, info};
 use rocksdb::{ColumnFamilyDescriptor, MultiThreaded, OptimisticTransactionDB, Options, DB};
 use std::collections::HashMap;
@@ -25,7 +24,6 @@ impl fmt::Display for RollingKVDBConfiguration {
     }
 }
 
-
 pub type BatchData = HashMap<Vec<u8>, Vec<u8>>;
 
 impl RollingKVDBConfiguration {
@@ -39,7 +37,6 @@ impl RollingKVDBConfiguration {
         }
     }
 }
-
 
 pub struct RollingKvDBReport {
     record_count: u32, //存入多少数据
