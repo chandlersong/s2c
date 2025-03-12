@@ -2,6 +2,7 @@ use crate::robots::OPS_ROBOTS;
 use crate::settings::VARYS_CONFIG;
 use log::info;
 use maester::database::rolling_kv_db::{BatchData, RollingKVDB, RollingKVDBConfiguration, RollingKvDBReport};
+use maester::tools::time::instant_to_datetime;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::signal;
@@ -52,7 +53,7 @@ async fn initial_db() -> mpsc::Sender<BatchData> {
     });
     tokio::spawn(async move {
         let mut start = Instant::now() + Duration::from_secs(60);
-
+        info!("first sending to telegram at  {:?}",instant_to_datetime(start));
         loop {
             let sleep_seconds = ONE_HOUR_SECONDS;
             tokio::select! {
@@ -62,7 +63,7 @@ async fn initial_db() -> mpsc::Sender<BatchData> {
                 _ = sleep_until(start) => {
                         let number = report.lock().unwrap().record_count();
                         *report.lock().unwrap() = RollingKvDBReport::default();
-                        let message = format!("过去一天，平均每秒存入{}条数据",number/sleep_seconds);
+                        let message = format!("过去一小时，平均每秒存入{}条数据",number/sleep_seconds);
                         let _ = &OPS_ROBOTS.send(&message).await;
                     }
                 }
