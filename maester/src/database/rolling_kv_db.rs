@@ -208,7 +208,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_create_cf_change() {
         let db_folder = &format!("{}/cf_change",DATA_FOLDER);
-        let config = RollingKVDBConfiguration::new(100, db_folder);
+        let config = RollingKVDBConfiguration::new(200, db_folder);
         let options = Options::default();
         if Path::new(db_folder).exists() {
             DB::destroy(&options, db_folder).unwrap();

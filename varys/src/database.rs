@@ -2,7 +2,6 @@ use crate::robots::OPS_ROBOTS;
 use crate::settings::VARYS_CONFIG;
 use log::info;
 use maester::database::rolling_kv_db::{BatchData, RollingKVDB, RollingKVDBConfiguration, RollingKvDBReport};
-use maester::tools::time::get_next_utc_day_begin;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::signal;
