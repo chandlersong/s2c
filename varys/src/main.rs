@@ -10,7 +10,7 @@ use std::time::Duration;
 use tokio::signal;
 use tokio::time::sleep;
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 100)]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let _ = setup_logger(Some(LevelFilter::Debug));
