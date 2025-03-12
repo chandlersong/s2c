@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tokio::signal;
 use tokio::sync::{mpsc, OnceCell};
-use tokio::time::sleep_until;
+use tokio::time::{sleep_until, Instant};
 
 ///
 /// 这里会设计有两类数据库。
@@ -16,7 +16,7 @@ use tokio::time::sleep_until;
 /// 2，其余数据库负责读
 
 static DB_WRITER_TX: OnceCell<mpsc::Sender<BatchData>> = OnceCell::const_new();
-static ONE_DAY_SECONDS: u32 = 24 * 60 * 60;
+static ONE_HOUR_SECONDS: u32 =  60 * 60;
 
 
 
@@ -52,10 +52,10 @@ async fn initial_db() -> mpsc::Sender<BatchData> {
         }
     });
     tokio::spawn(async move {
-        let mut start = get_next_utc_day_begin() + Duration::from_secs(18 * 60);
+        let mut start = Instant::now() + Duration::from_secs(60);
 
         loop {
-            let sleep_seconds = ONE_DAY_SECONDS;
+            let sleep_seconds = ONE_HOUR_SECONDS;
             tokio::select! {
                  _ = signal::ctrl_c() => {
                         info!("database analysis stop");
