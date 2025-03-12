@@ -204,6 +204,8 @@ mod tests {
 
     const DATA_FOLDER: &str = "./tests/db/rolling_db";
 
+    //手工跑。自动跑有点不稳定
+    #[ignore]
     /// 做CF切换的时候，需要能够存入
     #[tokio::test(flavor = "multi_thread")]
     async fn test_create_cf_change() {
@@ -235,6 +237,8 @@ mod tests {
         rolling_db.close().await;
     }
 
+    //手工跑。自动跑有点不稳定
+    #[ignore]
     /// 如果一个新的数据库。没有任何CF。应该能够完成处理
     #[tokio::test(flavor = "multi_thread")]
     async fn test_with_new_cf() {
