@@ -1,6 +1,6 @@
 use crate::binance::bn_models::SpotWsSubscribe::AllMiniTicker;
 use crate::binance::bn_models::WsMethod::SUBSCRIBE;
-use crate::binance::bn_models::{deserialize_wx_method, serialize_wx_method, BinanceBase, MiniTicker, StreamAllMiniTickerResponse, SymbolDepthData, TradeRaw, WsCommandResponse, WsMethod};
+use crate::binance::bn_models::{deserialize_wx_method, serialize_wx_method, BinanceBase, MiniTicker, SpotDepthData, StreamAllMiniTickerResponse, TradeRaw, WsCommandResponse, WsMethod};
 use crate::tools::SnowyFlakeWrapper;
 use crate::websockets::WebSocketClient;
 use log::{error, trace};
@@ -186,7 +186,7 @@ impl WsRequest {
 #[serde(untagged)]
 pub enum WsSpotResponse {
     CommonResponse(WsCommandResponse),
-    Depth(SymbolDepthData),
+    Depth(SpotDepthData),
     StreamAllMiniTicker(StreamAllMiniTickerResponse),
     SubAllMiniTicker(Vec<MiniTicker>),
     Trade(TradeRaw),

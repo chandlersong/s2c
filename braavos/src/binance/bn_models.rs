@@ -6,7 +6,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 
 pub mod bin {
-    use crate::binance::bn_models::TradeRaw;
+    use crate::binance::bn_models::{SpotDepthData, TradeRaw};
 
     include!(concat!(env!("OUT_DIR"), "/binance.rs"));
 
@@ -20,6 +20,39 @@ pub mod bin {
                 quantity: value.quantity,
                 trade_timestamp: value.trade_timestamp,
                 is_marker: value.buyer_is_marker,
+            }
+        }
+    }
+
+    impl From<SpotDepthData> for SpotDepth {
+        fn from(value: SpotDepthData) -> Self {
+            let mut bids = vec![];
+            for b in &value.bids {
+                bids.push(
+                    SpotDepthLevel {
+                        price: b.price,
+                        quantity: b.quantity,
+                    }
+                );
+            }
+
+            let mut asks = vec![];
+            for a in &value.asks {
+                asks.push(
+                    SpotDepthLevel {
+                        price: a.price,
+                        quantity: a.quantity,
+                    }
+                );
+            }
+
+            Self {
+                timestamp: value.event_time,
+                symbol:value.symbol,
+                first_update_id: value.first_update_id,
+                final_update_id: value.final_update_id,
+                bids,
+                asks,
             }
         }
     }
@@ -364,7 +397,7 @@ pub struct Asks {
 
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct SymbolDepthData {
+pub struct SpotDepthData {
     #[serde(rename = "e")]
     pub event_type: String, // 事件类型：depthUpdate
 

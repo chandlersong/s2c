@@ -11,3 +11,17 @@ message Trade {
   uint64 trade_timestamp = 6;
   bool  is_marker = 7;
 }
+
+message SpotDepthLevel{
+  double price = 1;
+  double quantity = 2;
+}
+
+message SpotDepth{
+  uint64 timestamp = 1;
+  string symbol = 2;
+  uint64 first_update_id = 3;
+  uint64 final_update_id = 4;
+  repeated SpotDepthLevel bids = 5;
+  repeated SpotDepthLevel asks = 6;
+}
