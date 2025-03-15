@@ -100,18 +100,15 @@ impl BNSpotWSClient {
 
     ///
     /// frequency只能是100或者1000
-    pub async fn subscribe_depth(&mut self, symbol: &str, level: Option<u8>, frequency: Option<u16>) -> broadcast::Receiver<SpotDepthData> {
+    pub async fn subscribe_depth(&mut self, symbol: &str, level: u8, frequency: u16) -> broadcast::Receiver<SpotDepthData> {
         if let Some(sender) = self.depth_tx_map.read().await.get(symbol) {
             return sender.subscribe();
         };
-
-        let real_level = level.unwrap_or_else(|| 20);
-        let real_frequency = frequency.unwrap_or_else(|| 1000);
         let subscribe_command;
-        if real_frequency ==1000{
-            subscribe_command = format!("{}@depth{}", symbol.to_lowercase(), real_level);
+        if frequency ==1000{
+            subscribe_command = format!("{}@depth{}", symbol.to_lowercase(), level);
         }else {
-            subscribe_command = format!("{}@depth{}@100ms", symbol.to_lowercase(), real_level);
+            subscribe_command = format!("{}@depth{}@100ms", symbol.to_lowercase(), level);
         }
 
      
