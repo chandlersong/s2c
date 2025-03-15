@@ -1,8 +1,8 @@
 use config::{Config, ConfigError, File};
 use log::info;
 use serde::Deserialize;
-use std::env;
 use std::sync::LazyLock;
+use std::{env, fmt};
 
 pub static VARYS_CONFIG: LazyLock<VarysConfig> = LazyLock::new(|| {
     init_setting()
@@ -33,11 +33,24 @@ pub struct AllRobotConfig {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct DepthConfiguration {
+    pub symbol: String,
+    pub level: u8,
+    pub frequency: u16,
+}
+
+impl fmt::Display for DepthConfiguration {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "symbol {}, level : {}, frequency: {}",
+               self.symbol, self.level, self.frequency)
+    }
+}
+
+#[derive(Debug, Deserialize)]
 pub struct VarysSpotConfig {
     pub trade: Option<Vec<String>>,
-    pub depth_100ms: Option<Vec<String>>,
-    pub depth_1000ms: Option<Vec<String>>,
     pub mini_ticker: Option<bool>,
+    pub depth: Option<Vec<DepthConfiguration>>,
 }
 
 
@@ -94,25 +107,19 @@ mod tests {
             }
         }
 
-        match &binance_spot_config.depth_100ms {
-            Some(depth_100ms) => {
-                assert_eq!(depth_100ms.len(), 1, "载入数量不对");
-                assert_eq!(depth_100ms[0], "SOLUSDT", "depth_100ms读取不对");
+        match &binance_spot_config.depth {
+            Some(depth) => {
+                assert_eq!(depth.len(), 1, "载入数量不对");
+                let d = &depth[0];
+                assert_eq!(d.symbol, "SOLUSDT", "depth symbol读取不对");
+                assert_eq!(d.level, 20, "depth level读取不对");
+                assert_eq!(d.frequency, 1000, "depth level读取不对");
             }
             None => {
                 panic!("depth_100ms为空");
             }
         }
 
-        match &binance_spot_config.depth_1000ms {
-            Some(depth_1000ms) => {
-                assert_eq!(depth_1000ms.len(), 1, "载入数量不对");
-                assert_eq!(depth_1000ms[0], "ETHUSDT", "depth_1000ms读取不对");
-            }
-            None => {
-                panic!("depth_1000ms为空");
-            }
-        }
 
         match &binance_spot_config.trade {
             Some(trade) => {
@@ -143,7 +150,6 @@ mod tests {
 
         assert!(setting.binance.spot.trade.is_none());
         assert!(setting.binance.spot.mini_ticker.is_none());
-        assert!(setting.binance.spot.depth_100ms.is_none());
-        assert!(setting.binance.spot.depth_1000ms.is_none());
+        assert!(setting.binance.spot.depth.is_none());
     }
 }

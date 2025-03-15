@@ -21,7 +21,7 @@ exchange:tradeType:symbol:seconds
 
 ## 逐笔数据
 
-exchange:tradeType:symbol:id:millSeconds
+exchange:trade:tradeType:symbol:id:millSeconds
 
 id:自动生成的序列
 
@@ -34,7 +34,7 @@ value: id的对象
 
 ## 深度数据
 
-exchange:tradeType:symbol:millSeconds
+exchange:depth:tradeType:symbol:millSeconds
 
 # 行情数据
 

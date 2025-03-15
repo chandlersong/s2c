@@ -107,8 +107,14 @@ impl BNSpotWSClient {
 
         let real_level = level.unwrap_or_else(|| 20);
         let real_frequency = frequency.unwrap_or_else(|| 1000);
+        let subscribe_command;
+        if real_frequency ==1000{
+            subscribe_command = format!("{}@depth{}", symbol.to_lowercase(), real_level);
+        }else {
+            subscribe_command = format!("{}@depth{}@100ms", symbol.to_lowercase(), real_level);
+        }
 
-        let subscribe_command = format!("{}@depth{}@{}ms", symbol.to_lowercase(), real_level, real_frequency);
+     
         info!("Subscribing depth to {}", subscribe_command);
         let params: Option<Vec<String>> = Some(vec![
             subscribe_command

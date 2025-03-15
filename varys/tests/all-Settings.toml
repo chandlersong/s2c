@@ -7,5 +7,7 @@ chat_id = 123
 [binance.spot]
 trade = ['BTCUSDT']
 mini_ticker = true
-depth_100ms = ['SOLUSDT']
-depth_1000ms = ['ETHUSDT']
+[[binance.spot.depth]]
+symbol = "SOLUSDT"
+level = 20
+frequency = 1000 #frequency 只能是100或者1000
