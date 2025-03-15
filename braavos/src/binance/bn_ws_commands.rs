@@ -3,7 +3,7 @@ use crate::binance::bn_models::WsMethod::SUBSCRIBE;
 use crate::binance::bn_models::{deserialize_wx_method, serialize_wx_method, BinanceBase, MiniTicker, SpotDepthData, StreamAllMiniTickerResponse, TradeRaw, WsCommandResponse, WsMethod};
 use crate::tools::SnowyFlakeWrapper;
 use crate::websockets::WebSocketClient;
-use log::{error, trace};
+use log::{error, info, trace};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -29,6 +29,7 @@ const SF: LazyLock<SnowyFlakeWrapper> = LazyLock::new(|| SnowyFlakeWrapper::new(
 pub struct BNSpotWSClient {
     mini_ticker_tx: Arc<RwLock<Option<broadcast::Sender<MiniTicker>>>>,
     trade_tx_map: Arc<RwLock<HashMap<String, broadcast::Sender<TradeRaw>>>>,
+    depth_tx_map: Arc<RwLock<HashMap<String, broadcast::Sender<SpotDepthData>>>>,
     ws_client: WebSocketClient,
 }
 
@@ -42,6 +43,7 @@ impl BNSpotWSClient {
         let res = Self {
             mini_ticker_tx: Arc::new(RwLock::new(None)),
             trade_tx_map: Arc::new(RwLock::new(HashMap::new())),
+            depth_tx_map: Arc::new(RwLock::new(HashMap::new())),
             ws_client,
         };
         let listener = res.clone();
@@ -88,18 +90,45 @@ impl BNSpotWSClient {
             format!("{}@trade", symbol.to_lowercase())
         ]);
         let subscribe_request = WsRequest::new(SUBSCRIBE, params);
-        match self.ws_client.send(subscribe_request.to_ws_message()).await {
-            Ok(_) => {}
-            Err(e) => {
-                error!("Failed to subscribe to {} trade: {}", symbol,e);
-            }
-        }
+        self.subscribe(symbol, subscribe_request).await;
 
         let (tx, rx) = broadcast::channel(1000);
         self.trade_tx_map.write().await.insert(symbol.to_string(), tx.clone());
         rx
     }
 
+
+    ///
+    /// frequency只能是100或者1000
+    pub async fn subscribe_depth(&mut self, symbol: &str, level: Option<u8>, frequency: Option<u16>) -> broadcast::Receiver<SpotDepthData> {
+        if let Some(sender) = self.depth_tx_map.read().await.get(symbol) {
+            return sender.subscribe();
+        };
+
+        let real_level = level.unwrap_or_else(|| 20);
+        let real_frequency = frequency.unwrap_or_else(|| 1000);
+
+        let subscribe_command = format!("{}@depth{}@{}ms", symbol.to_lowercase(), real_level, real_frequency);
+        info!("Subscribing depth to {}", subscribe_command);
+        let params: Option<Vec<String>> = Some(vec![
+            subscribe_command
+        ]);
+        let subscribe_request = WsRequest::new(SUBSCRIBE, params);
+        self.subscribe(symbol, subscribe_request).await;
+
+        let (tx, rx) = broadcast::channel(1000);
+        self.depth_tx_map.write().await.insert(symbol.to_string(), tx.clone());
+        rx
+    }
+
+    async fn subscribe(&mut self, symbol: &str, subscribe_request: WsRequest) {
+        match self.ws_client.send(subscribe_request.to_ws_message()).await {
+            Ok(_) => {}
+            Err(e) => {
+                error!("Failed to subscribe to {} trade: {}", symbol,e);
+            }
+        }
+    }
 
     async fn handler_message(&self, text: String) -> Result<bool, String> {
         let response = serde_json::from_str(&text);
@@ -109,6 +138,9 @@ impl BNSpotWSClient {
                 match entity {
                     WsSpotResponse::Depth(v) => {
                         trace!("{:?} at {:?}", v.symbol,v.event_time);
+                        if let Some(sender) = self.depth_tx_map.read().await.get(&v.symbol) {
+                            sender.send(v).unwrap();
+                        }
                     }
                     WsSpotResponse::StreamAllMiniTicker(v) => {
                         if let Some(sender) = self.mini_ticker_tx.read().await.as_ref() {

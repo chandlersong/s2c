@@ -9,15 +9,18 @@ use std::collections::HashMap;
 
 pub async fn start_binance_job() {
     info!("Starting binance job");
-    tokio::join!(start_trades(), start_mini_ticker());
+    tokio::join!(start_trades(), 
+                 start_mini_ticker(),
+                 start_subscribe_depth());
 }
 
 pub async fn start_trades() {
-    let trade_list = &VARYS_CONFIG.binance.spot.trade;
-    info!("monitor binance spot trades count: {}", trade_list.len());
-    for trade in trade_list {
-        info!("start monitor spot trade:{}", trade);
-        subscribe_one_trade(trade).await;
+    if let Some(trade_list) =  &VARYS_CONFIG.binance.spot.trade{
+        info!("monitor binance spot trades count: {}", trade_list.len());
+        for trade in trade_list {
+            info!("start monitor spot trade:{}", trade);
+            subscribe_one_trade(trade).await;
+        }
     }
 }
 
@@ -57,8 +60,13 @@ pub async fn subscribe_one_trade(symbol: &str) {
 }
 
 pub async fn start_mini_ticker() {
-    if !&VARYS_CONFIG.binance.spot.mini_ticker {
+    if let Some(_) = &VARYS_CONFIG.binance.spot.mini_ticker {
+        //先放空
         return;
     }
     info!("monitor binance spot mini ticker");
+}
+
+pub async fn start_subscribe_depth() {
+    info!("Starting subscribe depth");
 }

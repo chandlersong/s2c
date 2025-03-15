@@ -1,0 +1,11 @@
+db_path = "test/db/all"
+
+[robot.ops]
+client_id = "abc"
+chat_id = 123
+
+[binance.spot]
+trade = ['BTCUSDT']
+mini_ticker = true
+depth_100ms = ['SOLUSDT']
+depth_1000ms = ['ETHUSDT']
