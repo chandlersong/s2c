@@ -91,7 +91,7 @@ pub async fn start_subscribe_depth() {
             subscribe_one_depth(&DepthConfiguration {
                 symbol: depth.clone(),
                 level: 20,
-                frequency: 10000,
+                frequency: 1000,
             }).await;
         }
     }
