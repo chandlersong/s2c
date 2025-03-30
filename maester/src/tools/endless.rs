@@ -7,13 +7,14 @@
 
 #[macro_export]
 macro_rules! async_endless {
-    (async { $($action:tt)* } $(,async {$($ctrl_c_stop:tt)* })? ) => {
-         use tokio::time::{sleep_until, Instant};
+       ( $start_at:expr,             //循环开始时间
+         $sleep_seconds:expr,         //循环周期
+         async {$($action:tt)*}       // 循环中做的事情
+         $(,async {$($ctrl_c_stop:tt)* })?  //ctrl+c结束做的事情
+       ) => {
          use tokio::signal;
-         use std::time::Duration;
-         let mut start = Instant::now() + Duration::from_secs(1);
+         let mut start = $start_at.clone();
          loop {
-            let sleep_seconds = 1;
             tokio::select! {
                      _ = signal::ctrl_c() => {
                          $(
@@ -24,14 +25,16 @@ macro_rules! async_endless {
                      _ = sleep_until(start) => {
                             (async { $($action)* }).await
                      }
-                }
-            start = start + Duration::from_secs(sleep_seconds as u64);
+            }
+            start = start + Duration::from_secs($sleep_seconds as u64);
         };
     };
 }
 
 #[cfg(test)]
 pub mod tests {
+    use std::time::Duration;
+    use tokio::time::{sleep_until, Instant};
     ///
     /// 因为这个测试是不间断的跑。所以不用没法一直测试。
     #[ignore]
@@ -39,6 +42,7 @@ pub mod tests {
     async fn test_loop_marco() {
         let mut a = 1;
         async_endless! {
+           Instant::now() + Duration::from_secs(1), 1,
             async {
                 println!("Hi,{}",a);
                 a= a+1;
@@ -47,7 +51,7 @@ pub mod tests {
                 println!("stop,{}",a);
                 a= a+1;
             }
-        };
+        }
         println!("Hello, world!{}", a);
     }
 }
