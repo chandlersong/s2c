@@ -115,7 +115,7 @@ pub mod tests {
     #[tokio::test]
     async fn test_loop_marco() {
         let mut a = 1;
-        async_endless! {
+        let _ = async_endless! {
             Instant::now() + Duration::from_millis(10),
             Duration::from_millis(100),
             async {
@@ -136,7 +136,7 @@ pub mod tests {
     async fn test_manually_stop() {
         let value = Arc::new(Mutex::new(1));
         let clone = value.clone();
-        async_endless! {
+        let _ = async_endless! {
             Instant::now() + Duration::from_millis(10),
             Duration::from_millis(50),
             async {
@@ -155,7 +155,7 @@ pub mod tests {
         let value = Arc::new(Mutex::new(1));
         let clone = value.clone();
         let (tx, mut rx) = broadcast::channel(1);
-        endless_select!(
+        let _ = endless_select!(
                 num = rx.recv() => {
                    *clone.lock().unwrap() = num.unwrap();
                 }
