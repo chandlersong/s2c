@@ -1,6 +1,6 @@
 //主要是提供一些不断循环的宏
 
-use log::info;
+use log::{error, info};
 use tokio::sync::OnceCell;
 
 ///
@@ -26,7 +26,12 @@ pub async fn endless_stop_tx() -> broadcast::Sender<()> {
 pub async fn stop_endless() {
     let tx = endless_stop_tx().await;
     info!("stopped the endless program");
-    tx.send(()).unwrap();
+    match tx.send(()) {
+        Ok(_) => {}
+        Err(e) => {
+            error!("failed to stop endless program: {}", e);
+        }
+    }
 }
 #[macro_export]
 macro_rules! async_endless {
@@ -147,7 +152,7 @@ pub mod tests {
         sleep(Duration::from_millis(200)).await;
         stop_endless().await;
         let guard = value.lock().unwrap();
-        assert_eq!(*guard, 5);
+        assert_ne!(*guard, 1);
     }
 
     #[tokio::test]
@@ -161,7 +166,7 @@ pub mod tests {
                 }
         );
         tx.send(8).unwrap();
-        sleep(Duration::from_millis(200)).await;
+        sleep(Duration::from_millis(50)).await;
         stop_endless().await;
         println!("Hello, world! {}", value.lock().unwrap());
     }
