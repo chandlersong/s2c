@@ -4,6 +4,8 @@ use braavos::binance::bn_dashboard::get_spot_client;
 use braavos::binance::bn_models::bin::{SpotDepth, Trade};
 use log::info;
 use maester::database::rolling_kv_db::BatchData;
+use maester::endless_select;
+use maester::tools::endless::endless_stop_tx;
 use prost::Message;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -31,10 +33,8 @@ pub async fn subscribe_one_trade(symbol: &str) {
     let mut ws_client = get_spot_client().await;
     let mut rx = ws_client.subscribe_trade(symbol).await;
     let trade_pair = symbol.to_string();
-    tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                trade_raw_data = rx.recv() => {
+    let _ = endless_select!(
+                 trade_raw_data = rx.recv() => {
                      match trade_raw_data {
                         Ok(trade_raw) => {
                              let mut buf = Vec::new();
@@ -52,13 +52,7 @@ pub async fn subscribe_one_trade(symbol: &str) {
                         }
                     }
                 }
-                _ = tokio::signal::ctrl_c() => {
-                    info!("stop monitor trade:{}", trade_pair);
-                    break;
-                }
-            }
-        }
-    });
+        );
 }
 
 pub async fn start_mini_ticker() {
@@ -117,9 +111,7 @@ pub async fn subscribe_one_depth(depth_config: &DepthConfiguration) {
                                            depth_config.level,
                                            depth_config.frequency).await;
     let trade_pair = symbol.to_string();
-    tokio::spawn(async move {
-        loop {
-            tokio::select! {
+    let _ = endless_select!(
                 depth_data = rx.recv() => {
                      match depth_data {
                         Ok(depth) => {
@@ -131,18 +123,11 @@ pub async fn subscribe_one_depth(depth_config: &DepthConfiguration) {
                               let mut data:BatchData = HashMap::new();
                               data.insert(key, buf);
                               db_tx.send(data).await.unwrap();
-
                         }
                          _ => {
 
                         }
                     }
                 }
-                _ = tokio::signal::ctrl_c() => {
-                    info!("stop monitor trade:{}", trade_pair);
-                    break;
-                }
-            }
-        }
-    });
+        );
 }

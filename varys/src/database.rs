@@ -2,12 +2,12 @@ use crate::robots::OPS_ROBOTS;
 use crate::settings::VARYS_CONFIG;
 use log::info;
 use maester::database::rolling_kv_db::{BatchData, RollingKVDB, RollingKVDBConfiguration, RollingKvDBReport};
-use maester::tools::time::instant_to_datetime;
+use maester::tools::endless::endless_stop_tx;
+use maester::{async_endless, endless_select};
 use std::path::PathBuf;
 use std::time::Duration;
-use tokio::signal;
 use tokio::sync::{mpsc, OnceCell};
-use tokio::time::{sleep_until, Instant};
+use tokio::time::Instant;
 
 ///
 /// 这里会设计有两类数据库。
@@ -33,43 +33,33 @@ async fn initial_db() -> mpsc::Sender<BatchData> {
     let (persist_tx, mut persist_rx) = mpsc::channel(1000);
     let mut db = RollingKVDB::new(config, None).await;
     let report = db.get_report().await;
-    tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                 _ = signal::ctrl_c() => {
-                        db.close().await;
-                        info!("stop writing db");
-                    }
-                record = persist_rx.recv()=> {
-                        if let Some(kv) = record {
-                              match db.write_batch(kv){
-                                    Ok(_) => {}
-                                    Err(_) => {}
-                              }}
-                        
-                    }
-                }
-        }
-    });
-    tokio::spawn(async move {
-        let mut start = Instant::now() + Duration::from_secs(60);
-        info!("first sending to telegram at  {:?}",instant_to_datetime(start));
-        loop {
-            let sleep_seconds = ONE_HOUR_SECONDS;
-            tokio::select! {
-                 _ = signal::ctrl_c() => {
-                        info!("database analysis stop");
-                    }
-                _ = sleep_until(start) => {
-                        let number = report.lock().unwrap().record_count();
-                        *report.lock().unwrap() = RollingKvDBReport::default();
-                        let message = format!("过去一小时，平均每秒存入{}条数据",number/sleep_seconds);
-                        let _ = &OPS_ROBOTS.send(&message).await;
-                    }
-                }
-            start = start + Duration::from_secs(sleep_seconds as u64);
-        }
-    });
+    endless_select!(
+            record = persist_rx.recv()=> {
+                if let Some(kv) = record {
+                      match db.write_batch(kv){
+                            Ok(_) => {}
+                            Err(_) => {}
+                      }}
+                },
+            async {
+                    db.close().await;
+                    info!("stop writing db");
+             }
+        );
+
+    let _ = async_endless! {
+            Instant::now() + Duration::from_secs(60),
+            Duration::from_secs(60*60),
+            async {
+               let number = report.lock().unwrap().record_count();
+                *report.lock().unwrap() = RollingKvDBReport::default();
+                let message = format!("过去一小时，平均每秒存入{}条数据",number/ONE_HOUR_SECONDS);
+                let _ = &OPS_ROBOTS.send(&message).await;
+            },
+            async {
+                 info!("database analysis stop");
+            }
+        };
     persist_tx
 }
 

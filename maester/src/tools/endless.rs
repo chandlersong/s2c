@@ -43,6 +43,7 @@ macro_rules! async_endless {
          tokio::spawn(
              async move {
                  use tokio::signal;
+                 use tokio::time::sleep_until;
                  let mut start = $start_at.clone();
                  let mut rx = endless_stop_tx().await.subscribe();
                  loop {
@@ -112,7 +113,7 @@ pub mod tests {
     use std::time::Duration;
     use tokio::signal;
     use tokio::sync::broadcast;
-    use tokio::time::{sleep, sleep_until, Instant};
+    use tokio::time::{sleep, Instant};
 
     ///
     /// 因为这个测试是不间断的跑。所以不用没法一直测试。
