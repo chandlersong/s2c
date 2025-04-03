@@ -21,7 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let start_time = Instant::now();
     let _ = async_endless! {
             Instant::now() + Duration::from_millis(10),
-            Duration::from_millis(24 * 60 * 60),
+            Duration::from_secs(24 * 60 * 60),
             async {
                 let elapsed = start_time.elapsed();
                 info!("Running {} days at {}", elapsed.as_secs()/(60*60*24), chrono::Local::now());
