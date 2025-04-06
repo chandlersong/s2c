@@ -3,7 +3,7 @@ use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, info, trace};
 use std::error::Error;
 use std::sync::Arc;
-use tokio::sync::{broadcast, mpsc, oneshot, Notify, RwLock};
+use tokio::sync::{broadcast, mpsc, oneshot, RwLock};
 use tokio::time::{sleep, timeout, Duration};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 
@@ -32,21 +32,27 @@ pub struct WebSocketClient {
     text_message_tx: Arc<RwLock<Option<broadcast::Sender<String>>>>,
     command_tx: mpsc::Sender<(Message, oneshot::Sender<ResponseCode>)>,
     config: WebSocketConfig,
+    connected_tx: Option<broadcast::Sender<()>>,
 }
 
 impl WebSocketClient {
     pub async fn new(url: &str, config: Option<WebSocketConfig>) -> Result<Self, Box<dyn Error>> {
         let (tx, rx) = mpsc::channel::<(Message, oneshot::Sender<ResponseCode>)>(1000);
         let real_config = config.unwrap_or_default();
-        let client = WebSocketClient {
+        let mut client = WebSocketClient {
             url: url.to_string(),
             text_message_tx: Arc::new(RwLock::new(None)),
             command_tx: tx,
             config: real_config,
+            connected_tx: None,
         };
 
         client.start_connection(rx).await;
         Ok(client)
+    }
+
+    pub fn subscribe_connected(&self) -> broadcast::Receiver<()> {
+        self.connected_tx.as_ref().unwrap().subscribe()
     }
 
     pub async fn subscribe_text_message_sender(&self) -> broadcast::Receiver<String> {
@@ -59,29 +65,23 @@ impl WebSocketClient {
         rx
     }
 
-    async fn start_connection(&self, mut rx: mpsc::Receiver<(Message, oneshot::Sender<ResponseCode>)>) {
+    async fn start_connection(&mut self, mut rx: mpsc::Receiver<(Message, oneshot::Sender<ResponseCode>)>) {
         let url = self.url.clone();
         let tx = self.command_tx.clone();
         let reconnect_duration = self.config.reconnect_duration.clone();
         let text_message_tx = self.text_message_tx.clone();
-        let notify = Arc::new(Notify::new());
-
-        let notify_clone = Arc::clone(&notify);
+        let (connected_tx, _) = broadcast::channel(100);
+        self.connected_tx = Some(connected_tx.clone());
         tokio::spawn(async move {
-            let mut base_notify = Some(notify_clone);
             loop {
-                let connect_notify = base_notify.clone();
-                match Self::run_connection(&url, &text_message_tx, &tx, &mut rx, connect_notify).await {
+                match Self::run_connection(&url, &text_message_tx, &tx, &mut rx, &connected_tx).await {
                     Ok(()) => info!("WebSocket closed normally"),
                     Err(e) => error!("WebSocket error: {}", e),
                 }
-                base_notify = None;
                 info!("Reconnecting in 5 seconds...");
                 sleep(reconnect_duration).await;
             }
         });
-
-        notify.notified().await; // 等待通知
     }
 
     async fn run_connection(
@@ -89,15 +89,16 @@ impl WebSocketClient {
         text_message_tx: &TextMessageSender,
         _: &mpsc::Sender<(Message, oneshot::Sender<ResponseCode>)>, //为扩展准备。可以发送命令
         command: &mut mpsc::Receiver<(Message, oneshot::Sender<ResponseCode>)>,
-        notify: Option<Arc<Notify>>
+        notify: &broadcast::Sender<()>,
     ) -> Result<(), Box<dyn Error>> {
         let (ws_stream, _) = connect_async(url).await?;
-        if let Some(n) = notify {
-            n.notify_one();
-        }
         info!("WebSocket connected to {}", url);
         let (mut write, mut read) = ws_stream.split();
-
+        //觉得没有什么好处理的。错误也是别人没有听到。
+        match notify.send(()) {
+            Ok(_) => {}
+            Err(_) => {}
+        }
         let ping_interval = Duration::from_secs(10);
         loop {
             tokio::select! {
