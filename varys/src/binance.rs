@@ -1,4 +1,5 @@
 use crate::database::get_db_write_tx;
+use crate::robots::OPS_ROBOTS;
 use crate::settings::VARYS_CONFIG;
 use braavos::binance::bn_dashboard::get_spot_client;
 use braavos::binance::bn_models::bin::{SpotDepth, Trade};
@@ -16,6 +17,13 @@ pub async fn start_binance_job() {
     tokio::join!(start_trades(), 
                  start_mini_ticker(),
                  start_subscribe_depth());
+    let ws_client = get_spot_client().await;
+    let mut rx = ws_client.subscribe_connected().subscribe();
+    endless_select!(
+        _ = rx.recv() =>{
+            let _ = &OPS_ROBOTS.send("websocket重新连接").await;  
+        }
+    );
 }
 
 pub async fn start_trades() {

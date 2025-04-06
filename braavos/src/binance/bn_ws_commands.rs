@@ -34,7 +34,8 @@ pub struct BNSpotWSClient {
     trade_tx_map: Arc<RwLock<HashMap<String, broadcast::Sender<TradeRaw>>>>,
     depth_tx_map: Arc<RwLock<HashMap<String, broadcast::Sender<SpotDepthData>>>>,
     ws_client: WebSocketClient,
-    subscribe_item: Arc<RwLock<HashSet<String>>>
+    subscribe_item: Arc<RwLock<HashSet<String>>>,
+    connected_tx: broadcast::Sender<()>,
 }
 
 impl BNSpotWSClient {
@@ -51,6 +52,7 @@ impl BNSpotWSClient {
             depth_tx_map: Arc::new(RwLock::new(HashMap::new())),
             ws_client,
             subscribe_item: Arc::new(RwLock::new(HashSet::new())),
+            connected_tx: connected_tx.clone(),
         };
         let listener = res.clone();
 
@@ -80,6 +82,10 @@ impl BNSpotWSClient {
         );
 
         res
+    }
+
+    pub fn subscribe_connected(&self) -> broadcast::Sender<()> {
+        self.connected_tx.clone()
     }
 
     pub async fn subscribe_item(&self) {
