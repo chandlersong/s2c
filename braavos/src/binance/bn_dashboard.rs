@@ -39,7 +39,7 @@ pub async fn get_spot_mini_ticker(frequency_mill_seconds: u64) -> FrequencyDashB
         tokio::spawn(async move {
             debug!("start receive data");
             loop {
-                let ws_client = get_spot_client().await;
+                let mut ws_client = get_spot_client().await;
         
                 let mut listener = ws_client.subscribe_all_mini_ticker().await;
                 loop {

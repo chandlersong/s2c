@@ -3,6 +3,7 @@ use crate::settings::VARYS_CONFIG;
 use log::info;
 use maester::database::rolling_kv_db::{BatchData, RollingKVDB, RollingKVDBConfiguration, RollingKvDBReport};
 use maester::tools::endless::endless_stop_tx;
+use maester::tools::time::get_next_utc_hour_begin;
 use maester::{async_endless, endless_select};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -47,8 +48,9 @@ async fn initial_db() -> mpsc::Sender<BatchData> {
              }
         );
 
+    let start_time = get_next_utc_hour_begin() + Duration::from_secs(18);
     let _ = async_endless! {
-            Instant::now() + Duration::from_secs(60),
+            start_time,
             Duration::from_secs(60*60),
             async {
                let number = report.lock().unwrap().record_count();

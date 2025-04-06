@@ -32,27 +32,28 @@ pub struct WebSocketClient {
     text_message_tx: Arc<RwLock<Option<broadcast::Sender<String>>>>,
     command_tx: mpsc::Sender<(Message, oneshot::Sender<ResponseCode>)>,
     config: WebSocketConfig,
-    connected_tx: Option<broadcast::Sender<()>>,
+    connected_tx: broadcast::Sender<()>,
 }
 
 impl WebSocketClient {
     pub async fn new(url: &str, config: Option<WebSocketConfig>) -> Result<Self, Box<dyn Error>> {
         let (tx, rx) = mpsc::channel::<(Message, oneshot::Sender<ResponseCode>)>(1000);
+        let (connected_tx, _) = broadcast::channel(100);
         let real_config = config.unwrap_or_default();
-        let mut client = WebSocketClient {
+        let client = WebSocketClient {
             url: url.to_string(),
             text_message_tx: Arc::new(RwLock::new(None)),
             command_tx: tx,
             config: real_config,
-            connected_tx: None,
+            connected_tx,
         };
 
         client.start_connection(rx).await;
         Ok(client)
     }
 
-    pub fn subscribe_connected(&self) -> broadcast::Receiver<()> {
-        self.connected_tx.as_ref().unwrap().subscribe()
+    pub fn subscribe_connected(&self) -> broadcast::Sender<()> {
+        self.connected_tx.clone()
     }
 
     pub async fn subscribe_text_message_sender(&self) -> broadcast::Receiver<String> {
@@ -65,13 +66,13 @@ impl WebSocketClient {
         rx
     }
 
-    async fn start_connection(&mut self, mut rx: mpsc::Receiver<(Message, oneshot::Sender<ResponseCode>)>) {
+    async fn start_connection(&self, mut rx: mpsc::Receiver<(Message, oneshot::Sender<ResponseCode>)>) {
         let url = self.url.clone();
         let tx = self.command_tx.clone();
         let reconnect_duration = self.config.reconnect_duration.clone();
         let text_message_tx = self.text_message_tx.clone();
-        let (connected_tx, _) = broadcast::channel(100);
-        self.connected_tx = Some(connected_tx.clone());
+
+        let connected_tx = self.connected_tx.clone();
         tokio::spawn(async move {
             loop {
                 match Self::run_connection(&url, &text_message_tx, &tx, &mut rx, &connected_tx).await {

@@ -4,12 +4,15 @@ use crate::binance::bn_models::{deserialize_wx_method, serialize_wx_method, Bina
 use crate::tools::SnowyFlakeWrapper;
 use crate::websockets::WebSocketClient;
 use log::{error, info, trace};
+use maester::endless_select;
+use maester::tools::endless::endless_stop_tx;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
 use std::sync::{Arc, LazyLock};
 use tokio::sync::{broadcast, OnceCell, RwLock};
-use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite;
+use tokio_tungstenite::tungstenite;
 
 static BN_SPOT_WS_CLIENT: OnceCell<WebSocketClient> = OnceCell::const_new();
 
@@ -31,6 +34,7 @@ pub struct BNSpotWSClient {
     trade_tx_map: Arc<RwLock<HashMap<String, broadcast::Sender<TradeRaw>>>>,
     depth_tx_map: Arc<RwLock<HashMap<String, broadcast::Sender<SpotDepthData>>>>,
     ws_client: WebSocketClient,
+    subscribe_item: Arc<RwLock<HashSet<String>>>
 }
 
 impl BNSpotWSClient {
@@ -40,33 +44,51 @@ impl BNSpotWSClient {
 
     pub async fn new_with_client(ws_client: WebSocketClient) -> Self {
         let mut text_message_rx = ws_client.subscribe_text_message_sender().await;
+        let connected_tx = ws_client.subscribe_connected();
         let res = Self {
             mini_ticker_tx: Arc::new(RwLock::new(None)),
             trade_tx_map: Arc::new(RwLock::new(HashMap::new())),
             depth_tx_map: Arc::new(RwLock::new(HashMap::new())),
             ws_client,
+            subscribe_item: Arc::new(RwLock::new(HashSet::new())),
         };
         let listener = res.clone();
 
-        tokio::spawn(async move {
-            loop {
-                if let Ok(msg) = text_message_rx.recv().await {
+
+        endless_select!(
+             m = text_message_rx.recv()=>{
+                if let Ok(msg) = m{
                     match listener.handler_message(msg).await {
                         Ok(_) => {}
                         _ => {} //TODO 我没想好怎么处理。
                     };
                 }
+
             }
-        });
+        );
+
+
+        let mut connected_rx = connected_tx.subscribe();
+        _ = connected_rx.recv().await;
+        info!("spot websocket 连接成功");
+        let re_connected_client = res.clone();
+        endless_select!(
+             _ = connected_rx.recv()=>{
+                info!("连接成功，订阅信息");
+                re_connected_client.subscribe_item().await;
+            }
+        );
+
         res
     }
 
-    pub async fn subscribe_all_mini_ticker(&self) -> broadcast::Receiver<MiniTicker> {
-        if let Some(sender) = &self.mini_ticker_tx.read().await.deref(){
-            return sender.subscribe();
+    pub async fn subscribe_item(&self) {
+        info!("开始订阅");
+        let subscribe_item = &*self.subscribe_item.read().await;
+        for item in subscribe_item {
+            info!("订阅，{}", item);
         }
-
-        let params: Option<Vec<String>> = Some(vec![String::from(AllMiniTicker)]);
+        let params: Option<Vec<String>> = Some(subscribe_item.iter().cloned().collect());
         let subscribe_request = WsRequest::new(SUBSCRIBE, params);
         match self.ws_client.send(subscribe_request.to_ws_message()).await {
             Ok(_) => {}
@@ -74,6 +96,15 @@ impl BNSpotWSClient {
                 error!("Failed to subscribe to all mini ticker: {}", e);
             }
         }
+    }
+
+    pub async fn subscribe_all_mini_ticker(&mut self) -> broadcast::Receiver<MiniTicker> {
+        if let Some(sender) = &self.mini_ticker_tx.read().await.deref() {
+            return sender.subscribe();
+        }
+
+        self.subscribe_item.write().await.insert(String::from(AllMiniTicker));
+        self.subscribe_item().await;
         
         let (tx, rx) = broadcast::channel(100);
         self.mini_ticker_tx.write().await.replace(tx);
@@ -84,13 +115,11 @@ impl BNSpotWSClient {
         if let Some(sender) = self.trade_tx_map.read().await.get(symbol) {
             return sender.subscribe();
         };
+        let command = format!("{}@trade", symbol.to_lowercase());
 
-
-        let params: Option<Vec<String>> = Some(vec![
-            format!("{}@trade", symbol.to_lowercase())
-        ]);
-        let subscribe_request = WsRequest::new(SUBSCRIBE, params);
-        self.subscribe(symbol, subscribe_request).await;
+        info!("Subscribing subscribe_trade to {}", command);
+        self.subscribe_item.write().await.insert(command);
+        self.subscribe_item().await;
 
         let (tx, rx) = broadcast::channel(1000);
         self.trade_tx_map.write().await.insert(symbol.to_string(), tx.clone());
@@ -113,25 +142,14 @@ impl BNSpotWSClient {
 
      
         info!("Subscribing depth to {}", subscribe_command);
-        let params: Option<Vec<String>> = Some(vec![
-            subscribe_command
-        ]);
-        let subscribe_request = WsRequest::new(SUBSCRIBE, params);
-        self.subscribe(symbol, subscribe_request).await;
+        self.subscribe_item.write().await.insert(subscribe_command);
+        self.subscribe_item().await;
 
         let (tx, rx) = broadcast::channel(1000);
         self.depth_tx_map.write().await.insert(symbol.to_string(), tx.clone());
         rx
     }
 
-    async fn subscribe(&mut self, symbol: &str, subscribe_request: WsRequest) {
-        match self.ws_client.send(subscribe_request.to_ws_message()).await {
-            Ok(_) => {}
-            Err(e) => {
-                error!("Failed to subscribe to {} trade: {}", symbol,e);
-            }
-        }
-    }
 
     async fn handler_message(&self, text: String) -> Result<bool, String> {
         let response = serde_json::from_str(&text);
@@ -212,8 +230,8 @@ impl WsRequest {
         serde_json::to_string(self).unwrap()
     }
 
-    pub fn to_ws_message(&self) -> Message {
-        Message::text(serde_json::to_string(&self).unwrap())
+    pub fn to_ws_message(&self) -> tungstenite::protocol::Message {
+        tungstenite::protocol::Message::text(serde_json::to_string(&self).unwrap())
     }
 }
 

@@ -1,4 +1,4 @@
-use chrono::{DateTime, Datelike, Duration as ChronoDuration, TimeZone, Utc, };
+use chrono::{DateTime, Datelike, Duration as ChronoDuration, TimeZone, Timelike, Utc};
 use tokio::time::Instant;
 pub fn current_date_string() -> String {
     let now: DateTime<Utc> = Utc::now();
@@ -46,4 +46,60 @@ pub fn get_next_utc_day_begin() -> Instant {
     // 转换为 Instant
     let instant_now = Instant::now();
     instant_now + (today_end_duration - now_duration).to_std().expect("Duration out of range")
+}
+
+pub fn get_next_utc_hour_begin() -> Instant {
+    let now = Utc::now();
+    // 计算今天的 00:00 UTC
+    let current_hour = Utc
+        .with_ymd_and_hms(now.year(), now.month(), now.day(), now.hour(), 0, 0)
+        .single()
+        .expect("Failed to create UTC midnight");
+
+    // 计算今天的 24:00（即下一天的 00:00）
+    let today_end = current_hour + ChronoDuration::hours(1);
+
+    // 使用 UNIX_EPOCH 作为基准
+    let unix_epoch = chrono::DateTime::<Utc>::UNIX_EPOCH;
+
+    // 计算时间差
+    let now_duration = now - unix_epoch;
+    let today_end_duration = today_end - unix_epoch;
+
+    // 转换为 Instant
+    let instant_now = Instant::now();
+    instant_now + (today_end_duration - now_duration).to_std().expect("Duration out of range")
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::tools::time::{get_next_utc_day_begin, get_next_utc_hour_begin, instant_to_datetime};
+    use chrono::Timelike;
+    use tokio::time::Instant;
+
+    #[test]
+    pub fn test_get_next_utc_day_begin() {
+        let now = Instant::now();
+        let actual = get_next_utc_day_begin();
+        let duration = actual - now;
+        assert!(duration.as_secs() < 60 * 60 * 24);
+        assert!(actual > now);
+        let datetime = instant_to_datetime(actual).to_utc();
+        assert_eq!(datetime.hour(), 0);
+        assert_eq!(datetime.minute(), 0);
+        assert_eq!(datetime.second(), 0);
+    }
+
+    #[test]
+    pub fn test_get_next_utc_hour_begin() {
+        let now = Instant::now();
+        let actual = get_next_utc_hour_begin();
+        let duration = actual - now;
+        assert!(duration.as_secs() < 60 * 60);
+        assert!(actual > now);
+        let datetime = instant_to_datetime(actual).to_utc();
+        println!("next hour is {}", datetime);
+        assert_eq!(datetime.minute(), 0);
+        assert_eq!(datetime.second(), 0);
+    }
 }
