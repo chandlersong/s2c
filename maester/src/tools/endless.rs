@@ -72,7 +72,7 @@ macro_rules! async_endless {
 }
 
 ///
-/// 启动一个新的新的县城。然后不停的处理
+/// 启动一个新的新的线程。然后不停的处理
 #[macro_export]
 macro_rules! endless_select {
     (

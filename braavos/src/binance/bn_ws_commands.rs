@@ -5,9 +5,10 @@ use crate::tools::SnowyFlakeWrapper;
 use crate::websockets::WebSocketClient;
 use log::{error, info, trace};
 use maester::endless_select;
+use maester::tools::bus::Bus;
 use maester::tools::endless::endless_stop_tx;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::ops::Deref;
 use std::sync::{Arc, LazyLock};
 use tokio::sync::{broadcast, OnceCell, RwLock};
@@ -31,8 +32,8 @@ const SF: LazyLock<SnowyFlakeWrapper> = LazyLock::new(|| SnowyFlakeWrapper::new(
 #[derive(Clone)]
 pub struct BNSpotWSClient {
     mini_ticker_tx: Arc<RwLock<Option<broadcast::Sender<MiniTicker>>>>,
-    trade_tx_map: Arc<RwLock<HashMap<String, broadcast::Sender<TradeRaw>>>>,
-    depth_tx_map: Arc<RwLock<HashMap<String, broadcast::Sender<SpotDepthData>>>>,
+    trade_bus: Arc<Bus<TradeRaw>>,
+    depth_bus: Arc<Bus<SpotDepthData>>,
     ws_client: WebSocketClient,
     subscribe_item: Arc<RwLock<HashSet<String>>>,
     connected_tx: broadcast::Sender<()>,
@@ -48,8 +49,8 @@ impl BNSpotWSClient {
         let connected_tx = ws_client.subscribe_connected();
         let res = Self {
             mini_ticker_tx: Arc::new(RwLock::new(None)),
-            trade_tx_map: Arc::new(RwLock::new(HashMap::new())),
-            depth_tx_map: Arc::new(RwLock::new(HashMap::new())),
+            trade_bus: Bus::new(),
+            depth_bus: Bus::new(),
             ws_client,
             subscribe_item: Arc::new(RwLock::new(HashSet::new())),
             connected_tx: connected_tx.clone(),
@@ -118,42 +119,34 @@ impl BNSpotWSClient {
     }
 
     pub async fn subscribe_trade(&mut self, symbol: &str) -> broadcast::Receiver<TradeRaw> {
-        if let Some(sender) = self.trade_tx_map.read().await.get(symbol) {
-            return sender.subscribe();
+        let subscribe_item = self.trade_bus.subscribe(symbol).await;
+        if subscribe_item.is_new {
+            let command = format!("{}@trade", symbol.to_lowercase());
+
+            info!("Subscribing subscribe_trade to {}", command);
+            self.subscribe_item.write().await.insert(command);
+            self.subscribe_item().await;
         };
-        let command = format!("{}@trade", symbol.to_lowercase());
-
-        info!("Subscribing subscribe_trade to {}", command);
-        self.subscribe_item.write().await.insert(command);
-        self.subscribe_item().await;
-
-        let (tx, rx) = broadcast::channel(1000);
-        self.trade_tx_map.write().await.insert(symbol.to_string(), tx.clone());
-        rx
+        subscribe_item.rx
     }
 
 
     ///
     /// frequency只能是100或者1000
     pub async fn subscribe_depth(&mut self, symbol: &str, level: u8, frequency: u16) -> broadcast::Receiver<SpotDepthData> {
-        if let Some(sender) = self.depth_tx_map.read().await.get(symbol) {
-            return sender.subscribe();
+        let subscribe_item = self.depth_bus.subscribe(symbol).await;
+        if subscribe_item.is_new {
+            let subscribe_command;
+            if frequency == 1000 {
+                subscribe_command = format!("{}@depth{}", symbol.to_lowercase(), level);
+            } else {
+                subscribe_command = format!("{}@depth{}@100ms", symbol.to_lowercase(), level);
+            }
+            info!("Subscribing depth to {}", subscribe_command);
+            self.subscribe_item.write().await.insert(subscribe_command);
+            self.subscribe_item().await;
         };
-        let subscribe_command;
-        if frequency ==1000{
-            subscribe_command = format!("{}@depth{}", symbol.to_lowercase(), level);
-        }else {
-            subscribe_command = format!("{}@depth{}@100ms", symbol.to_lowercase(), level);
-        }
-
-     
-        info!("Subscribing depth to {}", subscribe_command);
-        self.subscribe_item.write().await.insert(subscribe_command);
-        self.subscribe_item().await;
-
-        let (tx, rx) = broadcast::channel(1000);
-        self.depth_tx_map.write().await.insert(symbol.to_string(), tx.clone());
-        rx
+        subscribe_item.rx
     }
 
 
@@ -165,9 +158,7 @@ impl BNSpotWSClient {
                 match entity {
                     WsSpotResponse::Depth(v) => {
                         trace!("{:?} at {:?}", v.symbol,v.event_time);
-                        if let Some(sender) = self.depth_tx_map.read().await.get(&v.symbol) {
-                            sender.send(v).unwrap();
-                        }
+                        self.depth_bus.publish(&v.symbol, v.clone()).await;
                     }
                     WsSpotResponse::StreamAllMiniTicker(v) => {
                         if let Some(sender) = self.mini_ticker_tx.read().await.as_ref() {
@@ -184,9 +175,7 @@ impl BNSpotWSClient {
                         }
                     }
                     WsSpotResponse::Trade(v) => {
-                        if let Some(sender) = self.trade_tx_map.read().await.get(&v.symbol) {
-                            sender.send(v).unwrap();
-                        }
+                        self.trade_bus.publish(&v.symbol, v.clone()).await;
                     }
                     WsSpotResponse::CommonResponse(v) => {
                         trace!("receive common result {:?}", v.result);
