@@ -1,5 +1,5 @@
-use braavos::binance::bn_models::{BinanceBase, BinancePath, CommandInfo, NormalAPI};
-use braavos::settings::BRAAVOS_SETTING;
+use braavos::binance::bn_restful_commands::execute_ping;
+use braavos::http_client::init_http_client;
 
 ///
 /// 这个example的主要作用是
@@ -7,11 +7,14 @@ use braavos::settings::BRAAVOS_SETTING;
 
 #[tokio::main]
 async fn main() {
+    let proxy = Option::from("http://localhost:7891");
+    init_http_client(proxy);
+    let _ = execute_ping();
 
-    let setting = &BRAAVOS_SETTING;
-    let account = setting.get_account(0);
-    let account_query = account.clone();
-    let info = CommandInfo::new(BinanceBase::Normal, BinancePath::Normal(NormalAPI::PingAPI));
+
+    // let get = GetCommand::<EmptyObject, EmptyObject> { phantom: Default::default() };
+    // let x = get.execute(info, None, None).await.unwrap();
+    // assert_eq!(x, EmptyObject {})
 
 
     // let result = rate_limited!(1, 42).await;

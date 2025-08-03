@@ -1,47 +1,33 @@
-use crate::accounts::{AccountReader, RawDataQuery};
-use crate::binance::bn_dashboard::get_spot_mini_ticker;
-use crate::binance::bn_models::{BinanceBase, BinancePath, CommandInfo, MiniTicker, NormalAPI, PMBalance, PMRawAccountData, PmAPI, SecurityInfo, TimeStampRequest, UMSwapPosition};
-use crate::cache::{DashBoard, FrequencyDashBoard};
+use crate::binance::bn_models::{BinanceBase, BinancePath, CommandInfo, NormalAPI, SecurityInfo};
 use crate::errors::BraavosError;
-use crate::models::{AccountSummary, EmptyObject, SpotPosition, SpotSummary, SwapPosition, SwapSummary};
-use crate::settings::{Account, BRAAVOS_SETTING};
+use crate::http_client::HTTP_CLIENT;
+use crate::models::EmptyObject;
 use crate::tools::sign_hmac;
-use async_trait::async_trait;
 use governor::clock::DefaultClock;
 use governor::state::{InMemoryState, NotKeyed};
 use governor::{Quota, RateLimiter};
-use log::{debug, error, trace, warn};
+use log::{error, trace};
 use nonzero_ext::nonzero;
 use reqwest::{RequestBuilder, Url};
-use rust_decimal::prelude::FromPrimitive;
-use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
 use serde::de::DeserializeOwned;
 use serde_json::{Error as JsonError, Value};
 use std::fmt::Display;
-use std::marker::PhantomData;
-use std::sync::{mpsc, LazyLock, OnceLock};
-use std::thread;
-use tokio::join;
+use std::sync::{LazyLock, OnceLock};
 
-static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
-    init_client()
-});
+pub(crate) static BN_SECURITY: OnceLock<SecurityInfo> = OnceLock::new();
 
+pub fn init_bn_security(api_key: String, api_secret: String) -> &'static SecurityInfo {
+    BN_SECURITY.get_or_init(|| SecurityInfo {
+        api_key,
+        api_secret,
+    })
+}
 /// 全局 RateLimiter，使用 OnceLock 延迟初始化
 static RATE_LIMITER: LazyLock<RateLimiter<NotKeyed, InMemoryState, DefaultClock>> =  LazyLock::new(|| {
     get_rate_limiter()
 });
 
-fn init_client() -> reqwest::Client {
-    let builder = reqwest::Client::builder();
-    let proxy_builder = match &BRAAVOS_SETTING.proxy {
-        Some(val) => { builder.proxy(reqwest::Proxy::https(val).unwrap()) }
-        None => { builder }
-    };
 
-    proxy_builder.build().unwrap()
-}
 
 /// 获取 RateLimiter 的静态引用
 fn get_rate_limiter() -> RateLimiter<NotKeyed, InMemoryState, DefaultClock> {
@@ -52,155 +38,104 @@ fn get_rate_limiter() -> RateLimiter<NotKeyed, InMemoryState, DefaultClock> {
 }
 
 
-impl CommandInfo<'_> {
-    pub fn new(base: BinanceBase, path: BinancePath) -> CommandInfo<'static> {
-        CommandInfo {
-            base,
-            path,
-            security: None,
-            client: &CLIENT,
-        }
+static PING_COMMAND: LazyLock<CommandInfo> = LazyLock::new(|| {
+    CommandInfo {
+        base: BinanceBase::Normal,
+        path: BinancePath::Normal(NormalAPI::PingAPI),
+        has_security: false,
+        weight: 0,
     }
+});
 
-    pub fn new_with_security(base: BinanceBase, path: BinancePath, api_key: &str, api_security: &str) -> CommandInfo<'static> {
-        CommandInfo {
-            base,
-            path,
-            security: Some(SecurityInfo {
-                api_key: String::from(api_key),
-                api_secret: String::from(api_security),
-            }),
-            client: &CLIENT,
-        }
-    }
-}
+
+
+
+
 pub async fn execute_ping() -> Result<(), BraavosError> {
-    let info = CommandInfo::new(BinanceBase::Normal, BinancePath::Normal(NormalAPI::PingAPI));
-
-    let get = GetCommand::<EmptyObject, EmptyObject> { phantom: Default::default() };
-    let _ = get.execute(info, None, None).await?;
+    let _ = execute_bn_get::<EmptyObject, EmptyObject>(&PING_COMMAND, None).await?;
     Ok(())
 }
 
-
-
-
-
-
-pub struct GetCommand<T: Display, U: DeserializeOwned> {
-    pub(crate) phantom: PhantomData<(T, U)>,
-}
-
-impl<T: Display, U: DeserializeOwned> GetCommand<T, U> {
-    pub fn new() -> GetCommand<T, U> {
-        GetCommand {
-            phantom: Default::default()
-        }
-    }
-
-    pub async fn execute(&self, info: CommandInfo<'_>, param: Option<T>, _: Option<Value>) -> Result<U, BraavosError> {
-        let request = create_request_with_param_and_security(&info, param,|url| info.client.get(url));
-        let res = request.send().await?;
-        trace!("Response: {:?} {}", res.version(), res.status());
-        let body = res.text().await?;
-        trace!("body:{}",&body);
-        let result: Result<U, JsonError> = serde_json::from_str(&body);
-        match result {
-            Ok(resp1) => Ok(resp1),
-            Err(_) => {
-                error!("binance error response,{}",&body);
-                Err(BraavosError::new(body))
-            }
+pub async fn execute_bn_get<T: Display, U: DeserializeOwned>(info: &CommandInfo, param: Option<T>) -> Result<U, BraavosError> {
+    let client = HTTP_CLIENT.get().ok_or(BraavosError::new("客户端没有初始化"))?;
+    let request = create_request_with_param_and_security(info, param, |url| client.get(url))?;
+    let res = request.send().await?;
+    trace!("Response: {:?} {}", res.version(), res.status());
+    let body = res.text().await?;
+    trace!("body:{}",&body);
+    let result: Result<U, JsonError> = serde_json::from_str(&body);
+    match result {
+        Ok(resp1) => Ok(resp1),
+        Err(_) => {
+            error!("binance error response,{}",&body);
+            Err(BraavosError::new(&body))
         }
     }
 }
 
-
-pub struct PostCommand<T: Display, U: DeserializeOwned> {
-    pub phantom: PhantomData<(T, U)>,
-}
-
-impl<T: Display, U: DeserializeOwned> PostCommand<T, U> {
-    pub fn new() -> PostCommand<T, U> {
-        PostCommand {
-            phantom: Default::default()
+pub async fn execute_bn_post<T: Display, U: DeserializeOwned>(info: &CommandInfo, param: Option<T>, body: Option<Value>) -> Result<U, BraavosError> {
+    let client = HTTP_CLIENT.get().ok_or(BraavosError::new("客户端没有初始化"))?;
+    let request_with_security = create_request_with_param_and_security(info, param, |url| client.post(url))?;
+    let request_with_body = match body {
+        None => {
+            request_with_security
         }
-    }
-
-    pub async fn execute(&self, info: CommandInfo<'_>, param: Option<T>, body: Option<Value>) -> Result<U, BraavosError> {
-        let request_with_security = create_request_with_param_and_security(&info, param,|url| info.client.post(url));
-        let request_with_body = match body {
-            None => {
-                request_with_security
-            }
-            Some(body_json) => {
-                request_with_security.json(&body_json)
-            }
-        };
-        let res = request_with_body.send().await?;
-        trace!("Response: {:?} {}", res.version(), res.status());
-        let body = res.text().await?;
-        trace!("body:{}",&body);
-        let result: Result<U, JsonError> = serde_json::from_str(&body);
-        match result {
-            Ok(resp1) => Ok(resp1),
-            Err(_) => {
-                error!("binance error response,{}",&body);
-                Err(BraavosError::new(body))
-            }
+        Some(body_json) => {
+            request_with_security.json(&body_json)
+        }
+    };
+    let res = request_with_body.send().await?;
+    trace!("Response: {:?} {}", res.version(), res.status());
+    let body = res.text().await?;
+    trace!("body:{}",&body);
+    let result: Result<U, JsonError> = serde_json::from_str(&body);
+    match result {
+        Ok(resp1) => Ok(resp1),
+        Err(_) => {
+            error!("binance error response,{}",&body);
+            Err(BraavosError::new(&body))
         }
     }
 }
 
 
-pub struct PutCommand<T: Display, U: DeserializeOwned> {
-    pub phantom: PhantomData<(T, U)>,
-}
-
-impl<T: Display, U: DeserializeOwned> PutCommand<T, U> {
-    pub fn new() -> PutCommand<T, U> {
-        PutCommand {
-            phantom: Default::default()
+pub async fn execute_bn_put<T: Display, U: DeserializeOwned>(info: &CommandInfo, param: Option<T>, body: Option<Value>) -> Result<U, BraavosError> {
+    let client = HTTP_CLIENT.get().ok_or(BraavosError::new("客户端没有初始化"))?;
+    let request_with_security = create_request_with_param_and_security(info, param, |url| client.put(url))?;
+    let request_with_body = match body {
+        None => {
+            request_with_security
         }
-    }
-
-    pub async fn execute(&self, info: CommandInfo<'_>, param: Option<T>, body: Option<Value>) -> Result<U, BraavosError> {
-        let request_with_security = create_request_with_param_and_security(&info, param, |url| info.client.put(url));
-        let request_with_body = match body {
-            None => {
-                request_with_security
-            }
-            Some(body_json) => {
-                request_with_security.json(&body_json)
-            }
-        };
-        let res = request_with_body.send().await?;
-        trace!("Response: {:?} {}", res.version(), res.status());
-        let body = res.text().await?;
-        trace!("body:{}",&body);
-        let result: Result<U, JsonError> = serde_json::from_str(&body);
-        match result {
-            Ok(resp1) => Ok(resp1),
-            Err(_) => {
-                error!("binance error response,{}",&body);
-                Err(BraavosError::new(body))
-            }
+        Some(body_json) => {
+            request_with_security.json(&body_json)
+        }
+    };
+    let res = request_with_body.send().await?;
+    trace!("Response: {:?} {}", res.version(), res.status());
+    let body = res.text().await?;
+    trace!("body:{}",&body);
+    let result: Result<U, JsonError> = serde_json::from_str(&body);
+    match result {
+        Ok(resp1) => Ok(resp1),
+        Err(_) => {
+            error!("binance error response,{}",&body);
+            Err(BraavosError::new(&body))
         }
     }
 }
 
-fn create_request_with_param_and_security<T: Display, F>(info: &CommandInfo, param: Option<T>, method: F) -> RequestBuilder
+fn create_request_with_param_and_security<T: Display, F>(info: &CommandInfo, param: Option<T>, method: F) -> Result<RequestBuilder, BraavosError>
 where
     F: Fn(Url) -> RequestBuilder,
 {
     let mut url = Url::parse(&String::from(info.base.clone())).expect("Invalid base URL");
     url.set_path(&String::from(&String::from(info.path.clone())));
-
+    let security = BN_SECURITY.get().ok_or(BraavosError::new("没有配置用户信息"))?;
     param.map(|request| {
         let query_param = format!("{}", request);
-        let real_param = match &info.security {
-            None => { query_param }
-            Some(security) => {
+        let real_param = match info.has_security {
+            false => { query_param }
+            true => {
                 let signature = sign_hmac(&query_param, &security.api_secret).unwrap();
                 format!("{query_param}&signature={signature}")
             }
@@ -209,491 +144,25 @@ where
         url.set_query(Some(&real_param));
     });
     let request_builder = method(url);
-    let request_with_security = match &info.security {
-        None => {
+    let request_with_security = match info.has_security {
+        false => {
             request_builder
         }
-        Some(security) => {
+        true => {
             request_builder.header(
                 "X-MBX-APIKEY", &security.api_key,
             )
         }
     };
-    request_with_security
+    Ok(request_with_security)
 }
 
-pub struct PMRawDataQuery {}
-
-impl RawDataQuery<PMRawAccountData> for PMRawDataQuery {
-    async fn query_raw_data(&self, account: &Account) -> Result<PMRawAccountData, BraavosError> {
-        let swap_info = CommandInfo::new_with_security(BinanceBase::PortfolioMargin,
-                                                       BinancePath::PAPI(PmAPI::SwapPositionAPI),
-                                                       &account.api_key,
-                                                       &account.secret);
-
-        let pm_acc_balance_info = CommandInfo::new_with_security(BinanceBase::PortfolioMargin,
-                                                                 BinancePath::PAPI(PmAPI::BalanceAPI),
-                                                                 &account.api_key,
-                                                                 &account.secret);
-
-        let acc_balance_command = GetCommand::<TimeStampRequest, Vec<PMBalance>> { phantom: Default::default() };
-        let swap_position_command = GetCommand::<TimeStampRequest, Vec<UMSwapPosition>> { phantom: Default::default() };
 
 
-        let (acc_position_res, um_swap_position_res)
-            = join!(
-                acc_balance_command.execute(pm_acc_balance_info, Some(Default::default()),None),
-                swap_position_command.execute(swap_info,Some(Default::default()),None)
-
-        );
-
-
-        let account_balance = acc_position_res?;
-        let um_swap_position = um_swap_position_res?;
-
-
-        Ok(PMRawAccountData {
-            account_balance,
-            um_swap_position,
-        })
-    }
-}
-
-///
-/// 读取统一账户的账户信息的工具。
-pub struct PMAccountReader {
-    pub account: Account,
-    pub spot_ticker: FrequencyDashBoard<MiniTicker>
-}
-
-macro_rules! update_balances {
-    ($b:expr, $dash_board:expr, $total_balance:expr, $negative_balance:expr, $swap_pnl:expr, $spot_asserts:expr) => {
-        if let Some(spot_value) = cal_equity($b, $dash_board).await {
-            $total_balance += spot_value.total_balance;
-            $negative_balance += spot_value.negative_balance;
-            $swap_pnl += spot_value.swap_pnl;
-            $spot_asserts.push(spot_value);
-        }
-    };
-}
-
-impl PMAccountReader {
-    pub async fn new(account: Account) -> PMAccountReader {
-        let spot_ticker = get_spot_mini_ticker(1000).await;
-        PMAccountReader { account, spot_ticker }
-    }
-
-    ///
-
-    async fn cal_account_summary(&self, acc_position: &Vec<PMBalance>, um_swap: SwapSummary) -> AccountSummary {
-        let mut swap_pnl = dec!(0);
-        let mut total_balance = dec!(0); //cross_margin_free
-        let mut negative_balance = dec!(0);
-        let mut usdt_equity = dec!(0);
-        let mut spot_asserts: Vec<SpotPosition> = vec![];
-
-        // 这里有计算现货
-        for b in acc_position {
-            swap_pnl = swap_pnl + b.um_unrealized_pnl + b.cm_unrealized_pnl;
-            //TODO 加入资金费率的过滤
-            match b.asset.as_str() {
-                "USDT" => {  //swap如果有负债的话，USDT就不计算了。
-                    let mut swap_usdt = if b.cm_wallet_balance > dec!(0) { b.cm_wallet_balance } else { dec!(0) };
-                    swap_usdt = if b.um_wallet_balance > dec!(0) { swap_usdt + b.um_wallet_balance } else { swap_usdt };
-                    usdt_equity = b.cross_margin_free + swap_usdt;
-
-
-                    total_balance = total_balance + b.total_wallet_balance;
-                    negative_balance = negative_balance + b.negative_balance;
-                }
-                "BNB" => {
-                    if !self.account.burning_free {
-                        update_balances!(b,&self.spot_ticker, total_balance, negative_balance, swap_pnl, spot_asserts);
-                    }
-                }
-                _ => {
-                    update_balances!(b,&self.spot_ticker, total_balance, negative_balance, swap_pnl, spot_asserts);
-                }
-            }
-        }
-
-        let account_pnl = swap_pnl;
-        let account_equity = total_balance + swap_pnl;
-        let spot_summary = SpotSummary{
-            equity: total_balance,
-            positions: spot_asserts,
-        };
-        AccountSummary {
-            usdt_equity,
-            negative_balance,
-            account_pnl,
-            account_equity,
-            spot_summary,
-            um_swap_summary: um_swap,
-        }
-    }
-
-    fn um_swap_balance(&self, swap_position: &Vec<UMSwapPosition>) -> SwapSummary {
-        let fra_symbol: Vec<String> = match &self.account.funding_rate_arbitrage {
-            None => { vec![] }
-            Some(fra) => { fra.iter().map(|x| format!("{}USDT", x)).collect() }
-        };
-        let mut balance = dec!(0);
-        let mut short_balance = dec!(0);
-        let mut long_balance = dec!(0);
-        let mut pnl = dec!(0);
-        let mut long_pnl = dec!(0);
-        let mut short_pnl = dec!(0);
-        let mut fra_pnl = dec!(0);
-
-        let mut positions: Vec<SwapPosition> = vec![];
-        for swap in swap_position {
-            if fra_symbol.contains(&swap.symbol) {
-                fra_pnl = fra_pnl + swap.unrealized_profit;
-                continue;
-            }
-            trace!("symbol:{}, 名义价值：{},未实现利润{}", swap.symbol, swap.notional, swap.unrealized_profit);
-            pnl = pnl + swap.unrealized_profit;
-            if swap.position_amt > dec!(0) {
-                balance = balance + swap.notional;
-                long_balance = long_balance + swap.notional;
-                long_pnl = long_pnl + swap.unrealized_profit;
-            } else {
-                let notional = swap.notional.abs();
-                balance = balance + notional;
-                short_balance = short_balance + notional;
-                short_pnl = short_pnl + swap.unrealized_profit;
-            }
-            positions.push(SwapPosition {
-                symbol: swap.symbol.clone(),
-                cur_price: swap.mark_price,
-                avg_price: swap.entry_price,
-                pos_u: swap.notional,
-                pnl_u: swap.unrealized_profit,
-                position_amt: swap.position_amt,
-            });
-        }
-        SwapSummary {
-            long_balance,
-            long_pnl,
-            short_balance,
-            short_pnl,
-            balance,
-            pnl,
-            fra_pnl,
-            positions,
-        }
-    }
-}
-
-#[async_trait]
-impl AccountReader for PMAccountReader {
-    async fn account_balance(&self) -> Result<AccountSummary, BraavosError> {
-        let (tx, rx) = mpsc::channel();
-
-        let account = self.account.clone();
-        //从远端读取数据。
-        thread::spawn(move || {
-            let query = PMRawDataQuery {};
-            let result = tokio::runtime::Runtime::new()
-                .unwrap()
-                .block_on(query.query_raw_data(&account));
-            tx.send(result).unwrap();
-        });
-
-        //调用restful api获取信息
-        match rx.recv() {
-            Ok(result) => {
-                match result {
-                    Ok(data) => {
-                        let swap_summary = self.um_swap_balance(&data.um_swap_position);
-                        Ok(self.cal_account_summary(&data.account_balance, swap_summary).await)
-                    }
-                    Err(err) => {
-                        error!("{}", err.to_string());
-                        Err(err)
-                    }
-                }
-            }
-            Err(e) => {
-                error!("{}", e.to_string());
-                Err(BraavosError::new(e.to_string()))
-            }
-        }
-    }
-}
-
-/** cal_equity:通过balance和ticker计算几个。
-* 返回的应该是total_balance,pnl和 negative_balance
-*/
-async fn cal_equity(balance: &PMBalance, dashboard: &FrequencyDashBoard<MiniTicker>) -> Option<SpotPosition> {
-    let symbol_pair = balance.asset.clone() + "USDT";
-    debug!("symbol:{}, ", symbol_pair);
-    let mini_ticker = dashboard.get_value(symbol_pair).await;
-    if let Some(price) = mini_ticker {
-        let p = Decimal::from_f64(price.close)?;
-        let spot_equity = balance.cross_margin_free * p;  //不能进行现货交易
-        let total_balance;
-        if spot_equity < dec!(5) {
-            total_balance = dec!(0);
-        } else {
-            total_balance = balance.total_wallet_balance * p;
-        };
-
-        let negative_balance = balance.negative_balance * p;
-        let swap_pnl = balance.um_unrealized_pnl * p + balance.cm_unrealized_pnl * p;
-        trace!("{},total balance:{},pnl:{},negative balance{}",balance.asset,total_balance,swap_pnl,negative_balance);
-
-        /*
-         在计算的现货价格时候，这里其实是非常依赖实现的。
-         因为现货可以放在杠杆账户，合约的账户里面，还有锁定这些东西。
-         所以这里为了简单，就用了total。以后在处理仓位的时候，请注意。
-         */
-        Some(SpotPosition {
-            symbol: balance.asset.clone(),
-            asset_amount: balance.total_wallet_balance,
-            price: p,
-            total_balance,
-            swap_pnl,
-            negative_balance,
-        })
-    } else {
-        warn!("symbol {} not exists!!!",balance.asset);
-        None
-    }
-}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::binance::bn_models::Ticker;
-    use crate::models::EmptyObject;
-    use crate::tools::parse_test_json;
-    use log::LevelFilter;
-    use maester::tools::logs::setup_logger;
-    use moka::future::Cache;
-    use rust_decimal::prelude::ToPrimitive;
-
-    impl PMAccountReader {
-        pub async fn new_for_ut(funding_rate_arbitrage: Vec<String>, burning_bnb: bool) -> PMAccountReader {
-            let tickers: Vec<Ticker> = parse_test_json::<Vec<Ticker>>("tests/data/binance_spot_ticker.json");
-            let cache: Cache<String, MiniTicker> = Cache::new(3000);
-
-            for ticker in tickers {
-                let price = ticker.price.to_f64().unwrap();
-                let symbol = ticker.symbol.clone();
-                let mini_ticker = MiniTicker {
-                    event_type: "bbbb".to_string(),
-                    event_time: 0,
-                    symbol: symbol.clone(),
-                    close: price,
-                    open: price,
-                    high: price,
-                    low: price,
-                    volume: price,
-                    quote_volume: price,
-                };
-                cache.insert(symbol, mini_ticker).await;
-            }
-
-            let spot_ticker: FrequencyDashBoard<MiniTicker> = FrequencyDashBoard::new_for_ut(cache);
-
-            PMAccountReader {
-                account: Account {
-                    name: "".to_string(),
-                    api_key: "".to_string(),
-                    secret: "".to_string(),
-                    funding_rate_arbitrage: Some(funding_rate_arbitrage),
-                    burning_free: burning_bnb,
-                },
-                spot_ticker,
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn test_cm_swap_balance() {
-        let _ = setup_logger(Some(LevelFilter::Trace));
-        let swap_position: Vec<UMSwapPosition> = parse_test_json::<Vec<UMSwapPosition>>("tests/data/binance_papi_um_position_risk.json");
-        let calculator = PMAccountReader::new_for_ut(vec![], false).await;
-        let actual = calculator.um_swap_balance(&swap_position);
-        trace!("actual is {:?}",actual);
-        assert_eq!(dec!(904.67784156), actual.long_balance);
-        assert_eq!(dec!(26.86035050), actual.long_pnl);
-        assert_eq!(dec!(2085.39024590), actual.short_balance);
-        assert_eq!(dec!(254.90110885), actual.short_pnl);
-        assert_eq!(dec!(2990.06808746), actual.balance);
-        assert_eq!(dec!(281.76145935 ), actual.pnl);
-        assert_eq!(8, actual.positions.len())
-    }
-
-    #[tokio::test]
-    async fn test_cm_swap_balance_with_fra() {
-        let _ = setup_logger(Some(LevelFilter::Trace));
-        let swap_position: Vec<UMSwapPosition> = parse_test_json::<Vec<UMSwapPosition>>("tests/data/binance_papi_um_position_risk.json");
-        let calculator = PMAccountReader::new_for_ut(vec!["SOL".to_string(), "ETH".to_string()], false).await;
-        let actual = calculator.um_swap_balance(&swap_position);
-        trace!("actual is {:?}",actual);
-        assert_eq!(dec!(904.67784156), actual.long_balance, "long_balance错误");
-        assert_eq!(dec!(26.86035050), actual.long_pnl, "long_pnl错误");
-        assert_eq!(dec!(922.03584590), actual.short_balance, "short_balance错误");
-        assert_eq!(dec!(14.20620885), actual.short_pnl, "short_pnl错误");
-        assert_eq!(dec!(1826.71368746), actual.balance, "balance错误");
-        assert_eq!(dec!(41.06655935), actual.pnl, "pnl错误");
-        assert_eq!(dec!(240.6949 ), actual.fra_pnl, "fra_pnl错误");
-        assert_eq!(6, actual.positions.len(), "swap个数错误");
-        let swap_positions = &actual.positions;
-        let has_mew = swap_positions
-            .iter()
-            .find(|mew| mew.symbol == "MEWUSDT" &&
-                mew.position_amt == dec!(-89164.0) && mew.avg_price == dec!(0.0051803174667) &&
-                mew.cur_price == dec!(0.00512372) && mew.pnl_u == dec!(5.04645652) &&
-                mew.pos_u == dec!(-456.85137008)).is_some();
-        assert!(has_mew, "mew获取不对")
-    }
-
-    #[tokio::test]
-    async fn test_account_value() {
-        let _ = setup_logger(Some(LevelFilter::Trace));
-        let balance: Vec<PMBalance> = parse_test_json::<Vec<PMBalance>>("tests/data/binance_papi_get_balance.json");
-        let calculator = PMAccountReader::new_for_ut(vec![], false).await;
-        let actual = calculator.cal_account_summary(&balance, mock_empty_swap_summary()).await;
-        println!("{:?}", actual);
-        assert_eq!(dec!(107.15440471), actual.usdt_equity);
-        assert_eq!(dec!(1016.5653078520000000), actual.account_equity);
-        assert_eq!(dec!(-406.38234549), actual.negative_balance);
-        assert_eq!(dec!(328.75345911), actual.account_pnl);
-        assert_eq!(3, actual.spot_summary.positions.len());
-    }
-
-    fn mock_empty_swap_summary() -> SwapSummary {
-        SwapSummary {
-            long_balance: Default::default(),
-            long_pnl: Default::default(),
-            short_balance: Default::default(),
-            short_pnl: Default::default(),
-            balance: Default::default(),
-            pnl: Default::default(),
-            fra_pnl: Default::default(),
-            positions: vec![],
-        }
-    }
-
-    #[tokio::test]
-    async fn test_account_value_burn_bnb() {
-        let _ = setup_logger(Some(LevelFilter::Trace));
-        let balance: Vec<PMBalance> = parse_test_json::<Vec<PMBalance>>("tests/data/binance_papi_get_balance.json");
-        let calculator = PMAccountReader::new_for_ut(vec![], true).await;
-        let actual = calculator.cal_account_summary(&balance, mock_empty_swap_summary()).await;
-        println!("{:?}", actual);
-        assert_eq!(dec!(107.15440471), actual.usdt_equity);
-        assert_eq!(dec!(1005.86615970000000), actual.account_equity);
-        assert_eq!(dec!(-406.38234549), actual.negative_balance);
-        assert_eq!(dec!(328.75345911), actual.account_pnl);
-    }
-
-    /** `test_account_value_with_um_cm_value` 测试计算account价值的单元测试
-                     # 测试内容
-                     1. um usdt和cm usdt都有值的时候，会加上去
-                           2. 没有小于5u的过滤
-                           3. 不存在币种不回影响最后结果
-    */
-    #[tokio::test]
-    async fn test_account_value_with_um_cm_value() {
-        let _ = setup_logger(Some(LevelFilter::Trace));
-        let balance: Vec<PMBalance> = parse_test_json::<Vec<PMBalance>>("tests/data/binance_papi_get_balance_v1.json");
-        let calculator = PMAccountReader::new_for_ut(vec![], false).await;
-        let actual = calculator.cal_account_summary(&balance, mock_empty_swap_summary()).await;
-        println!("{:?}", actual);
-        assert_eq!(dec!(109.15440471), actual.usdt_equity);
-        assert_eq!(dec!(1016.5653078520000000), actual.account_equity);
-    }
 
 
-    /**
-    因为这里的方法，都是一些直接连接服务器的。所以都ignore了。需要去连接后面。
-    **/
 
-    #[ignore]
-    #[tokio::test]
-    async fn test_ping() {
-        let info = CommandInfo::new(BinanceBase::Normal, BinancePath::Normal(NormalAPI::PingAPI));
-
-        let get = GetCommand::<EmptyObject, EmptyObject> { phantom: Default::default() };
-        let x = get.execute(info, None, None).await.unwrap();
-        assert_eq!(x, EmptyObject {})
-    }
-
-
-    #[ignore]
-    #[tokio::test]
-    async fn test_pm_swap_position() {
-        let _ = setup_logger(Some(LevelFilter::Trace));
-        let setting = &BRAAVOS_SETTING;
-        let account = setting.get_account(0);
-
-        let info = CommandInfo::new_with_security(BinanceBase::PortfolioMargin,
-                                                  BinancePath::PAPI(PmAPI::SwapPositionAPI),
-                                                  &account.api_key,
-                                                  &account.secret);
-
-        let get = GetCommand::<TimeStampRequest, Vec<UMSwapPosition>> { phantom: Default::default() };
-        let positions = get.execute(info, Some(Default::default()), None).await.unwrap();
-        for p in &positions {
-            println!("symbol:{},持仓未实现盈亏:{},名义价值:{}", p.symbol, p.unrealized_profit, p.notional);
-        }
-    }
-
-    #[ignore]
-    #[tokio::test]
-    async fn test_pm_balance() {
-        let _ = setup_logger(Some(LevelFilter::Trace));
-        let setting = &BRAAVOS_SETTING;
-        let account = setting.get_account(0);
-
-        let info = CommandInfo::new_with_security(BinanceBase::PortfolioMargin,
-                                                  BinancePath::PAPI(PmAPI::BalanceAPI),
-                                                  &account.api_key,
-                                                  &account.secret);
-
-        let get = GetCommand::<TimeStampRequest, Vec<PMBalance>> { phantom: Default::default() };
-        let positions = get.execute(info, Some(Default::default()), None).await.unwrap();
-        for p in &positions {
-            println!("symbol:{}", p.asset);
-        }
-    }
-
-
-    #[ignore]
-    #[tokio::test]
-    async fn test_real_pm_balance() {
-        let _ = setup_logger(Some(LevelFilter::Trace));
-        let setting = &BRAAVOS_SETTING;
-        let calculator = PMAccountReader::new(setting.accounts[0].clone()).await;
-        let actual = calculator.account_balance().await;
-        println!("account balance:{:?}", actual)
-    }
-
-    #[ignore]
-    #[tokio::test]
-    async fn test_real_swap_balance() {
-        let _ = setup_logger(Some(LevelFilter::Trace));
-        let setting = &BRAAVOS_SETTING;
-        let account = setting.get_account(0);
-
-        let pm_acc_balance_info = CommandInfo::new_with_security(BinanceBase::PortfolioMargin,
-                                                                 BinancePath::PAPI(PmAPI::SwapPositionAPI),
-                                                                 &account.api_key,
-                                                                 &account.secret);
-
-        let um_swap_position = GetCommand::<TimeStampRequest, Vec<UMSwapPosition>> { phantom: Default::default() };
-
-
-        let swap = um_swap_position.execute(pm_acc_balance_info, Some(Default::default()), None).await.unwrap();
-
-
-        let calculator = PMAccountReader::new(account.clone()).await;
-        let actual = calculator.um_swap_balance(&swap);
-        println!("{:?}", actual)
-    }
 }

@@ -175,13 +175,13 @@ impl WebSocketClient {
             Ok(result) => {
                 match result {
                     ResponseCode::Ok => Ok(()),
-                    ResponseCode::Failed => Err(Box::new(BraavosError::new("request error".to_string()))),
-                    ResponseCode::TimedOut => Err(Box::new(BraavosError::new("request timeout error".to_string()))),
+                    ResponseCode::Failed => Err(Box::new(BraavosError::new("request error"))),
+                    ResponseCode::TimedOut => Err(Box::new(BraavosError::new("request timeout error"))),
                 }
             }
             Err(error) => {
                 error!("request error: {}", error);
-                Err(Box::new(BraavosError::new("request error".to_string())))
+                Err(Box::new(BraavosError::new("request error")))
             }
         }
     }

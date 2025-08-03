@@ -14,8 +14,8 @@ impl fmt::Display for BraavosError {
 }
 
 impl BraavosError {
-    pub fn new(message: String) -> BraavosError {
-        BraavosError { message }
+    pub fn new(message: &str) -> BraavosError {
+        BraavosError { message: message.to_string() }
     }
 }
 

@@ -331,13 +331,14 @@ pub struct SecurityInfo {
     pub api_secret: String,
 }
 
-pub struct CommandInfo<'a> {
+pub struct CommandInfo {
     pub base: BinanceBase,
     pub path: BinancePath,
-    pub security: Option<SecurityInfo>,
-    pub client: &'a reqwest::Client,
+    pub has_security: bool,
+    pub weight: i16
+    // pub security: Option<SecurityInfo>,
+    // pub client: &'a reqwest::Client,
 }
-
 
 pub struct TimeStampRequest {
     pub timestamp: UnixTimeStamp,

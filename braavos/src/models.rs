@@ -8,60 +8,6 @@ pub type UnixTimeStamp = u64;
 pub type Decimal = rust_decimal::Decimal;
 
 
-
-#[deprecated(since = "版本号", note = "移出着crate")]
-#[derive(Debug,Clone)]
-pub struct AccountSummary {
-    pub usdt_equity: Decimal,
-    pub negative_balance: Decimal,
-    pub account_pnl: Decimal,
-    pub account_equity: Decimal,
-    pub spot_summary: SpotSummary,
-    pub um_swap_summary: SwapSummary,
-}
-
-#[deprecated(since = "版本号", note = "移出着crate")]
-#[derive(Debug,Clone)]
-pub struct SwapSummary {
-    pub long_balance: Decimal,
-    pub long_pnl: Decimal,
-    pub short_balance: Decimal,
-    pub short_pnl: Decimal,
-    pub balance: Decimal,
-    pub pnl: Decimal,
-    pub fra_pnl: Decimal, //funding_rate_arbitrage
-    pub positions: Vec<SwapPosition>,
-}
-#[deprecated(since = "版本号", note = "移出着crate")]
-#[derive(Debug,Clone)]
-pub struct SwapPosition {
-    pub symbol: String,         //交易对
-    pub cur_price: Decimal,     //现在价格
-    pub avg_price: Decimal,     //成本价
-    pub pos_u: Decimal,         //持仓
-    pub pnl_u: Decimal,         //仓位
-    pub position_amt: Decimal,  //持仓数量
-}
-
-#[deprecated(since = "版本号", note = "移出着crate")]
-//Spot的汇总信息。暂时先不管那么多。
-#[derive(Debug,Clone)]
-pub struct SpotSummary {
-    pub equity: Decimal,
-    pub positions: Vec<SpotPosition>,
-}
-#[deprecated(since = "版本号", note = "移出着crate")]
-#[derive(Debug,Clone)]
-pub struct SpotPosition {
-    pub symbol: String,
-    pub asset_amount: Decimal,  //资产数量
-    pub price: Decimal,
-    pub total_balance: Decimal,
-    pub swap_pnl: Decimal,
-    pub negative_balance: Decimal,
-}
-
-
 #[derive(Debug, PartialEq, Default)]
 pub struct EmptyObject;
 
