@@ -26,14 +26,6 @@ static PING_COMMAND: LazyLock<CommandInfo> = LazyLock::new(|| {
     }
 });
 
-pub(crate) static BN_SECURITY: OnceLock<SecurityInfo> = OnceLock::new();
-
-pub fn init_bn_security(api_key: String, api_secret: String) -> &'static SecurityInfo {
-    BN_SECURITY.get_or_init(|| SecurityInfo {
-        api_key,
-        api_secret,
-    })
-}
 /// 全局 RateLimiter，使用 OnceLock 延迟初始化
 static RATE_LIMITER: OnceLock<RateLimiter<NotKeyed, InMemoryState, DefaultClock>> = OnceLock::new();
 
@@ -73,14 +65,14 @@ async fn check_rate_limit(weight: u32) -> Result<(), BraavosError> {
 }
 
 pub async fn execute_ping() -> Result<(), BraavosError> {
-    let _ = execute_bn_get::<EmptyObject, EmptyObject>(&PING_COMMAND, None).await?;
+    let _ = execute_bn_get::<EmptyObject, EmptyObject>(&PING_COMMAND, None, None).await?;
     Ok(())
 }
 
-pub async fn execute_bn_get<T: Display, U: DeserializeOwned>(info: &CommandInfo, param: Option<T>) -> Result<U, BraavosError> {
+pub async fn execute_bn_get<T: Display, U: DeserializeOwned>(info: &CommandInfo, param: Option<T>, security_info: Option<SecurityInfo>) -> Result<U, BraavosError> {
     check_rate_limit(info.weight).await?;
     let client = HTTP_CLIENT.get().ok_or(BraavosError::new("客户端没有初始化"))?;
-    let request = create_request_with_param_and_security(info, param, |url| client.get(url))?;
+    let request = create_request_with_param_and_security(info, param, |url| client.get(url), security_info)?;
     let res = request.send().await?;
     trace!("Response: {:?} {}", res.version(), res.status());
     let body = res.text().await?;
@@ -95,10 +87,10 @@ pub async fn execute_bn_get<T: Display, U: DeserializeOwned>(info: &CommandInfo,
     }
 }
 
-pub async fn execute_bn_post<T: Display, U: DeserializeOwned>(info: &CommandInfo, param: Option<T>, body: Option<Value>) -> Result<U, BraavosError> {
+pub async fn execute_bn_post<T: Display, U: DeserializeOwned>(info: &CommandInfo, param: Option<T>, body: Option<Value>, security_info: Option<SecurityInfo>) -> Result<U, BraavosError> {
     check_rate_limit(info.weight).await?;
     let client = HTTP_CLIENT.get().ok_or(BraavosError::new("客户端没有初始化"))?;
-    let request_with_security = create_request_with_param_and_security(info, param, |url| client.post(url))?;
+    let request_with_security = create_request_with_param_and_security(info, param, |url| client.post(url), security_info)?;
     let request_with_body = match body {
         None => {
             request_with_security
@@ -122,10 +114,10 @@ pub async fn execute_bn_post<T: Display, U: DeserializeOwned>(info: &CommandInfo
 }
 
 
-pub async fn execute_bn_put<T: Display, U: DeserializeOwned>(info: &CommandInfo, param: Option<T>, body: Option<Value>) -> Result<U, BraavosError> {
+pub async fn execute_bn_put<T: Display, U: DeserializeOwned>(info: &CommandInfo, param: Option<T>, body: Option<Value>, security_info: Option<SecurityInfo>) -> Result<U, BraavosError> {
     check_rate_limit(info.weight).await?;
     let client = HTTP_CLIENT.get().ok_or(BraavosError::new("客户端没有初始化"))?;
-    let request_with_security = create_request_with_param_and_security(info, param, |url| client.put(url))?;
+    let request_with_security = create_request_with_param_and_security(info, param, |url| client.put(url), security_info)?;
     let request_with_body = match body {
         None => {
             request_with_security
@@ -148,19 +140,18 @@ pub async fn execute_bn_put<T: Display, U: DeserializeOwned>(info: &CommandInfo,
     }
 }
 
-fn create_request_with_param_and_security<T: Display, F>(info: &CommandInfo, param: Option<T>, method: F) -> Result<RequestBuilder, BraavosError>
+fn create_request_with_param_and_security<T: Display, F>(info: &CommandInfo, param: Option<T>, method: F, security_info: Option<SecurityInfo>) -> Result<RequestBuilder, BraavosError>
 where
     F: Fn(Url) -> RequestBuilder,
 {
     let mut url = Url::parse(&String::from(info.base.clone())).expect("Invalid base URL");
     url.set_path(&String::from(&String::from(info.path.clone())));
-    let security = BN_SECURITY.get().ok_or(BraavosError::new("没有配置用户信息"))?;
     param.map(|request| {
         let query_param = format!("{}", request);
-        let real_param = match info.has_security {
-            false => { query_param }
-            true => {
-                let signature = sign_hmac(&query_param, &security.api_secret).unwrap();
+        let real_param = match &security_info {
+            None => { query_param }
+            Some(info) => {
+                let signature = sign_hmac(&query_param, &info.api_secret).unwrap();
                 format!("{query_param}&signature={signature}")
             }
         };
@@ -168,13 +159,13 @@ where
         url.set_query(Some(&real_param));
     });
     let request_builder = method(url);
-    let request_with_security = match info.has_security {
-        false => {
+    let request_with_security = match &security_info {
+        None => {
             request_builder
         }
-        true => {
+        Some(info) => {
             request_builder.header(
-                "X-MBX-APIKEY", &security.api_key,
+                "X-MBX-APIKEY", &info.api_key,
             )
         }
     };
