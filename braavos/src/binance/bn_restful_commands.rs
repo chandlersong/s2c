@@ -5,14 +5,26 @@ use crate::models::EmptyObject;
 use crate::tools::sign_hmac;
 use governor::clock::DefaultClock;
 use governor::state::{InMemoryState, NotKeyed};
-use governor::{Quota, RateLimiter};
+use governor::{Jitter, Quota, RateLimiter};
 use log::{error, trace};
-use nonzero_ext::nonzero;
 use reqwest::{RequestBuilder, Url};
 use serde::de::DeserializeOwned;
 use serde_json::{Error as JsonError, Value};
 use std::fmt::Display;
+use std::num::NonZeroU32;
 use std::sync::{LazyLock, OnceLock};
+use std::time::Duration;
+use tokio::time::timeout;
+
+
+static PING_COMMAND: LazyLock<CommandInfo> = LazyLock::new(|| {
+    CommandInfo {
+        base: BinanceBase::Normal,
+        path: BinancePath::Normal(NormalAPI::PingAPI),
+        has_security: false,
+        weight: 1,
+    }
+});
 
 pub(crate) static BN_SECURITY: OnceLock<SecurityInfo> = OnceLock::new();
 
@@ -23,33 +35,42 @@ pub fn init_bn_security(api_key: String, api_secret: String) -> &'static Securit
     })
 }
 /// 全局 RateLimiter，使用 OnceLock 延迟初始化
-static RATE_LIMITER: LazyLock<RateLimiter<NotKeyed, InMemoryState, DefaultClock>> =  LazyLock::new(|| {
-    get_rate_limiter()
-});
-
-
+static RATE_LIMITER: OnceLock<RateLimiter<NotKeyed, InMemoryState, DefaultClock>> = OnceLock::new();
 
 /// 获取 RateLimiter 的静态引用
-fn get_rate_limiter() -> RateLimiter<NotKeyed, InMemoryState, DefaultClock> {
-        RateLimiter::direct(
-            Quota::per_second(nonzero!(10u32)) // 每秒补充 10 个令牌
-                .allow_burst(nonzero!(20u32)) // 突发容量 20 个令牌
-        )
+fn get_bn_rate_limiter(per_second_num: u32) -> &'static RateLimiter<NotKeyed, InMemoryState, DefaultClock> {
+    RATE_LIMITER.get_or_init(|| RateLimiter::direct(
+        Quota::per_second(NonZeroU32::new(per_second_num).unwrap())
+            .allow_burst(NonZeroU32::new(per_second_num).unwrap())
+    ))
+
 }
 
+async fn check_rate_limit(weight: u32) -> Result<(), BraavosError> {
+    let limiter = get_bn_rate_limiter(1200);
+    // 超时时间：2 秒
+    let timeout_duration = Duration::from_secs(2);
+    // 抖动避免请求堆积
+    let jitter = Jitter::up_to(Duration::from_millis(100));
 
-static PING_COMMAND: LazyLock<CommandInfo> = LazyLock::new(|| {
-    CommandInfo {
-        base: BinanceBase::Normal,
-        path: BinancePath::Normal(NormalAPI::PingAPI),
-        has_security: false,
-        weight: 0,
+    // 验证权重非零
+    let weight = match NonZeroU32::new(weight) {
+        Some(w) => w,
+        None => return Err(BraavosError::new("权重必须为非零"))
+    };
+    // 等待令牌或超时
+    let result = timeout(
+        timeout_duration,
+        limiter.until_n_ready_with_jitter(weight, jitter),
+    ).await;
+    match result {
+        Ok(inner_result) => match inner_result {
+            Ok(()) => Ok(()),
+            Err(_) => Err(BraavosError::new("令牌不足"))
+        },
+        Err(_) => Err(BraavosError::new("限流超时")),
     }
-});
-
-
-
-
+}
 
 pub async fn execute_ping() -> Result<(), BraavosError> {
     let _ = execute_bn_get::<EmptyObject, EmptyObject>(&PING_COMMAND, None).await?;
@@ -57,6 +78,7 @@ pub async fn execute_ping() -> Result<(), BraavosError> {
 }
 
 pub async fn execute_bn_get<T: Display, U: DeserializeOwned>(info: &CommandInfo, param: Option<T>) -> Result<U, BraavosError> {
+    check_rate_limit(info.weight).await?;
     let client = HTTP_CLIENT.get().ok_or(BraavosError::new("客户端没有初始化"))?;
     let request = create_request_with_param_and_security(info, param, |url| client.get(url))?;
     let res = request.send().await?;
@@ -74,6 +96,7 @@ pub async fn execute_bn_get<T: Display, U: DeserializeOwned>(info: &CommandInfo,
 }
 
 pub async fn execute_bn_post<T: Display, U: DeserializeOwned>(info: &CommandInfo, param: Option<T>, body: Option<Value>) -> Result<U, BraavosError> {
+    check_rate_limit(info.weight).await?;
     let client = HTTP_CLIENT.get().ok_or(BraavosError::new("客户端没有初始化"))?;
     let request_with_security = create_request_with_param_and_security(info, param, |url| client.post(url))?;
     let request_with_body = match body {
@@ -100,6 +123,7 @@ pub async fn execute_bn_post<T: Display, U: DeserializeOwned>(info: &CommandInfo
 
 
 pub async fn execute_bn_put<T: Display, U: DeserializeOwned>(info: &CommandInfo, param: Option<T>, body: Option<Value>) -> Result<U, BraavosError> {
+    check_rate_limit(info.weight).await?;
     let client = HTTP_CLIENT.get().ok_or(BraavosError::new("客户端没有初始化"))?;
     let request_with_security = create_request_with_param_and_security(info, param, |url| client.put(url))?;
     let request_with_body = match body {
@@ -162,7 +186,25 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::binance::bn_restful_commands::{check_rate_limit, get_bn_rate_limiter};
 
+    #[tokio::test]
+    async fn test_rate_limited() {
+        get_bn_rate_limiter(1200);
+        // 测试正常调用
+        let result = check_rate_limit(1).await;
+        assert!(result.is_ok());
 
+        // 测试高权重调用，触发超时
+        let result = check_rate_limit(1201).await; // 超过突发容量
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_zero_weight() {
+        // 测试零权重，预期错误
+        let result = check_rate_limit(0).await;
+        assert!(result.is_err());
+    }
 
 }
