@@ -7,7 +7,11 @@ use crate::models::{AccountSummary, EmptyObject, SpotPosition, SpotSummary, Swap
 use crate::settings::{Account, BRAAVOS_SETTING};
 use crate::tools::sign_hmac;
 use async_trait::async_trait;
+use governor::clock::DefaultClock;
+use governor::state::{InMemoryState, NotKeyed};
+use governor::{Quota, RateLimiter};
 use log::{debug, error, trace, warn};
+use nonzero_ext::nonzero;
 use reqwest::{RequestBuilder, Url};
 use rust_decimal::prelude::FromPrimitive;
 use rust_decimal::Decimal;
@@ -16,13 +20,36 @@ use serde::de::DeserializeOwned;
 use serde_json::{Error as JsonError, Value};
 use std::fmt::Display;
 use std::marker::PhantomData;
-use std::sync::{mpsc, LazyLock};
+use std::sync::{mpsc, LazyLock, OnceLock};
 use std::thread;
 use tokio::join;
 
 static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     init_client()
 });
+
+/// 全局 RateLimiter，使用 OnceLock 延迟初始化
+static RATE_LIMITER: LazyLock<RateLimiter<NotKeyed, InMemoryState, DefaultClock>> =  LazyLock::new(|| {
+    get_rate_limiter()
+});
+
+fn init_client() -> reqwest::Client {
+    let builder = reqwest::Client::builder();
+    let proxy_builder = match &BRAAVOS_SETTING.proxy {
+        Some(val) => { builder.proxy(reqwest::Proxy::https(val).unwrap()) }
+        None => { builder }
+    };
+
+    proxy_builder.build().unwrap()
+}
+
+/// 获取 RateLimiter 的静态引用
+fn get_rate_limiter() -> RateLimiter<NotKeyed, InMemoryState, DefaultClock> {
+        RateLimiter::direct(
+            Quota::per_second(nonzero!(10u32)) // 每秒补充 10 个令牌
+                .allow_burst(nonzero!(20u32)) // 突发容量 20 个令牌
+        )
+}
 
 
 impl CommandInfo<'_> {
@@ -56,15 +83,7 @@ pub async fn execute_ping() -> Result<(), BraavosError> {
 }
 
 
-fn init_client() -> reqwest::Client {
-    let builder = reqwest::Client::builder();
-    let proxy_builder = match &BRAAVOS_SETTING.proxy {
-        Some(val) => { builder.proxy(reqwest::Proxy::https(val).unwrap()) }
-        None => { builder }
-    };
 
-    proxy_builder.build().unwrap()
-}
 
 
 

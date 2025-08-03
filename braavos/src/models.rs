@@ -1,6 +1,7 @@
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
-
+///
+/// TODO：去除交易所之类的类的定义，因为发现这样没有办法统一
 pub type UnixTimeStamp = u64;
 
 //不太确定哪个好，就先用这个用于高精度计算
@@ -8,7 +9,7 @@ pub type Decimal = rust_decimal::Decimal;
 
 
 
-
+#[deprecated(since = "版本号", note = "移出着crate")]
 #[derive(Debug,Clone)]
 pub struct AccountSummary {
     pub usdt_equity: Decimal,
@@ -19,7 +20,7 @@ pub struct AccountSummary {
     pub um_swap_summary: SwapSummary,
 }
 
-
+#[deprecated(since = "版本号", note = "移出着crate")]
 #[derive(Debug,Clone)]
 pub struct SwapSummary {
     pub long_balance: Decimal,
@@ -31,7 +32,7 @@ pub struct SwapSummary {
     pub fra_pnl: Decimal, //funding_rate_arbitrage
     pub positions: Vec<SwapPosition>,
 }
-
+#[deprecated(since = "版本号", note = "移出着crate")]
 #[derive(Debug,Clone)]
 pub struct SwapPosition {
     pub symbol: String,         //交易对
@@ -42,14 +43,14 @@ pub struct SwapPosition {
     pub position_amt: Decimal,  //持仓数量
 }
 
-
+#[deprecated(since = "版本号", note = "移出着crate")]
 //Spot的汇总信息。暂时先不管那么多。
 #[derive(Debug,Clone)]
 pub struct SpotSummary {
     pub equity: Decimal,
     pub positions: Vec<SpotPosition>,
 }
-
+#[deprecated(since = "版本号", note = "移出着crate")]
 #[derive(Debug,Clone)]
 pub struct SpotPosition {
     pub symbol: String,

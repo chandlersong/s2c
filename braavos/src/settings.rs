@@ -4,6 +4,10 @@ use serde::Deserialize;
 use std::env;
 use std::sync::LazyLock;
 
+
+///
+/// TODO：删除lib类的配置，不会有自己的的配置项
+#[deprecated(since = "版本号", note = "移出着crate")]
 #[derive(Clone, Debug, Deserialize)]
 #[allow(unused)]
 pub struct Account {
