@@ -11,5 +11,4 @@ async fn main() {
     init_http_client(proxy);
     let ping_result = execute_ping().await;
     println!("ping的结果{}", ping_result.is_ok());
-    println!("错误结果{}", ping_result.err().unwrap());
 }
