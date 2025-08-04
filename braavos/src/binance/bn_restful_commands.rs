@@ -26,6 +26,15 @@ static PING_COMMAND: LazyLock<CommandInfo> = LazyLock::new(|| {
     }
 });
 
+pub static SERVER_TIME_COMMAND: LazyLock<CommandInfo> = LazyLock::new(|| {
+    CommandInfo {
+        base: BinanceBase::Normal,
+        path: BinancePath::Normal(NormalAPI::ServerTime),
+        has_security: false,
+        weight: 1,
+    }
+});
+
 /// 全局 RateLimiter，使用 OnceLock 延迟初始化
 static RATE_LIMITER: OnceLock<RateLimiter<NotKeyed, InMemoryState, DefaultClock>> = OnceLock::new();
 

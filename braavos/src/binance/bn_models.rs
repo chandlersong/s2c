@@ -86,6 +86,8 @@ pub enum BinancePath {
 #[derive(Debug,Clone)]
 pub enum NormalAPI {
     PingAPI,
+    ExchangeInfo,
+    ServerTime,
     SpotTickerAPI,
 }
 
@@ -103,6 +105,8 @@ impl From<BinancePath> for String {
             match api {
                 BinancePath::Normal(route) => match route {
                     NormalAPI::PingAPI => String::from("/api/v3/ping"),
+                    NormalAPI::ExchangeInfo => String::from("/api/v3/exchangeInfo"),
+                    NormalAPI::ServerTime => String::from("/api/v3/time"),
                     NormalAPI::SpotTickerAPI => String::from("/api/v3/ticker/price"),
                 }
                 BinancePath::PAPI(route) => match route {
@@ -298,6 +302,13 @@ pub struct UMSwapPosition {
 
     #[serde(rename = "breakEvenPrice")]
     pub break_even_price: Decimal, //表仓位盈亏平衡价
+}
+
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerTime {
+    #[serde(rename = "serverTime")]
+    pub time: UnixTimeStamp,   // 更新时间
 }
 
 pub struct PMRawAccountData {

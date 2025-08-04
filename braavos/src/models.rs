@@ -1,5 +1,6 @@
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
+
 ///
 /// TODO：去除交易所之类的类的定义，因为发现这样没有办法统一
 pub type UnixTimeStamp = u64;
@@ -7,7 +8,9 @@ pub type UnixTimeStamp = u64;
 //不太确定哪个好，就先用这个用于高精度计算
 pub type Decimal = rust_decimal::Decimal;
 
-
+pub fn create_empty_param() -> Option<EmptyObject> {
+    Option::from(EmptyObject {})
+}
 #[derive(Debug, PartialEq, Default)]
 pub struct EmptyObject;
 
