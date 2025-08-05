@@ -15,16 +15,25 @@ impl fmt::Display for BraavosError {
 
 impl BraavosError {
     pub fn new(message: &str) -> BraavosError {
-        BraavosError { message: message.to_string() }
+        BraavosError {
+            message: message.to_string(),
+        }
     }
 }
 
 // 实现 Error trait，用于提供错误信息
 impl Error for BraavosError {}
 
-// 实现 From trait，将 io::Error 转换为 CustomError
-impl From<reqwest::Error> for BraavosError {
-    fn from(error: reqwest::Error) -> Self {
+impl From<ureq::Error> for BraavosError {
+    fn from(error: ureq::Error) -> Self {
+        BraavosError {
+            message: format!("request Error: {}", error),
+        }
+    }
+}
+
+impl From<std::io::Error> for BraavosError {
+    fn from(error: std::io::Error) -> Self {
         BraavosError {
             message: format!("request Error: {}", error),
         }

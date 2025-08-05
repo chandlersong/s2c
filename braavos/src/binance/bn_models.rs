@@ -28,27 +28,23 @@ pub mod bin {
         fn from(value: SpotDepthData) -> Self {
             let mut bids = vec![];
             for b in &value.bids {
-                bids.push(
-                    SpotDepthLevel {
-                        price: b.price,
-                        quantity: b.quantity,
-                    }
-                );
+                bids.push(SpotDepthLevel {
+                    price: b.price,
+                    quantity: b.quantity,
+                });
             }
 
             let mut asks = vec![];
             for a in &value.asks {
-                asks.push(
-                    SpotDepthLevel {
-                        price: a.price,
-                        quantity: a.quantity,
-                    }
-                );
+                asks.push(SpotDepthLevel {
+                    price: a.price,
+                    quantity: a.quantity,
+                });
             }
 
             Self {
                 timestamp: value.event_time,
-                symbol:value.symbol,
+                symbol: value.symbol,
                 first_update_id: value.first_update_id,
                 final_update_id: value.final_update_id,
                 bids,
@@ -58,32 +54,29 @@ pub mod bin {
     }
 }
 
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone)]
 pub enum BinanceBase {
     Normal,
     PortfolioMargin,
     WsSwapStreamUrl,
 }
 
-
 impl From<BinanceBase> for String {
     fn from(url: BinanceBase) -> Self {
-        String::from(
-            match url {
-                BinanceBase::Normal => String::from("https://api.binance.com/"),
-                BinanceBase::PortfolioMargin => String::from("https://papi.binance.com/"),
-                BinanceBase::WsSwapStreamUrl => String::from("wss://fstream.binance.com/"),
-            }
-        )
+        String::from(match url {
+            BinanceBase::Normal => String::from("https://api.binance.com/"),
+            BinanceBase::PortfolioMargin => String::from("https://papi.binance.com/"),
+            BinanceBase::WsSwapStreamUrl => String::from("wss://fstream.binance.com/"),
+        })
     }
 }
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone)]
 pub enum BinancePath {
     Normal(NormalAPI),
     PAPI(PmAPI),
 }
 
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone)]
 pub enum NormalAPI {
     PingAPI,
     ExchangeInfo,
@@ -91,31 +84,29 @@ pub enum NormalAPI {
     SpotTickerAPI,
 }
 
-#[derive(Debug,Clone)]
-pub enum PmAPI { //统一账户
+#[derive(Debug, Clone)]
+pub enum PmAPI {
+    //统一账户
     BalanceAPI,
     SwapPositionAPI,
     ListenKey,
 }
 
-
 impl From<BinancePath> for String {
     fn from(api: BinancePath) -> Self {
-        String::from(
-            match api {
-                BinancePath::Normal(route) => match route {
-                    NormalAPI::PingAPI => String::from("/api/v3/ping"),
-                    NormalAPI::ExchangeInfo => String::from("/api/v3/exchangeInfo"),
-                    NormalAPI::ServerTime => String::from("/api/v3/time"),
-                    NormalAPI::SpotTickerAPI => String::from("/api/v3/ticker/price"),
-                }
-                BinancePath::PAPI(route) => match route {
-                    PmAPI::BalanceAPI => String::from("/papi/v1/balance"),
-                    PmAPI::SwapPositionAPI => String::from("/papi/v1/um/positionRisk"),
-                    PmAPI::ListenKey => String::from("/papi/v1/listenKey"),
-                }
-            }
-        )
+        String::from(match api {
+            BinancePath::Normal(route) => match route {
+                NormalAPI::PingAPI => String::from("/api/v3/ping"),
+                NormalAPI::ExchangeInfo => String::from("/api/v3/exchangeInfo"),
+                NormalAPI::ServerTime => String::from("/api/v3/time"),
+                NormalAPI::SpotTickerAPI => String::from("/api/v3/ticker/price"),
+            },
+            BinancePath::PAPI(route) => match route {
+                PmAPI::BalanceAPI => String::from("/papi/v1/balance"),
+                PmAPI::SwapPositionAPI => String::from("/papi/v1/um/positionRisk"),
+                PmAPI::ListenKey => String::from("/papi/v1/listenKey"),
+            },
+        })
     }
 }
 
@@ -125,9 +116,8 @@ pub enum WsMethod {
     Time,
     SUBSCRIBE,
     SetProperty,
-    GetProperty
+    GetProperty,
 }
-
 
 // 自定义序列化函数
 pub fn serialize_wx_method<S>(shape: &WsMethod, serializer: S) -> Result<S::Ok, S::Error>
@@ -150,9 +140,9 @@ where
 {
     let s: String = String::deserialize(deserializer)?;
     match s.as_str() {
-        "ping" => { Ok(WsMethod::Ping) }
-        "time" => { Ok(WsMethod::Time) }
-        "SUBSCRIBE" => { Ok(WsMethod::SUBSCRIBE) }
+        "ping" => Ok(WsMethod::Ping),
+        "time" => Ok(WsMethod::Time),
+        "SUBSCRIBE" => Ok(WsMethod::SUBSCRIBE),
         _ => {
             panic!("not found command")
         }
@@ -164,17 +154,13 @@ pub enum SpotWsSubscribe {
     AllMiniTicker,
 }
 
-
 impl From<SpotWsSubscribe> for String {
     fn from(subscription: SpotWsSubscribe) -> Self {
-        String::from(
-            match subscription {
-                SpotWsSubscribe::AllMiniTicker => String::from("!miniTicker@arr"),
-            }
-        )
+        String::from(match subscription {
+            SpotWsSubscribe::AllMiniTicker => String::from("!miniTicker@arr"),
+        })
     }
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PMBalance {
@@ -199,16 +185,16 @@ pub struct PMBalance {
     pub cross_margin_locked: Decimal, //全仓杠杆锁定
 
     #[serde(rename = "umWalletBalance")]
-    pub um_wallet_balance: Decimal,  // u本位合约钱包余额
+    pub um_wallet_balance: Decimal, // u本位合约钱包余额
 
     #[serde(rename = "umUnrealizedPNL")]
-    pub um_unrealized_pnl: Decimal,     // u本位未实现盈亏
+    pub um_unrealized_pnl: Decimal, // u本位未实现盈亏
 
     #[serde(rename = "cmWalletBalance")]
-    pub cm_wallet_balance: Decimal,       // 币本位合约钱包余额
+    pub cm_wallet_balance: Decimal, // 币本位合约钱包余额
 
     #[serde(rename = "cmUnrealizedPNL")]
-    pub cm_unrealized_pnl: Decimal,    // 币本位未实现盈亏
+    pub cm_unrealized_pnl: Decimal, // 币本位未实现盈亏
 
     #[serde(rename = "updateTime")]
     pub update_time: UnixTimeStamp,
@@ -217,49 +203,48 @@ pub struct PMBalance {
     pub negative_balance: Decimal,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UMSwapAssert {
-    pub symbol: String,    // 交易对
+    pub symbol: String, // 交易对
 
     #[serde(rename = "initialMargin")]
-    pub initial_margin: Decimal,   // 当前所需起始保证金(基于最新标记价格)
+    pub initial_margin: Decimal, // 当前所需起始保证金(基于最新标记价格)
 
     #[serde(rename = "maintMargin")]
-    pub maint_margin: Decimal,     // 维持保证金
+    pub maint_margin: Decimal, // 维持保证金
 
     #[serde(rename = "unrealizedProfit")]
-    pub unrealized_profit: Decimal,  // 持仓未实现盈亏
+    pub unrealized_profit: Decimal, // 持仓未实现盈亏
 
     #[serde(rename = "positionInitialMargin")]
-    pub position_initial_margin: Decimal,      //持仓所需起始保证金(基于最新标记价格)
+    pub position_initial_margin: Decimal, //持仓所需起始保证金(基于最新标记价格)
 
     #[serde(rename = "openOrderInitialMargin")]
-    pub open_order_initial_margin: Decimal,     // 当前挂单所需起始保证金(基于最新标记价格)
+    pub open_order_initial_margin: Decimal, // 当前挂单所需起始保证金(基于最新标记价格)
 
     #[serde(rename = "leverage")]
-    pub leverage: Decimal,      // 杠杆倍率
+    pub leverage: Decimal, // 杠杆倍率
 
     #[serde(rename = "entryPrice")]
-    pub entry_price: Decimal,    // 持仓成本价
+    pub entry_price: Decimal, // 持仓成本价
 
     #[serde(rename = "maxNotional")]
-    pub max_notional: Decimal,    // 当前杠杆下用户可用的最大名义价值
+    pub max_notional: Decimal, // 当前杠杆下用户可用的最大名义价值
 
     #[serde(rename = "bidNotional")]
-    pub bid_notional: Decimal,  // 买单净值，忽略
+    pub bid_notional: Decimal, // 买单净值，忽略
 
     #[serde(rename = "askNotional")]
-    pub ask_notional: Decimal,  // 卖单净值，忽略
+    pub ask_notional: Decimal, // 卖单净值，忽略
 
     #[serde(rename = "positionSide")]
-    pub position_side: String,     // 持仓方向
+    pub position_side: String, // 持仓方向
 
     #[serde(rename = "positionAmt")]
-    pub position_amt: Decimal,         //  持仓数量
+    pub position_amt: Decimal, //  持仓数量
 
     #[serde(rename = "updateTime")]
-    pub update_time: UnixTimeStamp,         // 更新时间
+    pub update_time: UnixTimeStamp, // 更新时间
 
     #[serde(rename = "breakEvenPrice")]
     pub break_even_price: Decimal,
@@ -274,7 +259,7 @@ pub struct UMSwapPosition {
     pub leverage: u16, // 当前杠杆倍数
 
     #[serde(rename = "markPrice")]
-    pub mark_price: Decimal,   // 当前标记价格
+    pub mark_price: Decimal, // 当前标记价格
 
     #[serde(rename = "maxNotionalValue")]
     pub max_notional_value: Decimal, // 当前杠杆倍数允许的名义价值上限
@@ -298,22 +283,117 @@ pub struct UMSwapPosition {
     pub position_side: String, // 持仓方向
 
     #[serde(rename = "updateTime")]
-    pub update_time: UnixTimeStamp,   // 更新时间
+    pub update_time: UnixTimeStamp, // 更新时间
 
     #[serde(rename = "breakEvenPrice")]
     pub break_even_price: Decimal, //表仓位盈亏平衡价
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerTime {
     #[serde(rename = "serverTime")]
-    pub time: UnixTimeStamp,   // 更新时间
+    pub time: UnixTimeStamp,
 }
 
-pub struct PMRawAccountData {
-    pub account_balance: Vec<PMBalance>,
-    pub um_swap_position: Vec<UMSwapPosition>,
+#[derive(Deserialize, Debug)]
+pub struct ExchangeInfo {
+    #[serde(rename = "timezone")]
+    pub timezone: String,
+
+    #[serde(rename = "serverTime")]
+    pub server_time: u64,
+
+    #[serde(rename = "rateLimits")]
+    pub rate_limits: Vec<RateLimit>,
+
+    #[serde(rename = "exchangeFilters")]
+    pub exchange_filters: Vec<ExchangeFilter>,
+
+    #[serde(rename = "symbols")]
+    pub symbols: Vec<ExchangeSymbol>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct RateLimit {
+    #[serde(rename = "rateLimitType")]
+    pub rate_limit_type: String,
+
+    #[serde(rename = "interval")]
+    pub interval: String,
+
+    #[serde(rename = "intervalNum")]
+    pub interval_num: i32,
+
+    #[serde(rename = "limit")]
+    pub limit: i32,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(tag = "filterType")]
+pub enum ExchangeFilter {
+    #[serde(rename = "PRICE_FILTER")]
+    PriceFilter {
+        #[serde(rename = "minPrice", default)]
+        min_price: Option<String>,
+        #[serde(rename = "maxPrice", default)]
+        max_price: Option<String>,
+        #[serde(rename = "tickSize", default)]
+        tick_size: Option<String>,
+    },
+    #[serde(rename = "LOT_SIZE")]
+    LotSize {
+        #[serde(rename = "minQty", default)]
+        min_qty: Option<String>,
+        #[serde(rename = "maxQty", default)]
+        max_qty: Option<String>,
+        #[serde(rename = "stepSize", default)]
+        step_size: Option<String>,
+    },
+    #[serde(other)]
+    Unknown,
+}
+#[derive(Deserialize, Debug)]
+pub struct ExchangeSymbol {
+    #[serde(rename = "symbol")]
+    pub symbol: String,
+    #[serde(rename = "status")]
+    pub status: String,
+    #[serde(rename = "baseAsset")]
+    pub base_asset: String,
+    #[serde(rename = "baseAssetPrecision")]
+    pub base_asset_precision: i32,
+    #[serde(rename = "quoteAsset")]
+    pub quote_asset: String,
+    #[serde(rename = "quotePrecision")]
+    pub quote_precision: i32,
+    #[serde(rename = "quoteAssetPrecision")]
+    pub quote_asset_precision: i32,
+    #[serde(rename = "baseCommissionPrecision")]
+    pub base_commission_precision: i32,
+    #[serde(rename = "quoteCommissionPrecision")]
+    pub quote_commission_precision: i32,
+    #[serde(rename = "orderTypes")]
+    pub order_types: Vec<String>,
+    #[serde(rename = "icebergAllowed")]
+    pub iceberg_allowed: bool,
+    #[serde(rename = "ocoAllowed")]
+    pub oco_allowed: bool,
+    #[serde(rename = "quoteOrderQtyMarketAllowed")]
+    pub quote_order_qty_market_allowed: bool,
+    #[serde(rename = "allowTrailingStop")]
+    pub allow_trailing_stop: bool,
+    #[serde(rename = "cancelReplaceAllowed")]
+    pub cancel_replace_allowed: bool,
+    #[serde(rename = "isSpotTradingAllowed")]
+    pub is_spot_trading_allowed: bool,
+    #[serde(rename = "isMarginTradingAllowed")]
+    pub is_margin_trading_allowed: bool,
+    pub filters: Vec<ExchangeFilter>,
+    pub permissions: Vec<String>,
+    #[serde(rename = "defaultSelfTradePreventionMode")]
+    pub default_self_trade_prevention_mode: String,
+    #[serde(rename = "allowedSelfTradePreventionModes")]
+    pub allowed_self_trade_prevention_modes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -329,13 +409,12 @@ pub struct UMSwapBalance {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ticker {
     #[serde(rename = "symbol")]
-    pub symbol: String,       // 交易对
+    pub symbol: String, // 交易对
     #[serde(rename = "price")]
-    pub price: Decimal,        // 价格
+    pub price: Decimal, // 价格
     #[serde(rename = "time")]
-    pub time: Option<UnixTimeStamp>,   // 撮合引擎时间,Spot的不存在这个数据
+    pub time: Option<UnixTimeStamp>, // 撮合引擎时间,Spot的不存在这个数据
 }
-
 
 pub struct SecurityInfo {
     pub api_key: String,
@@ -346,7 +425,7 @@ pub struct CommandInfo {
     pub base: BinanceBase,
     pub path: BinancePath,
     pub has_security: bool,
-    pub weight: u32
+    pub weight: u32,
 }
 
 pub struct TimeStampRequest {
@@ -356,7 +435,11 @@ pub struct TimeStampRequest {
 
 impl fmt::Display for TimeStampRequest {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "timestamp={}&recvWindow={}", self.timestamp, self.rec_window)
+        write!(
+            f,
+            "timestamp={}&recvWindow={}",
+            self.timestamp, self.rec_window
+        )
     }
 }
 
@@ -377,16 +460,13 @@ pub struct WsCommandResponse {
 
     #[serde(rename = "result")]
     pub result: Option<String>,
-
 }
-
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ListenKeyResponse {
     #[serde(rename = "listenKey")]
     pub listen_key: String,
-
 }
 
 #[derive(PartialEq, Debug, Serialize, Deserialize, Clone)]
@@ -404,7 +484,6 @@ pub struct Asks {
     #[serde(with = "string_to_float")]
     pub quantity: f64,
 }
-
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SpotDepthData {
@@ -481,10 +560,15 @@ pub struct MiniTicker {
 
 impl fmt::Display for MiniTicker {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "MiniTicker: symbol:{},time:{},close:{}", self.symbol, unix_2_readable(&self.event_time), self.close)
+        write!(
+            f,
+            "MiniTicker: symbol:{},time:{},close:{}",
+            self.symbol,
+            unix_2_readable(&self.event_time),
+            self.close
+        )
     }
 }
-
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct TradeRaw {
@@ -512,8 +596,6 @@ pub struct TradeRaw {
     pub buyer_is_marker: bool, //买方是否是做市方。如true，则此次成交是一个主动卖出单，否则是一个主动买入单。
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use crate::binance::bn_models::{BinanceBase, BinancePath, NormalAPI};
@@ -524,10 +606,15 @@ mod tests {
 
     #[test]
     fn test_api_define() {
-        assert_eq!("/api/v3/ping", String::from(BinancePath::Normal(NormalAPI::PingAPI)));
-        assert_eq!("https://api.binance.com/", String::from(BinanceBase::Normal));
+        assert_eq!(
+            "/api/v3/ping",
+            String::from(BinancePath::Normal(NormalAPI::PingAPI))
+        );
+        assert_eq!(
+            "https://api.binance.com/",
+            String::from(BinanceBase::Normal)
+        );
     }
-
 
     #[test]
     fn test_deserialize_swap_ws_all_mini_ticker_response() {
@@ -541,6 +628,4 @@ mod tests {
             _ => {}
         }
     }
-
-
 }

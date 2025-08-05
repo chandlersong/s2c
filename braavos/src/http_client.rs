@@ -1,12 +1,17 @@
-use reqwest::Client;
 use std::sync::OnceLock;
-pub(crate) static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
+use ureq::Agent;
 
-pub fn init_http_client(proxy: Option<&str>) -> &'static reqwest::Client {
-    let builder = reqwest::Client::builder();
-    let proxy_builder = match proxy {
-        Some(val) => { builder.proxy(reqwest::Proxy::https(val).unwrap()) }
-        None => { builder }
-    };
-    HTTP_CLIENT.get_or_init(|| proxy_builder.build().unwrap())
+pub(crate) static HTTP_CLIENT: OnceLock<Agent> = OnceLock::new();
+
+pub fn init_http_client(proxy: Option<&str>) -> &'static Agent {
+    HTTP_CLIENT.get_or_init(|| {
+        let mut builder = ureq::AgentBuilder::new()
+            .timeout_connect(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(60));
+        if let Some(proxy_url) = proxy {
+            let proxy_obj = ureq::Proxy::new(proxy_url).unwrap();
+            builder = builder.proxy(proxy_obj);
+        };
+        builder.build()
+    })
 }
