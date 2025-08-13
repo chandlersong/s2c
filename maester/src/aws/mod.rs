@@ -1,1 +1,2 @@
-mod dynamo_db;
+pub mod aws;
+pub mod dynamodb;

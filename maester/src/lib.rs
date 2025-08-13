@@ -5,4 +5,4 @@ pub mod tools;
 pub mod notification;
 
 #[cfg(feature = "aws")]
-mod aws;
+pub mod aws;

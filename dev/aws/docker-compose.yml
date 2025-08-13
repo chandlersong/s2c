@@ -44,24 +44,3 @@ services:
     depends_on:
       dynamodb-local:
         condition: service_healthy
-
-  dynamodb-init:
-    image: amazon/aws-cli:latest
-    container_name: dynamodb-init
-    environment:
-      - AWS_ACCESS_KEY_ID=dummy
-      - AWS_SECRET_ACCESS_KEY=dummy
-      - AWS_DEFAULT_REGION=us-west-2
-    command: >
-      bash -c "
-        sleep 5 &&
-        aws dynamodb create-table \
-          --table-name TestTable \
-          --attribute-definitions AttributeName=id,AttributeType=S \
-          --key-schema AttributeName=id,KeyType=HASH \
-          --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5 \
-          --endpoint-url http://dynamodb-local:8000
-      "
-    depends_on:
-      dynamodb-local:
-        condition: service_healthy
