@@ -1,7 +1,9 @@
-use crate::binance::bn_models::{BinanceBase, BinancePath, CommandInfo, NormalAPI, SecurityInfo};
+use crate::binance::bn_models::{
+    BINANCE_API_BASE, EXCHANGE_INFO_PATH, PING_PATH, SERVER_TIME_PATH, SecurityInfo,
+};
 use crate::errors::BraavosError;
 use crate::http_client::HTTP_CLIENT;
-use crate::models::EmptyObject;
+use crate::models::{EmptyObject, RequestInfo};
 use crate::tools::sign_hmac;
 use governor::clock::DefaultClock;
 use governor::state::{InMemoryState, NotKeyed};
@@ -14,13 +16,9 @@ use std::sync::{LazyLock, OnceLock};
 use std::time::Duration;
 use tokio::time::timeout;
 use ureq::Request;
-use url::Url;
-pub static PING_COMMAND: LazyLock<CommandInfo> = LazyLock::new(|| CommandInfo {
-    base: BinanceBase::Normal,
-    path: BinancePath::Normal(NormalAPI::PingAPI),
-    has_security: false,
-    weight: 1,
-});
+
+pub static PING_COMMAND: LazyLock<RequestInfo> =
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_API_BASE, PING_PATH, false, 1).unwrap());
 
 ///币安当前有 1479 个交易对
 /// 时区: UTC
@@ -71,18 +69,12 @@ pub static PING_COMMAND: LazyLock<CommandInfo> = LazyLock::new(|| CommandInfo {
     allowed_self_trade_prevention_modes: ["EXPIRE_TAKER", "EXPIRE_MAKER", "EXPIRE_BOTH", "DECREMENT"]
   }
 **/
-pub static EXCHANGE_INFO_COMMAND: LazyLock<CommandInfo> = LazyLock::new(|| CommandInfo {
-    base: BinanceBase::Normal,
-    path: BinancePath::Normal(NormalAPI::ExchangeInfo),
-    has_security: false,
-    weight: 20,
+pub static EXCHANGE_INFO_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| {
+    RequestInfo::from_base_path(BINANCE_API_BASE, EXCHANGE_INFO_PATH, false, 20).unwrap()
 });
 
-pub static SERVER_TIME_COMMAND: LazyLock<CommandInfo> = LazyLock::new(|| CommandInfo {
-    base: BinanceBase::Normal,
-    path: BinancePath::Normal(NormalAPI::ServerTime),
-    has_security: false,
-    weight: 1,
+pub static SERVER_TIME_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| {
+    RequestInfo::from_base_path(BINANCE_API_BASE, SERVER_TIME_PATH, false, 1).unwrap()
 });
 
 /// 全局 RateLimiter，使用 OnceLock 延迟初始化
@@ -92,6 +84,7 @@ static RATE_LIMITER: OnceLock<RateLimiter<NotKeyed, InMemoryState, DefaultClock>
 fn get_bn_rate_limiter(
     per_second_num: u32,
 ) -> &'static RateLimiter<NotKeyed, InMemoryState, DefaultClock> {
+    //TODO：按照
     RATE_LIMITER.get_or_init(|| {
         RateLimiter::direct(
             Quota::per_second(NonZeroU32::new(per_second_num).unwrap())
@@ -133,7 +126,7 @@ pub async fn execute_ping() -> Result<(), BraavosError> {
 }
 
 pub async fn execute_bn_get<T: Display, U: DeserializeOwned>(
-    info: &CommandInfo,
+    info: &RequestInfo,
     param: Option<T>,
     security_info: Option<SecurityInfo>,
 ) -> Result<U, BraavosError> {
@@ -145,24 +138,21 @@ pub async fn execute_bn_get<T: Display, U: DeserializeOwned>(
 }
 
 pub async fn execute_bn_post<T: Display, U: DeserializeOwned>(
-    info: &CommandInfo,
+    info: &RequestInfo,
     param: Option<T>,
     body: Option<Value>,
     security_info: Option<SecurityInfo>,
 ) -> Result<U, BraavosError> {
     check_rate_limit(info.weight).await?;
     let request = create_request_with_param_and_security(info, param, "POST", security_info)?;
-    let request_body = match body {
-        None => Value::Null,
-        Some(body_json) => body_json,
-    };
+    let request_body = body.unwrap_or_else(|| Value::Null);
     let res = request.send_json(&request_body)?;
     let result: U = res.into_json()?;
     Ok(result)
 }
 
 pub async fn execute_bn_put<T: Display, U: DeserializeOwned>(
-    info: &CommandInfo,
+    info: &RequestInfo,
     param: Option<T>,
     body: Option<Value>,
     security_info: Option<SecurityInfo>,
@@ -179,7 +169,7 @@ pub async fn execute_bn_put<T: Display, U: DeserializeOwned>(
 }
 
 fn create_request_with_param_and_security<T: Display>(
-    info: &CommandInfo,
+    info: &RequestInfo,
     param: Option<T>,
     method: &str,
     security_info: Option<SecurityInfo>,
@@ -187,8 +177,7 @@ fn create_request_with_param_and_security<T: Display>(
     let client = HTTP_CLIENT
         .get()
         .ok_or(BraavosError::new("客户端没有初始化"))?;
-    let mut url = Url::parse(&String::from(info.base.clone())).expect("Invalid base URL");
-    url.set_path(&String::from(&String::from(info.path.clone())));
+    let mut url = info.as_ref().clone();
     param.map(|request| {
         let query_param = format!("{}", request);
         let real_param = match &security_info {
@@ -205,6 +194,7 @@ fn create_request_with_param_and_security<T: Display>(
                 }
             }
         };
+
         if !real_param.is_empty() {
             url.set_query(Some(&real_param));
         }

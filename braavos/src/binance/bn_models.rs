@@ -2,7 +2,7 @@ use crate::binance::bn_tools::unix_2_readable;
 use crate::models::{Decimal, UnixTimeStamp};
 use crate::tools;
 use crate::tools::{string_to_float, unix_time};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 use std::fmt;
 
 pub mod bin {
@@ -54,100 +54,23 @@ pub mod bin {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum BinanceBase {
-    Normal,
-    PortfolioMargin,
-    WsSwapStreamUrl,
-}
+pub const BINANCE_API_BASE: &str = "https://api.binance.com/";
+pub const PING_PATH: &str = "/api/v3/ping";
+pub const EXCHANGE_INFO_PATH: &str = "/api/v3/exchangeInfo";
+pub const SERVER_TIME_PATH: &str = "/api/v3/time";
+pub const SPOT_TICKER_API_PATH: &str = "/api/v3/ticker/price";
 
-impl From<BinanceBase> for String {
-    fn from(url: BinanceBase) -> Self {
-        String::from(match url {
-            BinanceBase::Normal => String::from("https://api.binance.com/"),
-            BinanceBase::PortfolioMargin => String::from("https://papi.binance.com/"),
-            BinanceBase::WsSwapStreamUrl => String::from("wss://fstream.binance.com/"),
-        })
-    }
-}
-#[derive(Debug, Clone)]
-pub enum BinancePath {
-    Normal(NormalAPI),
-    PAPI(PmAPI),
-}
+pub const PORTFOLIO_MARGIN_BASE: &str = "https://papi.binance.com/";
+pub const BALANCE_PATH: &str = "/papi/v1/balance";
+pub const SWAP_POSITION_PATH: &str = "/papi/v1/um/positionRisk";
+pub const LISTEN_KEY_PATH: &str = "/papi/v1/listenKey";
 
-#[derive(Debug, Clone)]
-pub enum NormalAPI {
-    PingAPI,
-    ExchangeInfo,
-    ServerTime,
-    SpotTickerAPI,
-}
-
-#[derive(Debug, Clone)]
-pub enum PmAPI {
-    //统一账户
-    BalanceAPI,
-    SwapPositionAPI,
-    ListenKey,
-}
-
-impl From<BinancePath> for String {
-    fn from(api: BinancePath) -> Self {
-        String::from(match api {
-            BinancePath::Normal(route) => match route {
-                NormalAPI::PingAPI => String::from("/api/v3/ping"),
-                NormalAPI::ExchangeInfo => String::from("/api/v3/exchangeInfo"),
-                NormalAPI::ServerTime => String::from("/api/v3/time"),
-                NormalAPI::SpotTickerAPI => String::from("/api/v3/ticker/price"),
-            },
-            BinancePath::PAPI(route) => match route {
-                PmAPI::BalanceAPI => String::from("/papi/v1/balance"),
-                PmAPI::SwapPositionAPI => String::from("/papi/v1/um/positionRisk"),
-                PmAPI::ListenKey => String::from("/papi/v1/listenKey"),
-            },
-        })
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub enum WsMethod {
-    Ping,
-    Time,
-    SUBSCRIBE,
-    SetProperty,
-    GetProperty,
-}
-
-// 自定义序列化函数
-pub fn serialize_wx_method<S>(shape: &WsMethod, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    match shape {
-        WsMethod::Ping => serializer.serialize_str("ping"),
-        WsMethod::Time => serializer.serialize_str("time"),
-        WsMethod::SUBSCRIBE => serializer.serialize_str("SUBSCRIBE"),
-        WsMethod::SetProperty => serializer.serialize_str("SET_PROPERTY"),
-        WsMethod::GetProperty => serializer.serialize_str("GET_PROPERTY"),
-    }
-}
-
-// 自定义反序列化函数
-pub fn deserialize_wx_method<'de, D>(deserializer: D) -> Result<WsMethod, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let s: String = String::deserialize(deserializer)?;
-    match s.as_str() {
-        "ping" => Ok(WsMethod::Ping),
-        "time" => Ok(WsMethod::Time),
-        "SUBSCRIBE" => Ok(WsMethod::SUBSCRIBE),
-        _ => {
-            panic!("not found command")
-        }
-    }
-}
+pub const WS_SWAP_STREAM_URL_BASE: &str = "wss://fstream.binance.com/";
+pub const WS_PING_COMMAND: &str = "ping";
+pub const WS_TIME_COMMAND: &str = "time";
+pub const WS_SUBSCRIBE_COMMAND: &str = "SUBSCRIBE";
+pub const WS_SET_PROPERTY_COMMAND: &str = "SET_PROPERTY";
+pub const WS_GET_PROPERTY_COMMAND: &str = "GET_PROPERTY";
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum SpotWsSubscribe {
@@ -421,13 +344,6 @@ pub struct SecurityInfo {
     pub api_secret: String,
 }
 
-pub struct CommandInfo {
-    pub base: BinanceBase,
-    pub path: BinancePath,
-    pub has_security: bool,
-    pub weight: u32,
-}
-
 pub struct TimeStampRequest {
     pub timestamp: UnixTimeStamp,
     pub rec_window: u16,
@@ -594,38 +510,4 @@ pub struct TradeRaw {
 
     #[serde(rename = "m")]
     pub buyer_is_marker: bool, //买方是否是做市方。如true，则此次成交是一个主动卖出单，否则是一个主动买入单。
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::binance::bn_models::{BinanceBase, BinancePath, NormalAPI};
-    use crate::binance::bn_ws_commands::WsSpotResponse;
-    use crate::tools::parse_test_json;
-    use log::LevelFilter;
-    use maester::tools::logs::setup_logger;
-
-    #[test]
-    fn test_api_define() {
-        assert_eq!(
-            "/api/v3/ping",
-            String::from(BinancePath::Normal(NormalAPI::PingAPI))
-        );
-        assert_eq!(
-            "https://api.binance.com/",
-            String::from(BinanceBase::Normal)
-        );
-    }
-
-    #[test]
-    fn test_deserialize_swap_ws_all_mini_ticker_response() {
-        let _ = setup_logger(Some(LevelFilter::Debug));
-        let entry: WsSpotResponse =
-            parse_test_json::<WsSpotResponse>("tests/data/ws_stream_binance_miniTicker_all.json");
-        match entry {
-            WsSpotResponse::StreamAllMiniTicker(v) => {
-                println!("{:?}", v);
-            }
-            _ => {}
-        }
-    }
 }
