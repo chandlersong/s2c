@@ -4,11 +4,20 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-rocksdb = { workspace = true }
+rocksdb = { workspace = true, optional = true }
 tokio = { workspace = true }
 log = { workspace = true }
 chrono =  { workspace = true }
 fern = { workspace = true }
 humantime = { workspace = true }
 
-teloxide = { version = "0.13.0", features = ["macros"] }
+teloxide = { version = "0.13.0", features = ["macros"],optional = true}
+aws-config = { version = "1.5.8", optional = true }
+aws-sdk-dynamodb = { version = "1.88.0", optional = true }
+
+
+[features]
+default = []
+aws = ["aws-config", "aws-sdk-dynamodb"]
+rocks-db = ["rocksdb"]
+telegram = ['teloxide']

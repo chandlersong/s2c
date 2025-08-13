@@ -1,6 +1,6 @@
 use log::{error, trace};
-use teloxide::prelude::{ChatId, Requester};
 use teloxide::Bot;
+use teloxide::prelude::{ChatId, Requester};
 
 #[derive(Clone)]
 pub struct OpsBot {
@@ -15,8 +15,8 @@ impl OpsBot {
         Self { bot, chat_id }
     }
 
-    pub async  fn send(&self, text: &str) {
-        match self.bot.send_message(self.chat_id, text).await{
+    pub async fn send(&self, text: &str) {
+        match self.bot.send_message(self.chat_id, text).await {
             Ok(_) => trace!("消息已发送！"),
             Err(e) => error!("发送失败: {:?}", e),
         }

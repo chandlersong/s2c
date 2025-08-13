@@ -1,1 +1,2 @@
-pub mod telegrams;
+#[cfg(feature = "telegram")]
+pub mod telegram;

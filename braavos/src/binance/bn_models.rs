@@ -2,7 +2,7 @@ use crate::binance::bn_tools::unix_2_readable;
 use crate::models::{Decimal, UnixTimeStamp};
 use crate::tools;
 use crate::tools::{string_to_float, unix_time};
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 pub mod bin {
