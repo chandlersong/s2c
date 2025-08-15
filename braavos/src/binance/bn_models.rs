@@ -54,18 +54,45 @@ pub mod bin {
     }
 }
 
+// --- API and WebSocket Base URLs ---
+// The active URL is determined by the Cargo features enabled at compile time.
+// Priority: internal-test-mock > binance-testnet > production (default)
+
+// For Unit Tests with WireMock
+#[cfg(feature = "internal-test-mock")]
+pub const BINANCE_API_BASE: &str = "http://127.0.0.1:8080"; // WireMock server address
+
+// For Examples and Testnet Applications
+#[cfg(all(feature = "binance-testnet", not(feature = "internal-test-mock")))]
+pub const BINANCE_API_BASE: &str = "https://testnet.binance.vision/";
+
+// For Production (Default)
+#[cfg(not(any(feature = "binance-testnet", feature = "internal-test-mock")))]
 pub const BINANCE_API_BASE: &str = "https://api.binance.com/";
+
+// WebSocket URL
+#[cfg(feature = "internal-test-mock")]
+pub const WS_SWAP_STREAM_URL_BASE: &str = "ws://127.0.0.1:8080"; // Mock WS
+#[cfg(all(feature = "binance-testnet", not(feature = "internal-test-mock")))]
+pub const WS_SWAP_STREAM_URL_BASE: &str = "wss://stream.binancefuture.com/";
+#[cfg(not(any(feature = "binance-testnet", feature = "internal-test-mock")))]
+pub const WS_SWAP_STREAM_URL_BASE: &str = "wss://fstream.binance.com/";
+
+// Portfolio Margin URL (Note: Often no testnet, so it points to production)
+#[cfg(feature = "internal-test-mock")]
+pub const PORTFOLIO_MARGIN_BASE: &str = "http://127.0.0.1:8080"; // Mock PM
+#[cfg(not(feature = "internal-test-mock"))]
+pub const PORTFOLIO_MARGIN_BASE: &str = "https://papi.binance.com/";
+
 pub const PING_PATH: &str = "/api/v3/ping";
 pub const EXCHANGE_INFO_PATH: &str = "/api/v3/exchangeInfo";
 pub const SERVER_TIME_PATH: &str = "/api/v3/time";
 pub const SPOT_TICKER_API_PATH: &str = "/api/v3/ticker/price";
 
-pub const PORTFOLIO_MARGIN_BASE: &str = "https://papi.binance.com/";
 pub const BALANCE_PATH: &str = "/papi/v1/balance";
 pub const SWAP_POSITION_PATH: &str = "/papi/v1/um/positionRisk";
 pub const LISTEN_KEY_PATH: &str = "/papi/v1/listenKey";
 
-pub const WS_SWAP_STREAM_URL_BASE: &str = "wss://fstream.binance.com/";
 pub const WS_PING_COMMAND: &str = "ping";
 pub const WS_TIME_COMMAND: &str = "time";
 pub const WS_SUBSCRIBE_COMMAND: &str = "SUBSCRIBE";

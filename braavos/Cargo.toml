@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-maester = { path = "../maester" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -16,14 +15,15 @@ hmac = { workspace = true }
 tokio = { workspace = true }
 sonyflake = { workspace = true }
 chrono = { workspace = true }
-prost = { workspace = true }
 governor = { version = "0.10.0", features = ["std"] }
-tokio-tungstenite = { version = "0.24.0", features = ["rustls"] }
 futures-util = "0.3.30"
 moka = { version = "0.12.10", features = ["future"] }
 async-trait = "0.1.81"
+url = { version = "2.5.4" }
 ureq = { version = "2.10", features = ["json"] }
-url = "2.5.4"
+tokio-tungstenite = { version = "0.24.0", features = ["rustls"] }
+
+
 
 [dev-dependencies]
 mockall = "0.12.0"
@@ -32,4 +32,27 @@ wiremock = "0.6"
 [build-dependencies]
 prost-build = "0.12"
 
+[features]
+# -----------------------------------------------------------------------------
+# -- 功能特性 (Functionality Features)
+# -----------------------------------------------------------------------------
 
+# 启用此特性将会包含所有与币安 (Binance) 相关的功能模块和依赖。
+# 如果库的使用者不需要币安，他们可以不启用此特性，从而减少编译时间和依赖项。
+binance = []
+
+# -----------------------------------------------------------------------------
+# -- 环境配置特性 (Environment Configuration Features)
+# -----------------------------------------------------------------------------
+
+# 启用此特性将会把币安 API 的基地址切换到测试网 (Testnet)。
+# 它会自动激活 `binance` 特性，因为测试网是币安功能的一部分。
+binance-testnet = ["binance"]
+
+# -----------------------------------------------------------------------------
+# -- 测试专用特性 (Testing-Specific Features)
+# -----------------------------------------------------------------------------
+
+# [内部使用] 启用此特性将会把 API 基地址指向本地的 mock 服务器 (如 WireMock)。
+# 这个特性不应该被库的最终用户启用，仅用于本项目的单元测试。
+internal-test-mock = ["binance"]

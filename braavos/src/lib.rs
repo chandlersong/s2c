@@ -1,10 +1,11 @@
+#[cfg(feature = "binance")]
 pub mod binance;
 
-pub mod models;
 pub mod errors;
+pub mod models;
 
-pub mod tools;
 pub mod cache;
+pub mod tools;
 
-pub mod websockets;
 pub mod http_client;
+pub mod websockets;
