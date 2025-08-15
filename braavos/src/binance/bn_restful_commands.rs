@@ -16,7 +16,7 @@ use std::num::NonZeroU32;
 use std::sync::{LazyLock, OnceLock};
 use std::time::Duration;
 use tokio::time::timeout;
-use ureq::Request;
+use ureq::{Agent, Request};
 
 pub static PING_COMMAND: LazyLock<RequestInfo> =
     LazyLock::new(|| RequestInfo::from_base_path(BINANCE_API_BASE, PING_PATH, false, 1).unwrap());
@@ -132,7 +132,11 @@ pub async fn execute_bn_get<U: DeserializeOwned>(
     security_info: Option<SecurityInfo>,
 ) -> Result<U, BraavosError> {
     check_rate_limit(info.weight).await?;
-    let request = create_request_with_param_and_security(info, param, "GET", security_info)?;
+    let client = HTTP_CLIENT
+        .get()
+        .ok_or(BraavosError::new("客户端没有初始化"))?;
+    let request =
+        create_request_with_param_and_security(client, info, param, "GET", security_info)?;
     let res = request.call()?;
     let result: U = res.into_json()?;
     Ok(result)
@@ -145,7 +149,11 @@ pub async fn execute_bn_post<U: DeserializeOwned>(
     security_info: Option<SecurityInfo>,
 ) -> Result<U, BraavosError> {
     check_rate_limit(info.weight).await?;
-    let request = create_request_with_param_and_security(info, param, "POST", security_info)?;
+    let client = HTTP_CLIENT
+        .get()
+        .ok_or(BraavosError::new("客户端没有初始化"))?;
+    let request =
+        create_request_with_param_and_security(client, info, param, "POST", security_info)?;
     let request_body = body.unwrap_or_else(|| Value::Null);
     let res = request.send_json(&request_body)?;
     let result: U = res.into_json()?;
@@ -159,27 +167,27 @@ pub async fn execute_bn_put<U: DeserializeOwned>(
     security_info: Option<SecurityInfo>,
 ) -> Result<U, BraavosError> {
     check_rate_limit(info.weight).await?;
-    let request = create_request_with_param_and_security(info, param, "PUT", security_info)?;
+    let client = HTTP_CLIENT
+        .get()
+        .ok_or(BraavosError::new("客户端没有初始化"))?;
+    let request =
+        create_request_with_param_and_security(client, info, param, "PUT", security_info)?;
     let request_body = body.unwrap_or_else(|| Value::Null);
     let res = request.send_json(&request_body)?;
     let result: U = res.into_json()?;
     Ok(result)
 }
 
-fn create_request_with_param_and_security(
+/// Pure function for building request components. Easy to test.
+fn build_request_components(
     info: &RequestInfo,
     param: Option<BTreeMap<&str, String>>,
-    method: &str,
     security_info: Option<SecurityInfo>,
-) -> Result<Request, BraavosError> {
-    let client = HTTP_CLIENT
-        .get()
-        .ok_or(BraavosError::new("客户端没有初始化"))?;
+) -> (String, Option<String>) {
     let mut url = info.as_ref().clone();
 
-    // 1. Build the base query string from params.
     let base_query_string = param
-        .filter(|p| !p.is_empty()) // Treat None and empty map the same
+        .filter(|p| !p.is_empty())
         .map(|params| {
             params
                 .into_iter()
@@ -187,11 +195,11 @@ fn create_request_with_param_and_security(
                 .collect::<Vec<String>>()
                 .join("&")
         })
-        .unwrap_or_default(); // If None or empty, this is an empty String
+        .unwrap_or_default();
 
-    // 2. Handle security and signature
+    let api_key = security_info.as_ref().map(|s| s.api_key.clone());
+
     if let Some(sec_info) = &security_info {
-        // Always sign if security_info is present
         let signature = sign_hmac(&base_query_string, &sec_info.api_secret).unwrap();
         let final_query = if base_query_string.is_empty() {
             format!("signature={}", signature)
@@ -200,30 +208,38 @@ fn create_request_with_param_and_security(
         };
         url.set_query(Some(&final_query));
     } else if !base_query_string.is_empty() {
-        // No security, but there are params
         url.set_query(Some(&base_query_string));
     }
 
-    // 3. Create request and set header
-    let request = client.request_url(method, &url);
-    let request_with_security = match &security_info {
-        None => request,
-        Some(info) => request.set("X-MBX-APIKEY", &info.api_key),
-    };
+    (url.to_string(), api_key)
+}
 
-    Ok(request_with_security)
+/// Imperative shell for creating the request object.
+fn create_request_with_param_and_security(
+    client: &Agent,
+    info: &RequestInfo,
+    param: Option<BTreeMap<&str, String>>,
+    method: &str,
+    security_info: Option<SecurityInfo>,
+) -> Result<Request, BraavosError> {
+    let (url, api_key) = build_request_components(info, param, security_info);
+
+    let mut request = client.request(method, &url);
+
+    if let Some(key) = api_key {
+        request = request.set("X-MBX-APIKEY", &key);
+    }
+
+    Ok(request)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        HTTP_CLIENT, check_rate_limit, create_request_with_param_and_security, get_bn_rate_limiter,
-    };
+    use super::{build_request_components, check_rate_limit, get_bn_rate_limiter};
     use crate::binance::bn_models::{BINANCE_API_BASE, SecurityInfo};
     use crate::models::RequestInfo;
     use crate::tools::sign_hmac;
     use std::collections::BTreeMap;
-    use ureq::Agent;
 
     #[tokio::test]
     async fn test_rate_limited() {
@@ -245,10 +261,7 @@ mod tests {
     }
 
     #[test]
-    fn test_create_request_with_param_and_security() {
-        // Initialize HTTP_CLIENT for testing
-        HTTP_CLIENT.set(Agent::new()).unwrap();
-
+    fn test_build_request_components() {
         let request_info =
             RequestInfo::from_base_path(BINANCE_API_BASE, "/api/v3/order", false, 1).unwrap();
         let security_info = SecurityInfo {
@@ -257,16 +270,13 @@ mod tests {
         };
 
         // Scenario 1: No params, no security
-        let request =
-            create_request_with_param_and_security(&request_info, None, "GET", None).unwrap();
+        let (url, header) = build_request_components(&request_info, None, None);
         assert_eq!(
-            request.url(),
-            "https://api.binance.com/api/v3/order",
+            url, "https://api.binance.com/api/v3/order",
             "Scenario 1 (No params, no security): URL should be base path"
         );
         assert_eq!(
-            request.header("X-MBX-APIKEY"),
-            None,
+            header, None,
             "Scenario 1 (No params, no security): API key header should not be set"
         );
 
@@ -275,77 +285,53 @@ mod tests {
         params_map.insert("symbol", "BTCUSDT".to_string());
         params_map.insert("side", "BUY".to_string());
         params_map.insert("type", "LIMIT".to_string()); // BTreeMap will sort this
-        let request = create_request_with_param_and_security(
-            &request_info,
-            Some(params_map.clone()),
-            "POST",
-            None,
-        )
-        .unwrap();
+        let (url, header) = build_request_components(&request_info, Some(params_map.clone()), None);
         assert_eq!(
-            request.url(),
+            url,
             "https://api.binance.com/api/v3/order?side=BUY&symbol=BTCUSDT&type=LIMIT", // Note the alphabetical order
             "Scenario 2 (Params, no security): URL should include sorted query parameters"
         );
         assert_eq!(
-            request.header("X-MBX-APIKEY"),
-            None,
+            header, None,
             "Scenario 2 (Params, no security): API key header should not be set"
         );
 
         // Scenario 3: No params, security
-        let request = create_request_with_param_and_security(
-            &request_info,
-            None,
-            "GET",
-            Some(security_info.clone()),
-        )
-        .unwrap();
+        let (url, header) =
+            build_request_components(&request_info, None, Some(security_info.clone()));
         let signature_for_empty = sign_hmac("", "test_api_secret").unwrap();
         let expected_url_3 = format!(
             "https://api.binance.com/api/v3/order?signature={}",
             signature_for_empty
         );
         assert_eq!(
-            request.url(),
-            expected_url_3,
+            url, expected_url_3,
             "Scenario 3 (No params, security): URL should contain only the signature"
         );
         assert_eq!(
-            request.header("X-MBX-APIKEY"),
-            Some("test_api_key"),
+            header,
+            Some("test_api_key".to_string()),
             "Scenario 3 (No params, security): API key header should be set"
         );
 
         // Scenario 4: Empty params, security
         let empty_map = BTreeMap::new();
-        let request = create_request_with_param_and_security(
-            &request_info,
-            Some(empty_map),
-            "POST",
-            Some(security_info.clone()),
-        )
-        .unwrap();
-        // The signature and URL should be identical to scenario 3
+        let (url, header) =
+            build_request_components(&request_info, Some(empty_map), Some(security_info.clone()));
         assert_eq!(
-            request.url(),
-            expected_url_3, // Use the same expected URL from scenario 3
+            url,
+            expected_url_3, // Should be identical to scenario 3
             "Scenario 4 (Empty params, security): URL should contain only the signature"
         );
         assert_eq!(
-            request.header("X-MBX-APIKEY"),
-            Some("test_api_key"),
+            header,
+            Some("test_api_key".to_string()),
             "Scenario 4 (Empty params, security): API key header should be set"
         );
 
         // Scenario 5: Params, security
-        let request = create_request_with_param_and_security(
-            &request_info,
-            Some(params_map), // Use the map from scenario 2
-            "POST",
-            Some(security_info.clone()),
-        )
-        .unwrap();
+        let (url, header) =
+            build_request_components(&request_info, Some(params_map), Some(security_info.clone()));
         let query_string = "side=BUY&symbol=BTCUSDT&type=LIMIT";
         let signature = sign_hmac(query_string, "test_api_secret").unwrap();
         let expected_url_5 = format!(
@@ -353,13 +339,12 @@ mod tests {
             query_string, signature
         );
         assert_eq!(
-            request.url(),
-            expected_url_5,
+            url, expected_url_5,
             "Scenario 5 (Params, security): URL should contain sorted params and signature"
         );
         assert_eq!(
-            request.header("X-MBX-APIKEY"),
-            Some("test_api_key"),
+            header,
+            Some("test_api_key".to_string()),
             "Scenario 5 (Params, security): API key header should be set"
         );
     }
