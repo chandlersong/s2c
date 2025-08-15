@@ -15,10 +15,12 @@ teloxide = { version = "0.13.0", features = ["macros"],optional = true}
 aws-config = { version = "1.5.8", optional = true }
 aws-sdk-dynamodb = { version = "1.88.0", optional = true }
 aws-sdk-s3 = { version = "1.48.0", optional = true }
+serde_dynamo = { version = "4.2.0", optional = true }
+serde = { version = "1.0.218", features = ["derive"] }
 
 [features]
 default = []
-aws = ["aws-config", "aws-sdk-dynamodb", "aws-sdk-s3"]
+aws = ["aws-config", "aws-sdk-dynamodb", "aws-sdk-s3", "serde_dynamo"]
 rocks-db = ["rocksdb"]
 telegram = ['teloxide']
 

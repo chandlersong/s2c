@@ -1,3 +1,4 @@
+use hmac::digest::InvalidLength;
 use std::error::Error;
 use std::fmt;
 
@@ -37,5 +38,11 @@ impl From<std::io::Error> for BraavosError {
         BraavosError {
             message: format!("request Error: {}", error),
         }
+    }
+}
+
+impl From<InvalidLength> for BraavosError {
+    fn from(err: InvalidLength) -> Self {
+        BraavosError::new(&format!("Invalid key length for HMAC: {}", err))
     }
 }

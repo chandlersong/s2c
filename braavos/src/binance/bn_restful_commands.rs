@@ -10,6 +10,7 @@ use governor::state::{InMemoryState, NotKeyed};
 use governor::{Jitter, Quota, RateLimiter};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::num::NonZeroU32;
 use std::sync::{LazyLock, OnceLock};
@@ -121,13 +122,13 @@ async fn check_rate_limit(weight: u32) -> Result<(), BraavosError> {
 }
 
 pub async fn execute_ping() -> Result<(), BraavosError> {
-    let _ = execute_bn_get::<EmptyObject, EmptyObject>(&PING_COMMAND, None, None).await?;
+    let _ = execute_bn_get::<EmptyObject>(&PING_COMMAND, None, None).await?;
     Ok(())
 }
 
-pub async fn execute_bn_get<T: Display, U: DeserializeOwned>(
+pub async fn execute_bn_get<U: DeserializeOwned>(
     info: &RequestInfo,
-    param: Option<T>,
+    param: Option<BTreeMap<&str, String>>,
     security_info: Option<SecurityInfo>,
 ) -> Result<U, BraavosError> {
     check_rate_limit(info.weight).await?;
@@ -137,9 +138,9 @@ pub async fn execute_bn_get<T: Display, U: DeserializeOwned>(
     Ok(result)
 }
 
-pub async fn execute_bn_post<T: Display, U: DeserializeOwned>(
+pub async fn execute_bn_post<U: DeserializeOwned>(
     info: &RequestInfo,
-    param: Option<T>,
+    param: Option<BTreeMap<&str, String>>,
     body: Option<Value>,
     security_info: Option<SecurityInfo>,
 ) -> Result<U, BraavosError> {
@@ -151,26 +152,23 @@ pub async fn execute_bn_post<T: Display, U: DeserializeOwned>(
     Ok(result)
 }
 
-pub async fn execute_bn_put<T: Display, U: DeserializeOwned>(
+pub async fn execute_bn_put<U: DeserializeOwned>(
     info: &RequestInfo,
-    param: Option<T>,
+    param: Option<BTreeMap<&str, String>>,
     body: Option<Value>,
     security_info: Option<SecurityInfo>,
 ) -> Result<U, BraavosError> {
     check_rate_limit(info.weight).await?;
     let request = create_request_with_param_and_security(info, param, "PUT", security_info)?;
-    let request_body = match body {
-        None => Value::Null,
-        Some(body_json) => body_json,
-    };
+    let request_body = body.unwrap_or_else(|| Value::Null);
     let res = request.send_json(&request_body)?;
     let result: U = res.into_json()?;
     Ok(result)
 }
 
-fn create_request_with_param_and_security<T: Display>(
+fn create_request_with_param_and_security(
     info: &RequestInfo,
-    param: Option<T>,
+    param: Option<BTreeMap<&str, String>>,
     method: &str,
     security_info: Option<SecurityInfo>,
 ) -> Result<Request, BraavosError> {
@@ -178,38 +176,54 @@ fn create_request_with_param_and_security<T: Display>(
         .get()
         .ok_or(BraavosError::new("客户端没有初始化"))?;
     let mut url = info.as_ref().clone();
-    param.map(|request| {
-        let query_param = format!("{}", request);
-        let real_param = match &security_info {
-            None => query_param,
-            Some(info) => {
-                let signature = sign_hmac(&query_param, &info.api_secret).unwrap();
-                match query_param.is_empty() {
-                    true => {
-                        format!("signature={signature}")
-                    }
-                    false => {
-                        format!("{query_param}&signature={signature}")
-                    }
-                }
-            }
-        };
 
-        if !real_param.is_empty() {
-            url.set_query(Some(&real_param));
-        }
-    });
+    // 1. Build the base query string from params.
+    let base_query_string = param
+        .filter(|p| !p.is_empty()) // Treat None and empty map the same
+        .map(|params| {
+            params
+                .into_iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect::<Vec<String>>()
+                .join("&")
+        })
+        .unwrap_or_default(); // If None or empty, this is an empty String
+
+    // 2. Handle security and signature
+    if let Some(sec_info) = &security_info {
+        // Always sign if security_info is present
+        let signature = sign_hmac(&base_query_string, &sec_info.api_secret).unwrap();
+        let final_query = if base_query_string.is_empty() {
+            format!("signature={}", signature)
+        } else {
+            format!("{}&signature={}", base_query_string, signature)
+        };
+        url.set_query(Some(&final_query));
+    } else if !base_query_string.is_empty() {
+        // No security, but there are params
+        url.set_query(Some(&base_query_string));
+    }
+
+    // 3. Create request and set header
     let request = client.request_url(method, &url);
     let request_with_security = match &security_info {
         None => request,
         Some(info) => request.set("X-MBX-APIKEY", &info.api_key),
     };
+
     Ok(request_with_security)
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::binance::bn_restful_commands::{check_rate_limit, get_bn_rate_limiter};
+    use super::{
+        HTTP_CLIENT, check_rate_limit, create_request_with_param_and_security, get_bn_rate_limiter,
+    };
+    use crate::binance::bn_models::{BINANCE_API_BASE, SecurityInfo};
+    use crate::models::RequestInfo;
+    use crate::tools::sign_hmac;
+    use std::collections::BTreeMap;
+    use ureq::Agent;
 
     #[tokio::test]
     async fn test_rate_limited() {
@@ -228,5 +242,125 @@ mod tests {
         // 测试零权重，预期错误
         let result = check_rate_limit(0).await;
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_request_with_param_and_security() {
+        // Initialize HTTP_CLIENT for testing
+        HTTP_CLIENT.set(Agent::new()).unwrap();
+
+        let request_info =
+            RequestInfo::from_base_path(BINANCE_API_BASE, "/api/v3/order", false, 1).unwrap();
+        let security_info = SecurityInfo {
+            api_key: "test_api_key".to_string(),
+            api_secret: "test_api_secret".to_string(),
+        };
+
+        // Scenario 1: No params, no security
+        let request =
+            create_request_with_param_and_security(&request_info, None, "GET", None).unwrap();
+        assert_eq!(
+            request.url(),
+            "https://api.binance.com/api/v3/order",
+            "Scenario 1 (No params, no security): URL should be base path"
+        );
+        assert_eq!(
+            request.header("X-MBX-APIKEY"),
+            None,
+            "Scenario 1 (No params, no security): API key header should not be set"
+        );
+
+        // Scenario 2: Params, no security
+        let mut params_map = BTreeMap::new();
+        params_map.insert("symbol", "BTCUSDT".to_string());
+        params_map.insert("side", "BUY".to_string());
+        params_map.insert("type", "LIMIT".to_string()); // BTreeMap will sort this
+        let request = create_request_with_param_and_security(
+            &request_info,
+            Some(params_map.clone()),
+            "POST",
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            request.url(),
+            "https://api.binance.com/api/v3/order?side=BUY&symbol=BTCUSDT&type=LIMIT", // Note the alphabetical order
+            "Scenario 2 (Params, no security): URL should include sorted query parameters"
+        );
+        assert_eq!(
+            request.header("X-MBX-APIKEY"),
+            None,
+            "Scenario 2 (Params, no security): API key header should not be set"
+        );
+
+        // Scenario 3: No params, security
+        let request = create_request_with_param_and_security(
+            &request_info,
+            None,
+            "GET",
+            Some(security_info.clone()),
+        )
+        .unwrap();
+        let signature_for_empty = sign_hmac("", "test_api_secret").unwrap();
+        let expected_url_3 = format!(
+            "https://api.binance.com/api/v3/order?signature={}",
+            signature_for_empty
+        );
+        assert_eq!(
+            request.url(),
+            expected_url_3,
+            "Scenario 3 (No params, security): URL should contain only the signature"
+        );
+        assert_eq!(
+            request.header("X-MBX-APIKEY"),
+            Some("test_api_key"),
+            "Scenario 3 (No params, security): API key header should be set"
+        );
+
+        // Scenario 4: Empty params, security
+        let empty_map = BTreeMap::new();
+        let request = create_request_with_param_and_security(
+            &request_info,
+            Some(empty_map),
+            "POST",
+            Some(security_info.clone()),
+        )
+        .unwrap();
+        // The signature and URL should be identical to scenario 3
+        assert_eq!(
+            request.url(),
+            expected_url_3, // Use the same expected URL from scenario 3
+            "Scenario 4 (Empty params, security): URL should contain only the signature"
+        );
+        assert_eq!(
+            request.header("X-MBX-APIKEY"),
+            Some("test_api_key"),
+            "Scenario 4 (Empty params, security): API key header should be set"
+        );
+
+        // Scenario 5: Params, security
+        let request = create_request_with_param_and_security(
+            &request_info,
+            Some(params_map), // Use the map from scenario 2
+            "POST",
+            Some(security_info.clone()),
+        )
+        .unwrap();
+        let query_string = "side=BUY&symbol=BTCUSDT&type=LIMIT";
+        let signature = sign_hmac(query_string, "test_api_secret").unwrap();
+        let expected_url_5 = format!(
+            "https://api.binance.com/api/v3/order?{}&signature={}",
+            query_string, signature
+        );
+        assert_eq!(
+            request.url(),
+            expected_url_5,
+            "Scenario 5 (Params, security): URL should contain sorted params and signature"
+        );
+        assert_eq!(
+            request.header("X-MBX-APIKEY"),
+            Some("test_api_key"),
+            "Scenario 5 (Params, security): API key header should be set"
+        );
     }
 }

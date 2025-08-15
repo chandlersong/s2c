@@ -339,6 +339,7 @@ pub struct Ticker {
     pub time: Option<UnixTimeStamp>, // 撮合引擎时间,Spot的不存在这个数据
 }
 
+#[derive(Clone)]
 pub struct SecurityInfo {
     pub api_key: String,
     pub api_secret: String,
