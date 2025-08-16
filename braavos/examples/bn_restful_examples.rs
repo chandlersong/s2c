@@ -4,23 +4,33 @@ use braavos::binance::bn_tools::unix_2_readable;
 use braavos::http_client::init_http_client;
 
 ///
-/// 这个example的主要作用是
-/// 1. 展示如果去
-
+/// 币安REST API示例 - 无需API密钥
+///
+/// 这个示例演示了：
+/// 1. 如何初始化和配置HTTP客户端
+/// 2. 如何执行基本的API调用（ping和获取服务器时间）
+/// 3. 如何处理API响应
+///
 #[tokio::main]
 async fn main() {
+    // 配置本地代理（如果需要）
     let proxy = Option::from("http://localhost:7891");
     init_http_client(proxy);
-    let ping_result = execute_ping().await;
-    println!("ping的结果{}", ping_result.is_ok());
-    let server_time: ServerTime = execute_bn_get(&SERVER_TIME_COMMAND, None, None)
-        .await
-        .unwrap();
-    println!("server time is {}", unix_2_readable(&server_time.time));
 
-    // very slow
-    // let exchange_info: ExchangeInfo = execute_bn_get(&EXCHANGE_INFO_COMMAND, create_empty_param(), None).await.unwrap();
-    // println!("exchange info timezone is {}", &exchange_info.timezone);
-    // println!("exchange time is {}", &exchange_info.server_time);
-    // println!("交易对 {}", &exchange_info.symbols.len());
+    // 测试API连接
+    match execute_ping().await {
+        Ok(_) => println!("成功连接到币安网络"),
+        Err(e) => {
+            println!("连接测试失败: {}", e);
+            return;
+        }
+    }
+
+    // 获取服务器时间
+    match execute_bn_get::<ServerTime>(&SERVER_TIME_COMMAND, None, None).await {
+        Ok(server_time) => {
+            println!("测试网络服务器时间: {}", unix_2_readable(&server_time.time));
+        }
+        Err(e) => println!("获取服务器时间失败: {}", e),
+    }
 }

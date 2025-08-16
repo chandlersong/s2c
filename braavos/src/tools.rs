@@ -14,14 +14,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{broadcast, watch};
 use tokio::time;
 
-pub(crate) fn unix_time() -> UnixTimeStamp {
+pub fn unix_time() -> UnixTimeStamp {
     let now = SystemTime::now();
     let since_epoch = now.duration_since(UNIX_EPOCH).unwrap();
     since_epoch.as_secs() * 1000 + u64::from(since_epoch.subsec_nanos()) / 1_000_000
 }
 
 // 自定义反序列化函数，将字符串属性转换为数字
-pub(crate) fn str_to_u16<'de, D>(deserializer: D) -> Result<u16, D::Error>
+pub fn str_to_u16<'de, D>(deserializer: D) -> Result<u16, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -29,9 +29,8 @@ where
     s.parse::<u16>().map_err(serde::de::Error::custom)
 }
 
-
 // 签名方法从官方项目copy https://github.com/binance/binance-spot-connector-rust/blob/main/src/utils.rs#L9
-pub(crate) fn sign_hmac(payload: &str, key: &str) -> Result<String, InvalidLength> {
+pub fn sign_hmac(payload: &str, key: &str) -> Result<String, InvalidLength> {
     let mut mac = Hmac::<Sha256>::new_from_slice(key.as_bytes())?;
 
     mac.update(payload.to_string().as_bytes());
@@ -46,9 +45,7 @@ pub struct SnowyFlakeWrapper {
 impl SnowyFlakeWrapper {
     pub fn new() -> SnowyFlakeWrapper {
         let sf = Sonyflake::new().unwrap();
-        SnowyFlakeWrapper {
-            sf: Mutex::new(sf),
-        }
+        SnowyFlakeWrapper { sf: Mutex::new(sf) }
     }
 
     pub fn next_id_string(&self) -> String {
@@ -118,16 +115,13 @@ pub struct FrequencyReducer<S: Send + Clone + Sync> {
     cache_tx: watch::Sender<Option<S>>,
 }
 
-
 impl<V: Send + Clone + Sync + 'static> FrequencyReducer<V> {
     pub async fn new(out_tx: broadcast::Sender<V>, frequency_mill_seconds: u64) -> Self {
         let (cache_tx, cache_rx) = watch::channel(None);
         let res = Self { cache_tx };
-        tokio::spawn(
-            async move {
-                frequency_reducer_output(cache_rx, out_tx, frequency_mill_seconds).await;
-            }
-        );
+        tokio::spawn(async move {
+            frequency_reducer_output(cache_rx, out_tx, frequency_mill_seconds).await;
+        });
         res
     }
 
@@ -136,9 +130,11 @@ impl<V: Send + Clone + Sync + 'static> FrequencyReducer<V> {
     }
 }
 
-async fn frequency_reducer_output<V: Send + Clone + Sync>(mut cache_rx: watch::Receiver<Option<V>>,
-                                                          out_tx: broadcast::Sender<V>,
-                                                          frequency_mill_seconds: u64) {
+async fn frequency_reducer_output<V: Send + Clone + Sync>(
+    mut cache_rx: watch::Receiver<Option<V>>,
+    out_tx: broadcast::Sender<V>,
+    frequency_mill_seconds: u64,
+) {
     let mut interval = time::interval(Duration::from_millis(frequency_mill_seconds));
     loop {
         interval.tick().await; // 等待下一个间隔
@@ -165,7 +161,6 @@ mod tests {
         let (tx, mut rx) = broadcast::channel(10);
         let reducer: FrequencyReducer<i32> = FrequencyReducer::new(tx.clone(), 1000).await;
 
-
         let mut reducer_clone = reducer.clone();
         tokio::spawn(async move {
             reducer_clone.update(1).await;
@@ -173,29 +168,25 @@ mod tests {
 
         let timeout_duration = Duration::from_secs(3);
         match time::timeout(timeout_duration, rx.recv()).await {
-            Ok(res) => {
-                match res {
-                    Ok(value) => {
-                        assert_eq!(value, 1, "wrong value");
-                    }
-                    Err(_) => {
-                        assert!(false, "not fresh");
-                    }
+            Ok(res) => match res {
+                Ok(value) => {
+                    assert_eq!(value, 1, "wrong value");
                 }
-            }
+                Err(_) => {
+                    assert!(false, "not fresh");
+                }
+            },
             Err(_) => {
                 assert!(false, "channel timeout");
             }
         }
     }
 
-
     /// 有一个新的出来后，旧的应该被替换掉。
     #[tokio::test]
     pub async fn test_update_cache_replace() {
         let (tx, mut rx) = broadcast::channel(10);
         let reducer: FrequencyReducer<i32> = FrequencyReducer::new(tx.clone(), 1000).await;
-
 
         let mut reducer_clone = reducer.clone();
         tokio::spawn(async move {
@@ -205,20 +196,17 @@ mod tests {
 
         let timeout_duration = Duration::from_secs(3);
         match time::timeout(timeout_duration, rx.recv()).await {
-            Ok(res) => {
-                match res {
-                    Ok(value) => {
-                        assert_eq!(value, 2, "wrong value");
-                    }
-                    Err(_) => {
-                        assert!(false, "not fresh");
-                    }
+            Ok(res) => match res {
+                Ok(value) => {
+                    assert_eq!(value, 2, "wrong value");
                 }
-            }
+                Err(_) => {
+                    assert!(false, "not fresh");
+                }
+            },
             Err(_) => {
                 assert!(false, "channel timeout");
             }
         }
     }
 }
-

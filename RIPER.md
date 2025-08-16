@@ -1,8 +1,8 @@
 ---
-alwaysApply: false
+alwaysApply: true
 ---
 
-## RIPER-5
+## STRICT-MODE PROTOCOL
 
 ### CONTEXT PRIMER
 
@@ -19,7 +19,7 @@ Format: \[MODE: MODE\_NAME\]
 
 Failure to declare your mode is a critical violation of protocol.
 
-### THE RIPER-5 MODES
+### THE STRICT-MODE PROTOCOL MODES
 
 #### MODE 1: RESEARCH
 

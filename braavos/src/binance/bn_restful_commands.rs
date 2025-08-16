@@ -11,7 +11,6 @@ use governor::{Jitter, Quota, RateLimiter};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::fmt::Display;
 use std::num::NonZeroU32;
 use std::sync::{LazyLock, OnceLock};
 use std::time::Duration;
@@ -236,10 +235,89 @@ fn create_request_with_param_and_security(
 #[cfg(test)]
 mod tests {
     use super::{build_request_components, check_rate_limit, get_bn_rate_limiter};
-    use crate::binance::bn_models::{BINANCE_API_BASE, SecurityInfo};
+    use crate::binance::bn_models::SecurityInfo;
     use crate::models::RequestInfo;
-    use crate::tools::sign_hmac;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn test_build_request_components() {
+        let request_info =
+            RequestInfo::from_base_path("http://127.0.0.1:8080", "/api/v3/order", false, 1)
+                .unwrap();
+        let security_info = SecurityInfo {
+            api_key: "test_api_key".to_string(),
+            api_secret: "test_api_secret".to_string(),
+        };
+
+        // Scenario 1: No params, no security
+        let (url, header) = build_request_components(&request_info, None, None);
+        assert_eq!(
+            url, "http://127.0.0.1:8080/api/v3/order",
+            "Scenario 1 (No params, no security): URL should be base path"
+        );
+        assert_eq!(
+            header, None,
+            "Scenario 1 (No params, no security): API key header should not be set"
+        );
+
+        // Scenario 2: Params, no security
+        let mut params_map = BTreeMap::new();
+        params_map.insert("symbol", "BTCUSDT".to_string());
+        params_map.insert("side", "BUY".to_string());
+        params_map.insert("type", "LIMIT".to_string());
+        let (url, header) = build_request_components(&request_info, Some(params_map.clone()), None);
+        assert_eq!(
+            url, "http://127.0.0.1:8080/api/v3/order?side=BUY&symbol=BTCUSDT&type=LIMIT",
+            "Scenario 2 (Params, no security): URL should include sorted query parameters"
+        );
+        assert_eq!(
+            header, None,
+            "Scenario 2 (Params, no security): API key header should not be set"
+        );
+
+        // Scenario 3: No params, security
+        let (url, header) =
+            build_request_components(&request_info, None, Some(security_info.clone()));
+        assert_eq!(
+            url,
+            "http://127.0.0.1:8080/api/v3/order?signature=4c4df0c09aaefc2fe10f409703fd08d6754229e4c9b99897331efa42d8d65e47",
+            "Scenario 3 (No params, security): URL should contain only the signature"
+        );
+        assert_eq!(
+            header,
+            Some("test_api_key".to_string()),
+            "Scenario 3 (No params, security): API key header should be set"
+        );
+
+        // Scenario 4: Empty params, security
+        let empty_map = BTreeMap::new();
+        let (url, header) =
+            build_request_components(&request_info, Some(empty_map), Some(security_info.clone()));
+        assert_eq!(
+            url,
+            "http://127.0.0.1:8080/api/v3/order?signature=4c4df0c09aaefc2fe10f409703fd08d6754229e4c9b99897331efa42d8d65e47",
+            "Scenario 4 (Empty params, security): URL should contain only the signature"
+        );
+        assert_eq!(
+            header,
+            Some("test_api_key".to_string()),
+            "Scenario 4 (Empty params, security): API key header should be set"
+        );
+
+        // Scenario 5: Params, security
+        let (url, header) =
+            build_request_components(&request_info, Some(params_map), Some(security_info));
+        assert_eq!(
+            url,
+            "http://127.0.0.1:8080/api/v3/order?side=BUY&symbol=BTCUSDT&type=LIMIT&signature=627ca17e230c3eb329537cdab76b3654fd620c7d863f7344f7d625c02f7cc110",
+            "Scenario 5 (Params, security): URL should contain sorted params and signature"
+        );
+        assert_eq!(
+            header,
+            Some("test_api_key".to_string()),
+            "Scenario 5 (Params, security): API key header should be set"
+        );
+    }
 
     #[tokio::test]
     async fn test_rate_limited() {
@@ -258,94 +336,5 @@ mod tests {
         // 测试零权重，预期错误
         let result = check_rate_limit(0).await;
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_build_request_components() {
-        let request_info =
-            RequestInfo::from_base_path(BINANCE_API_BASE, "/api/v3/order", false, 1).unwrap();
-        let security_info = SecurityInfo {
-            api_key: "test_api_key".to_string(),
-            api_secret: "test_api_secret".to_string(),
-        };
-
-        // Scenario 1: No params, no security
-        let (url, header) = build_request_components(&request_info, None, None);
-        assert_eq!(
-            url, "https://api.binance.com/api/v3/order",
-            "Scenario 1 (No params, no security): URL should be base path"
-        );
-        assert_eq!(
-            header, None,
-            "Scenario 1 (No params, no security): API key header should not be set"
-        );
-
-        // Scenario 2: Params, no security
-        let mut params_map = BTreeMap::new();
-        params_map.insert("symbol", "BTCUSDT".to_string());
-        params_map.insert("side", "BUY".to_string());
-        params_map.insert("type", "LIMIT".to_string()); // BTreeMap will sort this
-        let (url, header) = build_request_components(&request_info, Some(params_map.clone()), None);
-        assert_eq!(
-            url,
-            "https://api.binance.com/api/v3/order?side=BUY&symbol=BTCUSDT&type=LIMIT", // Note the alphabetical order
-            "Scenario 2 (Params, no security): URL should include sorted query parameters"
-        );
-        assert_eq!(
-            header, None,
-            "Scenario 2 (Params, no security): API key header should not be set"
-        );
-
-        // Scenario 3: No params, security
-        let (url, header) =
-            build_request_components(&request_info, None, Some(security_info.clone()));
-        let signature_for_empty = sign_hmac("", "test_api_secret").unwrap();
-        let expected_url_3 = format!(
-            "https://api.binance.com/api/v3/order?signature={}",
-            signature_for_empty
-        );
-        assert_eq!(
-            url, expected_url_3,
-            "Scenario 3 (No params, security): URL should contain only the signature"
-        );
-        assert_eq!(
-            header,
-            Some("test_api_key".to_string()),
-            "Scenario 3 (No params, security): API key header should be set"
-        );
-
-        // Scenario 4: Empty params, security
-        let empty_map = BTreeMap::new();
-        let (url, header) =
-            build_request_components(&request_info, Some(empty_map), Some(security_info.clone()));
-        assert_eq!(
-            url,
-            expected_url_3, // Should be identical to scenario 3
-            "Scenario 4 (Empty params, security): URL should contain only the signature"
-        );
-        assert_eq!(
-            header,
-            Some("test_api_key".to_string()),
-            "Scenario 4 (Empty params, security): API key header should be set"
-        );
-
-        // Scenario 5: Params, security
-        let (url, header) =
-            build_request_components(&request_info, Some(params_map), Some(security_info.clone()));
-        let query_string = "side=BUY&symbol=BTCUSDT&type=LIMIT";
-        let signature = sign_hmac(query_string, "test_api_secret").unwrap();
-        let expected_url_5 = format!(
-            "https://api.binance.com/api/v3/order?{}&signature={}",
-            query_string, signature
-        );
-        assert_eq!(
-            url, expected_url_5,
-            "Scenario 5 (Params, security): URL should contain sorted params and signature"
-        );
-        assert_eq!(
-            header,
-            Some("test_api_key".to_string()),
-            "Scenario 5 (Params, security): API key header should be set"
-        );
     }
 }

@@ -56,32 +56,32 @@ pub mod bin {
 
 // --- API and WebSocket Base URLs ---
 // The active URL is determined by the Cargo features enabled at compile time.
-// Priority: internal-test-mock > binance-testnet > production (default)
+// Priority: test > binance-testnet > production (default)
 
 // For Unit Tests with WireMock
-#[cfg(feature = "internal-test-mock")]
+#[cfg(test)]
 pub const BINANCE_API_BASE: &str = "http://127.0.0.1:8080"; // WireMock server address
 
 // For Examples and Testnet Applications
-#[cfg(all(feature = "binance-testnet", not(feature = "internal-test-mock")))]
+#[cfg(all(feature = "binance-testnet", not(test)))]
 pub const BINANCE_API_BASE: &str = "https://testnet.binance.vision/";
 
 // For Production (Default)
-#[cfg(not(any(feature = "binance-testnet", feature = "internal-test-mock")))]
+#[cfg(not(any(feature = "binance-testnet", test)))]
 pub const BINANCE_API_BASE: &str = "https://api.binance.com/";
 
 // WebSocket URL
-#[cfg(feature = "internal-test-mock")]
+#[cfg(test)]
 pub const WS_SWAP_STREAM_URL_BASE: &str = "ws://127.0.0.1:8080"; // Mock WS
-#[cfg(all(feature = "binance-testnet", not(feature = "internal-test-mock")))]
+#[cfg(all(feature = "binance-testnet", not(test)))]
 pub const WS_SWAP_STREAM_URL_BASE: &str = "wss://stream.binancefuture.com/";
-#[cfg(not(any(feature = "binance-testnet", feature = "internal-test-mock")))]
+#[cfg(not(any(feature = "binance-testnet", test)))]
 pub const WS_SWAP_STREAM_URL_BASE: &str = "wss://fstream.binance.com/";
 
-// Portfolio Margin URL (Note: Often no testnet, so it points to production)
-#[cfg(feature = "internal-test-mock")]
+// Portfolio Margin URL
+#[cfg(test)]
 pub const PORTFOLIO_MARGIN_BASE: &str = "http://127.0.0.1:8080"; // Mock PM
-#[cfg(not(feature = "internal-test-mock"))]
+#[cfg(not(test))]
 pub const PORTFOLIO_MARGIN_BASE: &str = "https://papi.binance.com/";
 
 pub const PING_PATH: &str = "/api/v3/ping";

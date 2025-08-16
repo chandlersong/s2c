@@ -1,0 +1,11 @@
+# you can ignore files
+.DS_Store
+*.log
+*.tmp
+
+# or folders
+dist/
+build/
+out/
+conf/
+target/
