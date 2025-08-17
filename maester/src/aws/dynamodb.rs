@@ -23,7 +23,7 @@ pub async fn create_dynamodb_client(is_local: bool) -> Client {
         Client::from_conf(config)
     } else {
         // 远程 AWS DynamoDB 配置
-        let config = aws_config::load_from_env().await;
+        let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
         Client::new(&config)
     }
 }
