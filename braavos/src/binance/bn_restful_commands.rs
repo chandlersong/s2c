@@ -234,10 +234,17 @@ fn create_request_with_param_and_security(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_request_components, check_rate_limit, get_bn_rate_limiter};
+    use super::{build_request_components, check_rate_limit, execute_bn_get, get_bn_rate_limiter};
     use crate::binance::bn_models::SecurityInfo;
+    use crate::http_client::init_http_client;
     use crate::models::RequestInfo;
     use std::collections::BTreeMap;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn setup() {
+        init_http_client(None);
+    }
 
     #[test]
     fn test_build_request_components() {
@@ -336,5 +343,114 @@ mod tests {
         // 测试零权重，预期错误
         let result = check_rate_limit(0).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_execute_bn_get_basic() -> Result<(), Box<dyn std::error::Error>> {
+        setup();
+        // Start a mock server
+        let mock_server = MockServer::start().await;
+
+        // Create a test RequestInfo
+        let test_path = "/api/v3/test";
+        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1)?;
+
+        // Setup the mock
+        Mock::given(method("GET"))
+            .and(path(test_path))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "message": "success"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        // Execute the request
+        let result: serde_json::Value = execute_bn_get(&request_info, None, None).await?;
+
+        assert_eq!(result["message"], "success");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_execute_bn_get_with_params() -> Result<(), Box<dyn std::error::Error>> {
+        setup();
+        let mock_server = MockServer::start().await;
+        let test_path = "/api/v3/test";
+        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1)?;
+
+        // Setup mock with query parameters
+        Mock::given(method("GET"))
+            .and(path(test_path))
+            .and(wiremock::matchers::query_param("symbol", "BTCUSDT"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "symbol": "BTCUSDT",
+                "price": "50000.00"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        // Create parameters
+        let mut params = BTreeMap::new();
+        params.insert("symbol", "BTCUSDT".to_string());
+
+        // Execute request with parameters
+        let result: serde_json::Value = execute_bn_get(&request_info, Some(params), None).await?;
+
+        assert_eq!(result["symbol"], "BTCUSDT");
+        assert_eq!(result["price"], "50000.00");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_execute_bn_get_with_security() -> Result<(), Box<dyn std::error::Error>> {
+        setup();
+        let mock_server = MockServer::start().await;
+        let test_path = "/api/v3/test";
+        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1)?;
+
+        let security_info = SecurityInfo {
+            api_key: "test_key".to_string(),
+            api_secret: "test_secret".to_string(),
+        };
+
+        // Setup mock expecting security headers
+        Mock::given(method("GET"))
+            .and(path(test_path))
+            .and(wiremock::matchers::header("X-MBX-APIKEY", "test_key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "authenticated": true
+            })))
+            .mount(&mock_server)
+            .await;
+
+        // Execute request with security info
+        let result: serde_json::Value =
+            execute_bn_get(&request_info, None, Some(security_info)).await?;
+
+        assert_eq!(result["authenticated"], true);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_execute_bn_get_error_handling() -> Result<(), Box<dyn std::error::Error>> {
+        setup();
+        let mock_server = MockServer::start().await;
+        let test_path = "/api/v3/test";
+        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1)?;
+
+        // Setup mock returning error
+        Mock::given(method("GET"))
+            .and(path(test_path))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "code": -1121,
+                "msg": "Invalid symbol"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        // Execute request and expect error
+        let result = execute_bn_get::<serde_json::Value>(&request_info, None, None).await;
+        assert!(result.is_err());
+        Ok(())
     }
 }
