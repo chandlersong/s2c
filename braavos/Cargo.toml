@@ -29,7 +29,6 @@ tokio-tungstenite = { version = "0.24.0", features = ["rustls"] }
 [dev-dependencies]
 mockall = "0.12.0"
 wiremock = "0.6"
-braavos = { path = ".", features = ["binance"] }
 
 [build-dependencies]
 prost-build = "0.12"
@@ -42,7 +41,6 @@ prost-build = "0.12"
 
 # 启用此特性将会包含所有与币安 (Binance) 相关的功能模块和依赖。
 # 如果库的使用者不需要币安，他们可以不启用此特性，从而减少编译时间和依赖项。
-binance = []
 
 # -----------------------------------------------------------------------------
 # -- 环境配置特性 (Environment Configuration Features)
@@ -50,4 +48,4 @@ binance = []
 
 # 启用此特性将会把币安 API 的基地址切换到测试网 (Testnet)。
 # 它会自动激活 `binance` 特性，因为测试网是币安功能的一部分。
-binance-testnet = ["binance"]
+binance-testnet = []

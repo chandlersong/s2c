@@ -1,4 +1,3 @@
-#[cfg(feature = "binance")]
 pub mod binance;
 
 pub mod errors;
