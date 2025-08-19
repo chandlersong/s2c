@@ -6,3 +6,4 @@ pub mod notification;
 
 #[cfg(feature = "aws")]
 pub mod aws;
+mod errors;

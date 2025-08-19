@@ -1,4 +1,8 @@
+use crate::errors::MaesterError;
 use aws_sdk_dynamodb::config::{BehaviorVersion, Credentials, Region};
+use aws_sdk_dynamodb::types::{
+    AttributeDefinition, KeySchemaElement, KeyType, ProvisionedThroughput, ScalarAttributeType,
+};
 use aws_sdk_dynamodb::{Client, Config};
 
 pub async fn create_dynamodb_client(is_local: bool) -> Client {
@@ -25,5 +29,55 @@ pub async fn create_dynamodb_client(is_local: bool) -> Client {
         // 远程 AWS DynamoDB 配置
         let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
         Client::new(&config)
+    }
+}
+
+pub async fn create_kline_table(
+    client: &Client,
+    table_name: &str,
+    provisioned_throughput: Option<ProvisionedThroughput>,
+) -> Result<(), MaesterError> {
+    // 创建表
+    let pt = provisioned_throughput.unwrap_or_else(|| {
+        ProvisionedThroughput::builder()
+            .read_capacity_units(5)
+            .write_capacity_units(5)
+            .build()
+            .unwrap()
+    });
+    let result = client
+        .create_table()
+        .table_name(table_name)
+        .attribute_definitions(
+            AttributeDefinition::builder()
+                .attribute_name("symbol")
+                .attribute_type(ScalarAttributeType::S) // 修正类型
+                .build()?, // 解包 Result
+        )
+        .attribute_definitions(
+            AttributeDefinition::builder()
+                .attribute_name("timestamp")
+                .attribute_type(ScalarAttributeType::N) // 修正类型
+                .build()?, // 解包 Result
+        )
+        .key_schema(
+            KeySchemaElement::builder()
+                .attribute_name("symbol")
+                .key_type(KeyType::Hash) // 修正类型
+                .build()?, // 解包 Result
+        )
+        .key_schema(
+            KeySchemaElement::builder()
+                .attribute_name("timestamp")
+                .key_type(KeyType::Range) // 修正类型
+                .build()?, // 解包 Result
+        )
+        .provisioned_throughput(pt)
+        .send()
+        .await;
+
+    match result {
+        Ok(_) => Ok(()),
+        Err(e) => Err(MaesterError::from(aws_sdk_dynamodb::Error::from(e))), // 转换错误类型
     }
 }

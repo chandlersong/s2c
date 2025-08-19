@@ -1,6 +1,6 @@
 use aws_sdk_dynamodb::types::AttributeValue;
 use aws_smithy_types::Blob;
-use maester::aws::dynamodb::create_dynamodb_client;
+use maester::aws::dynamodb::{create_dynamodb_client, create_kline_table};
 use serde::{Deserialize, Serialize};
 use serde_dynamo;
 use std::collections::HashMap;
@@ -54,6 +54,10 @@ fn convert_attr_value(val: &serde_dynamo::AttributeValue) -> AttributeValue {
 async fn main() {
     // 初始化 DynamoDB 客户端
     let client = create_dynamodb_client(true).await;
+
+    create_kline_table(&client, "bn_kline", None)
+        .await
+        .expect("创建 Users 表失败");
 
     let user = User {
         user_id: "12345".to_string(),
