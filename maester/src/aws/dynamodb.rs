@@ -1,10 +1,11 @@
+use crate::errors::MaesterError;
 use aws_sdk_dynamodb::config::{BehaviorVersion, Credentials, Region};
 use aws_sdk_dynamodb::types::{
     AttributeDefinition, KeySchemaElement, KeyType, ProvisionedThroughput, ScalarAttributeType,
 };
 use aws_sdk_dynamodb::{Client, Config};
 
-pub async fn create_dynamodb_client(is_local: bool) -> Result<Client, aws_sdk_dynamodb::Error> {
+pub async fn create_dynamodb_client(is_local: bool) -> Result<Client, MaesterError> {
     // 检查环境变量 IS_LOCAL 是否为 "true" 来决定使用本地还是远程 DynamoDB
 
     if is_local {
@@ -35,7 +36,7 @@ pub async fn create_kline_table(
     client: &Client,
     table_name: &str,
     provisioned_throughput: Option<ProvisionedThroughput>,
-) -> Result<(), aws_sdk_dynamodb::Error> {
+) -> Result<(), MaesterError> {
     // 创建表
     let pt = provisioned_throughput.unwrap_or_else(|| {
         ProvisionedThroughput::builder()

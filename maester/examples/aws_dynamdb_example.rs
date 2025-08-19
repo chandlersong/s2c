@@ -1,6 +1,7 @@
 use aws_sdk_dynamodb::types::AttributeValue;
 use aws_smithy_types::Blob;
 use maester::aws::dynamodb::{create_dynamodb_client, create_kline_table};
+use maester::errors::MaesterError;
 use serde::{Deserialize, Serialize};
 use serde_dynamo;
 use std::collections::HashMap;
@@ -51,16 +52,11 @@ fn convert_attr_value(val: &serde_dynamo::AttributeValue) -> AttributeValue {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), MaesterError> {
     // 初始化 DynamoDB 客户端
-    let client = create_dynamodb_client(true)
-        .await
-        .expect("Failed to create DynamoDB client");
+    let client = create_dynamodb_client(true).await?;
 
-    if let Err(e) = create_kline_table(&client, "bn_kline1", None).await {
-        eprintln!("Error creating table: {:?}", e);
-        return;
-    }
+    create_kline_table(&client, "bn_kline1", None).await?;
     println!("Table 'bn_kline1' created successfully");
 
     // let user = User {
@@ -104,4 +100,6 @@ async fn main() {
     //         println!("手动转换方式写入失败: {:?}", e);
     //     }
     // }
+
+    Ok(())
 }
