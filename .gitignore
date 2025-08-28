@@ -263,3 +263,4 @@ fabric.properties
 /varys/tests/db/
 /conf/
 /test/
+.DS_Store

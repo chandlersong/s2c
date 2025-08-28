@@ -1,5 +1,5 @@
 use crate::binance::bn_models::{
-    BINANCE_API_BASE, EXCHANGE_INFO_PATH, PING_PATH, SERVER_TIME_PATH, SecurityInfo,
+    SecurityInfo, BINANCE_API_BASE, EXCHANGE_INFO_PATH, PING_PATH, SERVER_TIME_PATH, SPOT_KLINE_PATH
 };
 use crate::errors::BraavosError;
 use crate::http_client::HTTP_CLIENT;
@@ -76,6 +76,13 @@ pub static EXCHANGE_INFO_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| {
 pub static SERVER_TIME_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| {
     RequestInfo::from_base_path(BINANCE_API_BASE, SERVER_TIME_PATH, false, 1).unwrap()
 });
+
+pub static SPOT_KLINE_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| {
+    RequestInfo::from_base_path(BINANCE_API_BASE, SPOT_KLINE_PATH, false, 1).unwrap()
+});
+
+
+
 
 /// 全局 RateLimiter，使用 OnceLock 延迟初始化
 static RATE_LIMITER: OnceLock<RateLimiter<NotKeyed, InMemoryState, DefaultClock>> = OnceLock::new();

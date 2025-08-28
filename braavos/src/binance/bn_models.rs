@@ -5,6 +5,7 @@ use crate::tools::{string_to_float, unix_time};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+
 pub mod bin {
     use crate::binance::bn_models::{SpotDepthData, TradeRaw};
 
@@ -87,6 +88,7 @@ pub const PORTFOLIO_MARGIN_BASE: &str = "https://papi.binance.com/";
 pub const PING_PATH: &str = "/api/v3/ping";
 pub const EXCHANGE_INFO_PATH: &str = "/api/v3/exchangeInfo";
 pub const SERVER_TIME_PATH: &str = "/api/v3/time";
+pub const SPOT_KLINE_PATH: &str = "/api/v3/klines";
 pub const SPOT_TICKER_API_PATH: &str = "/api/v3/ticker/price";
 
 pub const BALANCE_PATH: &str = "/papi/v1/balance";
@@ -538,4 +540,43 @@ pub struct TradeRaw {
 
     #[serde(rename = "m")]
     pub buyer_is_marker: bool, //买方是否是做市方。如true，则此次成交是一个主动卖出单，否则是一个主动买入单。
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Kline {
+    #[serde(rename = "open_time")]
+    pub open_time: u64, // 开盘时间戳 (毫秒)
+
+    #[serde(rename = "open")]
+    pub open: String, // 开盘价
+
+    #[serde(rename = "high")]
+    pub high: String, // 最高价
+
+    #[serde(rename = "low")]
+    pub low: String, // 最低价
+
+    #[serde(rename = "close")]
+    pub close: String, // 收盘价
+
+    #[serde(rename = "volume")]
+    pub volume: String, // 成交量
+
+    #[serde(rename = "close_time")]
+    pub close_time: u64, // 收盘时间戳 (毫秒)
+
+    #[serde(rename = "quote_asset_volume")]
+    pub quote_asset_volume: String, // 成交额
+
+    #[serde(rename = "number_of_trades")]
+    pub number_of_trades: u64, // 成交笔数
+
+    #[serde(rename = "taker_buy_base_asset_volume")]
+    pub taker_buy_base_asset_volume: String, // 主动买入成交量
+
+    #[serde(rename = "taker_buy_quote_asset_volume")]
+    pub taker_buy_quote_asset_volume: String, // 主动买入成交额
+
+    #[serde(rename = "ignore")]
+    pub ignore: String, // 忽略字段
 }
