@@ -1,5 +1,6 @@
 use crate::binance::bn_models::{
-    SecurityInfo, BINANCE_API_BASE, EXCHANGE_INFO_PATH, PING_PATH, SERVER_TIME_PATH, SPOT_KLINE_PATH
+    BINANCE_API_BASE, EXCHANGE_INFO_PATH, EmptyQueryParams, PING_PATH, SERVER_TIME_PATH,
+    SPOT_KLINE_PATH, SecurityInfo, ToQueryParams,
 };
 use crate::errors::BraavosError;
 use crate::http_client::HTTP_CLIENT;
@@ -10,7 +11,6 @@ use governor::state::{InMemoryState, NotKeyed};
 use governor::{Jitter, Quota, RateLimiter};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::sync::{LazyLock, OnceLock};
 use std::time::Duration;
@@ -81,24 +81,6 @@ pub static SPOT_KLINE_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| {
     RequestInfo::from_base_path(BINANCE_API_BASE, SPOT_KLINE_PATH, false, 1).unwrap()
 });
 
-// 查询参数trait定义
-pub trait ToQueryParams {
-    fn to_query_string(&self) -> String;
-}
-
-// BTreeMap实现ToQueryParams
-impl ToQueryParams for BTreeMap<&str, String> {
-    fn to_query_string(&self) -> String {
-        self.iter()
-            .map(|(k, v)| format!("{}={}", k, v))
-            .collect::<Vec<String>>()
-            .join("&")
-    }
-}
-
-
-
-
 /// 全局 RateLimiter，使用 OnceLock 延迟初始化
 static RATE_LIMITER: OnceLock<RateLimiter<NotKeyed, InMemoryState, DefaultClock>> = OnceLock::new();
 
@@ -143,13 +125,13 @@ async fn check_rate_limit(weight: u32) -> Result<(), BraavosError> {
 }
 
 pub async fn execute_ping() -> Result<(), BraavosError> {
-    let _ = execute_bn_get::<EmptyObject>(&PING_COMMAND, None, None).await?;
+    let _ = execute_bn_get::<EmptyQueryParams, EmptyObject>(&PING_COMMAND, None, None).await?;
     Ok(())
 }
 
-pub async fn execute_bn_get<U: DeserializeOwned>(
+pub async fn execute_bn_get<P: ToQueryParams, U: DeserializeOwned>(
     info: &RequestInfo,
-    param: Option<BTreeMap<&str, String>>,
+    param: Option<P>,
     security_info: Option<SecurityInfo>,
 ) -> Result<U, BraavosError> {
     check_rate_limit(info.weight).await?;
@@ -163,9 +145,9 @@ pub async fn execute_bn_get<U: DeserializeOwned>(
     Ok(result)
 }
 
-pub async fn execute_bn_post<U: DeserializeOwned>(
+pub async fn execute_bn_post<U: DeserializeOwned, P: ToQueryParams>(
     info: &RequestInfo,
-    param: Option<BTreeMap<&str, String>>,
+    param: Option<P>,
     body: Option<Value>,
     security_info: Option<SecurityInfo>,
 ) -> Result<U, BraavosError> {
@@ -181,9 +163,9 @@ pub async fn execute_bn_post<U: DeserializeOwned>(
     Ok(result)
 }
 
-pub async fn execute_bn_put<U: DeserializeOwned>(
+pub async fn execute_bn_put<U: DeserializeOwned, P: ToQueryParams>(
     info: &RequestInfo,
-    param: Option<BTreeMap<&str, String>>,
+    param: Option<P>,
     body: Option<Value>,
     security_info: Option<SecurityInfo>,
 ) -> Result<U, BraavosError> {
@@ -200,26 +182,18 @@ pub async fn execute_bn_put<U: DeserializeOwned>(
 }
 
 /// Pure function for building request components. Easy to test.
-fn build_request_components(
+fn build_request_components<P: ToQueryParams>(
     info: &RequestInfo,
-    param: Option<BTreeMap<&str, String>>,
+    param: Option<P>,
     security_info: Option<SecurityInfo>,
 ) -> (String, Option<String>) {
     let mut url = info.as_ref().clone();
-
     let base_query_string = param
-        .filter(|p| !p.is_empty())
-        .map(|params| {
-            params
-                .into_iter()
-                .map(|(k, v)| format!("{}={}", k, v))
-                .collect::<Vec<String>>()
-                .join("&")
-        })
+        .as_ref()
+        .map(|p| p.to_query_string())
+        .filter(|s| !s.is_empty())
         .unwrap_or_default();
-
     let api_key = security_info.as_ref().map(|s| s.api_key.clone());
-
     if let Some(sec_info) = &security_info {
         let signature = sign_hmac(&base_query_string, &sec_info.api_secret).unwrap();
         let final_query = if base_query_string.is_empty() {
@@ -231,33 +205,29 @@ fn build_request_components(
     } else if !base_query_string.is_empty() {
         url.set_query(Some(&base_query_string));
     }
-
     (url.to_string(), api_key)
 }
 
 /// Imperative shell for creating the request object.
-fn create_request_with_param_and_security(
+fn create_request_with_param_and_security<P: ToQueryParams>(
     client: &Agent,
     info: &RequestInfo,
-    param: Option<BTreeMap<&str, String>>,
+    param: Option<P>,
     method: &str,
     security_info: Option<SecurityInfo>,
 ) -> Result<Request, BraavosError> {
     let (url, api_key) = build_request_components(info, param, security_info);
-
     let mut request = client.request(method, &url);
-
     if let Some(key) = api_key {
         request = request.set("X-MBX-APIKEY", &key);
     }
-
     Ok(request)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{build_request_components, check_rate_limit, execute_bn_get, get_bn_rate_limiter};
-    use crate::binance::bn_models::SecurityInfo;
+    use crate::binance::bn_models::{EmptyQueryParams, SecurityInfo};
     use crate::http_client::init_http_client;
     use crate::models::RequestInfo;
     use std::collections::BTreeMap;
@@ -279,7 +249,7 @@ mod tests {
         };
 
         // Scenario 1: No params, no security
-        let (url, header) = build_request_components(&request_info, None, None);
+        let (url, header) = build_request_components::<EmptyQueryParams>(&request_info, None, None);
         assert_eq!(
             url, "http://127.0.0.1:8080/api/v3/order",
             "Scenario 1 (No params, no security): URL should be base path"
@@ -305,8 +275,11 @@ mod tests {
         );
 
         // Scenario 3: No params, security
-        let (url, header) =
-            build_request_components(&request_info, None, Some(security_info.clone()));
+        let (url, header) = build_request_components::<EmptyQueryParams>(
+            &request_info,
+            None,
+            Some(security_info.clone()),
+        );
         assert_eq!(
             url,
             "http://127.0.0.1:8080/api/v3/order?signature=4c4df0c09aaefc2fe10f409703fd08d6754229e4c9b99897331efa42d8d65e47",
@@ -387,7 +360,9 @@ mod tests {
             .await;
 
         // Execute the request
-        let result: serde_json::Value = execute_bn_get(&request_info, None, None).await?;
+        let result: serde_json::Value =
+            execute_bn_get::<EmptyQueryParams, serde_json::Value>(&request_info, None, None)
+                .await?;
 
         assert_eq!(result["message"], "success");
         Ok(())
@@ -446,8 +421,12 @@ mod tests {
             .await;
 
         // Execute request with security info
-        let result: serde_json::Value =
-            execute_bn_get(&request_info, None, Some(security_info)).await?;
+        let result: serde_json::Value = execute_bn_get::<EmptyQueryParams, serde_json::Value>(
+            &request_info,
+            None,
+            Some(security_info),
+        )
+        .await?;
 
         assert_eq!(result["authenticated"], true);
         Ok(())
@@ -471,7 +450,8 @@ mod tests {
             .await;
 
         // Execute request and expect error
-        let result = execute_bn_get::<serde_json::Value>(&request_info, None, None).await;
+        let result =
+            execute_bn_get::<EmptyQueryParams, serde_json::Value>(&request_info, None, None).await;
         assert!(result.is_err());
         Ok(())
     }

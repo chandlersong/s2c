@@ -5,6 +5,28 @@ use crate::tools::{string_to_float, unix_time};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+// 查询参数trait定义
+pub trait ToQueryParams {
+    fn to_query_string(&self) -> String;
+}
+
+// BTreeMap实现ToQueryParams
+impl ToQueryParams for std::collections::BTreeMap<&str, String> {
+    fn to_query_string(&self) -> String {
+        self.iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect::<Vec<String>>()
+            .join("&")
+    }
+}
+
+pub struct EmptyQueryParams;
+
+impl ToQueryParams for EmptyQueryParams {
+    fn to_query_string(&self) -> String {
+        String::new()
+    }
+}
 
 pub mod bin {
     use crate::binance::bn_models::{SpotDepthData, TradeRaw};
