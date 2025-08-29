@@ -81,6 +81,21 @@ pub static SPOT_KLINE_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| {
     RequestInfo::from_base_path(BINANCE_API_BASE, SPOT_KLINE_PATH, false, 1).unwrap()
 });
 
+// 查询参数trait定义
+pub trait ToQueryParams {
+    fn to_query_string(&self) -> String;
+}
+
+// BTreeMap实现ToQueryParams
+impl ToQueryParams for BTreeMap<&str, String> {
+    fn to_query_string(&self) -> String {
+        self.iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect::<Vec<String>>()
+            .join("&")
+    }
+}
+
 
 
 
