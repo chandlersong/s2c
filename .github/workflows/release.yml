@@ -76,6 +76,9 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
       - name: Create and push multi-arch manifest for nightwatch
         run: |
-          docker buildx imagetools create --tag chandlersong/nightwatch:snapshot \
+          docker buildx imagetools create --tag chandlersong/nightwatch:${{github.event.inputs.imageTag}} \
+            chandlersong/nightwatch:${{github.event.inputs.imageTag}}-amd64 \
+            chandlersong/nightwatch:${{github.event.inputs.imageTag}}-arm64
+          docker buildx imagetools create --tag chandlersong/nightwatch:latest \
             chandlersong/nightwatch:${{github.event.inputs.imageTag}}-amd64 \
             chandlersong/nightwatch:${{github.event.inputs.imageTag}}-arm64
