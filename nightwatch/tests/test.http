@@ -1,5 +1,0 @@
-### 测试结果
-GET {{host}}/metrics
-Accept: application/json
-
-

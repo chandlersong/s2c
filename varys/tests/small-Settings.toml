@@ -1,7 +1,0 @@
-db_path = "test/db/all"
-
-[robot.ops]
-client_id = "abc"
-chat_id = 123
-
-[binance.spot]

@@ -3,9 +3,9 @@ resolver = "2"
 
 
 
-members = ["direwolf",
-    "braavos",
-    "nightwatch", "varys", "maester",
+members = [
+    "yue",
+     "li",
 ]
 
 

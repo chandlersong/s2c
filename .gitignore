@@ -257,8 +257,8 @@ fabric.properties
 .idea/caches/build_file_checksums.ser
 
 /nightwatch/conf/Settings.toml
-/braavos/conf/Settings.toml
-/maester/tests/db/
+/yue/conf/Settings.toml
+/li/tests/db/
 /conf/varys/Settings.toml
 /varys/tests/db/
 /conf/
