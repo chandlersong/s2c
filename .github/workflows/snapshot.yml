@@ -15,14 +15,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Run cargo test
         run: cargo test --all-features
-  build:
+  build-amd64:
     runs-on: ubuntu-latest
     needs: test
     steps:
       - name: checkout
         uses: actions/checkout@v4
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Login to Docker Registry
@@ -36,30 +34,48 @@ jobs:
           context: ${{ github.workspace }}
           file: ${{ github.workspace }}/Dockerfile
           push: true
-          tags: chandlersong/nightwatch:snapshot
+          tags: chandlersong/nightwatch:snapshot-amd64
           build-args: |
             APP_NAME=nightwatch
           platforms: linux/amd64
-      - name: direwolf build
+  build-arm64:
+    runs-on: ubuntu-24.04-arm
+    needs: test
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login to Docker Registry
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      - name: nightwatch build
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: ${{ github.workspace }}/Dockerfile
           push: true
-          tags: chandlersong/direwolf:snapshot
+          tags: chandlersong/nightwatch:snapshot-arm64
           build-args: |
-            APP_NAME=direwolf
+            APP_NAME=nightwatch
           platforms: linux/amd64
-      - name: varys build
-        uses: docker/build-push-action@v6
+  build_manifest:
+    runs-on: ubuntu-latest
+    needs: [test, build-arm64, build-amd64]
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
         with:
-          context: ${{ github.workspace }}
-          file: ${{ github.workspace }}/Dockerfile
-          push: true
-          tags: |
-            chandlersong/varys:snapshot
-          build-args: |
-            APP_NAME=varys
-          platforms: ${{ inputs.platform }}
-      - name: Image digest
-        run: echo ${{ steps.docker_build.outputs.digest }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Create and push multi-arch manifest for nightwatch
+        run: |
+          docker buildx imagetools create --tag chandlersong/nightwatch:snapshot \
+            chandlersong/nightwatch:snapshot-amd64 \
+            chandlersong/nightwatch:snapshot-arm64
