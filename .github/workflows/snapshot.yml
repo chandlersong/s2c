@@ -36,7 +36,8 @@ jobs:
           push: true
           tags: chandlersong/nightwatch:snapshot-amd64
           build-args: |
-            APP_NAME=nightwatch
+            APP_NAME=nightwatch,
+            LIBDIR=x86_64-linux-gnu
           platforms: linux/amd64
   build-arm64:
     runs-on: ubuntu-24.04-arm
@@ -59,7 +60,8 @@ jobs:
           push: true
           tags: chandlersong/nightwatch:snapshot-arm64
           build-args: |
-            APP_NAME=nightwatch
+            APP_NAME=nightwatch,
+            LIBDIR=aarch64-linux-gnu
           platforms: linux/arm64
   build_manifest:
     runs-on: ubuntu-latest
