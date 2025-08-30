@@ -10,7 +10,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     container:
-      image: chandlersong/1.89-slim-bookworm  # 替换为你的镜像
+      image: chandlersong/rust_ci:1.89-slim-bookworm  # 替换为你的镜像
     steps:
       - uses: actions/checkout@v4
       - name: Run cargo test
@@ -60,7 +60,7 @@ jobs:
           tags: chandlersong/nightwatch:snapshot-arm64
           build-args: |
             APP_NAME=nightwatch
-          platforms: linux/amd64
+          platforms: linux/arm64
   build_manifest:
     runs-on: ubuntu-latest
     needs: [test, build-arm64, build-amd64]
