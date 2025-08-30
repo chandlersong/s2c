@@ -6,5 +6,6 @@ test_docker_file:
 	docker build \
 	  -f Dockerfile \
 	  --build-arg APP_NAME=nightwatch \
+	  --build-arg LIBDIR=aarch64-linux-gnu \
       -t chandlersong/nightwatch:0.1.0\
       .
