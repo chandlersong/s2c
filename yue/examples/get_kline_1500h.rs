@@ -10,8 +10,8 @@ async fn main() {
     init_http_client(proxy);
 
     let now_ms = unix_time();
-    let hours: u64 = 1500;
-    let start_ms = now_ms - hours * 3600 * 1000;
+    let one_hour: u64 = 60 * 60 * 1000;
+    let start_ms = now_ms - 1500 * one_hour;
     println!("Now (ms) = {}, start_time (ms) = {}", now_ms, start_ms);
 
     match get_all_kline_data("BTCUSDT", KlineInterval::OneHour, Some(start_ms)).await {
@@ -29,6 +29,19 @@ async fn main() {
                     unix_2_readable(&last.close_time)
                 );
             }
+            let mut prev = start_ms - one_hour;
+            for k in &klines {
+                let gap = k.open_time - prev;
+                if gap != one_hour {
+                    println!(
+                        "Time gap detected!prev is {},now is {}",
+                        unix_2_readable(&prev),
+                        unix_2_readable(&k.open_time)
+                    );
+                }
+                prev = k.open_time;
+            }
+
             println!("total kline fetched: {}", klines.len());
         }
         Err(e) => {

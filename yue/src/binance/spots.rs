@@ -104,6 +104,7 @@ impl ToQueryParams for KlineParams {
 }
 
 /// 获取现货交易对信息
+///TODO： 这个算法是错的。因为如果开始时间不存在的话，就什么数据都拉不到
 ///
 /// # 参数
 /// * `status` - 交易对状态过滤器
@@ -158,7 +159,11 @@ pub async fn get_trading_spot_symbols(
 }
 
 /// 获取指定交易对和时间间隔的K线数据
+/// FIXME：如果start_time之后的一个周期没有。就不会取道数据
+///       比如你从2021年1月1日取，但是这个币是2022年1月上市的。这里就会是空
 ///
+/// 注意点
+/// 1. 最后一段时间最好废弃。比如说现在是11:30:00， interval是1h。那么最后一段就是11点到12点的一段时间。
 /// # 参数
 /// * `symbol` - 交易对符号，如 "BTCUSDT"
 /// * `interval` - K线时间间隔
@@ -171,7 +176,7 @@ pub async fn get_all_kline_data(
     interval: KlineInterval,
     start_time: Option<u64>,
 ) -> Result<Vec<Kline>, YueError> {
-    let mut all_klines = Vec::new();
+    let mut res: Vec<Kline> = Vec::new();
     let mut current_start_time = start_time;
 
     loop {
@@ -187,30 +192,35 @@ pub async fn get_all_kline_data(
             execute_bn_get::<KlineParams, Vec<Kline>>(&SPOT_KLINE_COMMAND, Some(params), None)
                 .await?;
 
+        if let Some(last_kline) = klines.last() {
+            if current_start_time.is_some() && current_start_time.unwrap() == last_kline.close_time
+            {
+                break;
+            }
+            current_start_time = Some(last_kline.close_time);
+        } else {
+            break;
+        }
+
         let klines_count = klines.len();
-        all_klines.extend(klines);
+        res.extend(klines);
 
         if klines_count < 1000 {
             break;
         }
 
         // Set next start_time to the close_time of the last kline
-        if let Some(last_kline) = all_klines.last() {
-            current_start_time = Some(last_kline.close_time);
-        } else {
-            break;
-        }
     }
 
-    Ok(all_klines)
+    Ok(res)
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::binance::bn_models::BINANCE_API_BASE;
     use crate::binance::spots::{KlineInterval, get_all_kline_data};
     use crate::http_client::init_http_client;
     use serde_json::json;
+    use serial_test::serial;
     use std::net::TcpListener;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -241,9 +251,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_get_all_kline_data_normal_case() {
         let mock_server = create_net_work().await;
-        print!("{}", &mock_server.uri());
         // Mock response with 500 klines
         let mut mock_klines = vec![];
         for i in 0..500 {
@@ -273,6 +283,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_get_all_kline_data_pagination() {
         let mock_server = create_net_work().await;
 
@@ -308,12 +319,13 @@ mod tests {
             .and(query_param("symbol", "BTCUSDT"))
             .and(query_param("interval", "1h"))
             .and(query_param("limit", "1000"))
-            .and(query_param("startTime", "1610063999999")) // close_time of last in first batch
+            .and(query_param("startTime", "1613059199999")) // close_time of last in first batch
             .respond_with(ResponseTemplate::new(200).set_body_json(second_batch))
             .expect(1)
             .mount(&mock_server)
             .await;
-        let kline_res = get_all_kline_data("BTCUSDT", KlineInterval::OneHour, None).await;
+        let kline_res =
+            get_all_kline_data("BTCUSDT", KlineInterval::OneHour, Some(1609459200000)).await;
         assert!(
             kline_res.is_ok(),
             "获取K线数据失败: {:?}",
@@ -324,42 +336,25 @@ mod tests {
         assert!(kline[0].open_time == 1609459200000);
     }
 
-    // #[tokio::test]
-    async fn test_get_all_kline_data_start_time_none() {
-        let mock_server = MockServer::start().await;
-
-        let mock_klines = vec![create_mock_kline(1609459200000, 1609462799999)];
-
-        Mock::given(method("GET"))
-            .and(path("/api/v3/klines"))
-            .and(query_param("symbol", "BTCUSDT"))
-            .and(query_param("interval", "1h"))
-            .and(query_param("limit", "1000"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(mock_klines))
-            .mount(&mock_server)
-            .await;
-
-        // Test with start_time = None
-        // Placeholder
-    }
-
-    // #[tokio::test]
+    #[tokio::test]
+    #[serial]
     async fn test_get_all_kline_data_api_error() {
-        let mock_server = MockServer::start().await;
+        let mock_server = create_net_work().await;
 
         Mock::given(method("GET"))
             .and(path("/api/v3/klines"))
             .respond_with(ResponseTemplate::new(500))
             .mount(&mock_server)
             .await;
-
-        // Test error handling
-        // Placeholder
+        let kline_res =
+            get_all_kline_data("BTCUSDT", KlineInterval::OneHour, Some(1609459200000)).await;
+        assert!(kline_res.is_err());
     }
 
-    // #[tokio::test]
+    #[tokio::test]
+    #[serial]
     async fn test_get_all_kline_data_exactly_1000() {
-        let mock_server = MockServer::start().await;
+        let mock_server = create_net_work().await;
 
         let mut mock_klines = vec![];
         for i in 0..1000 {
@@ -374,11 +369,19 @@ mod tests {
             .and(query_param("interval", "1h"))
             .and(query_param("limit", "1000"))
             .respond_with(ResponseTemplate::new(200).set_body_json(mock_klines))
-            .expect(1) // Only one request
+            .expect(2) // Only one request
             .mount(&mock_server)
             .await;
 
-        // Test that no additional request is made
-        // Placeholder
+        let kline_res =
+            get_all_kline_data("BTCUSDT", KlineInterval::OneHour, Some(1609459200000)).await;
+        assert!(
+            kline_res.is_ok(),
+            "获取K线数据失败: {:?}",
+            kline_res.as_ref().err()
+        );
+        let kline = kline_res.unwrap();
+        assert_eq!(kline.len(), 1000);
+        assert!(kline[0].open_time == 1609459200000);
     }
 }
