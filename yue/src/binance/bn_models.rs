@@ -412,22 +412,6 @@ pub struct ExchangeSymbol {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TradingSymbolInfo {
-    /// 交易对符号，如 "BTCUSDT"
-    pub symbol: String,
-    /// 交易状态，可能的值包括：TRADING, END_OF_DAY, HALT, BREAK
-    pub status: String,
-    /// 基础资产，如 "BTC"
-    pub base_asset: String,
-    /// 报价资产，如 "USDT"
-    pub quote_asset: String,
-    /// 报价资产精度
-    pub quote_asset_precision: i32,
-    /// 支持的订单类型数组
-    pub order_types: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UMSwapBalance {
     #[serde(rename = "tradeGroupId")]
     pub trade_group_id: i32,
