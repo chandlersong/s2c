@@ -34,6 +34,7 @@ pub async fn get_trading_spot_symbols(status: Option<&str>) -> Result<Vec<Tradin
                 symbol: symbol.symbol,
                 status: symbol.status,
                 base_asset: symbol.base_asset,
+                quote_asset: symbol.quote_asset,
                 quote_asset_precision: symbol.quote_asset_precision,
                 order_types: symbol.order_types,
             })
@@ -48,6 +49,7 @@ pub async fn get_trading_spot_symbols(status: Option<&str>) -> Result<Vec<Tradin
                 symbol: symbol.symbol,
                 status: symbol.status,
                 base_asset: symbol.base_asset,
+                quote_asset: symbol.quote_asset,
                 quote_asset_precision: symbol.quote_asset_precision,
                 order_types: symbol.order_types,
             })

@@ -9,6 +9,14 @@ use yue::http_client::init_http_client;
 /// 这个例子演示了如何调用 get_trading_spot_symbols 函数
 /// 获取所有交易对的信息（包括各种状态的交易对）
 /// 并将结果保存为CSV格式的文件
+/// 
+/// CSV文件包含以下字段：
+/// - symbol: 交易对符号
+/// - status: 交易状态
+/// - base_asset: 基础资产
+/// - quote_asset: 报价资产
+/// - quote_asset_precision: 报价资产精度
+/// - order_types: 支持的订单类型
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
      let proxy = Option::from("http://localhost:7891");
@@ -35,6 +43,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         "symbol",
         "status",
         "base_asset",
+        "quote_asset",
         "quote_asset_precision",
         "order_types"
     ])?;
@@ -48,6 +57,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             &symbol_info.symbol,
             &symbol_info.status,
             &symbol_info.base_asset,
+            &symbol_info.quote_asset,
             &symbol_info.quote_asset_precision.to_string(),
             &order_types_str,
         ])?;
@@ -74,11 +84,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // 显示前5个交易对作为示例
     println!("\n前5个交易对示例:");
     for (i, symbol) in symbols.iter().take(5).enumerate() {
-        println!("  {}. {} ({}) - 基础资产: {}, 报价精度: {}",
+        println!("  {}. {} ({}) - 基础资产: {}, 报价资产: {}, 报价精度: {}",
                  i + 1,
                  symbol.symbol,
                  symbol.status,
                  symbol.base_asset,
+                 symbol.quote_asset,
                  symbol.quote_asset_precision);
     }
 

@@ -419,6 +419,8 @@ pub struct TradingSymbolInfo {
     pub status: String,
     /// 基础资产，如 "BTC"
     pub base_asset: String,
+    /// 报价资产，如 "USDT"
+    pub quote_asset: String,
     /// 报价资产精度
     pub quote_asset_precision: i32,
     /// 支持的订单类型数组
