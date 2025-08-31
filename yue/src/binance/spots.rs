@@ -1,5 +1,5 @@
 use crate::binance::bn_models::{
-    ExchangeInfo, EmptyQueryParams,
+    ExchangeInfo, EmptyQueryParams, ToQueryParams,
 };
 use crate::binance::bn_restful_commands::{execute_bn_get, EXCHANGE_INFO_COMMAND};
 use crate::errors::YueError;
@@ -19,6 +19,88 @@ pub struct TradingSymbolInfo {
     pub quote_asset_precision: i32,
     /// 支持的订单类型数组
     pub order_types: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum KlineInterval {
+    OneSecond,
+    OneMinute,
+    ThreeMinutes,
+    FiveMinutes,
+    FifteenMinutes,
+    ThirtyMinutes,
+    OneHour,
+    TwoHours,
+    FourHours,
+    SixHours,
+    EightHours,
+    TwelveHours,
+    OneDay,
+    ThreeDays,
+    OneWeek,
+    OneMonth,
+}
+
+impl AsRef<str> for KlineInterval {
+    fn as_ref(&self) -> &str {
+        match self {
+            KlineInterval::OneSecond => "1s",
+            KlineInterval::OneMinute => "1m",
+            KlineInterval::ThreeMinutes => "3m",
+            KlineInterval::FiveMinutes => "5m",
+            KlineInterval::FifteenMinutes => "15m",
+            KlineInterval::ThirtyMinutes => "30m",
+            KlineInterval::OneHour => "1h",
+            KlineInterval::TwoHours => "2h",
+            KlineInterval::FourHours => "4h",
+            KlineInterval::SixHours => "6h",
+            KlineInterval::EightHours => "8h",
+            KlineInterval::TwelveHours => "12h",
+            KlineInterval::OneDay => "1d",
+            KlineInterval::ThreeDays => "3d",
+            KlineInterval::OneWeek => "1w",
+            KlineInterval::OneMonth => "1M",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KlineParams {
+    pub symbol: String,
+    pub interval: KlineInterval,
+    pub start_time: Option<i64>,
+    pub end_time: Option<i64>,
+    pub limit: Option<u32>,
+}
+
+impl KlineParams {
+    pub fn new(symbol: String) -> Self {
+        Self {
+            symbol,
+            interval: KlineInterval::OneHour,
+            start_time: None,
+            end_time: None,
+            limit: None,
+        }
+    }
+}
+
+impl ToQueryParams for KlineParams {
+    fn to_query_string(&self) -> String {
+        let mut params = vec![];
+        params.push(format!("symbol={}", self.symbol));
+        params.push(format!("interval={}", self.interval.as_ref()));
+        if let Some(start) = self.start_time {
+            params.push(format!("startTime={}", start));
+        }
+        if let Some(end) = self.end_time {
+            params.push(format!("endTime={}", end));
+        }
+        if let Some(limit) = self.limit {
+            params.push(format!("limit={}", limit));
+        }
+        params.join("&")
+    }
 }
 
 /// 获取现货交易对信息
