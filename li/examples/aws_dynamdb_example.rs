@@ -1,5 +1,5 @@
 use li::aws::dynamodb::{create_dynamodb_client, create_kline_table};
-use li::errors::MaesterError;
+use li::errors::LiError;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -10,7 +10,7 @@ struct User {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), MaesterError> {
+async fn main() -> Result<(), LiError> {
     // 初始化 DynamoDB 客户端
     let client = create_dynamodb_client(true).await?;
 

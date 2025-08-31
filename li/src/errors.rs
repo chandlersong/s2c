@@ -4,7 +4,7 @@ use aws_sdk_dynamodb::operation::update_time_to_live::UpdateTimeToLiveError;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
-pub enum MaesterError {
+pub enum LiError {
     #[error("DynamoDB error: {0}")]
     DynamoDBError(#[from] aws_sdk_dynamodb::Error),
     #[error("Serde error: {0}")]
@@ -13,14 +13,14 @@ pub enum MaesterError {
     CustomError(String),
 }
 
-impl From<SdkError<CreateTableError>> for MaesterError {
+impl From<SdkError<CreateTableError>> for LiError {
     fn from(err: SdkError<CreateTableError>) -> Self {
-        MaesterError::DynamoDBError(aws_sdk_dynamodb::Error::from(err))
+        LiError::DynamoDBError(aws_sdk_dynamodb::Error::from(err))
     }
 }
 
-impl From<SdkError<UpdateTimeToLiveError>> for MaesterError {
+impl From<SdkError<UpdateTimeToLiveError>> for LiError {
     fn from(err: SdkError<UpdateTimeToLiveError>) -> Self {
-        MaesterError::DynamoDBError(aws_sdk_dynamodb::Error::from(err))
+        LiError::DynamoDBError(aws_sdk_dynamodb::Error::from(err))
     }
 }
