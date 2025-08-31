@@ -23,6 +23,11 @@ async-trait = "0.1.81"
 url = { version = "2.5.4" }
 ureq = { version = "2.10", features = ["json"] }
 tokio-tungstenite = { version = "0.24.0", features = ["rustls"] }
+csv = "1.3.0"
+
+[[example]]
+name = "bn_exchange_info"
+path = "examples/bn_exchange_info.rs"
 
 
 
