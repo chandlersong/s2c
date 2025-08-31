@@ -4,8 +4,8 @@ use yue::binance::bn_models::Kline;
 use yue::binance::bn_models::{EmptyQueryParams, ServerTime};
 use yue::binance::bn_restful_commands::SPOT_KLINE_COMMAND;
 use yue::binance::bn_restful_commands::{SERVER_TIME_COMMAND, execute_bn_get, execute_ping};
-use yue::binance::bn_tools::unix_2_readable;
 use yue::http_client::init_http_client;
+use yue::tools::unix_2_readable;
 
 ///
 /// 币安REST API示例 - 无需API密钥

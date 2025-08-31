@@ -68,8 +68,8 @@ impl AsRef<str> for KlineInterval {
 pub struct KlineParams {
     pub symbol: String,
     pub interval: KlineInterval,
-    pub start_time: Option<i64>,
-    pub end_time: Option<i64>,
+    pub start_time: Option<u64>,
+    pub end_time: Option<u64>,
     pub limit: Option<u32>,
 }
 
@@ -169,7 +169,7 @@ pub async fn get_trading_spot_symbols(
 pub async fn get_all_kline_data(
     symbol: &str,
     interval: KlineInterval,
-    start_time: Option<i64>,
+    start_time: Option<u64>,
 ) -> Result<Vec<Kline>, YueError> {
     let mut all_klines = Vec::new();
     let mut current_start_time = start_time;
@@ -196,7 +196,7 @@ pub async fn get_all_kline_data(
 
         // Set next start_time to the close_time of the last kline
         if let Some(last_kline) = all_klines.last() {
-            current_start_time = Some(last_kline.close_time as i64);
+            current_start_time = Some(last_kline.close_time);
         } else {
             break;
         }
@@ -272,9 +272,9 @@ mod tests {
         assert!(kline[0].open_time == 1609459200000);
     }
 
-    // #[tokio::test]
+    #[tokio::test]
     async fn test_get_all_kline_data_pagination() {
-        let mock_server = MockServer::start().await;
+        let mock_server = create_net_work().await;
 
         // First response: 1000 klines
         let mut first_batch = vec![];
@@ -313,8 +313,15 @@ mod tests {
             .expect(1)
             .mount(&mock_server)
             .await;
-
-        // Placeholder for actual test execution
+        let kline_res = get_all_kline_data("BTCUSDT", KlineInterval::OneHour, None).await;
+        assert!(
+            kline_res.is_ok(),
+            "获取K线数据失败: {:?}",
+            kline_res.as_ref().err()
+        );
+        let kline = kline_res.unwrap();
+        assert_eq!(kline.len(), 1200);
+        assert!(kline[0].open_time == 1609459200000);
     }
 
     // #[tokio::test]

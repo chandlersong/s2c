@@ -78,7 +78,7 @@ pub static SERVER_TIME_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| {
 });
 
 pub static SPOT_KLINE_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| {
-    RequestInfo::from_base_path(BINANCE_API_BASE, SPOT_KLINE_PATH, false, 1).unwrap()
+    RequestInfo::from_base_path(BINANCE_API_BASE, SPOT_KLINE_PATH, false, 2).unwrap()
 });
 
 /// 全局 RateLimiter，使用 OnceLock 延迟初始化
@@ -135,9 +135,7 @@ pub async fn execute_bn_get<P: ToQueryParams, U: DeserializeOwned>(
     security_info: Option<SecurityInfo>,
 ) -> Result<U, YueError> {
     check_rate_limit(info.weight).await?;
-    let client = HTTP_CLIENT
-        .get()
-        .ok_or(YueError::new("客户端没有初始化"))?;
+    let client = HTTP_CLIENT.get().ok_or(YueError::new("客户端没有初始化"))?;
     let request =
         create_request_with_param_and_security(client, info, param, "GET", security_info)?;
     let res = request.call()?;
@@ -152,9 +150,7 @@ pub async fn execute_bn_post<U: DeserializeOwned, P: ToQueryParams>(
     security_info: Option<SecurityInfo>,
 ) -> Result<U, YueError> {
     check_rate_limit(info.weight).await?;
-    let client = HTTP_CLIENT
-        .get()
-        .ok_or(YueError::new("客户端没有初始化"))?;
+    let client = HTTP_CLIENT.get().ok_or(YueError::new("客户端没有初始化"))?;
     let request =
         create_request_with_param_and_security(client, info, param, "POST", security_info)?;
     let request_body = body.unwrap_or_else(|| Value::Null);
@@ -170,9 +166,7 @@ pub async fn execute_bn_put<U: DeserializeOwned, P: ToQueryParams>(
     security_info: Option<SecurityInfo>,
 ) -> Result<U, YueError> {
     check_rate_limit(info.weight).await?;
-    let client = HTTP_CLIENT
-        .get()
-        .ok_or(YueError::new("客户端没有初始化"))?;
+    let client = HTTP_CLIENT.get().ok_or(YueError::new("客户端没有初始化"))?;
     let request =
         create_request_with_param_and_security(client, info, param, "PUT", security_info)?;
     let request_body = body.unwrap_or_else(|| Value::Null);
