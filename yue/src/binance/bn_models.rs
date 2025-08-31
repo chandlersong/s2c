@@ -83,7 +83,7 @@ pub mod bin {
 
 // For Unit Tests with WireMock
 #[cfg(test)]
-pub const BINANCE_API_BASE: &str = "http://127.0.0.1:8080"; // WireMock server address
+pub const BINANCE_API_BASE: &str = "http://127.0.0.1:18080"; // WireMock server address
 
 // For Examples and Testnet Applications
 #[cfg(all(feature = "binance-testnet", not(test)))]

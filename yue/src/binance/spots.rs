@@ -1,7 +1,7 @@
-use crate::binance::bn_models::{
-    ExchangeInfo, EmptyQueryParams, ToQueryParams,
+use crate::binance::bn_models::{EmptyQueryParams, ExchangeInfo, Kline, ToQueryParams};
+use crate::binance::bn_restful_commands::{
+    EXCHANGE_INFO_COMMAND, SPOT_KLINE_COMMAND, execute_bn_get,
 };
-use crate::binance::bn_restful_commands::{execute_bn_get, EXCHANGE_INFO_COMMAND};
 use crate::errors::YueError;
 use serde::{Deserialize, Serialize};
 
@@ -104,23 +104,22 @@ impl ToQueryParams for KlineParams {
 }
 
 /// 获取现货交易对信息
-/// 
+///
 /// # 参数
 /// * `status` - 交易对状态过滤器
 ///   - `None` 或 `Some("TRADING")`: 只返回交易中的交易对 (默认)
 ///   - `Some("ALL")`: 返回所有交易对 (不进行状态过滤)
 ///   - `Some("HALT")`: 只返回暂停交易的交易对
 ///   - 其他值: 按指定状态过滤
-/// 
+///
 /// # 返回
 /// 返回符合条件的交易对信息列表，包含 symbol, status, base_asset, quote_asset_precision, order_types
-pub async fn get_trading_spot_symbols(status: Option<&str>) -> Result<Vec<TradingSymbolInfo>, YueError> {
-    let exchange_info: ExchangeInfo = execute_bn_get::<EmptyQueryParams, ExchangeInfo>(
-        &EXCHANGE_INFO_COMMAND,
-        None,
-        None,
-    )
-    .await?;
+pub async fn get_trading_spot_symbols(
+    status: Option<&str>,
+) -> Result<Vec<TradingSymbolInfo>, YueError> {
+    let exchange_info: ExchangeInfo =
+        execute_bn_get::<EmptyQueryParams, ExchangeInfo>(&EXCHANGE_INFO_COMMAND, None, None)
+            .await?;
 
     let filter_status = status.unwrap_or("TRADING");
 
@@ -156,4 +155,223 @@ pub async fn get_trading_spot_symbols(status: Option<&str>) -> Result<Vec<Tradin
     };
 
     Ok(trading_symbols)
+}
+
+/// 获取指定交易对和时间间隔的K线数据
+///
+/// # 参数
+/// * `symbol` - 交易对符号，如 "BTCUSDT"
+/// * `interval` - K线时间间隔
+/// * `start_time` - 开始时间（毫秒时间戳），如果为None则获取全部历史数据
+///
+/// # 返回
+/// 返回K线数据列表，由于API限制，每次最多1000条，会自动分页获取
+pub async fn get_all_kline_data(
+    symbol: &str,
+    interval: KlineInterval,
+    start_time: Option<i64>,
+) -> Result<Vec<Kline>, YueError> {
+    let mut all_klines = Vec::new();
+    let mut current_start_time = start_time;
+
+    loop {
+        let params = KlineParams {
+            symbol: symbol.to_string(),
+            interval: interval.clone(),
+            start_time: current_start_time,
+            end_time: None,
+            limit: Some(1000),
+        };
+
+        let klines: Vec<Kline> =
+            execute_bn_get::<KlineParams, Vec<Kline>>(&SPOT_KLINE_COMMAND, Some(params), None)
+                .await?;
+
+        let klines_count = klines.len();
+        all_klines.extend(klines);
+
+        if klines_count < 1000 {
+            break;
+        }
+
+        // Set next start_time to the close_time of the last kline
+        if let Some(last_kline) = all_klines.last() {
+            current_start_time = Some(last_kline.close_time as i64);
+        } else {
+            break;
+        }
+    }
+
+    Ok(all_klines)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::binance::bn_models::BINANCE_API_BASE;
+    use crate::binance::spots::{KlineInterval, get_all_kline_data};
+    use crate::http_client::init_http_client;
+    use serde_json::json;
+    use std::net::TcpListener;
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    // Helper function to create mock Kline data
+    fn create_mock_kline(open_time: u64, close_time: u64) -> serde_json::Value {
+        json!([
+            open_time,  // open_time
+            "10000.0",  // open
+            "10100.0",  // high
+            "9900.0",   // low
+            "10050.0",  // close
+            "10.0",     // volume
+            close_time, // close_time
+            "100500.0", // quote_asset_volume
+            100,        // number_of_trades
+            "5.0",      // taker_buy_base_asset_volume
+            "50000.0",  // taker_buy_quote_asset_volume
+            "0"         // ignore
+        ])
+    }
+
+    async fn create_net_work() -> MockServer {
+        init_http_client(None);
+        let listener = TcpListener::bind("127.0.0.1:18080").expect("bind failed");
+        let mock_server = MockServer::builder().listener(listener).start().await;
+        mock_server
+    }
+
+    #[tokio::test]
+    async fn test_get_all_kline_data_normal_case() {
+        let mock_server = create_net_work().await;
+        print!("{}", &mock_server.uri());
+        // Mock response with 500 klines
+        let mut mock_klines = vec![];
+        for i in 0..500 {
+            let open_time = 1609459200000 + i * 3600000; // 1 hour intervals
+            let close_time = open_time + 3600000 - 1;
+            mock_klines.push(create_mock_kline(open_time, close_time));
+        }
+
+        Mock::given(method("GET"))
+            .and(path("/api/v3/klines"))
+            .and(query_param("symbol", "BTCUSDT"))
+            .and(query_param("interval", "1h"))
+            .and(query_param("limit", "1000"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mock_klines))
+            .mount(&mock_server)
+            .await;
+
+        let kline_res = get_all_kline_data("BTCUSDT", KlineInterval::OneHour, None).await;
+        assert!(
+            kline_res.is_ok(),
+            "获取K线数据失败: {:?}",
+            kline_res.as_ref().err()
+        );
+        let kline = kline_res.unwrap();
+        assert_eq!(kline.len(), 500);
+        assert!(kline[0].open_time == 1609459200000);
+    }
+
+    // #[tokio::test]
+    async fn test_get_all_kline_data_pagination() {
+        let mock_server = MockServer::start().await;
+
+        // First response: 1000 klines
+        let mut first_batch = vec![];
+        for i in 0..1000 {
+            let open_time = 1609459200000 + i * 3600000;
+            let close_time = open_time + 3600000 - 1;
+            first_batch.push(create_mock_kline(open_time, close_time));
+        }
+
+        // Second response: 200 klines
+        let mut second_batch = vec![];
+        for i in 1000..1200 {
+            let open_time = 1609459200000 + i * 3600000;
+            let close_time = open_time + 3600000 - 1;
+            second_batch.push(create_mock_kline(open_time, close_time));
+        }
+
+        Mock::given(method("GET"))
+            .and(path("/api/v3/klines"))
+            .and(query_param("symbol", "BTCUSDT"))
+            .and(query_param("interval", "1h"))
+            .and(query_param("limit", "1000"))
+            .and(query_param("startTime", "1609459200000"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(first_batch))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/api/v3/klines"))
+            .and(query_param("symbol", "BTCUSDT"))
+            .and(query_param("interval", "1h"))
+            .and(query_param("limit", "1000"))
+            .and(query_param("startTime", "1610063999999")) // close_time of last in first batch
+            .respond_with(ResponseTemplate::new(200).set_body_json(second_batch))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        // Placeholder for actual test execution
+    }
+
+    // #[tokio::test]
+    async fn test_get_all_kline_data_start_time_none() {
+        let mock_server = MockServer::start().await;
+
+        let mock_klines = vec![create_mock_kline(1609459200000, 1609462799999)];
+
+        Mock::given(method("GET"))
+            .and(path("/api/v3/klines"))
+            .and(query_param("symbol", "BTCUSDT"))
+            .and(query_param("interval", "1h"))
+            .and(query_param("limit", "1000"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mock_klines))
+            .mount(&mock_server)
+            .await;
+
+        // Test with start_time = None
+        // Placeholder
+    }
+
+    // #[tokio::test]
+    async fn test_get_all_kline_data_api_error() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/api/v3/klines"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&mock_server)
+            .await;
+
+        // Test error handling
+        // Placeholder
+    }
+
+    // #[tokio::test]
+    async fn test_get_all_kline_data_exactly_1000() {
+        let mock_server = MockServer::start().await;
+
+        let mut mock_klines = vec![];
+        for i in 0..1000 {
+            let open_time = 1609459200000 + i * 3600000;
+            let close_time = open_time + 3600000 - 1;
+            mock_klines.push(create_mock_kline(open_time, close_time));
+        }
+
+        Mock::given(method("GET"))
+            .and(path("/api/v3/klines"))
+            .and(query_param("symbol", "BTCUSDT"))
+            .and(query_param("interval", "1h"))
+            .and(query_param("limit", "1000"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mock_klines))
+            .expect(1) // Only one request
+            .mount(&mock_server)
+            .await;
+
+        // Test that no additional request is made
+        // Placeholder
+    }
 }
