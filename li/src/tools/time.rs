@@ -51,9 +51,24 @@ pub fn get_next_utc_day_begin() -> Instant {
             .expect("Duration out of range")
 }
 
+pub fn get_prev_utc_hour_end() -> u64 {
+    // 获取当前 UTC 时间
+    let now = Utc::now();
+
+    // 构造当前小时的开始时间（分钟和秒为0）
+    let current_hour_start = Utc
+        .with_ymd_and_hms(now.year(), now.month(), now.day(), now.hour(), 0, 0)
+        .single()
+        .expect("Failed to create current hour start");
+
+    // previous hour's end corresponds to current_hour_start
+    // 返回毫秒时间戳，保持与项目中其他时间戳格式一致
+    current_hour_start.timestamp_millis() as u64
+}
+
 pub fn get_next_utc_hour_begin() -> Instant {
     let now = Utc::now();
-    // 计算今天的 00:00 UTC
+    // 计算今���的 00:00 UTC
     let current_hour = Utc
         .with_ymd_and_hms(now.year(), now.month(), now.day(), now.hour(), 0, 0)
         .single()
@@ -80,9 +95,9 @@ pub fn get_next_utc_hour_begin() -> Instant {
 #[cfg(test)]
 mod tests {
     use crate::tools::time::{
-        get_next_utc_day_begin, get_next_utc_hour_begin, instant_to_datetime,
+        get_next_utc_day_begin, get_next_utc_hour_begin, get_prev_utc_hour_end, instant_to_datetime,
     };
-    use chrono::Timelike;
+    use chrono::{Datelike, TimeZone, Timelike, Utc};
     use tokio::time::Instant;
 
     #[test]
@@ -109,5 +124,21 @@ mod tests {
         println!("next hour is {}", datetime);
         assert_eq!(datetime.minute(), 0);
         assert_eq!(datetime.second(), 0);
+    }
+
+    #[test]
+    pub fn test_get_prev_utc_hour_end() {
+        // 计算期望的当前小时开始时间（即“前一小时的结束”）
+        let now = Utc::now();
+        let current_hour_start = Utc
+            .with_ymd_and_hms(now.year(), now.month(), now.day(), now.hour(), 0, 0)
+            .single()
+            .expect("Failed to create current hour start");
+
+        let expected = current_hour_start.timestamp_millis() as u64;
+        let actual = get_prev_utc_hour_end();
+        let dt = Utc.timestamp_millis_opt(actual as i64);
+        println!("{:?}", dt);
+        assert_eq!(actual, expected);
     }
 }

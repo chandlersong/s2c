@@ -384,4 +384,38 @@ mod tests {
         assert_eq!(kline.len(), 1000);
         assert!(kline[0].open_time == 1609459200000);
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_stop() {
+        let mock_server = create_net_work().await;
+
+        let mut mock_klines = vec![];
+        for i in 0..1000 {
+            let open_time = 1609459200000 + i * 3600000;
+            let close_time = open_time + 3600000 - 1;
+            mock_klines.push(create_mock_kline(open_time, close_time));
+        }
+
+        Mock::given(method("GET"))
+            .and(path("/api/v3/klines"))
+            .and(query_param("symbol", "BTCUSDT"))
+            .and(query_param("interval", "1h"))
+            .and(query_param("limit", "1000"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mock_klines))
+            .expect(2) // Only one request
+            .mount(&mock_server)
+            .await;
+
+        let kline_res =
+            get_all_kline_data("BTCUSDT", KlineInterval::OneHour, Some(1609459200000)).await;
+        assert!(
+            kline_res.is_ok(),
+            "获取K线数据失败: {:?}",
+            kline_res.as_ref().err()
+        );
+        let kline = kline_res.unwrap();
+        assert_eq!(kline.len(), 1000);
+        assert!(kline[0].open_time == 1609459200000);
+    }
 }
