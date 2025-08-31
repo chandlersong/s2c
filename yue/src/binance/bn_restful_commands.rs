@@ -2,7 +2,7 @@ use crate::binance::bn_models::{
     BINANCE_API_BASE, EXCHANGE_INFO_PATH, EmptyQueryParams, PING_PATH, SERVER_TIME_PATH,
     SPOT_KLINE_PATH, SecurityInfo, ToQueryParams,
 };
-use crate::errors::BraavosError;
+use crate::errors::YueError;
 use crate::http_client::HTTP_CLIENT;
 use crate::models::{EmptyObject, RequestInfo};
 use crate::tools::sign_hmac;
@@ -97,7 +97,7 @@ fn get_bn_rate_limiter(
     })
 }
 
-async fn check_rate_limit(weight: u32) -> Result<(), BraavosError> {
+async fn check_rate_limit(weight: u32) -> Result<(), YueError> {
     let limiter = get_bn_rate_limiter(1200);
     // 超时时间：2 秒
     let timeout_duration = Duration::from_secs(2);
@@ -107,7 +107,7 @@ async fn check_rate_limit(weight: u32) -> Result<(), BraavosError> {
     // 验证权重非零
     let weight = match NonZeroU32::new(weight) {
         Some(w) => w,
-        None => return Err(BraavosError::new("权重必须为非零")),
+        None => return Err(YueError::new("权重必须为非零")),
     };
     // 等待令牌或超时
     let result = timeout(
@@ -118,13 +118,13 @@ async fn check_rate_limit(weight: u32) -> Result<(), BraavosError> {
     match result {
         Ok(inner_result) => match inner_result {
             Ok(()) => Ok(()),
-            Err(_) => Err(BraavosError::new("令牌不足")),
+            Err(_) => Err(YueError::new("令牌不足")),
         },
-        Err(_) => Err(BraavosError::new("限流超时")),
+        Err(_) => Err(YueError::new("限流超时")),
     }
 }
 
-pub async fn execute_ping() -> Result<(), BraavosError> {
+pub async fn execute_ping() -> Result<(), YueError> {
     let _ = execute_bn_get::<EmptyQueryParams, EmptyObject>(&PING_COMMAND, None, None).await?;
     Ok(())
 }
@@ -133,11 +133,11 @@ pub async fn execute_bn_get<P: ToQueryParams, U: DeserializeOwned>(
     info: &RequestInfo,
     param: Option<P>,
     security_info: Option<SecurityInfo>,
-) -> Result<U, BraavosError> {
+) -> Result<U, YueError> {
     check_rate_limit(info.weight).await?;
     let client = HTTP_CLIENT
         .get()
-        .ok_or(BraavosError::new("客户端没有初始化"))?;
+        .ok_or(YueError::new("客户端没有初始化"))?;
     let request =
         create_request_with_param_and_security(client, info, param, "GET", security_info)?;
     let res = request.call()?;
@@ -150,11 +150,11 @@ pub async fn execute_bn_post<U: DeserializeOwned, P: ToQueryParams>(
     param: Option<P>,
     body: Option<Value>,
     security_info: Option<SecurityInfo>,
-) -> Result<U, BraavosError> {
+) -> Result<U, YueError> {
     check_rate_limit(info.weight).await?;
     let client = HTTP_CLIENT
         .get()
-        .ok_or(BraavosError::new("客户端没有初始化"))?;
+        .ok_or(YueError::new("客户端没有初始化"))?;
     let request =
         create_request_with_param_and_security(client, info, param, "POST", security_info)?;
     let request_body = body.unwrap_or_else(|| Value::Null);
@@ -168,11 +168,11 @@ pub async fn execute_bn_put<U: DeserializeOwned, P: ToQueryParams>(
     param: Option<P>,
     body: Option<Value>,
     security_info: Option<SecurityInfo>,
-) -> Result<U, BraavosError> {
+) -> Result<U, YueError> {
     check_rate_limit(info.weight).await?;
     let client = HTTP_CLIENT
         .get()
-        .ok_or(BraavosError::new("客户端没有初始化"))?;
+        .ok_or(YueError::new("客户端没有初始化"))?;
     let request =
         create_request_with_param_and_security(client, info, param, "PUT", security_info)?;
     let request_body = body.unwrap_or_else(|| Value::Null);
@@ -215,7 +215,7 @@ fn create_request_with_param_and_security<P: ToQueryParams>(
     param: Option<P>,
     method: &str,
     security_info: Option<SecurityInfo>,
-) -> Result<Request, BraavosError> {
+) -> Result<Request, YueError> {
     let (url, api_key) = build_request_components(info, param, security_info);
     let mut request = client.request(method, &url);
     if let Some(key) = api_key {

@@ -3,46 +3,46 @@ use std::error::Error;
 use std::fmt;
 
 #[derive(Debug)]
-pub struct BraavosError {
+pub struct YueError {
     message: String,
 }
 
 // 实现 Display trait，用于将错误信息格式化为字符串
-impl fmt::Display for BraavosError {
+impl fmt::Display for YueError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Custom Error: {}", self.message)
     }
 }
 
-impl BraavosError {
-    pub fn new(message: &str) -> BraavosError {
-        BraavosError {
+impl YueError {
+    pub fn new(message: &str) -> YueError {
+        YueError {
             message: message.to_string(),
         }
     }
 }
 
 // 实现 Error trait，用于提供错误信息
-impl Error for BraavosError {}
+impl Error for YueError {}
 
-impl From<ureq::Error> for BraavosError {
+impl From<ureq::Error> for YueError {
     fn from(error: ureq::Error) -> Self {
-        BraavosError {
+        YueError {
             message: format!("request Error: {}", error),
         }
     }
 }
 
-impl From<std::io::Error> for BraavosError {
+impl From<std::io::Error> for YueError {
     fn from(error: std::io::Error) -> Self {
-        BraavosError {
+        YueError {
             message: format!("request Error: {}", error),
         }
     }
 }
 
-impl From<InvalidLength> for BraavosError {
+impl From<InvalidLength> for YueError {
     fn from(err: InvalidLength) -> Self {
-        BraavosError::new(&format!("Invalid key length for HMAC: {}", err))
+        YueError::new(&format!("Invalid key length for HMAC: {}", err))
     }
 }

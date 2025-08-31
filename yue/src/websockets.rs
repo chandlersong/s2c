@@ -1,4 +1,4 @@
-use crate::errors::BraavosError;
+use crate::errors::YueError;
 use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, info, trace};
 use std::error::Error;
@@ -181,12 +181,12 @@ impl WebSocketClient {
         match rx.await {
             Ok(result) => match result {
                 ResponseCode::Ok => Ok(()),
-                ResponseCode::Failed => Err(Box::new(BraavosError::new("request error"))),
-                ResponseCode::TimedOut => Err(Box::new(BraavosError::new("request timeout error"))),
+                ResponseCode::Failed => Err(Box::new(YueError::new("request error"))),
+                ResponseCode::TimedOut => Err(Box::new(YueError::new("request timeout error"))),
             },
             Err(error) => {
                 error!("request error: {}", error);
-                Err(Box::new(BraavosError::new("request error")))
+                Err(Box::new(YueError::new("request error")))
             }
         }
     }

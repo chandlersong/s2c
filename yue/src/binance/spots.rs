@@ -2,7 +2,7 @@ use crate::binance::bn_models::{
     ExchangeInfo, EmptyQueryParams, TradingSymbolInfo,
 };
 use crate::binance::bn_restful_commands::{execute_bn_get, EXCHANGE_INFO_COMMAND};
-use crate::errors::BraavosError;
+use crate::errors::YueError;
 
 /// 获取现货交易对信息
 /// 
@@ -15,7 +15,7 @@ use crate::errors::BraavosError;
 /// 
 /// # 返回
 /// 返回符合条件的交易对信息列表，包含 symbol, status, base_asset, quote_asset_precision, order_types
-pub async fn get_trading_spot_symbols(status: Option<&str>) -> Result<Vec<TradingSymbolInfo>, BraavosError> {
+pub async fn get_trading_spot_symbols(status: Option<&str>) -> Result<Vec<TradingSymbolInfo>, YueError> {
     let exchange_info: ExchangeInfo = execute_bn_get::<EmptyQueryParams, ExchangeInfo>(
         &EXCHANGE_INFO_COMMAND,
         None,
