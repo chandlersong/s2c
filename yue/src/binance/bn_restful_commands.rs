@@ -31,23 +31,23 @@ macro_rules! check_status {
 }
 
 /// Wrapper for Binance requests to enable retry with backon
-pub struct BnRequest<'a, P: ToQueryParams, U: DeserializeOwned> {
+pub struct YueRequest<'a, U: DeserializeOwned> {
     pub info: &'a RequestInfo,
-    pub param: Option<&'a P>,
+    pub param: Option<String>,
     pub security_info: Option<&'a SecurityInfo>,
     pub body: Option<&'a Value>,
     pub method: Method,
     _phantom: std::marker::PhantomData<U>,
 }
 
-impl<'a, P: ToQueryParams, U: DeserializeOwned> BnRequest<'a, P, U> {
+impl<'a, U: DeserializeOwned> YueRequest<'a, U> {
     pub async fn execute(&self) -> Result<U, YueError> {
         check_rate_limit(self.info.weight).await?;
         let client = HTTP_CLIENT.get().ok_or(YueError::new("客户端没有初始化"))?;
         let mut request = create_request_with_param_and_security(
             client,
             self.info,
-            self.param,
+            self.param.clone(),
             self.method.clone(),
             self.security_info,
         )?;
@@ -68,13 +68,13 @@ impl<'a, P: ToQueryParams, U: DeserializeOwned> BnRequest<'a, P, U> {
         -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<U, YueError>> + 'a>>
     + 'a {
         let info = self.info;
-        let param = self.param;
+        let param = self.param.clone();
         let security_info = self.security_info;
         let body = self.body;
         let method = self.method;
         move || {
             let info = info;
-            let param = param;
+            let param = param.clone();
             let security_info = security_info;
             let body = body;
             let method = method.clone();
@@ -228,10 +228,11 @@ pub fn execute_bn_get<'a, P: ToQueryParams, U: DeserializeOwned>(
     info: &'a RequestInfo,
     param: Option<&'a P>,
     security_info: Option<&'a SecurityInfo>,
-) -> BnRequest<'a, P, U> {
-    BnRequest {
+) -> YueRequest<'a, U> {
+    let converted_param = param.map(|p| p.to_query_string());
+    YueRequest {
         info,
-        param,
+        param: converted_param,
         security_info,
         body: None,
         method: Method::GET,
@@ -244,10 +245,11 @@ pub fn execute_bn_post<'a, U: DeserializeOwned, P: ToQueryParams>(
     param: Option<&'a P>,
     body: Option<&'a Value>,
     security_info: Option<&'a SecurityInfo>,
-) -> BnRequest<'a, P, U> {
-    BnRequest {
+) -> YueRequest<'a, U> {
+    let converted_param = param.map(|p| p.to_query_string());
+    YueRequest {
         info,
-        param,
+        param: converted_param,
         security_info,
         body,
         method: Method::POST,
@@ -260,10 +262,11 @@ pub fn execute_bn_put<'a, U: DeserializeOwned, P: ToQueryParams>(
     param: Option<&'a P>,
     body: Option<&'a Value>,
     security_info: Option<&'a SecurityInfo>,
-) -> BnRequest<'a, P, U> {
-    BnRequest {
+) -> YueRequest<'a, U> {
+    let converted_param = param.map(|p| p.to_query_string());
+    YueRequest {
         info,
-        param,
+        param: converted_param,
         security_info,
         body,
         method: Method::PUT,
@@ -272,14 +275,13 @@ pub fn execute_bn_put<'a, U: DeserializeOwned, P: ToQueryParams>(
 }
 
 /// Pure function for building request components. Easy to test.
-fn build_request_components<P: ToQueryParams>(
+fn build_request_components(
     info: &RequestInfo,
-    param: Option<&P>,
+    param: Option<String>,
     security_info: Option<&SecurityInfo>,
 ) -> (String, Option<String>) {
     let mut url = info.as_ref().clone();
     let base_query_string = param
-        .map(|p| (*p).to_query_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_default();
     let api_key = security_info.map(|s| s.api_key.clone());
@@ -298,10 +300,10 @@ fn build_request_components<P: ToQueryParams>(
 }
 
 /// Imperative shell for creating the request object.
-fn create_request_with_param_and_security<P: ToQueryParams>(
+fn create_request_with_param_and_security(
     client: &Client,
     info: &RequestInfo,
-    param: Option<&P>,
+    param: Option<String>,
     method: Method,
     security_info: Option<&SecurityInfo>,
 ) -> Result<RequestBuilder, YueError> {
@@ -316,6 +318,7 @@ fn create_request_with_param_and_security<P: ToQueryParams>(
 #[cfg(test)]
 mod tests {
     use super::{build_request_components, check_rate_limit, execute_bn_get, get_bn_rate_limiter};
+    use crate::binance::bn_models::ToQueryParams;
     use crate::binance::bn_models::{EmptyQueryParams, SecurityInfo};
     use crate::http_client::init_http_client;
     use crate::models::RequestInfo;
@@ -338,7 +341,7 @@ mod tests {
         };
 
         // Scenario 1: No params, no security
-        let (url, header) = build_request_components::<EmptyQueryParams>(&request_info, None, None);
+        let (url, header) = build_request_components(&request_info, None, None);
         assert_eq!(
             url, "http://127.0.0.1:8080/api/v3/order",
             "Scenario 1 (No params, no security): URL should be base path"
@@ -353,7 +356,7 @@ mod tests {
         params_map.insert("symbol", "BTCUSDT".to_string());
         params_map.insert("side", "BUY".to_string());
         params_map.insert("type", "LIMIT".to_string());
-        let (url, header) = build_request_components(&request_info, Some(&params_map), None);
+        let (url, header) = build_request_components(&request_info, Some(params_map.to_query_string()), None);
         assert_eq!(
             url, "http://127.0.0.1:8080/api/v3/order?side=BUY&symbol=BTCUSDT&type=LIMIT",
             "Scenario 2 (Params, no security): URL should include sorted query parameters"
@@ -365,7 +368,7 @@ mod tests {
 
         // Scenario 3: No params, security
         let (url, header) =
-            build_request_components::<EmptyQueryParams>(&request_info, None, Some(&security_info));
+            build_request_components(&request_info, None, Some(&security_info));
         assert_eq!(
             url,
             "http://127.0.0.1:8080/api/v3/order?signature=4c4df0c09aaefc2fe10f409703fd08d6754229e4c9b99897331efa42d8d65e47",
@@ -380,7 +383,7 @@ mod tests {
         // Scenario 4: Empty params, security
         let empty_map = BTreeMap::new();
         let (url, header) =
-            build_request_components(&request_info, Some(&empty_map), Some(&security_info));
+            build_request_components(&request_info, Some(empty_map.to_query_string()), Some(&security_info));
         assert_eq!(
             url,
             "http://127.0.0.1:8080/api/v3/order?signature=4c4df0c09aaefc2fe10f409703fd08d6754229e4c9b99897331efa42d8d65e47",
@@ -394,7 +397,7 @@ mod tests {
 
         // Scenario 5: Params, security
         let (url, header) =
-            build_request_components(&request_info, Some(&params_map), Some(&security_info));
+            build_request_components(&request_info, Some(params_map.to_query_string()), Some(&security_info));
         assert_eq!(
             url,
             "http://127.0.0.1:8080/api/v3/order?side=BUY&symbol=BTCUSDT&type=LIMIT&signature=627ca17e230c3eb329537cdab76b3654fd620c7d863f7344f7d625c02f7cc110",
