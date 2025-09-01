@@ -3,6 +3,7 @@ use crate::binance::bn_models::{
     SPOT_KLINE_PATH, SecurityInfo, ToQueryParams,
 };
 use crate::errors::YueError;
+use crate::errors::YueError::RequestError;
 use crate::http_client::HTTP_CLIENT;
 use crate::models::{EmptyObject, RequestInfo};
 use crate::tools::sign_hmac;
@@ -16,6 +17,17 @@ use std::num::NonZeroU32;
 use std::sync::{LazyLock, OnceLock};
 use std::time::Duration;
 use tokio::time::timeout;
+
+macro_rules! check_status {
+    ($res:expr) => {
+        if $res.status() != reqwest::StatusCode::OK {
+            return Err(RequestError {
+                code: $res.status().as_u16(),
+                body: $res.text().await.unwrap_or_default(),
+            });
+        }
+    };
+}
 
 pub static PING_COMMAND: LazyLock<RequestInfo> =
     LazyLock::new(|| RequestInfo::from_base_path(BINANCE_API_BASE, PING_PATH, false, 1).unwrap());
@@ -139,6 +151,7 @@ pub async fn execute_bn_get<P: ToQueryParams, U: DeserializeOwned>(
     let request =
         create_request_with_param_and_security(client, info, param, Method::GET, security_info)?;
     let res = request.send().await?;
+    check_status!(res);
     let result: U = res.json::<U>().await?;
     Ok(result)
 }
@@ -157,6 +170,7 @@ pub async fn execute_bn_post<U: DeserializeOwned, P: ToQueryParams>(
         request = request.json(&body);
     }
     let res = request.send().await?;
+    check_status!(res);
     let result: U = res.json::<U>().await?;
     Ok(result)
 }
@@ -175,6 +189,7 @@ pub async fn execute_bn_put<U: DeserializeOwned, P: ToQueryParams>(
         request = request.json(&body);
     }
     let res = request.send().await?;
+    check_status!(res);
     let result: U = res.json::<U>().await?;
     Ok(result)
 }

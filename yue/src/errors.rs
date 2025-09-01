@@ -3,8 +3,12 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum YueError {
-    #[error("Request error: {0}")]
-    RequestError(#[from] reqwest::Error),
+    #[error("Request error: code={code:?}, body={body:?}")]
+    RequestError { code: u16, body: String },
+    #[error("Serialization/Deserialization error: {0}")]
+    SerdeError(#[from] serde_json::Error),
+    #[error("Reqwest error: {0}")]
+    ReqwestError(#[from] reqwest::Error),
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
     #[error("Invalid key length for HMAC: {0}")]
