@@ -9,13 +9,13 @@ use crate::tools::sign_hmac;
 use governor::clock::DefaultClock;
 use governor::state::{InMemoryState, NotKeyed};
 use governor::{Jitter, Quota, RateLimiter};
+use reqwest::{Client, Method, RequestBuilder};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::num::NonZeroU32;
 use std::sync::{LazyLock, OnceLock};
 use std::time::Duration;
 use tokio::time::timeout;
-use ureq::{Agent, Request};
 
 pub static PING_COMMAND: LazyLock<RequestInfo> =
     LazyLock::new(|| RequestInfo::from_base_path(BINANCE_API_BASE, PING_PATH, false, 1).unwrap());
@@ -137,9 +137,9 @@ pub async fn execute_bn_get<P: ToQueryParams, U: DeserializeOwned>(
     check_rate_limit(info.weight).await?;
     let client = HTTP_CLIENT.get().ok_or(YueError::new("客户端没有初始化"))?;
     let request =
-        create_request_with_param_and_security(client, info, param, "GET", security_info)?;
-    let res = request.call()?;
-    let result: U = res.into_json()?;
+        create_request_with_param_and_security(client, info, param, Method::GET, security_info)?;
+    let res = request.send().await?;
+    let result: U = res.json::<U>().await?;
     Ok(result)
 }
 
@@ -151,11 +151,13 @@ pub async fn execute_bn_post<U: DeserializeOwned, P: ToQueryParams>(
 ) -> Result<U, YueError> {
     check_rate_limit(info.weight).await?;
     let client = HTTP_CLIENT.get().ok_or(YueError::new("客户端没有初始化"))?;
-    let request =
-        create_request_with_param_and_security(client, info, param, "POST", security_info)?;
-    let request_body = body.unwrap_or_else(|| Value::Null);
-    let res = request.send_json(&request_body)?;
-    let result: U = res.into_json()?;
+    let mut request =
+        create_request_with_param_and_security(client, info, param, Method::POST, security_info)?;
+    if let Some(body) = body {
+        request = request.json(&body);
+    }
+    let res = request.send().await?;
+    let result: U = res.json::<U>().await?;
     Ok(result)
 }
 
@@ -167,11 +169,13 @@ pub async fn execute_bn_put<U: DeserializeOwned, P: ToQueryParams>(
 ) -> Result<U, YueError> {
     check_rate_limit(info.weight).await?;
     let client = HTTP_CLIENT.get().ok_or(YueError::new("客户端没有初始化"))?;
-    let request =
-        create_request_with_param_and_security(client, info, param, "PUT", security_info)?;
-    let request_body = body.unwrap_or_else(|| Value::Null);
-    let res = request.send_json(&request_body)?;
-    let result: U = res.into_json()?;
+    let mut request =
+        create_request_with_param_and_security(client, info, param, Method::PUT, security_info)?;
+    if let Some(body) = body {
+        request = request.json(&body);
+    }
+    let res = request.send().await?;
+    let result: U = res.json::<U>().await?;
     Ok(result)
 }
 
@@ -204,16 +208,16 @@ fn build_request_components<P: ToQueryParams>(
 
 /// Imperative shell for creating the request object.
 fn create_request_with_param_and_security<P: ToQueryParams>(
-    client: &Agent,
+    client: &Client,
     info: &RequestInfo,
     param: Option<P>,
-    method: &str,
+    method: Method,
     security_info: Option<SecurityInfo>,
-) -> Result<Request, YueError> {
+) -> Result<RequestBuilder, YueError> {
     let (url, api_key) = build_request_components(info, param, security_info);
     let mut request = client.request(method, &url);
     if let Some(key) = api_key {
-        request = request.set("X-MBX-APIKEY", &key);
+        request = request.header("X-MBX-APIKEY", &key);
     }
     Ok(request)
 }

@@ -4,12 +4,12 @@ use std::io::Write;
 use yue::binance::spots::get_trading_spot_symbols;
 use yue::http_client::init_http_client;
 
-/// 获取所有币安现货交易对信息并保存到CSV文件
+/// 获取所有币安现货交易对信息并��存到CSV文件
 ///
 /// 这个例子演示了如何调用 get_trading_spot_symbols 函数
 /// 获取所有交易对的信息（包括各种状态的交易对）
 /// 并将结果保存为CSV格式的文件
-/// 
+///
 /// CSV文件包含以下字段：
 /// - symbol: 交易对符号
 /// - status: 交易状态
@@ -19,14 +19,14 @@ use yue::http_client::init_http_client;
 /// - order_types: 支持的订单类型
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-     let proxy = Option::from("http://localhost:7891");
+    let start = std::time::Instant::now(); // 记录开始时间
+    let proxy = Option::from("http://localhost:7891");
     // 初始化HTTP客户端
     init_http_client(proxy);
 
-
     println!("开始获取币安现货交易对信息...");
 
-    // 调用API获取所有交易对信息
+    // 调用API获取所有交易对信���
     let symbols = get_trading_spot_symbols(Some("ALL")).await?;
 
     println!("成功获取到 {} 个交易对信息", symbols.len());
@@ -45,7 +45,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         "base_asset",
         "quote_asset",
         "quote_asset_precision",
-        "order_types"
+        "order_types",
     ])?;
 
     // 写入数据行
@@ -79,19 +79,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("  暂停交易 (HALT): {}", halt_count);
     println!("  休市 (BREAK): {}", break_count);
     println!("  收盘 (END_OF_DAY): {}", end_of_day_count);
-    println!("  其他状态: {}", symbols.len() - trading_count - halt_count - break_count - end_of_day_count);
+    println!(
+        "  其他状态: {}",
+        symbols.len() - trading_count - halt_count - break_count - end_of_day_count
+    );
 
     // 显示前5个交易对作为示例
     println!("\n前5个交易对示例:");
     for (i, symbol) in symbols.iter().take(5).enumerate() {
-        println!("  {}. {} ({}) - 基础资产: {}, 报价资产: {}, 报价精度: {}",
-                 i + 1,
-                 symbol.symbol,
-                 symbol.status,
-                 symbol.base_asset,
-                 symbol.quote_asset,
-                 symbol.quote_asset_precision);
+        println!(
+            "  {}. {} ({}) - 基础资产: {}, 报价资产: {}, 报价精度: {}",
+            i + 1,
+            symbol.symbol,
+            symbol.status,
+            symbol.base_asset,
+            symbol.quote_asset,
+            symbol.quote_asset_precision
+        );
     }
+    println!("运行耗时: {:?}", start.elapsed()); // 打印运行时间
 
     Ok(())
 }
