@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-
+li = {path = "../li" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

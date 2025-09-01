@@ -1,6 +1,7 @@
-use crate::models::{Decimal, UnixTimeStamp};
+use crate::models::Decimal;
 use crate::tools;
-use crate::tools::{string_to_float, unix_2_readable, unix_time};
+use crate::tools::string_to_float;
+use li::tools::time::{UnixTimeStamp, unix_2_readable, unix_time_now_u64};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -454,7 +455,7 @@ impl fmt::Display for TimeStampRequest {
 impl Default for TimeStampRequest {
     fn default() -> Self {
         TimeStampRequest {
-            timestamp: unix_time(),
+            timestamp: unix_time_now_u64(),
             rec_window: 5000,
         }
     }

@@ -1,5 +1,3 @@
-use crate::models::UnixTimeStamp;
-use chrono::{DateTime, Utc};
 use hmac::digest::InvalidLength;
 use hmac::{Hmac, Mac};
 use log::error;
@@ -11,27 +9,9 @@ use sonyflake::Sonyflake;
 #[cfg(test)]
 use std::fs;
 use std::sync::Mutex;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use tokio::sync::{broadcast, watch};
 use tokio::time;
-
-pub fn unix_2_readable(unix_timestamp_millis: &u64) -> DateTime<Utc> {
-    // Unix 时间戳（毫秒）
-
-    // 将毫秒转换为秒和纳秒
-    let seconds = (unix_timestamp_millis / 1000) as u64;
-    let nanoseconds = ((unix_timestamp_millis % 1000) * 1_000_000) as u32;
-
-    // 创建 SystemTime
-    let system_time = UNIX_EPOCH + std::time::Duration::new(seconds, nanoseconds);
-
-    system_time.into()
-}
-pub fn unix_time() -> UnixTimeStamp {
-    let now = SystemTime::now();
-    let since_epoch = now.duration_since(UNIX_EPOCH).unwrap();
-    since_epoch.as_secs() * 1000 + u64::from(since_epoch.subsec_nanos()) / 1_000_000
-}
 
 // 自定义反序列化函数，将字符串属性转换为数字
 pub fn str_to_u16<'de, D>(deserializer: D) -> Result<u16, D::Error>
@@ -164,7 +144,7 @@ async fn frequency_reducer_output<V: Send + Clone + Sync>(
 
 #[cfg(test)]
 mod tests {
-    use crate::tools::{FrequencyReducer, unix_2_readable};
+    use crate::tools::FrequencyReducer;
     use std::time::Duration;
     use tokio::sync::broadcast;
     use tokio::time;
@@ -221,11 +201,5 @@ mod tests {
                 assert!(false, "channel timeout");
             }
         }
-    }
-
-    #[test]
-    fn test_unix_2_time() {
-        let expected = format!("{}", unix_2_readable(&1737093025292));
-        assert_eq!("2025-01-17 05:50:25.292 UTC", expected);
     }
 }

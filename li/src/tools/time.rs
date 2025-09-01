@@ -1,4 +1,5 @@
 use chrono::{DateTime, Datelike, Duration as ChronoDuration, TimeZone, Timelike, Utc};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::Instant;
 pub fn current_date_string() -> String {
     let now: DateTime<Utc> = Utc::now();
@@ -92,10 +93,32 @@ pub fn get_next_utc_hour_begin() -> Instant {
             .expect("Duration out of range")
 }
 
+pub fn unix_2_readable(unix_timestamp_millis: &u64) -> DateTime<Utc> {
+    // Unix 时间戳（毫秒）
+
+    // 将毫秒转换为秒和纳秒
+    let seconds = (unix_timestamp_millis / 1000) as u64;
+    let nanoseconds = ((unix_timestamp_millis % 1000) * 1_000_000) as u32;
+
+    // 创建 SystemTime
+    let system_time = UNIX_EPOCH + std::time::Duration::new(seconds, nanoseconds);
+
+    system_time.into()
+}
+
+pub type UnixTimeStamp = u64;
+
+pub fn unix_time_now_u64() -> UnixTimeStamp {
+    let now = SystemTime::now();
+    let since_epoch = now.duration_since(UNIX_EPOCH).unwrap();
+    since_epoch.as_secs() * 1000 + u64::from(since_epoch.subsec_nanos()) / 1_000_000
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tools::time::{
-        get_next_utc_day_begin, get_next_utc_hour_begin, get_prev_utc_hour_end, instant_to_datetime,
+        get_next_utc_day_begin, get_next_utc_hour_begin, get_prev_utc_hour_end,
+        instant_to_datetime, unix_2_readable,
     };
     use chrono::{Datelike, TimeZone, Timelike, Utc};
     use tokio::time::Instant;
@@ -140,5 +163,11 @@ mod tests {
         let dt = Utc.timestamp_millis_opt(actual as i64);
         println!("{:?}", dt);
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_unix_2_time() {
+        let expected = format!("{}", unix_2_readable(&1737093025292));
+        assert_eq!("2025-01-17 05:50:25.292 UTC", expected);
     }
 }

@@ -3,6 +3,8 @@ use crate::binance::bn_restful_commands::{
     EXCHANGE_INFO_COMMAND, SPOT_KLINE_COMMAND, execute_bn_get,
 };
 use crate::errors::YueError;
+use li::tools::time::unix_2_readable;
+use log::{debug, trace};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,7 +106,8 @@ impl ToQueryParams for KlineParams {
 }
 
 /// 获取现货交易对信息
-///TODO： 这个算法是错的。因为如果开始时间不存在的话，就什么数据都拉不到
+/// 按照币安的策略。如果一个币在2022年1月1日上线。那么start_time设定为2021年为1月1日。
+/// 那么返回的第一个日期是2022年1月1日
 ///
 /// # 参数
 /// * `status` - 交易对状态过滤器
@@ -202,6 +205,7 @@ pub async fn get_all_kline_data(
             break;
         }
 
+        trace!("{} fetch {} kline", symbol, klines.len());
         let klines_count = klines.len();
         res.extend(klines);
 
@@ -212,6 +216,13 @@ pub async fn get_all_kline_data(
         // Set next start_time to the close_time of the last kline
     }
 
+    debug!(
+        "{} fetch {} kline,from {} to {}",
+        symbol,
+        res.len(),
+        unix_2_readable(&res.first().unwrap().open_time),
+        unix_2_readable(&res.last().unwrap().open_time)
+    );
     Ok(res)
 }
 
@@ -388,6 +399,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_get_stop() {
+        // 测试正好1000个
         let mock_server = create_net_work().await;
 
         let mut mock_klines = vec![];
