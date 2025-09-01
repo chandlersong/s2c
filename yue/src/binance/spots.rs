@@ -123,6 +123,7 @@ pub async fn get_trading_spot_symbols(
 ) -> Result<Vec<TradingSymbolInfo>, YueError> {
     let exchange_info: ExchangeInfo =
         execute_bn_get::<EmptyQueryParams, ExchangeInfo>(&EXCHANGE_INFO_COMMAND, None, None)
+            .execute()
             .await?;
 
     let filter_status = status.unwrap_or("TRADING");
@@ -192,7 +193,8 @@ pub async fn get_all_kline_data(
         };
 
         let klines: Vec<Kline> =
-            execute_bn_get::<KlineParams, Vec<Kline>>(&SPOT_KLINE_COMMAND, Some(params), None)
+            execute_bn_get::<KlineParams, Vec<Kline>>(&SPOT_KLINE_COMMAND, Some(&params), None)
+                .execute()
                 .await?;
 
         if let Some(last_kline) = klines.last() {

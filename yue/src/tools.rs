@@ -42,7 +42,7 @@ impl SnowyFlakeWrapper {
     }
 
     pub fn next_id_string(&self) -> String {
-        let mut value = self.sf.lock().unwrap();
+        let value = self.sf.lock().unwrap();
         value.next_id().unwrap().to_string()
     }
 }

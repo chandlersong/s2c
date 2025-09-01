@@ -30,7 +30,10 @@ async fn main() {
     }
 
     // 获取服务器时间
-    match execute_bn_get::<EmptyQueryParams, ServerTime>(&SERVER_TIME_COMMAND, None, None).await {
+    match execute_bn_get::<EmptyQueryParams, ServerTime>(&SERVER_TIME_COMMAND, None, None)
+        .execute()
+        .await
+    {
         Ok(server_time) => {
             println!("测试网络服务器时间: {}", unix_2_readable(&server_time.time));
         }
@@ -44,9 +47,10 @@ async fn main() {
     params.insert("limit", "5".to_string()); // 只取5根K线做演示
     match execute_bn_get::<BTreeMap<&str, String>, Vec<Kline>>(
         &SPOT_KLINE_COMMAND,
-        Some(params),
+        Some(&params),
         None,
     )
+    .execute()
     .await
     {
         Ok(klines) => {
