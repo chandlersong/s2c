@@ -1,12 +1,30 @@
 use crate::binance::bn_models::{EmptyQueryParams, ExchangeInfo, Kline, ToQueryParams};
 use crate::binance::bn_restful_commands::{
-    EXCHANGE_INFO_COMMAND, SPOT_KLINE_COMMAND, execute_bn_get,
+    EXCHANGE_INFO_COMMAND, PING_COMMAND, SPOT_KLINE_COMMAND, execute_bn_get,
 };
 use crate::errors::YueError;
-use crate::http_client::NonAuthRequestBuilder;
+use crate::http_client::{DefaultRateLimiter, NonAuthRequestBuilder};
+use crate::models::EmptyObject;
+use governor::{Quota, RateLimiter};
 use li::tools::time::unix_2_readable;
 use log::{debug, trace};
 use serde::{Deserialize, Serialize};
+use std::num::NonZeroU32;
+use std::sync::OnceLock;
+
+static RATE_LIMITER: OnceLock<DefaultRateLimiter> = OnceLock::new();
+
+//TODO: 做成配置，优先级低
+static SPOT_RATE_LIMITER_PER_SECOND: u32 = 1200;
+/// 获取 RateLimiter 的静态引用
+fn get_bn_rate_limiter(per_second_num: u32) -> Option<&'static DefaultRateLimiter> {
+    Some(RATE_LIMITER.get_or_init(|| {
+        RateLimiter::direct(
+            Quota::per_second(NonZeroU32::new(per_second_num).unwrap())
+                .allow_burst(NonZeroU32::new(per_second_num).unwrap()),
+        )
+    }))
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradingSymbolInfo {
@@ -106,6 +124,17 @@ impl ToQueryParams for KlineParams {
     }
 }
 
+pub async fn execute_ping() -> Result<(), YueError> {
+    let _ = execute_bn_get::<EmptyQueryParams, NonAuthRequestBuilder, EmptyObject>(
+        &PING_COMMAND,
+        None,
+        NonAuthRequestBuilder {},
+    )
+    .execute(get_bn_rate_limiter(SPOT_RATE_LIMITER_PER_SECOND))
+    .await?;
+    Ok(())
+}
+
 /// 获取现货交易对信息
 /// 按照币安的策略。如果一个币在2022年1月1日上线。那么start_time设定为2021年为1月1日。
 /// 那么返回的第一个日期是2022年1月1日
@@ -127,7 +156,7 @@ pub async fn get_trading_spot_symbols(
         NonAuthRequestBuilder,
         ExchangeInfo,
     >(&EXCHANGE_INFO_COMMAND, None, NonAuthRequestBuilder {})
-    .execute()
+    .execute(get_bn_rate_limiter(SPOT_RATE_LIMITER_PER_SECOND))
     .await?;
 
     let filter_status = status.unwrap_or("TRADING");
@@ -201,7 +230,7 @@ pub async fn get_all_kline_data(
             Some(&params),
             request_builder.clone(),
         )
-        .execute()
+        .execute(get_bn_rate_limiter(SPOT_RATE_LIMITER_PER_SECOND))
         .await?;
 
         if let Some(last_kline) = klines.last() {

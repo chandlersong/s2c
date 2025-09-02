@@ -1,23 +1,17 @@
 use crate::binance::bn_models::{
-    BINANCE_API_BASE, EXCHANGE_INFO_PATH, EmptyQueryParams, PING_PATH, SERVER_TIME_PATH,
-    SPOT_KLINE_PATH, ToQueryParams,
+    BINANCE_API_BASE, EXCHANGE_INFO_PATH, PING_PATH, SERVER_TIME_PATH, SPOT_KLINE_PATH,
+    ToQueryParams,
 };
 use crate::errors::YueError;
 use crate::errors::YueError::RequestError;
-use crate::http_client::{HTTP_CLIENT, NonAuthRequestBuilder, YueRequestBuilder};
-use crate::models::{EmptyObject, RequestInfo};
+use crate::http_client::{DefaultRateLimiter, HTTP_CLIENT, YueRequestBuilder, check_rate_limit};
+use crate::models::RequestInfo;
 use crate::tools::sign_hmac;
 use backon::{ExponentialBuilder, Retryable};
-use governor::clock::DefaultClock;
-use governor::state::{InMemoryState, NotKeyed};
-use governor::{Jitter, Quota, RateLimiter};
 use reqwest::{Client, Method, RequestBuilder};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use std::num::NonZeroU32;
-use std::sync::{LazyLock, OnceLock};
-use std::time::Duration;
-use tokio::time::timeout;
+use std::sync::LazyLock;
 
 macro_rules! check_status {
     ($res:expr) => {
@@ -32,6 +26,7 @@ macro_rules! check_status {
 
 #[derive(Clone)]
 pub struct BNSecurityRequestBuilder {
+    //TODO: 用security的那个包来包裹一下，优先级低
     pub api_key: String,
     pub api_secret: String,
 }
@@ -79,8 +74,11 @@ where
     T: YueRequestBuilder + Clone + 'a,
     U: DeserializeOwned,
 {
-    pub async fn execute(&self) -> Result<U, YueError> {
-        check_rate_limit(self.info.weight).await?;
+    pub async fn execute(&self, rate_limit: Option<&'a DefaultRateLimiter>) -> Result<U, YueError> {
+        if let Some(limiter) = rate_limit {
+            check_rate_limit(self.info.weight, limiter).await?;
+        }
+
         let client = HTTP_CLIENT.get().ok_or(YueError::new("客户端没有初始化"))?;
         let mut request = self.request_builder.compose_request(
             client,
@@ -101,6 +99,7 @@ where
 
     pub fn into_retryable(
         self,
+        rate_limit: Option<&'a DefaultRateLimiter>,
     ) -> impl FnMut() -> std::pin::Pin<Box<dyn Future<Output = Result<U, YueError>> + 'a>> + 'a
     {
         let info = self.info;
@@ -115,7 +114,9 @@ where
             let body = body;
             let method = method.clone();
             Box::pin(async move {
-                check_rate_limit(info.weight).await?;
+                if let Some(limiter) = rate_limit {
+                    check_rate_limit(self.info.weight, limiter).await?;
+                }
                 let client = HTTP_CLIENT.get().ok_or(YueError::new("客户端没有初始化"))?;
                 let mut request =
                     request_builder.compose_request(client, info, param, method.clone())?;
@@ -133,9 +134,13 @@ where
         }
     }
 
-    pub fn retry(self, builder: ExponentialBuilder) -> impl Future<Output = Result<U, YueError>> {
+    pub fn retry(
+        self,
+        builder: ExponentialBuilder,
+        rate_limit: Option<&'a DefaultRateLimiter>,
+    ) -> impl Future<Output = Result<U, YueError>> {
         // Add explicit type annotations to resolve type inference issues
-        self.into_retryable().retry(builder)
+        self.into_retryable(rate_limit).retry(builder)
     }
 }
 
@@ -204,58 +209,6 @@ pub static SPOT_KLINE_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| {
 });
 
 /// 全局 RateLimiter，使用 OnceLock 延迟初始化
-static RATE_LIMITER: OnceLock<RateLimiter<NotKeyed, InMemoryState, DefaultClock>> = OnceLock::new();
-
-/// 获取 RateLimiter 的静态引用
-fn get_bn_rate_limiter(
-    per_second_num: u32,
-) -> &'static RateLimiter<NotKeyed, InMemoryState, DefaultClock> {
-    //TODO：按照
-    RATE_LIMITER.get_or_init(|| {
-        RateLimiter::direct(
-            Quota::per_second(NonZeroU32::new(per_second_num).unwrap())
-                .allow_burst(NonZeroU32::new(per_second_num).unwrap()),
-        )
-    })
-}
-
-async fn check_rate_limit(weight: u32) -> Result<(), YueError> {
-    let limiter = get_bn_rate_limiter(1200);
-    // 超时时间：2 秒
-    let timeout_duration = Duration::from_secs(2);
-    // 抖动避免请求堆积
-    let jitter = Jitter::up_to(Duration::from_millis(100));
-
-    // 验证权重非零
-    let weight = match NonZeroU32::new(weight) {
-        Some(w) => w,
-        None => return Err(YueError::new("权重必须为非零")),
-    };
-    // 等待令牌或�����时
-    let result = timeout(
-        timeout_duration,
-        limiter.until_n_ready_with_jitter(weight, jitter),
-    )
-    .await;
-    match result {
-        Ok(inner_result) => match inner_result {
-            Ok(()) => Ok(()),
-            Err(_) => Err(YueError::new("令牌不足")),
-        },
-        Err(_) => Err(YueError::new("限流超时")),
-    }
-}
-
-pub async fn execute_ping() -> Result<(), YueError> {
-    let _ = execute_bn_get::<EmptyQueryParams, NonAuthRequestBuilder, EmptyObject>(
-        &PING_COMMAND,
-        None,
-        NonAuthRequestBuilder {},
-    )
-    .execute()
-    .await?;
-    Ok(())
-}
 
 pub fn execute_bn_get<'a, P, T, U>(
     info: &'a RequestInfo,
@@ -326,7 +279,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{BNSecurityRequestBuilder, check_rate_limit, execute_bn_get, get_bn_rate_limiter};
+    use super::{BNSecurityRequestBuilder, execute_bn_get};
     use crate::binance::bn_models::EmptyQueryParams;
     use crate::http_client::{NonAuthRequestBuilder, YueRequestBuilder, init_http_client};
     use crate::models::RequestInfo;
@@ -408,25 +361,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_rate_limited() {
-        get_bn_rate_limiter(1200);
-        // 测试正常调��
-        let result = check_rate_limit(1).await;
-        assert!(result.is_ok());
-
-        // 测试高权重调用，触发超时
-        let result = check_rate_limit(1201).await; // 超过突发容量
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_zero_weight() {
-        // 测试零权重，预期错误
-        let result = check_rate_limit(0).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
     async fn test_execute_bn_get_basic() -> Result<(), Box<dyn std::error::Error>> {
         setup();
         // Start a mock server
@@ -451,7 +385,7 @@ mod tests {
             NonAuthRequestBuilder,
             serde_json::Value,
         >(&request_info, None, NonAuthRequestBuilder {})
-        .execute()
+        .execute(None)
         .await?;
 
         assert_eq!(result["message"], "success");
@@ -483,7 +417,7 @@ mod tests {
         // Execute request with parameters
         let result: serde_json::Value =
             execute_bn_get(&request_info, Some(&params), NonAuthRequestBuilder {})
-                .execute()
+                .execute(None)
                 .await?;
 
         assert_eq!(result["symbol"], "BTCUSDT");
@@ -518,7 +452,7 @@ mod tests {
                     api_secret: "test_secret".to_string(),
                 },
             )
-            .execute()
+            .execute(None)
             .await?;
 
         assert_eq!(result["authenticated"], true);
@@ -548,7 +482,7 @@ mod tests {
             None,
             NonAuthRequestBuilder {},
         )
-        .execute()
+        .execute(None)
         .await;
         assert!(result.is_err());
         Ok(())

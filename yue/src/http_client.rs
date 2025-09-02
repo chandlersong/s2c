@@ -1,9 +1,17 @@
 use crate::errors::YueError;
 use crate::models::RequestInfo;
+use governor::clock::DefaultClock;
+use governor::state::{InMemoryState, NotKeyed};
+use governor::{Jitter, RateLimiter};
 use reqwest::{Client, Method, RequestBuilder};
+use std::num::NonZeroU32;
 use std::sync::OnceLock;
+use std::time::Duration;
+use tokio::time::timeout;
 
 pub(crate) static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
+
+pub type DefaultRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
 
 pub fn init_http_client(proxy: Option<&str>) -> &'static Client {
     //TODO：像超时这类进行配置。
@@ -27,6 +35,32 @@ pub trait YueRequestBuilder: Send + Sync {
         param: Option<String>,
         method: Method,
     ) -> Result<RequestBuilder, YueError>;
+}
+
+pub async fn check_rate_limit(weight: u32, limiter: &DefaultRateLimiter) -> Result<(), YueError> {
+    // 超时时间：2 秒
+    let timeout_duration = Duration::from_secs(2);
+    // 抖动避免请求堆积
+    let jitter = Jitter::up_to(Duration::from_millis(100));
+
+    // 验证权重非零
+    let weight = match NonZeroU32::new(weight) {
+        Some(w) => w,
+        None => return Err(YueError::new("权重必须为非零")),
+    };
+    // 等待令牌或�����时
+    let result = timeout(
+        timeout_duration,
+        limiter.until_n_ready_with_jitter(weight, jitter),
+    )
+    .await;
+    match result {
+        Ok(inner_result) => match inner_result {
+            Ok(()) => Ok(()),
+            Err(_) => Err(YueError::new("令牌不足")),
+        },
+        Err(_) => Err(YueError::new("限流超时")),
+    }
 }
 
 #[derive(Clone)]

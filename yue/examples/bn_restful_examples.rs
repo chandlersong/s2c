@@ -3,7 +3,8 @@ use std::collections::BTreeMap;
 use yue::binance::bn_models::Kline;
 use yue::binance::bn_models::{EmptyQueryParams, ServerTime};
 use yue::binance::bn_restful_commands::SPOT_KLINE_COMMAND;
-use yue::binance::bn_restful_commands::{SERVER_TIME_COMMAND, execute_bn_get, execute_ping};
+use yue::binance::bn_restful_commands::{SERVER_TIME_COMMAND, execute_bn_get};
+use yue::binance::spots::execute_ping;
 use yue::http_client::{NonAuthRequestBuilder, init_http_client};
 
 ///
@@ -35,7 +36,7 @@ async fn main() {
         None,
         request_builder.clone(),
     )
-    .execute()
+    .execute(None)
     .await
     {
         Ok(server_time) => {
@@ -54,7 +55,7 @@ async fn main() {
         Some(&params),
         request_builder.clone(),
     )
-    .execute()
+    .execute(None)
     .await
     {
         Ok(klines) => {
