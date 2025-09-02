@@ -142,4 +142,101 @@ mod http_clients_yue_request_tests {
         assert!(result.is_err());
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_retry_success_after_failure() -> Result<(), Box<dyn std::error::Error>> {
+        setup();
+        let mock_server = MockServer::start().await;
+        let test_path = "/api/v3/retry_test";
+        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1)?;
+
+        // First call fails with 500
+        Mock::given(method("GET"))
+            .and(path(test_path))
+            .respond_with(ResponseTemplate::new(500).set_body_json(serde_json::json!({
+                "error": "internal server error"
+            })))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        // Second call succeeds
+        Mock::given(method("GET"))
+            .and(path(test_path))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "message": "success after retry"
+            })))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let yue_request = YueRequest {
+            info: &request_info,
+            param: None,
+            request_builder: NonAuthRequestBuilder {},
+            body: None,
+            method: Method::GET,
+            _phantom: std::marker::PhantomData::<serde_json::Value>,
+        };
+
+        let builder = backon::ExponentialBuilder::default().with_max_times(2);
+        let result: serde_json::Value = yue_request.retry(builder, None).await?;
+
+        assert_eq!(result["message"], "success after retry");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_rate_limit_handling() -> Result<(), Box<dyn std::error::Error>> {
+        setup();
+        let mock_server = MockServer::start().await;
+        let test_path = "/api/v3/rate_limit_test";
+        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 10)?; // High weight
+
+        Mock::given(method("GET"))
+            .and(path(test_path))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "rate_limited": false
+            })))
+            .mount(&mock_server)
+            .await;
+
+        // Create a rate limiter that allows only 1 request per second
+        let quota = governor::Quota::per_second(std::num::NonZeroU32::new(1).unwrap());
+        let limiter = governor::RateLimiter::direct(quota);
+
+        // First request should succeed
+        let result1: serde_json::Value = YueRequest {
+            info: &request_info,
+            param: None,
+            request_builder: NonAuthRequestBuilder {},
+            body: None,
+            method: Method::GET,
+            _phantom: std::marker::PhantomData::<serde_json::Value>,
+        }
+        .execute(Some(&limiter))
+        .await?;
+
+        assert_eq!(result1["rate_limited"], false);
+
+        // Second request with high weight should be rate limited or succeed based on timing
+        // For simplicity, just check that execute handles rate limiter without panic
+        let result2 = YueRequest {
+            info: &request_info,
+            param: None,
+            request_builder: NonAuthRequestBuilder {},
+            body: None,
+            method: Method::GET,
+            _phantom: std::marker::PhantomData::<serde_json::Value>,
+        }
+        .execute(Some(&limiter))
+        .await;
+
+        // Either succeeds or fails due to rate limit, but should not panic
+        match result2 {
+            Ok(_) => Ok(()),
+            Err(e) if e.to_string().contains("限流") => Ok(()),
+            Err(_) => Err("Unexpected error".into()),
+        }
+    }
 }

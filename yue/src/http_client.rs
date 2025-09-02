@@ -126,27 +126,30 @@ where
     T: YueRequestBuilder + Clone + 'a,
     U: DeserializeOwned,
 {
-    pub async fn execute(&self, rate_limit: Option<&'a DefaultRateLimiter>) -> Result<U, YueError> {
+    async fn perform_request_async(info: &'a RequestInfo, param: Option<String>, request_builder: &T, body: Option<&'a Value>, method: Method, rate_limit: Option<&'a DefaultRateLimiter>) -> Result<U, YueError> {
         if let Some(limiter) = rate_limit {
-            check_rate_limit(self.info.weight, limiter).await?;
+            check_rate_limit(info.weight, limiter).await?;
         }
         let client = HTTP_CLIENT.get().ok_or(YueError::new("客户端没有初始化"))?;
-        let mut request = self.request_builder.compose_request(
+        let mut request = request_builder.compose_request(
             client,
-            self.info,
-            self.param.clone(),
-            self.method.clone(),
+            info,
+            param,
+            method.clone(),
         )?;
-        if self.method == Method::POST || self.method == Method::PUT {
-            if let Some(body) = self.body {
+        if method == Method::POST || method == Method::PUT {
+            if let Some(body) = body {
                 request = request.json(body);
             }
         }
         let res = request.send().await?;
-        // 状态检查宏建议迁移到 http_client.rs，暂留
         check_status!(res);
         let result: U = res.json::<U>().await?;
         Ok(result)
+    }
+
+    pub async fn execute(&self, rate_limit: Option<&'a DefaultRateLimiter>) -> Result<U, YueError> {
+        Self::perform_request_async(self.info, self.param.clone(), &self.request_builder, self.body, self.method.clone(), rate_limit).await
     }
 
     pub fn into_retryable(
@@ -166,21 +169,7 @@ where
             let body = body;
             let method = method.clone();
             Box::pin(async move {
-                if let Some(limiter) = rate_limit {
-                    crate::http_client::check_rate_limit(info.weight, limiter).await?;
-                }
-                let client = HTTP_CLIENT.get().ok_or(YueError::new("客户端没有初始化"))?;
-                let mut request =
-                    request_builder.compose_request(client, info, param, method.clone())?;
-                if method == Method::POST || method == Method::PUT {
-                    if let Some(body) = body {
-                        request = request.json(body);
-                    }
-                }
-                let res = request.send().await?;
-                check_status!(res);
-                let result: U = res.json::<U>().await?;
-                Ok(result)
+                YueRequest::<T, U>::perform_request_async(info, param, &request_builder, body, method.clone(), rate_limit).await
             })
         }
     }
