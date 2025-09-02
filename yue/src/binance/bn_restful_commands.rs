@@ -3,26 +3,13 @@ use crate::binance::bn_models::{
     ToQueryParams,
 };
 use crate::errors::YueError;
-use crate::errors::YueError::RequestError;
-use crate::http_client::{DefaultRateLimiter, HTTP_CLIENT, YueRequestBuilder, check_rate_limit};
+use crate::http_client::{YueRequest, YueRequestBuilder};
 use crate::models::RequestInfo;
 use crate::tools::sign_hmac;
-use backon::{ExponentialBuilder, Retryable};
 use reqwest::{Client, Method, RequestBuilder};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::sync::LazyLock;
-
-macro_rules! check_status {
-    ($res:expr) => {
-        if $res.status() != reqwest::StatusCode::OK {
-            return Err(RequestError {
-                code: $res.status().as_u16(),
-                body: $res.text().await.unwrap_or_default(),
-            });
-        }
-    };
-}
 
 #[derive(Clone)]
 pub struct BNSecurityRequestBuilder {
@@ -56,93 +43,6 @@ impl YueRequestBuilder for BNSecurityRequestBuilder {
 }
 
 /// Wrapper for Binance requests to enable retry with backon
-pub struct YueRequest<'a, T, U>
-where
-    T: YueRequestBuilder + Clone,
-    U: DeserializeOwned,
-{
-    pub info: &'a RequestInfo,
-    pub param: Option<String>,
-    pub request_builder: T,
-    pub body: Option<&'a Value>,
-    pub method: Method,
-    _phantom: std::marker::PhantomData<U>,
-}
-
-impl<'a, T, U> YueRequest<'a, T, U>
-where
-    T: YueRequestBuilder + Clone + 'a,
-    U: DeserializeOwned,
-{
-    pub async fn execute(&self, rate_limit: Option<&'a DefaultRateLimiter>) -> Result<U, YueError> {
-        if let Some(limiter) = rate_limit {
-            check_rate_limit(self.info.weight, limiter).await?;
-        }
-
-        let client = HTTP_CLIENT.get().ok_or(YueError::new("客户端没有初始化"))?;
-        let mut request = self.request_builder.compose_request(
-            client,
-            self.info,
-            self.param.clone(),
-            self.method.clone(),
-        )?;
-        if self.method == Method::POST || self.method == Method::PUT {
-            if let Some(body) = self.body {
-                request = request.json(body);
-            }
-        }
-        let res = request.send().await?;
-        check_status!(res);
-        let result: U = res.json::<U>().await?;
-        Ok(result)
-    }
-
-    pub fn into_retryable(
-        self,
-        rate_limit: Option<&'a DefaultRateLimiter>,
-    ) -> impl FnMut() -> std::pin::Pin<Box<dyn Future<Output = Result<U, YueError>> + 'a>> + 'a
-    {
-        let info = self.info;
-        let param = self.param.clone();
-        let request_builder = self.request_builder;
-        let body = self.body;
-        let method = self.method;
-        move || {
-            let info = info;
-            let param = param.clone();
-            let request_builder = request_builder.clone();
-            let body = body;
-            let method = method.clone();
-            Box::pin(async move {
-                if let Some(limiter) = rate_limit {
-                    check_rate_limit(self.info.weight, limiter).await?;
-                }
-                let client = HTTP_CLIENT.get().ok_or(YueError::new("客户端没有初始化"))?;
-                let mut request =
-                    request_builder.compose_request(client, info, param, method.clone())?;
-                if method == Method::POST || method == Method::PUT {
-                    if let Some(body) = body {
-                        request = request.json(body);
-                    }
-                }
-                let res = request.send().await?;
-                check_status!(res);
-                let result: U = res.json::<U>().await?;
-                Ok(result)
-            })
-                as std::pin::Pin<Box<dyn std::future::Future<Output = Result<U, YueError>> + 'a>>
-        }
-    }
-
-    pub fn retry(
-        self,
-        builder: ExponentialBuilder,
-        rate_limit: Option<&'a DefaultRateLimiter>,
-    ) -> impl Future<Output = Result<U, YueError>> {
-        // Add explicit type annotations to resolve type inference issues
-        self.into_retryable(rate_limit).retry(builder)
-    }
-}
 
 pub static PING_COMMAND: LazyLock<RequestInfo> =
     LazyLock::new(|| RequestInfo::from_base_path(BINANCE_API_BASE, PING_PATH, false, 1).unwrap());
