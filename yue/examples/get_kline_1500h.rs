@@ -16,7 +16,7 @@ async fn main() {
     println!("Now (ms) = {}, start_time (ms) = {}", now_ms, start_ms);
     let symbol = "BTCUSDT";
     match get_all_kline_data(symbol, KlineInterval::OneHour, Some(start_ms)).await {
-        Ok(klines) => {
+        Ok((klines, fail_count)) => {
             println!("Fetched {} klines", klines.len());
             if let Some(first) = klines.first() {
                 println!(
@@ -44,6 +44,7 @@ async fn main() {
             }
 
             println!("total kline fetched: {}", klines.len());
+            println!("fail count {}", fail_count)
         }
         Err(e) => {
             eprintln!("Error fetching klines: {:?}", e);

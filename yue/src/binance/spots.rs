@@ -5,12 +5,14 @@ use crate::binance::bn_restful_commands::{
 use crate::errors::YueError;
 use crate::http_client::{DefaultRateLimiter, NonAuthRequestBuilder};
 use crate::models::EmptyObject;
+use backon::{BackoffBuilder, ExponentialBuilder, Retryable};
 use governor::{Quota, RateLimiter};
 use li::tools::time::unix_2_readable;
 use log::{debug, trace};
 use serde::{Deserialize, Serialize};
 use std::num::NonZeroU32;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 static RATE_LIMITER: OnceLock<DefaultRateLimiter> = OnceLock::new();
 
@@ -212,10 +214,11 @@ pub async fn get_all_kline_data(
     symbol: &str,
     interval: KlineInterval,
     start_time: Option<u64>,
-) -> Result<Vec<Kline>, YueError> {
+) -> Result<(Vec<Kline>, usize), YueError> {
     let mut res: Vec<Kline> = Vec::new();
     let mut current_start_time = start_time;
     let request_builder = NonAuthRequestBuilder {};
+    let retry_count = AtomicUsize::new(0);
     loop {
         let params = KlineParams {
             symbol: symbol.to_string(),
@@ -224,13 +227,23 @@ pub async fn get_all_kline_data(
             end_time: None,
             limit: Some(1000),
         };
-
+        let retry_policy = ExponentialBuilder::default()
+            .with_jitter() // 添加随机抖动
+            .with_factor(1.5) // 指数因子 1.5
+            .with_max_times(10)
+            .with_min_delay(std::time::Duration::from_millis(100)) // 最小延迟 500ms
+            .with_max_delay(std::time::Duration::from_secs(10))
+            .build();
         let klines: Vec<Kline> = execute_bn_get::<KlineParams, NonAuthRequestBuilder, Vec<Kline>>(
             &SPOT_KLINE_COMMAND,
             Some(&params),
             request_builder.clone(),
         )
-        .execute(get_bn_rate_limiter(SPOT_RATE_LIMITER_PER_SECOND))
+        .into_retryable(get_bn_rate_limiter(SPOT_RATE_LIMITER_PER_SECOND))
+        .retry(retry_policy)
+        .notify(|_err, _dur| {
+            retry_count.fetch_add(1, Ordering::SeqCst); // 每次重试加 1
+        })
         .await?;
 
         if let Some(last_kline) = klines.last() {
@@ -261,7 +274,7 @@ pub async fn get_all_kline_data(
         unix_2_readable(&res.first().unwrap().open_time),
         unix_2_readable(&res.last().unwrap().open_time)
     );
-    Ok(res)
+    Ok((res, retry_count.load(Ordering::SeqCst)))
 }
 
 #[cfg(test)]
@@ -326,9 +339,9 @@ mod tests {
             "获取K线数据失败: {:?}",
             kline_res.as_ref().err()
         );
-        let kline = kline_res.unwrap();
+        let (kline, _) = kline_res.unwrap();
         assert_eq!(kline.len(), 500);
-        assert!(kline[0].open_time == 1609459200000);
+        assert_eq!(kline[0].open_time, 1609459200000);
     }
 
     #[tokio::test]
@@ -380,7 +393,7 @@ mod tests {
             "获取K线数据失败: {:?}",
             kline_res.as_ref().err()
         );
-        let kline = kline_res.unwrap();
+        let (kline, _) = kline_res.unwrap();
         assert_eq!(kline.len(), 1200);
         assert!(kline[0].open_time == 1609459200000);
     }
@@ -429,7 +442,7 @@ mod tests {
             "获取K线数据失败: {:?}",
             kline_res.as_ref().err()
         );
-        let kline = kline_res.unwrap();
+        let (kline, _) = kline_res.unwrap();
         assert_eq!(kline.len(), 1000);
         assert!(kline[0].open_time == 1609459200000);
     }
@@ -464,8 +477,8 @@ mod tests {
             "获取K线数据失败: {:?}",
             kline_res.as_ref().err()
         );
-        let kline = kline_res.unwrap();
+        let (kline, _) = kline_res.unwrap();
         assert_eq!(kline.len(), 1000);
-        assert!(kline[0].open_time == 1609459200000);
+        assert_eq!(kline[0].open_time, 1609459200000);
     }
 }
