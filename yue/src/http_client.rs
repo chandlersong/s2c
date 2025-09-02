@@ -1,6 +1,6 @@
 use crate::errors::YueError;
 use crate::models::RequestInfo;
-use backon::{ExponentialBuilder, Retryable};
+use backon::{Backoff, Retryable};
 use governor::clock::DefaultClock;
 use governor::state::{InMemoryState, NotKeyed};
 use governor::{Jitter, RateLimiter};
@@ -126,17 +126,19 @@ where
     T: YueRequestBuilder + Clone + 'a,
     U: DeserializeOwned,
 {
-    async fn perform_request_async(info: &'a RequestInfo, param: Option<String>, request_builder: &T, body: Option<&'a Value>, method: Method, rate_limit: Option<&'a DefaultRateLimiter>) -> Result<U, YueError> {
+    async fn perform_request_async(
+        info: &'a RequestInfo,
+        param: Option<String>,
+        request_builder: &T,
+        body: Option<&'a Value>,
+        method: Method,
+        rate_limit: Option<&'a DefaultRateLimiter>,
+    ) -> Result<U, YueError> {
         if let Some(limiter) = rate_limit {
             check_rate_limit(info.weight, limiter).await?;
         }
         let client = HTTP_CLIENT.get().ok_or(YueError::new("客户端没有初始化"))?;
-        let mut request = request_builder.compose_request(
-            client,
-            info,
-            param,
-            method.clone(),
-        )?;
+        let mut request = request_builder.compose_request(client, info, param, method.clone())?;
         if method == Method::POST || method == Method::PUT {
             if let Some(body) = body {
                 request = request.json(body);
@@ -149,7 +151,15 @@ where
     }
 
     pub async fn execute(&self, rate_limit: Option<&'a DefaultRateLimiter>) -> Result<U, YueError> {
-        Self::perform_request_async(self.info, self.param.clone(), &self.request_builder, self.body, self.method.clone(), rate_limit).await
+        Self::perform_request_async(
+            self.info,
+            self.param.clone(),
+            &self.request_builder,
+            self.body,
+            self.method.clone(),
+            rate_limit,
+        )
+        .await
     }
 
     pub fn into_retryable(
@@ -169,14 +179,22 @@ where
             let body = body;
             let method = method.clone();
             Box::pin(async move {
-                YueRequest::<T, U>::perform_request_async(info, param, &request_builder, body, method.clone(), rate_limit).await
+                YueRequest::<T, U>::perform_request_async(
+                    info,
+                    param,
+                    &request_builder,
+                    body,
+                    method.clone(),
+                    rate_limit,
+                )
+                .await
             })
         }
     }
 
-    pub fn retry(
+    pub fn retry<B: Backoff>(
         self,
-        builder: ExponentialBuilder,
+        builder: B,
         rate_limit: Option<&'a DefaultRateLimiter>,
     ) -> impl Future<Output = Result<U, YueError>> {
         self.into_retryable(rate_limit).retry(builder)
