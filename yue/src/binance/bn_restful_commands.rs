@@ -44,25 +44,20 @@ impl YueRequestBuilder for BNSecurityRequestBuilder {
         param: Option<String>,
         method: Method,
     ) -> Result<RequestBuilder, YueError> {
-        let url = build_request_components(info, param, &self.api_secret);
-        let mut request = client.request(method, &url);
+        let mut url = info.as_ref().clone();
+        let base_query_string = param.filter(|s| !s.is_empty()).unwrap_or_default();
+        let signature = sign_hmac(&base_query_string, &self.api_secret)?;
+        let final_query = if base_query_string.is_empty() {
+            format!("signature={}", signature)
+        } else {
+            format!("{}&signature={}", base_query_string, signature)
+        };
+        url.set_query(Some(&final_query));
+        let url_str = url.to_string();
+        let mut request = client.request(method, &url_str);
         request = request.header("X-MBX-APIKEY", self.api_key.clone());
         Ok(request)
     }
-}
-
-fn build_request_components(info: &RequestInfo, param: Option<String>, api_secret: &str) -> String {
-    let mut url = info.as_ref().clone();
-    let base_query_string = param.filter(|s| !s.is_empty()).unwrap_or_default();
-    let signature = sign_hmac(&base_query_string, &api_secret).unwrap();
-    let final_query = if base_query_string.is_empty() {
-        format!("signature={}", signature)
-    } else {
-        format!("{}&signature={}", base_query_string, signature)
-    };
-    url.set_query(Some(&final_query));
-
-    url.to_string()
 }
 
 /// Wrapper for Binance requests to enable retry with backon
@@ -415,7 +410,7 @@ mod tests {
     #[tokio::test]
     async fn test_rate_limited() {
         get_bn_rate_limiter(1200);
-        // 测试正常调用
+        // 测试正常调��
         let result = check_rate_limit(1).await;
         assert!(result.is_ok());
 
