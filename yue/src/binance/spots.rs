@@ -3,6 +3,7 @@ use crate::binance::bn_restful_commands::{
     EXCHANGE_INFO_COMMAND, SPOT_KLINE_COMMAND, execute_bn_get,
 };
 use crate::errors::YueError;
+use crate::http_client::NonAuthRequestBuilder;
 use li::tools::time::unix_2_readable;
 use log::{debug, trace};
 use serde::{Deserialize, Serialize};
@@ -121,10 +122,13 @@ impl ToQueryParams for KlineParams {
 pub async fn get_trading_spot_symbols(
     status: Option<&str>,
 ) -> Result<Vec<TradingSymbolInfo>, YueError> {
-    let exchange_info: ExchangeInfo =
-        execute_bn_get::<EmptyQueryParams, ExchangeInfo>(&EXCHANGE_INFO_COMMAND, None, None)
-            .execute()
-            .await?;
+    let exchange_info: ExchangeInfo = execute_bn_get::<
+        EmptyQueryParams,
+        NonAuthRequestBuilder,
+        ExchangeInfo,
+    >(&EXCHANGE_INFO_COMMAND, None, NonAuthRequestBuilder {})
+    .execute()
+    .await?;
 
     let filter_status = status.unwrap_or("TRADING");
 
@@ -182,7 +186,7 @@ pub async fn get_all_kline_data(
 ) -> Result<Vec<Kline>, YueError> {
     let mut res: Vec<Kline> = Vec::new();
     let mut current_start_time = start_time;
-
+    let request_builder = NonAuthRequestBuilder {};
     loop {
         let params = KlineParams {
             symbol: symbol.to_string(),
@@ -192,10 +196,13 @@ pub async fn get_all_kline_data(
             limit: Some(1000),
         };
 
-        let klines: Vec<Kline> =
-            execute_bn_get::<KlineParams, Vec<Kline>>(&SPOT_KLINE_COMMAND, Some(&params), None)
-                .execute()
-                .await?;
+        let klines: Vec<Kline> = execute_bn_get::<KlineParams, NonAuthRequestBuilder, Vec<Kline>>(
+            &SPOT_KLINE_COMMAND,
+            Some(&params),
+            request_builder.clone(),
+        )
+        .execute()
+        .await?;
 
         if let Some(last_kline) = klines.last() {
             if current_start_time.is_some() && current_start_time.unwrap() == last_kline.close_time

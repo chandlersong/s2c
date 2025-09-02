@@ -4,7 +4,7 @@ use yue::binance::bn_models::Kline;
 use yue::binance::bn_models::{EmptyQueryParams, ServerTime};
 use yue::binance::bn_restful_commands::SPOT_KLINE_COMMAND;
 use yue::binance::bn_restful_commands::{SERVER_TIME_COMMAND, execute_bn_get, execute_ping};
-use yue::http_client::init_http_client;
+use yue::http_client::{NonAuthRequestBuilder, init_http_client};
 
 ///
 /// 币安REST API示例 - 无需API密钥
@@ -28,11 +28,15 @@ async fn main() {
             return;
         }
     }
-
+    let request_builder = NonAuthRequestBuilder {};
     // 获取服务器时间
-    match execute_bn_get::<EmptyQueryParams, ServerTime>(&SERVER_TIME_COMMAND, None, None)
-        .execute()
-        .await
+    match execute_bn_get::<EmptyQueryParams, NonAuthRequestBuilder, ServerTime>(
+        &SERVER_TIME_COMMAND,
+        None,
+        request_builder.clone(),
+    )
+    .execute()
+    .await
     {
         Ok(server_time) => {
             println!("测试网络服务器时间: {}", unix_2_readable(&server_time.time));
@@ -45,10 +49,10 @@ async fn main() {
     params.insert("symbol", "BTCUSDT".to_string());
     params.insert("interval", "5m".to_string());
     params.insert("limit", "5".to_string()); // 只取5根K线做演示
-    match execute_bn_get::<BTreeMap<&str, String>, Vec<Kline>>(
+    match execute_bn_get::<BTreeMap<&str, String>, NonAuthRequestBuilder, Vec<Kline>>(
         &SPOT_KLINE_COMMAND,
         Some(&params),
-        None,
+        request_builder.clone(),
     )
     .execute()
     .await

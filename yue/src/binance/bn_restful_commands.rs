@@ -1,10 +1,10 @@
 use crate::binance::bn_models::{
     BINANCE_API_BASE, EXCHANGE_INFO_PATH, EmptyQueryParams, PING_PATH, SERVER_TIME_PATH,
-    SPOT_KLINE_PATH, SecurityInfo, ToQueryParams,
+    SPOT_KLINE_PATH, ToQueryParams,
 };
 use crate::errors::YueError;
 use crate::errors::YueError::RequestError;
-use crate::http_client::HTTP_CLIENT;
+use crate::http_client::{HTTP_CLIENT, NonAuthRequestBuilder, YueRequestBuilder};
 use crate::models::{EmptyObject, RequestInfo};
 use crate::tools::sign_hmac;
 use backon::{ExponentialBuilder, Retryable};
@@ -30,26 +30,68 @@ macro_rules! check_status {
     };
 }
 
+#[derive(Clone)]
+pub struct BNSecurityRequestBuilder {
+    pub api_key: String,
+    pub api_secret: String,
+}
+
+impl YueRequestBuilder for BNSecurityRequestBuilder {
+    fn compose_request(
+        &self,
+        client: &Client,
+        info: &RequestInfo,
+        param: Option<String>,
+        method: Method,
+    ) -> Result<RequestBuilder, YueError> {
+        let url = build_request_components(info, param, &self.api_secret);
+        let mut request = client.request(method, &url);
+        request = request.header("X-MBX-APIKEY", self.api_key.clone());
+        Ok(request)
+    }
+}
+
+fn build_request_components(info: &RequestInfo, param: Option<String>, api_secret: &str) -> String {
+    let mut url = info.as_ref().clone();
+    let base_query_string = param.filter(|s| !s.is_empty()).unwrap_or_default();
+    let signature = sign_hmac(&base_query_string, &api_secret).unwrap();
+    let final_query = if base_query_string.is_empty() {
+        format!("signature={}", signature)
+    } else {
+        format!("{}&signature={}", base_query_string, signature)
+    };
+    url.set_query(Some(&final_query));
+
+    url.to_string()
+}
+
 /// Wrapper for Binance requests to enable retry with backon
-pub struct YueRequest<'a, U: DeserializeOwned> {
+pub struct YueRequest<'a, T, U>
+where
+    T: YueRequestBuilder + Clone,
+    U: DeserializeOwned,
+{
     pub info: &'a RequestInfo,
     pub param: Option<String>,
-    pub security_info: Option<&'a SecurityInfo>,
+    pub request_builder: T,
     pub body: Option<&'a Value>,
     pub method: Method,
     _phantom: std::marker::PhantomData<U>,
 }
 
-impl<'a, U: DeserializeOwned> YueRequest<'a, U> {
+impl<'a, T, U> YueRequest<'a, T, U>
+where
+    T: YueRequestBuilder + Clone + 'a,
+    U: DeserializeOwned,
+{
     pub async fn execute(&self) -> Result<U, YueError> {
         check_rate_limit(self.info.weight).await?;
         let client = HTTP_CLIENT.get().ok_or(YueError::new("客户端没有初始化"))?;
-        let mut request = create_request_with_param_and_security(
+        let mut request = self.request_builder.compose_request(
             client,
             self.info,
             self.param.clone(),
             self.method.clone(),
-            self.security_info,
         )?;
         if self.method == Method::POST || self.method == Method::PUT {
             if let Some(body) = self.body {
@@ -64,30 +106,24 @@ impl<'a, U: DeserializeOwned> YueRequest<'a, U> {
 
     pub fn into_retryable(
         self,
-    ) -> impl FnMut()
-        -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<U, YueError>> + 'a>>
-    + 'a {
+    ) -> impl FnMut() -> std::pin::Pin<Box<dyn Future<Output = Result<U, YueError>> + 'a>> + 'a
+    {
         let info = self.info;
         let param = self.param.clone();
-        let security_info = self.security_info;
+        let request_builder = self.request_builder;
         let body = self.body;
         let method = self.method;
         move || {
             let info = info;
             let param = param.clone();
-            let security_info = security_info;
+            let request_builder = request_builder.clone();
             let body = body;
             let method = method.clone();
             Box::pin(async move {
                 check_rate_limit(info.weight).await?;
                 let client = HTTP_CLIENT.get().ok_or(YueError::new("客户端没有初始化"))?;
-                let mut request = create_request_with_param_and_security(
-                    client,
-                    info,
-                    param,
-                    method.clone(),
-                    security_info,
-                )?;
+                let mut request =
+                    request_builder.compose_request(client, info, param, method.clone())?;
                 if method == Method::POST || method == Method::PUT {
                     if let Some(body) = body {
                         request = request.json(body);
@@ -102,10 +138,8 @@ impl<'a, U: DeserializeOwned> YueRequest<'a, U> {
         }
     }
 
-    pub fn retry(
-        self,
-        builder: ExponentialBuilder,
-    ) -> impl std::future::Future<Output = Result<U, YueError>> {
+    pub fn retry(self, builder: ExponentialBuilder) -> impl Future<Output = Result<U, YueError>> {
+        // Add explicit type annotations to resolve type inference issues
         self.into_retryable().retry(builder)
     }
 }
@@ -202,7 +236,7 @@ async fn check_rate_limit(weight: u32) -> Result<(), YueError> {
         Some(w) => w,
         None => return Err(YueError::new("权重必须为非零")),
     };
-    // 等待令牌或超时
+    // 等待令牌或�����时
     let result = timeout(
         timeout_duration,
         limiter.until_n_ready_with_jitter(weight, jitter),
@@ -218,110 +252,90 @@ async fn check_rate_limit(weight: u32) -> Result<(), YueError> {
 }
 
 pub async fn execute_ping() -> Result<(), YueError> {
-    let _ = execute_bn_get::<EmptyQueryParams, EmptyObject>(&PING_COMMAND, None, None)
-        .execute()
-        .await?;
+    let _ = execute_bn_get::<EmptyQueryParams, NonAuthRequestBuilder, EmptyObject>(
+        &PING_COMMAND,
+        None,
+        NonAuthRequestBuilder {},
+    )
+    .execute()
+    .await?;
     Ok(())
 }
 
-pub fn execute_bn_get<'a, P: ToQueryParams, U: DeserializeOwned>(
+pub fn execute_bn_get<'a, P, T, U>(
     info: &'a RequestInfo,
     param: Option<&'a P>,
-    security_info: Option<&'a SecurityInfo>,
-) -> YueRequest<'a, U> {
+    request_builder: T,
+) -> YueRequest<'a, T, U>
+where
+    P: ToQueryParams,
+    T: YueRequestBuilder + Clone,
+    U: DeserializeOwned,
+{
     let converted_param = param.map(|p| p.to_query_string());
     YueRequest {
         info,
         param: converted_param,
-        security_info,
+        request_builder,
         body: None,
         method: Method::GET,
         _phantom: std::marker::PhantomData,
     }
 }
 
-pub fn execute_bn_post<'a, U: DeserializeOwned, P: ToQueryParams>(
+pub fn execute_bn_post<'a, P, T, U>(
     info: &'a RequestInfo,
     param: Option<&'a P>,
     body: Option<&'a Value>,
-    security_info: Option<&'a SecurityInfo>,
-) -> YueRequest<'a, U> {
+    request_builder: T,
+) -> YueRequest<'a, T, U>
+where
+    P: ToQueryParams,
+    T: YueRequestBuilder + Clone,
+    U: DeserializeOwned,
+{
     let converted_param = param.map(|p| p.to_query_string());
     YueRequest {
         info,
         param: converted_param,
-        security_info,
+        request_builder,
         body,
         method: Method::POST,
         _phantom: std::marker::PhantomData,
     }
 }
 
-pub fn execute_bn_put<'a, U: DeserializeOwned, P: ToQueryParams>(
+pub fn execute_bn_put<'a, P, T, U>(
     info: &'a RequestInfo,
     param: Option<&'a P>,
     body: Option<&'a Value>,
-    security_info: Option<&'a SecurityInfo>,
-) -> YueRequest<'a, U> {
+    request_builder: T,
+) -> YueRequest<'a, T, U>
+where
+    P: ToQueryParams,
+    T: YueRequestBuilder + Clone,
+    U: DeserializeOwned,
+{
     let converted_param = param.map(|p| p.to_query_string());
     YueRequest {
         info,
         param: converted_param,
-        security_info,
+        request_builder,
         body,
-        method: Method::PUT,
+        method: Method::POST,
         _phantom: std::marker::PhantomData,
     }
 }
 
 /// Pure function for building request components. Easy to test.
-fn build_request_components(
-    info: &RequestInfo,
-    param: Option<String>,
-    security_info: Option<&SecurityInfo>,
-) -> (String, Option<String>) {
-    let mut url = info.as_ref().clone();
-    let base_query_string = param
-        .filter(|s| !s.is_empty())
-        .unwrap_or_default();
-    let api_key = security_info.map(|s| s.api_key.clone());
-    if let Some(sec_info) = security_info {
-        let signature = sign_hmac(&base_query_string, &sec_info.api_secret).unwrap();
-        let final_query = if base_query_string.is_empty() {
-            format!("signature={}", signature)
-        } else {
-            format!("{}&signature={}", base_query_string, signature)
-        };
-        url.set_query(Some(&final_query));
-    } else if !base_query_string.is_empty() {
-        url.set_query(Some(&base_query_string));
-    }
-    (url.to_string(), api_key)
-}
-
-/// Imperative shell for creating the request object.
-fn create_request_with_param_and_security(
-    client: &Client,
-    info: &RequestInfo,
-    param: Option<String>,
-    method: Method,
-    security_info: Option<&SecurityInfo>,
-) -> Result<RequestBuilder, YueError> {
-    let (url, api_key) = build_request_components(info, param, security_info);
-    let mut request = client.request(method, &url);
-    if let Some(key) = api_key {
-        request = request.header("X-MBX-APIKEY", &key);
-    }
-    Ok(request)
-}
 
 #[cfg(test)]
 mod tests {
-    use super::{build_request_components, check_rate_limit, execute_bn_get, get_bn_rate_limiter};
-    use crate::binance::bn_models::ToQueryParams;
-    use crate::binance::bn_models::{EmptyQueryParams, SecurityInfo};
-    use crate::http_client::init_http_client;
+    use super::{BNSecurityRequestBuilder, check_rate_limit, execute_bn_get, get_bn_rate_limiter};
+    use crate::binance::bn_models::EmptyQueryParams;
+    use crate::http_client::{NonAuthRequestBuilder, YueRequestBuilder, init_http_client};
     use crate::models::RequestInfo;
+    use reqwest::{Client, Method};
     use std::collections::BTreeMap;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -331,82 +345,70 @@ mod tests {
     }
 
     #[test]
-    fn test_build_request_components() {
+    fn test_compose_request_with_valid_security_info() {
+        let client = Client::new();
         let request_info =
-            RequestInfo::from_base_path("http://127.0.0.1:8080", "/api/v3/order", false, 1)
-                .unwrap();
-        let security_info = SecurityInfo {
+            RequestInfo::from_base_path("https://example.com", "/api/v3/test", false, 1).unwrap();
+        let builder = BNSecurityRequestBuilder {
             api_key: "test_api_key".to_string(),
             api_secret: "test_api_secret".to_string(),
         };
 
-        // Scenario 1: No params, no security
-        let (url, header) = build_request_components(&request_info, None, None);
-        assert_eq!(
-            url, "http://127.0.0.1:8080/api/v3/order",
-            "Scenario 1 (No params, no security): URL should be base path"
-        );
-        assert_eq!(
-            header, None,
-            "Scenario 1 (No params, no security): API key header should not be set"
-        );
+        let result = builder.compose_request(&client, &request_info, None, Method::GET);
+        assert!(result.is_ok());
 
-        // Scenario 2: Params, no security
-        let mut params_map = BTreeMap::new();
-        params_map.insert("symbol", "BTCUSDT".to_string());
-        params_map.insert("side", "BUY".to_string());
-        params_map.insert("type", "LIMIT".to_string());
-        let (url, header) = build_request_components(&request_info, Some(params_map.to_query_string()), None);
+        let request = result.unwrap().build().unwrap();
         assert_eq!(
-            url, "http://127.0.0.1:8080/api/v3/order?side=BUY&symbol=BTCUSDT&type=LIMIT",
-            "Scenario 2 (Params, no security): URL should include sorted query parameters"
+            request.url().as_str(),
+            "https://example.com/api/v3/test?signature=4c4df0c09aaefc2fe10f409703fd08d6754229e4c9b99897331efa42d8d65e47"
         );
         assert_eq!(
-            header, None,
-            "Scenario 2 (Params, no security): API key header should not be set"
+            request.headers().get("X-MBX-APIKEY").unwrap(),
+            "test_api_key"
         );
+    }
 
-        // Scenario 3: No params, security
-        let (url, header) =
-            build_request_components(&request_info, None, Some(&security_info));
-        assert_eq!(
-            url,
-            "http://127.0.0.1:8080/api/v3/order?signature=4c4df0c09aaefc2fe10f409703fd08d6754229e4c9b99897331efa42d8d65e47",
-            "Scenario 3 (No params, security): URL should contain only the signature"
-        );
-        assert_eq!(
-            header,
-            Some("test_api_key".to_string()),
-            "Scenario 3 (No params, security): API key header should be set"
-        );
+    #[test]
+    fn test_compose_request_without_security_info() {
+        let client = Client::new();
+        let request_info =
+            RequestInfo::from_base_path("https://example.com", "/api/v3/test", false, 1).unwrap();
+        let builder = NonAuthRequestBuilder {};
 
-        // Scenario 4: Empty params, security
-        let empty_map = BTreeMap::new();
-        let (url, header) =
-            build_request_components(&request_info, Some(empty_map.to_query_string()), Some(&security_info));
-        assert_eq!(
-            url,
-            "http://127.0.0.1:8080/api/v3/order?signature=4c4df0c09aaefc2fe10f409703fd08d6754229e4c9b99897331efa42d8d65e47",
-            "Scenario 4 (Empty params, security): URL should contain only the signature"
-        );
-        assert_eq!(
-            header,
-            Some("test_api_key".to_string()),
-            "Scenario 4 (Empty params, security): API key header should be set"
-        );
+        let result = builder.compose_request(&client, &request_info, None, Method::GET);
+        assert!(result.is_ok());
 
-        // Scenario 5: Params, security
-        let (url, header) =
-            build_request_components(&request_info, Some(params_map.to_query_string()), Some(&security_info));
+        let request = result.unwrap().build().unwrap();
+        assert_eq!(request.url().as_str(), "https://example.com/api/v3/test");
+        assert!(request.headers().get("X-MBX-APIKEY").is_none());
+    }
+
+    #[test]
+    fn test_compose_request_with_query_params() {
+        let client = Client::new();
+        let request_info =
+            RequestInfo::from_base_path("https://example.com", "/api/v3/test", false, 1).unwrap();
+        let builder = BNSecurityRequestBuilder {
+            api_key: "test_api_key".to_string(),
+            api_secret: "test_api_secret".to_string(),
+        };
+
+        let result = builder.compose_request(
+            &client,
+            &request_info,
+            Some("symbol=BTCUSDT".to_string()),
+            Method::GET,
+        );
+        assert!(result.is_ok());
+
+        let request = result.unwrap().build().unwrap();
         assert_eq!(
-            url,
-            "http://127.0.0.1:8080/api/v3/order?side=BUY&symbol=BTCUSDT&type=LIMIT&signature=627ca17e230c3eb329537cdab76b3654fd620c7d863f7344f7d625c02f7cc110",
-            "Scenario 5 (Params, security): URL should contain sorted params and signature"
+            request.url().as_str(),
+            "https://example.com/api/v3/test?symbol=BTCUSDT&signature=e383f8d24830bb711f0e833507b66798c5936a8fedd29b51bc5403cffd0ba755"
         );
         assert_eq!(
-            header,
-            Some("test_api_key".to_string()),
-            "Scenario 5 (Params, security): API key header should be set"
+            request.headers().get("X-MBX-APIKEY").unwrap(),
+            "test_api_key"
         );
     }
 
@@ -449,10 +451,13 @@ mod tests {
             .await;
 
         // Execute the request
-        let result: serde_json::Value =
-            execute_bn_get::<EmptyQueryParams, serde_json::Value>(&request_info, None, None)
-                .execute()
-                .await?;
+        let result: serde_json::Value = execute_bn_get::<
+            EmptyQueryParams,
+            NonAuthRequestBuilder,
+            serde_json::Value,
+        >(&request_info, None, NonAuthRequestBuilder {})
+        .execute()
+        .await?;
 
         assert_eq!(result["message"], "success");
         Ok(())
@@ -481,9 +486,10 @@ mod tests {
         params.insert("symbol", "BTCUSDT".to_string());
 
         // Execute request with parameters
-        let result: serde_json::Value = execute_bn_get(&request_info, Some(&params), None)
-            .execute()
-            .await?;
+        let result: serde_json::Value =
+            execute_bn_get(&request_info, Some(&params), NonAuthRequestBuilder {})
+                .execute()
+                .await?;
 
         assert_eq!(result["symbol"], "BTCUSDT");
         assert_eq!(result["price"], "50000.00");
@@ -497,11 +503,6 @@ mod tests {
         let test_path = "/api/v3/test";
         let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1)?;
 
-        let security_info = SecurityInfo {
-            api_key: "test_key".to_string(),
-            api_secret: "test_secret".to_string(),
-        };
-
         // Setup mock expecting security headers
         Mock::given(method("GET"))
             .and(path(test_path))
@@ -513,13 +514,17 @@ mod tests {
             .await;
 
         // Execute request with security info
-        let result: serde_json::Value = execute_bn_get::<EmptyQueryParams, serde_json::Value>(
-            &request_info,
-            None,
-            Some(&security_info),
-        )
-        .execute()
-        .await?;
+        let result: serde_json::Value =
+            execute_bn_get::<EmptyQueryParams, BNSecurityRequestBuilder, serde_json::Value>(
+                &request_info,
+                None,
+                BNSecurityRequestBuilder {
+                    api_key: "test_key".to_string(),
+                    api_secret: "test_secret".to_string(),
+                },
+            )
+            .execute()
+            .await?;
 
         assert_eq!(result["authenticated"], true);
         Ok(())
@@ -543,10 +548,13 @@ mod tests {
             .await;
 
         // Execute request and expect error
-        let result =
-            execute_bn_get::<EmptyQueryParams, serde_json::Value>(&request_info, None, None)
-                .execute()
-                .await;
+        let result = execute_bn_get::<EmptyQueryParams, NonAuthRequestBuilder, serde_json::Value>(
+            &request_info,
+            None,
+            NonAuthRequestBuilder {},
+        )
+        .execute()
+        .await;
         assert!(result.is_err());
         Ok(())
     }

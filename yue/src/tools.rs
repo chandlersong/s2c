@@ -202,4 +202,18 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn debug_signature_generation() {
+        let base_query_string = "symbol=BTCUSDT";
+        let api_secret = "test_api_secret";
+
+        let generated_signature = super::sign_hmac(base_query_string, api_secret).unwrap();
+        println!("Generated signature: {}", generated_signature);
+
+        assert_eq!(
+            generated_signature,
+            "e383f8d24830bb711f0e833507b66798c5936a8fedd29b51bc5403cffd0ba755"
+        );
+    }
 }
