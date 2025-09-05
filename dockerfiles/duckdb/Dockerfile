@@ -7,7 +7,6 @@ ENV LIBDIR=${LIBDIR}
 ENV ROCKSDB_LIB_DIR=/usr/lib/${LIBDIR}
 ENV OPENSSL_INCLUDE_DIR=/usr/include/openssl
 ENV OPENSSL_LIB_DIR=/usr/lib/${LIBDIR}
-COPY --from=rocksdb /usr/lib/${LIBDIR}/librocksdb* /usr/lib/${LIBDIR}/
 RUN cargo test --all-features && cargo build --release
 
 FROM chandlersong/rust_runtime:1.89-slim-bookworm AS runtime
