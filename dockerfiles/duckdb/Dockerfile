@@ -1,8 +1,7 @@
 # Dockerfile
-FROM chandlersong/rocksdb:bookworm-slim-9.9.3 AS rocksdb
 FROM chandlersong/rust_ci:1.89-slim-bookworm AS builder
 WORKDIR /app
-COPY . .
+COPY ../.. .
 ARG LIBDIR
 ENV LIBDIR=${LIBDIR}
 ENV ROCKSDB_LIB_DIR=/usr/lib/${LIBDIR}
@@ -14,8 +13,14 @@ RUN cargo build --release
 FROM chandlersong/rust_runtime:1.89-slim-bookworm AS runtime
 ARG APP_NAME=test
 ENV LIBDIR=${LIBDIR}
-COPY --from=builder /app/target/release/${APP_NAME} /app/app
-COPY --from=rocksdb /usr/lib/${LIBDIR}/librocksdb* /usr/lib/${LIBDIR}/
 
-ADD dockerscripts/start.sh /app/start.sh
+RUN wget https://github.com/duckdb/duckdb/releases/download/v1.3.2/libduckdb-osx-universal.zip **\
+    unzip libduckdb-osx-universal.zip -d /opt/libduckdb
+ENV DUCKDB_LIB_DIR=/opt/libduckdb
+ENV DUCKDB_INCLUDE_DIR=$DUCKDB_LIB_DIR
+ENV LD_LIBRARY_PATH=$DUCKDB_LIB_DIR
+
+COPY --from=builder /app/target/release/${APP_NAME} /app/app
+
+ADD ../../dockerscripts/start.sh /app/start.sh
 CMD ["sh","/app/start.sh"]
