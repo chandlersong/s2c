@@ -6,6 +6,9 @@ ARG LIBDIR
 ENV LIBDIR=${LIBDIR}
 ENV ROCKSDB_LIB_DIR=/usr/lib/${LIBDIR}
 ENV OPENSSL_INCLUDE_DIR=/usr/include/openssl
+ENV DUCKDB_LIB_DIR=/opt/libduckdb
+ENV DUCKDB_INCLUDE_DIR=$DUCKDB_LIB_DIR
+ENV LD_LIBRARY_PATH=$DUCKDB_LIB_DIR
 
 RUN cargo test --all-features && cargo build --release
 
