@@ -1,4 +1,4 @@
-name: build ci images (Multi-Arch)
+name: build ci images
 on:
   workflow_dispatch:
     inputs:
@@ -31,7 +31,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: dockers/dockerfiles/rust_ci/Dockerfile
+          file: dockerfiles/rust_ci/Dockerfile
           push: true
           platforms: linux/amd64
           tags: chandlersong/rust_ci:${{ inputs.image_tag }}-amd64
@@ -42,7 +42,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: dockers/dockerfiles/rust_runtime/Dockerfile
+          file: dockerfiles/rust_runtime/Dockerfile
           push: true
           platforms: linux/amd64
           tags: chandlersong/rust_runtime:${{ inputs.image_tag }}-amd64
@@ -68,7 +68,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: dockers/dockerfiles/rust_ci/Dockerfile
+          file: dockerfiles/rust_ci/Dockerfile
           push: true
           platforms: linux/arm64
           tags: chandlersong/rust_ci:${{ inputs.image_tag }}-arm64
@@ -79,7 +79,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: dockers/dockerfiles/rust_runtime/Dockerfile
+          file: dockerfiles/rust_runtime/Dockerfile
           push: true
           platforms: linux/arm64
           tags: chandlersong/rust_runtime:${{ inputs.image_tag }}-arm64
