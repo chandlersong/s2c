@@ -23,7 +23,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
-          file: ${{ github.workspace }}/dockerfiles/duckdb/Dockerfile
+          file: ${{ github.workspace }}/dockerfiles/prod_with_duckdb/Dockerfile
           push: true
           tags: chandlersong/mingluan:snapshot-amd64
           build-args: |
@@ -46,7 +46,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
-          file: ${{ github.workspace }}/dockerfiles/duckdb/Dockerfile
+          file: ${{ github.workspace }}/dockerfiles/prod_with_duckdb/Dockerfile
           push: true
           tags: chandlersong/mingluan:snapshot-arm64
           build-args: |
