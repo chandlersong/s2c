@@ -4,5 +4,5 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-li = { path = "../../li" }
-yue = { path = "../../yue" }
+duckdb = {workspace = true}
+r2d2 = "0.8.10"
