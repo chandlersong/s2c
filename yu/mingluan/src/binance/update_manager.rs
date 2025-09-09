@@ -1,21 +1,21 @@
 use crate::binance::binance_consts::QUERY_LATEST_SQL;
-use crate::exchange::ExchangeUpdateManager;
+use crate::exchange::KlineUpDate;
 use duckdb::DuckdbConnectionManager;
 use r2d2::PooledConnection;
 use yue::binance::spots::{KlineInterval, get_all_kline_data};
 
-pub struct BinanceUpdateManager {
+pub struct SpotKlineRefresh {
     connection: PooledConnection<DuckdbConnectionManager>,
 }
 
-impl BinanceUpdateManager {
+impl SpotKlineRefresh {
     pub fn new(connection: PooledConnection<DuckdbConnectionManager>) -> Self {
-        BinanceUpdateManager { connection }
+        SpotKlineRefresh { connection }
     }
 }
 
-impl ExchangeUpdateManager for BinanceUpdateManager {
-    async fn refresh_spot_kline(&self) -> String {
+impl KlineUpDate for SpotKlineRefresh {
+    async fn update(&self) -> String {
         let mut stmt = self.connection.prepare(QUERY_LATEST_SQL).unwrap();
         let latest_symbol = stmt
             .query_map([], |row| {
@@ -42,8 +42,8 @@ impl ExchangeUpdateManager for BinanceUpdateManager {
 #[cfg(test)]
 mod tests {
     use crate::binance::binance_consts::BinanceTables::SpotKline;
-    use crate::binance::update_manager::BinanceUpdateManager;
-    use crate::exchange::ExchangeUpdateManager;
+    use crate::binance::update_manager::SpotKlineRefresh;
+    use crate::exchange::KlineUpDate;
     use crate::test_utils::import_local_csv_and_assert;
     use duckdb::DuckdbConnectionManager;
     use r2d2::PooledConnection;
@@ -73,7 +73,7 @@ mod tests {
             .join("tests/data/test_refresh_spot_kline_normal.csv");
         import_local_csv_and_assert(&conn, "spot_kline", csv_path.as_path(), 3).unwrap();
 
-        let manager = BinanceUpdateManager { connection: conn };
-        manager.refresh_spot_kline().await;
+        let manager = SpotKlineRefresh { connection: conn };
+        manager.update().await;
     }
 }

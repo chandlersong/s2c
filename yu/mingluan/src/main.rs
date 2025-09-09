@@ -1,4 +1,4 @@
-use crate::binance::update_manager::BinanceUpdateManager;
+use crate::binance::update_manager::SpotKlineRefresh;
 use crate::datasource::get_connection_pool;
 use duckdb::DuckdbConnectionManager;
 use r2d2::PooledConnection;
@@ -17,7 +17,7 @@ pub mod test_utils;
 fn main() {
     let conn: PooledConnection<DuckdbConnectionManager> = get_connection_pool().get().unwrap();
 
-    let manager = BinanceUpdateManager::new(conn);
+    let manager = SpotKlineRefresh::new(conn);
     // conn.execute(
     //     "CREATE TABLE ducks (id INTEGER PRIMARY KEY, name TEXT)",
     //     [], // empty list of parameters
