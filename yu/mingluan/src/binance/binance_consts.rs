@@ -1,4 +1,4 @@
-static QUERY_LATEST_SQL: &str =
+pub(super) static QUERY_LATEST_SQL: &str =
     "select symbol,max(candle_begin_time) as latest from spot_kline group by symbol;";
 
 static CREATE_KLINE_TABLE: &str = "CREATE TABLE IF NOT EXISTS spot_kline

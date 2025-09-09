@@ -1,7 +1,5 @@
 use duckdb::{Connection, Result};
-use std::fs::File;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// 从本地 CSV 路径导入指定表并断言行数等于 expected_count
 /// - csv_path 可以是相对或绝对路径，函数会 canonicalize 转为绝对路径
