@@ -12,3 +12,4 @@ build/
 out/
 conf/
 target/
+/testdata/

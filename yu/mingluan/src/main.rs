@@ -1,9 +1,10 @@
 use crate::datasource::get_connection_pool;
-use duckdb::arrow::array::Datum;
-use duckdb::{Connection, DuckdbConnectionManager, params};
-use std::thread;
+use duckdb::params;
 
-pub mod datasource;
+pub(crate) mod binance;
+pub(crate) mod datasource;
+#[cfg(test)]
+pub mod test_utils;
 
 struct Duck {
     id: i32,

@@ -264,3 +264,4 @@ fabric.properties
 /conf/
 /test/
 .DS_Store
+/testdata/

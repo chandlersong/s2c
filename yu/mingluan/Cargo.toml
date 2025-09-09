@@ -4,5 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-duckdb = {workspace = true}
+duckdb = { workspace = true }
+tokio = { workspace = true }
+polars = { workspace = true}
 r2d2 = "0.8.10"
