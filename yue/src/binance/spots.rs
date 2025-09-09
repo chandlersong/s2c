@@ -208,7 +208,7 @@ pub trait KlineFetcher {
     ) -> Result<(Vec<Kline>, usize), YueError>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SpotKlineFetcher {}
 
 #[async_trait(?Send)]

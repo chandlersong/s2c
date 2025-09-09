@@ -1,4 +1,3 @@
-use crate::binance::update_manager::SpotKlineRefresh;
 use crate::datasource::get_connection_pool;
 use duckdb::DuckdbConnectionManager;
 use r2d2::PooledConnection;
