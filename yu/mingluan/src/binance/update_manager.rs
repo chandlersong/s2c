@@ -2,19 +2,45 @@ use crate::binance::binance_consts::QUERY_LATEST_SQL;
 use crate::exchange::KlineUpDate;
 use duckdb::DuckdbConnectionManager;
 use r2d2::PooledConnection;
-use yue::binance::spots::{KlineInterval, get_all_kline_data};
+use yue::binance::spots::KlineFetcher;
 
-pub struct SpotKlineRefresh {
+pub struct SpotKlineRefresh<F>
+where
+    F: KlineFetcher + Send + Sync,
+{
     connection: PooledConnection<DuckdbConnectionManager>,
+    kline_fetcher: F,
 }
 
-impl SpotKlineRefresh {
-    pub fn new(connection: PooledConnection<DuckdbConnectionManager>) -> Self {
-        SpotKlineRefresh { connection }
+impl<F> SpotKlineRefresh<F>
+where
+    F: KlineFetcher + Send + Sync,
+{
+    pub fn new(connection: PooledConnection<DuckdbConnectionManager>) -> Self
+    where
+        F: KlineFetcher + Send + Sync + Default,
+    {
+        SpotKlineRefresh {
+            connection,
+            kline_fetcher: F::default(),
+        }
+    }
+
+    pub fn with_fetcher(
+        connection: PooledConnection<DuckdbConnectionManager>,
+        kline_fetcher: F,
+    ) -> Self {
+        SpotKlineRefresh {
+            connection,
+            kline_fetcher,
+        }
     }
 }
 
-impl KlineUpDate for SpotKlineRefresh {
+impl<F> KlineUpDate for SpotKlineRefresh<F>
+where
+    F: KlineFetcher + Send + Sync,
+{
     async fn update(&self) -> String {
         let mut stmt = self.connection.prepare(QUERY_LATEST_SQL).unwrap();
         let latest_symbol = stmt
@@ -46,8 +72,10 @@ mod tests {
     use crate::exchange::KlineUpDate;
     use crate::test_utils::import_local_csv_and_assert;
     use duckdb::DuckdbConnectionManager;
+    use mockall::mock;
     use r2d2::PooledConnection;
     use std::path::Path;
+    use yue::binance::spots::KlineFetcher;
 
     fn initial_db() -> PooledConnection<DuckdbConnectionManager> {
         let builder = r2d2::Pool::builder()
@@ -62,6 +90,20 @@ mod tests {
             .unwrap()
     }
 
+    mock! {
+        pub KlineFetcher {}
+
+        #[async_trait::async_trait(?Send)]
+        impl KlineFetcher for KlineFetcher {
+            async fn get_all_kline_data(
+                &self,
+                symbol: &str,
+                interval: yue::binance::spots::KlineInterval,
+                start_time: Option<u64>,
+            ) -> Result<(Vec<yue::binance::spots::Kline>, usize), yue::errors::YueError>;
+        }
+    }
+
     #[tokio::test]
     async fn test_refresh_spot_kline_normal() {
         // 初始化内存数据库连接并建表
@@ -73,7 +115,11 @@ mod tests {
             .join("tests/data/test_refresh_spot_kline_normal.csv");
         import_local_csv_and_assert(&conn, "spot_kline", csv_path.as_path(), 3).unwrap();
 
-        let manager = SpotKlineRefresh { connection: conn };
+        use mockall::predicate::{always, eq};
+
+        let mut mock = MockKlineFetcher::new();
+
+        let manager = SpotKlineRefresh::with_fetcher(conn, mock);
         manager.update().await;
     }
 }

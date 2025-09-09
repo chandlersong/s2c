@@ -17,7 +17,7 @@ pub mod test_utils;
 fn main() {
     let conn: PooledConnection<DuckdbConnectionManager> = get_connection_pool().get().unwrap();
 
-    let manager = SpotKlineRefresh::new(conn);
+    // let manager = SpotKlineRefresh::new(conn);
     // conn.execute(
     //     "CREATE TABLE ducks (id INTEGER PRIMARY KEY, name TEXT)",
     //     [], // empty list of parameters

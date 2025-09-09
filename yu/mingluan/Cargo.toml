@@ -8,3 +8,7 @@ duckdb = { workspace = true }
 tokio = { workspace = true }
 r2d2 = "0.8.10"
 yue = { path = "../../yue" }
+
+[dev-dependencies]
+mockall = { workspace = true }
+async-trait = { workspace = true }

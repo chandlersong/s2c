@@ -1,7 +1,7 @@
 use li::tools::logs::setup_logger;
 use li::tools::time::{unix_2_readable, unix_time_now_u64};
 use log::LevelFilter;
-use yue::binance::spots::{KlineInterval, get_all_kline_data};
+use yue::binance::spots::{KlineFetcher, KlineInterval, SpotKlineFetcher};
 use yue::http_client::init_http_client;
 
 #[tokio::main]
@@ -15,7 +15,11 @@ async fn main() {
     let start_ms = now_ms - 1500 * one_hour;
     println!("Now (ms) = {}, start_time (ms) = {}", now_ms, start_ms);
     let symbol = "BTCUSDT";
-    match get_all_kline_data(symbol, KlineInterval::OneHour, Some(start_ms)).await {
+    let fetcher = SpotKlineFetcher {};
+    match fetcher
+        .get_all_kline_data(symbol, KlineInterval::OneHour, Some(start_ms))
+        .await
+    {
         Ok((klines, fail_count)) => {
             println!("Fetched {} klines", klines.len());
             if let Some(first) = klines.first() {
