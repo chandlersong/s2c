@@ -8,6 +8,7 @@ duckdb = { workspace = true }
 tokio = { workspace = true }
 r2d2 = "0.8.10"
 yue = { path = "../../yue" }
+thiserror = {workspace = true}
 
 [dev-dependencies]
 mockall = { workspace = true }

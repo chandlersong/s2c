@@ -1,9 +1,10 @@
-use crate::datasource::get_connection_pool;
+use crate::duckdb_service::get_connection_pool;
 use duckdb::{DuckdbConnectionManager, params};
 use r2d2::PooledConnection;
 
 pub(crate) mod binance;
-pub(crate) mod datasource;
+pub(crate) mod duckdb_service;
+mod errors;
 mod exchange;
 #[cfg(test)]
 pub mod test_utils;

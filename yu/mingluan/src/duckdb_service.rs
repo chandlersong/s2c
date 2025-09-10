@@ -1,6 +1,7 @@
+use crate::errors::MingLuanError;
 use duckdb::DuckdbConnectionManager;
 use r2d2;
-use r2d2::Pool;
+use r2d2::{Pool, PooledConnection};
 use std::sync::OnceLock;
 
 pub(crate) static CONNECTION_POOL: OnceLock<Pool<DuckdbConnectionManager>> = OnceLock::new();
@@ -22,4 +23,32 @@ pub fn get_connection_pool() -> &'static Pool<DuckdbConnectionManager> {
             .build(DuckdbConnectionManager::memory().unwrap())
             .unwrap()
     })
+}
+
+pub(crate) trait DuckConnAcquire {
+    fn acquire(&self) -> Result<PooledConnection<DuckdbConnectionManager>, MingLuanError>;
+}
+
+struct SimpleDuckDBConnectionAcquire {
+    pool: &'static Pool<DuckdbConnectionManager>,
+}
+
+impl SimpleDuckDBConnectionAcquire {
+    fn new(pool: &'static Pool<DuckdbConnectionManager>) -> Self {
+        SimpleDuckDBConnectionAcquire { pool }
+    }
+}
+
+impl Default for SimpleDuckDBConnectionAcquire {
+    fn default() -> Self {
+        SimpleDuckDBConnectionAcquire {
+            pool: get_connection_pool(),
+        }
+    }
+}
+
+impl DuckConnAcquire for SimpleDuckDBConnectionAcquire {
+    fn acquire(&self) -> Result<PooledConnection<DuckdbConnectionManager>, MingLuanError> {
+        Ok(self.pool.get()?)
+    }
 }
