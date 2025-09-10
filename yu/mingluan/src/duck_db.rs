@@ -25,30 +25,25 @@ pub fn get_connection_pool() -> &'static Pool<DuckdbConnectionManager> {
     })
 }
 
-pub(crate) trait DuckConnAcquire {
-    fn acquire(&self) -> Result<PooledConnection<DuckdbConnectionManager>, MingLuanError>;
+pub struct DBProvider {
+    pool: Pool<DuckdbConnectionManager>,
 }
 
-struct SimpleDuckDBConnectionAcquire {
-    pool: &'static Pool<DuckdbConnectionManager>,
-}
-
-impl SimpleDuckDBConnectionAcquire {
-    fn new(pool: &'static Pool<DuckdbConnectionManager>) -> Self {
-        SimpleDuckDBConnectionAcquire { pool }
+impl DBProvider {
+    #[cfg(test)]
+    pub fn new(pool: Pool<DuckdbConnectionManager>) -> Self {
+        DBProvider { pool }
     }
-}
 
-impl Default for SimpleDuckDBConnectionAcquire {
-    fn default() -> Self {
-        SimpleDuckDBConnectionAcquire {
-            pool: get_connection_pool(),
-        }
-    }
-}
-
-impl DuckConnAcquire for SimpleDuckDBConnectionAcquire {
-    fn acquire(&self) -> Result<PooledConnection<DuckdbConnectionManager>, MingLuanError> {
+    pub fn acquire(&self) -> Result<PooledConnection<DuckdbConnectionManager>, MingLuanError> {
         Ok(self.pool.get()?)
+    }
+}
+
+impl Default for DBProvider {
+    fn default() -> Self {
+        DBProvider {
+            pool: get_connection_pool().clone(),
+        }
     }
 }

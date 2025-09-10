@@ -13,7 +13,7 @@ use log::{debug, trace};
 use serde::{Deserialize, Serialize};
 use std::num::NonZeroU32;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU16, Ordering};
 
 static SPOT_RATE_LIMITER: OnceLock<DefaultRateLimiter> = OnceLock::new();
 
@@ -205,7 +205,7 @@ pub trait KlineFetcher {
         symbol: &str,
         interval: KlineInterval,
         start_time: Option<u64>,
-    ) -> Result<(Vec<Kline>, usize), YueError>;
+    ) -> Result<(Vec<Kline>, u16), YueError>;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -231,11 +231,11 @@ impl KlineFetcher for SpotKlineFetcher {
         symbol: &str,
         interval: KlineInterval,
         start_time: Option<u64>,
-    ) -> Result<(Vec<Kline>, usize), YueError> {
+    ) -> Result<(Vec<Kline>, u16), YueError> {
         let mut res: Vec<Kline> = Vec::new();
         let mut current_start_time = start_time;
         let request_builder = NonAuthRequestBuilder {};
-        let retry_count = AtomicUsize::new(0);
+        let retry_count = AtomicU16::new(0);
         loop {
             let params = KlineParams {
                 symbol: symbol.to_string(),

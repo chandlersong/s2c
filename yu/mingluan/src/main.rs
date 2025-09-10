@@ -1,9 +1,10 @@
-use crate::duckdb_service::get_connection_pool;
+use crate::duck_db::DBProvider;
+use crate::errors::MingLuanError;
 use duckdb::{DuckdbConnectionManager, params};
 use r2d2::PooledConnection;
 
 pub(crate) mod binance;
-pub(crate) mod duckdb_service;
+pub(crate) mod duck_db;
 mod errors;
 mod exchange;
 #[cfg(test)]
@@ -14,8 +15,9 @@ struct Duck {
     name: String,
 }
 
-fn main() {
-    let conn: PooledConnection<DuckdbConnectionManager> = get_connection_pool().get().unwrap();
+fn main() -> Result<(), MingLuanError> {
+    let acquire = DBProvider::default();
+    let conn: PooledConnection<DuckdbConnectionManager> = acquire.acquire()?;
 
     // let manager = SpotKlineRefresh::new(conn);
     conn.execute(
@@ -54,4 +56,5 @@ fn main() {
     for duck in ducks {
         println!("{}) {}", duck.id, duck.name);
     }
+    Ok(())
 }
