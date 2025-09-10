@@ -71,6 +71,7 @@ mod tests {
     use crate::binance::update_manager::SpotKlineRefresh;
     use crate::exchange::KlineUpDate;
     use crate::test_utils::import_local_csv_and_assert;
+    use async_trait::async_trait;
     use duckdb::DuckdbConnectionManager;
     use mockall::mock;
     use r2d2::PooledConnection;
@@ -93,7 +94,7 @@ mod tests {
     mock! {
         pub KlineFetcher {}
 
-        #[async_trait::async_trait(?Send)]
+        #[async_trait]
         impl KlineFetcher for KlineFetcher {
             async fn get_all_kline_data(
                 &self,

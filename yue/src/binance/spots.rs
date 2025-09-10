@@ -198,7 +198,7 @@ pub async fn get_trading_spot_symbols(
     Ok(trading_symbols)
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 pub trait KlineFetcher {
     async fn get_all_kline_data(
         &self,
@@ -211,7 +211,7 @@ pub trait KlineFetcher {
 #[derive(Debug, Clone, Default)]
 pub struct SpotKlineFetcher {}
 
-#[async_trait(?Send)]
+#[async_trait]
 impl KlineFetcher for SpotKlineFetcher {
     /// 获取指定交易对和时间间隔的K线数据
     /// FIXME：如果start_time之后的一个周期没有。就不会取道数据

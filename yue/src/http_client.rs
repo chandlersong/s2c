@@ -165,7 +165,7 @@ where
     pub fn into_retryable(
         self,
         rate_limit: Option<&'a DefaultRateLimiter>,
-    ) -> impl FnMut() -> std::pin::Pin<Box<dyn Future<Output = Result<U, YueError>> + 'a>> + 'a
+    ) -> impl FnMut() -> std::pin::Pin<Box<dyn Future<Output = Result<U, YueError>> + Send + 'a>> + 'a
     {
         let info = self.info;
         let param = self.param.clone();
