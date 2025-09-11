@@ -9,6 +9,7 @@ mod errors;
 mod exchange;
 #[cfg(test)]
 pub mod test_utils;
+mod utils;
 
 struct Duck {
     id: i32,

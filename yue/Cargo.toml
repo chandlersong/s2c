@@ -18,10 +18,11 @@ backon = { workspace = true }
 prost = { workspace = true }
 reqwest = { workspace = true }
 thiserror = {workspace = true}
+async-trait = { workspace = true }
 governor = { version = "0.10.0", features = ["std"] }
 futures-util = "0.3.30"
 moka = { version = "0.12.10", features = ["future"] }
-async-trait = "0.1.81"
+
 url = { version = "2.5.4" }
 
 tokio-tungstenite = { version = "0.24.0", features = ["rustls"] }

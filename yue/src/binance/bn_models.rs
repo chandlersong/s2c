@@ -600,39 +600,47 @@ pub struct TradeRaw {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Kline {
+pub struct BinanceKline {
     #[serde(rename = "open_time")]
     pub open_time: u64, // 开盘时间戳 (毫秒)
 
     #[serde(rename = "open")]
-    pub open: String, // 开盘价
+    #[serde(with = "string_to_float")]
+    pub open: f64, // 开盘价
 
     #[serde(rename = "high")]
-    pub high: String, // 最高价
+    #[serde(with = "string_to_float")]
+    pub high: f64, // 最高价
 
     #[serde(rename = "low")]
-    pub low: String, // 最低价
+    #[serde(with = "string_to_float")]
+    pub low: f64, // 最低价
 
     #[serde(rename = "close")]
-    pub close: String, // 收盘价
+    #[serde(with = "string_to_float")]
+    pub close: f64, // 收盘价
 
     #[serde(rename = "volume")]
-    pub volume: String, // 成交量
+    #[serde(with = "string_to_float")]
+    pub volume: f64, // 成交量
 
     #[serde(rename = "close_time")]
     pub close_time: u64, // 收盘时间戳 (毫秒)
 
     #[serde(rename = "quote_asset_volume")]
-    pub quote_asset_volume: String, // 成交额
+    #[serde(with = "string_to_float")]
+    pub quote_asset_volume: f64, // 成交额
 
     #[serde(rename = "number_of_trades")]
     pub number_of_trades: u64, // 成交笔数
 
     #[serde(rename = "taker_buy_base_asset_volume")]
-    pub taker_buy_base_asset_volume: String, // 主动买入成交量
+    #[serde(with = "string_to_float")]
+    pub taker_buy_base_asset_volume: f64, // 主动买入成交量
 
     #[serde(rename = "taker_buy_quote_asset_volume")]
-    pub taker_buy_quote_asset_volume: String, // 主动买入成交额
+    #[serde(with = "string_to_float")]
+    pub taker_buy_quote_asset_volume: f64, // 主动买入成交额
 
     #[serde(rename = "ignore")]
     pub ignore: String, // 忽略字段

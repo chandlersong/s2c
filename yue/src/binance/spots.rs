@@ -1,4 +1,4 @@
-pub use crate::binance::bn_models::{EmptyQueryParams, ExchangeInfo, Kline, ToQueryParams};
+pub use crate::binance::bn_models::{BinanceKline, EmptyQueryParams, ExchangeInfo, ToQueryParams};
 use crate::binance::bn_restful_commands::{
     EXCHANGE_INFO_COMMAND, PING_COMMAND, SPOT_KLINE_COMMAND, execute_bn_get,
 };
@@ -45,7 +45,7 @@ pub struct TradingSymbolInfo {
     pub order_types: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum KlineInterval {
     OneSecond,
     OneMinute,
@@ -142,6 +142,8 @@ pub async fn execute_ping() -> Result<(), YueError> {
 /// 按照币安的策略。如果一个币在2022年1月1日上线。那么start_time设定为2021年为1月1日。
 /// 那么返回的第一个日期是2022年1月1日
 ///
+/// TODO： 听过一个stream的接口，获得一些就返回。
+///
 /// # 参数
 /// * `status` - 交易对状态过滤器
 ///   - `None` 或 `Some("TRADING")`: 只返回交易中的交易对 (默认)
@@ -205,7 +207,7 @@ pub trait KlineFetcher {
         symbol: &str,
         interval: KlineInterval,
         start_time: Option<u64>,
-    ) -> Result<(Vec<Kline>, u16), YueError>;
+    ) -> Result<(Vec<BinanceKline>, u16), YueError>;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -231,8 +233,8 @@ impl KlineFetcher for SpotKlineFetcher {
         symbol: &str,
         interval: KlineInterval,
         start_time: Option<u64>,
-    ) -> Result<(Vec<Kline>, u16), YueError> {
-        let mut res: Vec<Kline> = Vec::new();
+    ) -> Result<(Vec<BinanceKline>, u16), YueError> {
+        let mut res: Vec<BinanceKline> = Vec::new();
         let mut current_start_time = start_time;
         let request_builder = NonAuthRequestBuilder {};
         let retry_count = AtomicU16::new(0);
@@ -251,8 +253,8 @@ impl KlineFetcher for SpotKlineFetcher {
                 .with_min_delay(std::time::Duration::from_millis(100)) // 最小延迟 500ms
                 .with_max_delay(std::time::Duration::from_secs(10))
                 .build();
-            let klines: Vec<Kline> =
-                execute_bn_get::<KlineParams, NonAuthRequestBuilder, Vec<Kline>>(
+            let klines: Vec<BinanceKline> =
+                execute_bn_get::<KlineParams, NonAuthRequestBuilder, Vec<BinanceKline>>(
                     &SPOT_KLINE_COMMAND,
                     Some(&params),
                     request_builder.clone(),
