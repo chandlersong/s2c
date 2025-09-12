@@ -11,17 +11,17 @@ use yue::binance::spots::{KlineFetcher, KlineInterval};
 pub struct KlinePo {
     pub id: i64,
     pub symbol: String,
-    pub candle_begin_time: i64,
+    pub candle_begin_time: u64,
     pub open: f64,
     pub high: f64,
     pub low: f64,
     pub close: f64,
     pub volume: f64,
     pub quote_volume: f64,
-    pub number_of_trades: i64,
+    pub number_of_trades: u64,
     pub taker_buy_base_asset_volume: f64,
     pub taker_buy_quote_asset_volume: f64,
-    pub close_time: i64,
+    pub close_time: u64,
 }
 
 impl<'a> From<&duckdb::Row<'a>> for KlinePo {
@@ -53,17 +53,17 @@ impl KlinePo {
         KlinePo {
             id,
             symbol: symbol.to_string(),
-            candle_begin_time: kline.open_time as i64,
+            candle_begin_time: kline.open_time,
             open: kline.open,
             high: kline.high,
             low: kline.low,
             close: kline.close,
             volume: kline.volume,
             quote_volume: kline.quote_asset_volume,
-            number_of_trades: kline.number_of_trades as i64,
+            number_of_trades: kline.number_of_trades,
             taker_buy_base_asset_volume: kline.taker_buy_base_asset_volume,
             taker_buy_quote_asset_volume: kline.taker_buy_quote_asset_volume,
-            close_time: kline.close_time as i64,
+            close_time: kline.close_time,
         }
     }
 
@@ -308,7 +308,23 @@ mod tests {
                 eth_vec.push(kline);
             }
         }
+
+
         assert_eq!(&btc_vec.len(), &3);
+        let insert_btc = btc_vec.last().unwrap();
+        assert_eq!(insert_btc.candle_begin_time, 1609459200000);
+        assert_eq!(insert_btc.open, 10000.0);
+        assert_eq!(insert_btc.high, 10100.0);
+        assert_eq!(insert_btc.low, 9900.0);
+        assert_eq!(insert_btc.close, 1.0);
+        assert_eq!(insert_btc.volume, 10.0);
+        assert_eq!(insert_btc.quote_volume, 100500.0);
+        assert_eq!(insert_btc.number_of_trades, 100);
+        assert_eq!(insert_btc.taker_buy_base_asset_volume, 5.0);
+        assert_eq!(insert_btc.taker_buy_quote_asset_volume, 50000.0);
+        assert_eq!(insert_btc.close_time, 1609462799999);
+        
+        
         assert_eq!(&eth_vec.len(), &2);
 
         Ok(())
@@ -335,28 +351,5 @@ mod tests {
         assert!(s.contains("KlineData"));
         assert!(s.contains("ETHUSDT"));
         assert!(s.contains("42"));
-    }
-
-    #[test]
-    fn test_to_params() {
-        let kline = KlinePo {
-            id: 123,
-            symbol: "BTCUSDT".to_string(),
-            candle_begin_time: 1694448000000,
-            open: 10000.1,
-            high: 10100.0,
-            low: 9900.0,
-            close: 10050.0,
-            volume: 123.45,
-            quote_volume: 123456.78,
-            number_of_trades: 100,
-            taker_buy_base_asset_volume: 12.34,
-            taker_buy_quote_asset_volume: 1234.56,
-            close_time: 1694451600000,
-        };
-        let params = kline.to_params();
-        // Verify it's AppenderParamsFromIter type
-        // Since we can't access internal fields, we rely on type checking at compile time
-        // The original array had 13 elements, so the iterator should produce 13 items
     }
 }
