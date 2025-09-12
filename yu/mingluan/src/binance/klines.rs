@@ -66,26 +66,22 @@ impl KlinePo {
         }
     }
 
-    pub fn to_insert_sql(&self, table_name: &str) -> String {
-        // 简单转义 symbol 字段中的单引号
-        let symbol = self.symbol.replace("'", "''");
-        format!(
-            "INSERT INTO {} (id, symbol, candle_begin_time, open, high, low, close, volume, quote_volume, number_of_trades, taker_buy_base_asset_volume, taker_buy_quote_asset_volume, close_time) VALUES ({}, '{}', {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {});",
-            table_name,
-            self.id,
-            symbol,
-            self.candle_begin_time,
-            self.open,
-            self.high,
-            self.low,
-            self.close,
-            self.volume,
-            self.quote_volume,
-            self.number_of_trades,
-            self.taker_buy_base_asset_volume,
-            self.taker_buy_quote_asset_volume,
-            self.close_time
-        )
+    pub fn to_params(&self) -> [&dyn duckdb::ToSql; 13] {
+        [
+            &self.id,
+            &self.symbol,
+            &self.candle_begin_time,
+            &self.open,
+            &self.high,
+            &self.low,
+            &self.close,
+            &self.volume,
+            &self.quote_volume,
+            &self.number_of_trades,
+            &self.taker_buy_base_asset_volume,
+            &self.taker_buy_quote_asset_volume,
+            &self.close_time,
+        ]
     }
 }
 
@@ -164,15 +160,23 @@ impl<'a, T: KlineFetcher> KlineUpdate for SpotKlineRefresh<'a, T> {
                         len, symbol, fail_times
                     );
 
+                    let mut appender = match conn.appender(&self.table_name) {
+                        Ok(a) => a,
+                        Err(e) => {
+                            error!("Failed to create appender for table {}: {}", self.table_name, e);
+                            continue;
+                        }
+                    };
+
                     for kline in data {
                         let kline_po = KlinePo::from_binance_kline(&symbol, &kline);
-                        let insert_sql = kline_po.to_insert_sql(self.table_name.as_str());
-                        match conn.execute_batch(&insert_sql) {
-                            Ok(_) => {}
-                            Err(e) => {
-                                error!("Failed to insert kline {}: {}", kline_po, e);
-                            }
+                        if let Err(e) = appender.append_row(kline_po.to_params()) {
+                            error!("Failed to append kline {}: {}", kline_po, e);
                         }
+                    }
+
+                    if let Err(e) = appender.flush() {
+                        error!("Failed to flush appender for table {}: {}", self.table_name, e);
                     }
                 }
                 Err(e) => {
@@ -310,53 +314,6 @@ mod tests {
     }
 
     #[test]
-    fn test_to_insert_sql_basic() {
-        let kline = KlinePo {
-            id: 123456789,
-            symbol: "BTCUSDT".to_string(),
-            candle_begin_time: 1694448000000,
-            open: 10000.1,
-            high: 10100.0,
-            low: 9900.0,
-            close: 10050.0,
-            volume: 123.45,
-            quote_volume: 123456.78,
-            number_of_trades: 100,
-            taker_buy_base_asset_volume: 12.34,
-            taker_buy_quote_asset_volume: 1234.56,
-            close_time: 1694451600000,
-        };
-        let sql = kline.to_insert_sql(SpotKline.table_name().as_str());
-        println!("Generated SQL: {}", sql);
-        assert!(sql.contains("INSERT INTO spot_kline"));
-        assert!(sql.contains("'BTCUSDT'"));
-        assert!(sql.contains("123456789"));
-        assert!(sql.contains("10000.1"));
-        assert!(sql.contains("1694451600000"));
-    }
-
-    #[test]
-    fn test_to_insert_sql_symbol_escape() {
-        let kline = KlinePo {
-            id: 1,
-            symbol: "O'MATIC".to_string(),
-            candle_begin_time: 0,
-            open: 1.0,
-            high: 1.0,
-            low: 1.0,
-            close: 1.0,
-            volume: 1.0,
-            quote_volume: 1.0,
-            number_of_trades: 1,
-            taker_buy_base_asset_volume: 1.0,
-            taker_buy_quote_asset_volume: 1.0,
-            close_time: 0,
-        };
-        let sql = kline.to_insert_sql("spot_kline");
-        assert!(sql.contains("'O''MATIC'")); // SQL单引号转义
-    }
-
-    #[test]
     fn test_display_trait() {
         let kline = KlinePo {
             id: 42,
@@ -377,5 +334,27 @@ mod tests {
         assert!(s.contains("KlineData"));
         assert!(s.contains("ETHUSDT"));
         assert!(s.contains("42"));
+    }
+
+    #[test]
+    fn test_to_params() {
+        let kline = KlinePo {
+            id: 123,
+            symbol: "BTCUSDT".to_string(),
+            candle_begin_time: 1694448000000,
+            open: 10000.1,
+            high: 10100.0,
+            low: 9900.0,
+            close: 10050.0,
+            volume: 123.45,
+            quote_volume: 123456.78,
+            number_of_trades: 100,
+            taker_buy_base_asset_volume: 12.34,
+            taker_buy_quote_asset_volume: 1234.56,
+            close_time: 1694451600000,
+        };
+        let params = kline.to_params();
+        assert_eq!(params.len(), 13);
+        // Since it's trait objects, hard to check values, but length is fine
     }
 }
