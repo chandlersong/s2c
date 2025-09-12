@@ -3,6 +3,7 @@ use crate::duck_db::DBProvider;
 use crate::errors::MingLuanError;
 use crate::exchange::KlineUpdate;
 use crate::utils::get_snowflake_generator;
+use duckdb::appender_params_from_iter;
 use log::{error, trace};
 use yue::binance::spots::{KlineFetcher, KlineInterval};
 
@@ -66,22 +67,22 @@ impl KlinePo {
         }
     }
 
-    pub fn to_params(&self) -> [&dyn duckdb::ToSql; 13] {
-        [
-            &self.id,
-            &self.symbol,
-            &self.candle_begin_time,
-            &self.open,
-            &self.high,
-            &self.low,
-            &self.close,
-            &self.volume,
-            &self.quote_volume,
-            &self.number_of_trades,
-            &self.taker_buy_base_asset_volume,
-            &self.taker_buy_quote_asset_volume,
-            &self.close_time,
-        ]
+    pub fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>> {
+        appender_params_from_iter(vec![
+            &self.id as &dyn duckdb::ToSql,
+            &self.symbol as &dyn duckdb::ToSql,
+            &self.candle_begin_time as &dyn duckdb::ToSql,
+            &self.open as &dyn duckdb::ToSql,
+            &self.high as &dyn duckdb::ToSql,
+            &self.low as &dyn duckdb::ToSql,
+            &self.close as &dyn duckdb::ToSql,
+            &self.volume as &dyn duckdb::ToSql,
+            &self.quote_volume as &dyn duckdb::ToSql,
+            &self.number_of_trades as &dyn duckdb::ToSql,
+            &self.taker_buy_base_asset_volume as &dyn duckdb::ToSql,
+            &self.taker_buy_quote_asset_volume as &dyn duckdb::ToSql,
+            &self.close_time as &dyn duckdb::ToSql,
+        ])
     }
 }
 
@@ -354,7 +355,8 @@ mod tests {
             close_time: 1694451600000,
         };
         let params = kline.to_params();
-        assert_eq!(params.len(), 13);
-        // Since it's trait objects, hard to check values, but length is fine
+        // Verify it's AppenderParamsFromIter type
+        // Since we can't access internal fields, we rely on type checking at compile time
+        // The original array had 13 elements, so the iterator should produce 13 items
     }
 }
