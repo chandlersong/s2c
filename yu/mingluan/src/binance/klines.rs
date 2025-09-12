@@ -1,4 +1,4 @@
-use crate::binance::binance_consts::QUERY_LATEST_SQL;
+use crate::binance::binance_consts::{ONE_HOUR_MS, QUERY_LATEST_SQL};
 use crate::duck_db::DBProvider;
 use crate::errors::MingLuanError;
 use crate::exchange::KlineUpdate;
@@ -144,7 +144,11 @@ impl<'a, T: KlineFetcher> KlineUpdate for SpotKlineRefresh<'a, T> {
 
             let fetch_data = self
                 .kline_fetcher
-                .get_all_kline_data(&symbol, KlineInterval::OneHour, Some(timestamp))
+                .get_all_kline_data(
+                    &symbol,
+                    KlineInterval::OneHour,
+                    Some(timestamp + ONE_HOUR_MS),
+                )
                 .await;
 
             match fetch_data {
@@ -252,8 +256,9 @@ mod tests {
             .with(
                 predicate::eq("BTCUSDT"),
                 predicate::eq(KlineInterval::OneHour),
-                predicate::always(),
+                predicate::eq(Some(1694102400000 + ONE_HOUR_MS)),
             )
+            .times(1)
             .returning(|_, _, _| {
                 // 返回模拟数据
                 let klines = generate_test_kline_vec(TEST_BEGIN_TIMESTAMP, ONE_HOUR_MS, 1.0, 2);
@@ -262,10 +267,11 @@ mod tests {
 
         kline_fetcher
             .expect_get_all_kline_data()
+            .times(1)
             .with(
                 predicate::eq("ETHUSDT"),
                 predicate::eq(KlineInterval::OneHour),
-                predicate::always(),
+                predicate::eq(Some(1694101400000 + ONE_HOUR_MS)),
             )
             .returning(|_, _, _| {
                 // 返回模拟数据
