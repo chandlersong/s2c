@@ -1,3 +1,4 @@
+use crate::errors::MingLuanError;
 use duckdb::{Connection, Result};
 use std::path::Path;
 use std::vec::Vec;
@@ -14,8 +15,15 @@ pub fn import_local_csv_and_assert(
     table: &str,
     csv_path: &Path,
     expected_count: i64,
-) -> Result<()> {
-    let abs = std::fs::canonicalize(csv_path).expect("canonicalize csv path");
+) -> Result<(), MingLuanError> {
+    let abs = match std::fs::canonicalize(csv_path) {
+        Ok(v) => v,
+        Err(_) => {
+            return Err(MingLuanError::new(
+                format!("CSV file not found: {}", csv_path.display()).as_str(),
+            ));
+        }
+    };
     let copy_sql = format!(
         "COPY {} FROM '{}' (FORMAT CSV, HEADER);",
         table,

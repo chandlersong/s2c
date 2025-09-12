@@ -3,8 +3,8 @@ use crate::duck_db::DBProvider;
 use crate::errors::MingLuanError;
 use crate::exchange::KlineUpdate;
 use crate::utils::get_snowflake_generator;
-use snowflake::SnowflakeIdGenerator;
-use yue::binance::spots::KlineFetcher;
+use log::{error, trace};
+use yue::binance::spots::{KlineFetcher, KlineInterval};
 
 #[derive(Debug, Clone)]
 pub struct KlinePo {
@@ -133,14 +133,48 @@ impl<'a, T: KlineFetcher> KlineUpdate for SpotKlineRefresh<'a, T> {
         let mut stmt = conn.prepare(QUERY_LATEST_SQL)?;
         let latest_symbol = stmt.query_map([], |row| {
             let symbol: String = row.get(0)?;
-            let latest: i64 = row.get(1)?;
+            let latest: u64 = row.get(1)?;
             Ok((symbol, latest))
         })?;
 
         // 打印查询到的每个 symbol 和对应的 latest 时间戳，便于调试
         for entry in latest_symbol {
             let (symbol, timestamp) = entry?;
-            println!("latest_symbol -> symbol: {}, latest: {}", symbol, timestamp);
+            trace!("update -> symbol: {}, latest: {}", symbol, timestamp);
+
+            let fetch_data = self
+                .kline_fetcher
+                .get_all_kline_data(&symbol, KlineInterval::OneHour, Some(timestamp))
+                .await;
+
+            match fetch_data {
+                Ok((kline_data, fail_times)) => {
+                    let len = kline_data.len();
+                    if len <= 1 {
+                        ()
+                    }
+                    //因为币安最后一个都是脏数据，比如说我在11:30获取，他会返回12:00的，但是12:00的还没收盘。所以就默认舍弃
+                    let data = &kline_data[..len - 1];
+                    trace!(
+                        "Fetched {} klines for symbol {}: HTTP status {}",
+                        len, symbol, fail_times
+                    );
+
+                    for kline in data {
+                        let kline_po = KlinePo::from_binance_kline(&symbol, &kline);
+                        let insert_sql = kline_po.to_insert_sql(self.table_name.as_str());
+                        match conn.execute_batch(&insert_sql) {
+                            Ok(_) => {}
+                            Err(e) => {
+                                error!("Failed to insert kline {}: {}", kline_po, e);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("Error fetching klines for symbol {}: {}", symbol, e);
+                }
+            }
         }
         Ok(())
     }
@@ -149,7 +183,7 @@ impl<'a, T: KlineFetcher> KlineUpdate for SpotKlineRefresh<'a, T> {
 #[cfg(test)]
 mod tests {
     use crate::binance::binance_consts::BinanceTables::SpotKline;
-    use crate::binance::binance_consts::{ONE_HOUR_MS, QUERY_LATEST_SQL};
+    use crate::binance::binance_consts::ONE_HOUR_MS;
     use crate::binance::klines::{KlinePo, SpotKlineRefresh};
     use crate::duck_db::DBProvider;
     use crate::errors::MingLuanError;
@@ -196,9 +230,8 @@ mod tests {
         // 初始化内存数据库连接并建表
         let pool = initial_db();
         let db_provider = DBProvider::new(pool);
-        let conn = db_provider.acquire().unwrap();
-        conn.execute(SpotKline.create_table_statement().as_str(), [])
-            .unwrap();
+        let conn = db_provider.acquire()?;
+        conn.execute(SpotKline.create_table_statement().as_str(), [])?;
         // 直接从仓库中的本地 CSV 导入并断言行数为 2
         let csv_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/data/test_refresh_spot_kline_normal.csv");
@@ -208,8 +241,7 @@ mod tests {
             SpotKline.table_name().as_str(),
             csv_path.as_path(),
             3,
-        )
-        .unwrap();
+        )?;
 
         // use mockall::predicate::{always, eq};
         //
@@ -241,105 +273,103 @@ mod tests {
                 Ok((klines, 200))
             });
 
-        let expected = kline_fetcher
-            .get_all_kline_data("BTCUSDT", KlineInterval::OneHour, None)
-            .await
-            .unwrap();
         let manager = SpotKlineRefresh::new(&db_provider, &kline_fetcher, SpotKline.table_name());
-        manager.update().await;
+        let res = manager.update().await;
+
+        assert!(res.is_ok());
 
         let conn = db_provider.acquire()?;
         let mut stmt =
             conn.prepare(format!("SELECT * FROM {}", SpotKline.table_name()).as_str())?;
-        let klines = stmt.query_map([], |row| Ok(KlinePo::from(row)))?;
+        let kline_data: Vec<KlinePo> = stmt
+            .query_map([], |row| Ok(KlinePo::from(row)))?
+            .filter_map(Result::ok)
+            .collect();
 
+        assert_eq!(&kline_data.len(), &5); // 原有3条 + 每个symbol新增2条
         // 打印查询到的每个 symbol 和对应的 latest 时间戳，便于调试
-        for kline in klines {
-            match kline {
-                Ok(data) => {
-                    println!("{}", data);
-                }
-                Err(e) => {
-                    println!("Error parsing row: {}", e);
-                }
+        let mut btc_vec: Vec<KlinePo> = vec![];
+        let mut eth_vec: Vec<KlinePo> = vec![];
+        for kline in kline_data {
+            if kline.symbol == "BTCUSDT" {
+                btc_vec.push(kline);
+            } else if kline.symbol == "ETHUSDT" {
+                eth_vec.push(kline);
             }
         }
+        assert_eq!(&btc_vec.len(), &3);
+        assert_eq!(&eth_vec.len(), &2);
 
         Ok(())
     }
 
-    #[cfg(test)]
-    mod tests {
-        use super::*;
+    #[test]
+    fn test_to_insert_sql_basic() {
+        let kline = KlinePo {
+            id: 123456789,
+            symbol: "BTCUSDT".to_string(),
+            candle_begin_time: 1694448000000,
+            open: 10000.1,
+            high: 10100.0,
+            low: 9900.0,
+            close: 10050.0,
+            volume: 123.45,
+            quote_volume: 123456.78,
+            number_of_trades: 100,
+            taker_buy_base_asset_volume: 12.34,
+            taker_buy_quote_asset_volume: 1234.56,
+            close_time: 1694451600000,
+        };
+        let sql = kline.to_insert_sql(SpotKline.table_name().as_str());
+        println!("Generated SQL: {}", sql);
+        assert!(sql.contains("INSERT INTO spot_kline"));
+        assert!(sql.contains("'BTCUSDT'"));
+        assert!(sql.contains("123456789"));
+        assert!(sql.contains("10000.1"));
+        assert!(sql.contains("1694451600000"));
+    }
 
-        #[test]
-        fn test_to_insert_sql_basic() {
-            let kline = KlinePo {
-                id: 123456789,
-                symbol: "BTCUSDT".to_string(),
-                candle_begin_time: 1694448000000,
-                open: 10000.1,
-                high: 10100.0,
-                low: 9900.0,
-                close: 10050.0,
-                volume: 123.45,
-                quote_volume: 123456.78,
-                number_of_trades: 100,
-                taker_buy_base_asset_volume: 12.34,
-                taker_buy_quote_asset_volume: 1234.56,
-                close_time: 1694451600000,
-            };
-            let sql = kline.to_insert_sql(SpotKline.table_name().as_str());
-            println!("Generated SQL: {}", sql);
-            assert!(sql.contains("INSERT INTO spot_kline"));
-            assert!(sql.contains("'BTCUSDT'"));
-            assert!(sql.contains("123456789"));
-            assert!(sql.contains("10000.1"));
-            assert!(sql.contains("1694451600000"));
-        }
+    #[test]
+    fn test_to_insert_sql_symbol_escape() {
+        let kline = KlinePo {
+            id: 1,
+            symbol: "O'MATIC".to_string(),
+            candle_begin_time: 0,
+            open: 1.0,
+            high: 1.0,
+            low: 1.0,
+            close: 1.0,
+            volume: 1.0,
+            quote_volume: 1.0,
+            number_of_trades: 1,
+            taker_buy_base_asset_volume: 1.0,
+            taker_buy_quote_asset_volume: 1.0,
+            close_time: 0,
+        };
+        let sql = kline.to_insert_sql("spot_kline");
+        assert!(sql.contains("'O''MATIC'")); // SQL单引号转义
+    }
 
-        #[test]
-        fn test_to_insert_sql_symbol_escape() {
-            let kline = KlinePo {
-                id: 1,
-                symbol: "O'MATIC".to_string(),
-                candle_begin_time: 0,
-                open: 1.0,
-                high: 1.0,
-                low: 1.0,
-                close: 1.0,
-                volume: 1.0,
-                quote_volume: 1.0,
-                number_of_trades: 1,
-                taker_buy_base_asset_volume: 1.0,
-                taker_buy_quote_asset_volume: 1.0,
-                close_time: 0,
-            };
-            let sql = kline.to_insert_sql("spot_kline");
-            assert!(sql.contains("'O''MATIC'")); // SQL单引号转义
-        }
-
-        #[test]
-        fn test_display_trait() {
-            let kline = KlinePo {
-                id: 42,
-                symbol: "ETHUSDT".to_string(),
-                candle_begin_time: 123,
-                open: 1.0,
-                high: 2.0,
-                low: 0.5,
-                close: 1.5,
-                volume: 10.0,
-                quote_volume: 20.0,
-                number_of_trades: 5,
-                taker_buy_base_asset_volume: 2.0,
-                taker_buy_quote_asset_volume: 4.0,
-                close_time: 456,
-            };
-            let s = format!("{}", kline);
-            assert!(s.contains("KlineData"));
-            assert!(s.contains("ETHUSDT"));
-            assert!(s.contains("42"));
-        }
+    #[test]
+    fn test_display_trait() {
+        let kline = KlinePo {
+            id: 42,
+            symbol: "ETHUSDT".to_string(),
+            candle_begin_time: 123,
+            open: 1.0,
+            high: 2.0,
+            low: 0.5,
+            close: 1.5,
+            volume: 10.0,
+            quote_volume: 20.0,
+            number_of_trades: 5,
+            taker_buy_base_asset_volume: 2.0,
+            taker_buy_quote_asset_volume: 4.0,
+            close_time: 456,
+        };
+        let s = format!("{}", kline);
+        assert!(s.contains("KlineData"));
+        assert!(s.contains("ETHUSDT"));
+        assert!(s.contains("42"));
     }
 }

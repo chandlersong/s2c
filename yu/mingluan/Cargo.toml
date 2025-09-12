@@ -12,3 +12,4 @@ thiserror = {workspace = true}
 mockall = { workspace = true }
 async-trait = { workspace = true }
 rs-snowflake = { workspace = true }
+log = { workspace = true }
