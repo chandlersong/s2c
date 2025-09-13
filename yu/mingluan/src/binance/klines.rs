@@ -1,11 +1,11 @@
 use crate::binance::binance_consts::{ONE_HOUR_MS, QUERY_LATEST_SQL};
 use crate::duck_db::DBProvider;
 use crate::errors::MingLuanError;
+use crate::exchange::KlineFetcherFactory;
 use crate::exchange::KlineUpdate;
 use crate::utils::get_snowflake_generator;
-use duckdb::appender_params_from_iter;
+use duckdb::{DropBehavior, appender_params_from_iter};
 use log::{error, trace};
-use std::sync::Arc;
 use tokio::sync::mpsc;
 use yue::binance::spots::{KlineFetcher, KlineInterval};
 
@@ -48,10 +48,7 @@ impl<'a> From<&duckdb::Row<'a>> for KlinePo {
 
 impl KlinePo {
     pub fn from_binance_kline(symbol: &str, kline: &yue::binance::bn_models::BinanceKline) -> Self {
-        let id = get_snowflake_generator()
-            .lock()
-            .unwrap()
-            .real_time_generate();
+        let id = get_snowflake_generator().lock().unwrap().real_time_generate();
         KlinePo {
             id,
             symbol: symbol.to_string(),
@@ -110,38 +107,46 @@ impl std::fmt::Display for KlinePo {
     }
 }
 
-pub struct SpotKlineRefresh<'a, T: KlineFetcher + Send + Sync + 'static> {
+pub struct KlineService<'a, T, F>
+where
+    T: KlineFetcher + Default + Send,
+    F: KlineFetcherFactory<T>,
+{
     provider: &'a DBProvider,
-    kline_fetcher: Arc<T>,
+    kline_fetcher_factory: F,
     table_name: String,
+    _marker: std::marker::PhantomData<T>,
 }
 
-impl<'a, T: KlineFetcher + Send + Sync + 'static> SpotKlineRefresh<'a, T> {
-    pub fn new(provider: &'a DBProvider, kline_fetcher: Arc<T>, table_name: String) -> Self {
-        SpotKlineRefresh {
+impl<'a, T, F> KlineService<'a, T, F>
+where
+    T: KlineFetcher + Default + Send,
+    F: KlineFetcherFactory<T>,
+{
+    pub fn new(provider: &'a DBProvider, table_name: String, factory: F) -> Self {
+        KlineService {
             provider,
-            kline_fetcher,
+            kline_fetcher_factory: factory,
             table_name,
+            _marker: std::marker::PhantomData,
         }
     }
 
     fn query_latest_symbols(&self, conn: &duckdb::Connection) -> Result<Vec<(String, u64)>, MingLuanError> {
         let mut stmt = conn.prepare(QUERY_LATEST_SQL)?;
-        let latest_symbol: Vec<(String, u64)> = stmt.query_map([], |row| {
-            let symbol: String = row.get(0)?;
-            let latest: u64 = row.get(1)?;
-            Ok((symbol, latest))
-        })?.collect::<Result<Vec<_>, _>>()?;
+        let latest_symbol: Vec<(String, u64)> = stmt
+            .query_map([], |row| {
+                let symbol: String = row.get(0)?;
+                let latest: u64 = row.get(1)?;
+                Ok((symbol, latest))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(latest_symbol)
     }
 
-    async fn fetch_symbol_data(kline_fetcher: Arc<T>, symbol: String, timestamp: u64, tx: mpsc::Sender<Result<Vec<KlinePo>, yue::errors::YueError>>) {
+    async fn fetch_symbol_data(kline_fetcher: T, symbol: String, timestamp: u64, tx: mpsc::Sender<Result<Vec<KlinePo>, yue::errors::YueError>>) {
         trace!("update -> symbol: {}, latest: {}", symbol, timestamp);
-        let result = match kline_fetcher.get_all_kline_data(
-            &symbol,
-            KlineInterval::OneHour,
-            Some(timestamp + ONE_HOUR_MS),
-        ).await {
+        let result = match kline_fetcher.get_all_kline_data(&symbol, KlineInterval::OneHour, Some(timestamp + ONE_HOUR_MS)).await {
             Ok((kline_data, fail_times)) => {
                 let len = kline_data.len();
                 if len <= 1 {
@@ -149,13 +154,8 @@ impl<'a, T: KlineFetcher + Send + Sync + 'static> SpotKlineRefresh<'a, T> {
                 } else {
                     //因为币安最后一个都是脏数据，比如说我在11:30获取，他会返回12:00的，但是12:00的还没收盘。所以就默认舍弃
                     let data = &kline_data[..len - 1];
-                    trace!(
-                        "Fetched {} klines for symbol {}: HTTP status {}",
-                        len, symbol, fail_times
-                    );
-                    let kline_pos: Vec<KlinePo> = data.iter().map(|kline| {
-                        KlinePo::from_binance_kline(&symbol, kline)
-                    }).collect();
+                    trace!("Fetched {} klines for symbol {}: HTTP status {}", len, symbol, fail_times);
+                    let kline_pos: Vec<KlinePo> = data.iter().map(|kline| KlinePo::from_binance_kline(&symbol, kline)).collect();
                     Ok(kline_pos)
                 }
             }
@@ -169,13 +169,16 @@ impl<'a, T: KlineFetcher + Send + Sync + 'static> SpotKlineRefresh<'a, T> {
         }
     }
 
-    async fn insert_kline_data(&self, conn: &duckdb::Connection, result: Result<Vec<KlinePo>, yue::errors::YueError>) {
+    async fn insert_kline_data(&self, result: Result<Vec<KlinePo>, yue::errors::YueError>) {
         match result {
             Ok(kline_pos) => {
                 if kline_pos.is_empty() {
                     return;
                 }
-                let mut appender = match conn.appender(&self.table_name) {
+                let mut conn = self.provider.acquire().unwrap();
+                let mut tx = conn.transaction().unwrap();
+                tx.set_drop_behavior(DropBehavior::Commit);
+                let mut appender = match tx.appender(&self.table_name) {
                     Ok(a) => a,
                     Err(e) => {
                         error!("Failed to create appender for table {}: {}", self.table_name, e);
@@ -188,7 +191,6 @@ impl<'a, T: KlineFetcher + Send + Sync + 'static> SpotKlineRefresh<'a, T> {
                         error!("Failed to append kline {}: {}", kline_po, e);
                     }
                 }
-
                 if let Err(e) = appender.flush() {
                     error!("Failed to flush appender for table {}: {}", self.table_name, e);
                 }
@@ -200,7 +202,11 @@ impl<'a, T: KlineFetcher + Send + Sync + 'static> SpotKlineRefresh<'a, T> {
     }
 }
 
-impl<'a, T: KlineFetcher + Send + Sync + 'static> KlineUpdate for SpotKlineRefresh<'a, T> {
+impl<'a, T, F> KlineUpdate for KlineService<'a, T, F>
+where
+    T: KlineFetcher + Default + Send + 'static,
+    F: KlineFetcherFactory<T>,
+{
     async fn update(&self) -> Result<(), MingLuanError> {
         let conn = self.provider.acquire()?;
         let latest_symbol = self.query_latest_symbols(&conn)?;
@@ -210,18 +216,19 @@ impl<'a, T: KlineFetcher + Send + Sync + 'static> KlineUpdate for SpotKlineRefre
 
         for (symbol, timestamp) in latest_symbol {
             let tx_clone = tx.clone();
-            let kline_fetcher = Arc::clone(&self.kline_fetcher);
+            let kline_fetcher = self.kline_fetcher_factory.create_fetcher();
             tokio::spawn(async move {
                 Self::fetch_symbol_data(kline_fetcher, symbol, timestamp, tx_clone).await;
             });
         }
 
+        drop(conn);
         drop(tx);
 
         // 在主线程中接收结果并串行插入数据库
         for _ in 0..symbol_count {
             if let Some(result) = rx.recv().await {
-                self.insert_kline_data(&conn, result).await;
+                self.insert_kline_data(result).await;
             }
         }
 
@@ -233,19 +240,16 @@ impl<'a, T: KlineFetcher + Send + Sync + 'static> KlineUpdate for SpotKlineRefre
 mod tests {
     use crate::binance::binance_consts::BinanceTables::SpotKline;
     use crate::binance::binance_consts::ONE_HOUR_MS;
-    use crate::binance::klines::{KlinePo, SpotKlineRefresh};
+    use crate::binance::klines::{KlinePo, KlineService};
     use crate::duck_db::DBProvider;
     use crate::errors::MingLuanError;
-    use crate::exchange::KlineUpdate;
-    use crate::test_utils::{
-        TEST_BEGIN_TIMESTAMP, generate_test_kline_vec, import_local_csv_and_assert,
-    };
+    use crate::exchange::{KlineUpdate, MockKlineFetcherFactory};
+    use crate::test_utils::{TEST_BEGIN_TIMESTAMP, generate_test_kline_vec, import_local_csv_and_assert};
     use async_trait::async_trait;
     use duckdb::DuckdbConnectionManager;
     use mockall::{mock, predicate};
     use r2d2::Pool;
     use std::path::Path;
-    use std::sync::Arc;
     use yue::binance::bn_models::BinanceKline;
     use yue::binance::spots::{KlineFetcher, KlineInterval};
     use yue::errors::YueError;
@@ -256,9 +260,7 @@ mod tests {
             .min_idle(Some(1)) // 最小空闲连接数
             .connection_timeout(std::time::Duration::from_secs(5)); // 连接超时时间
 
-        builder
-            .build(DuckdbConnectionManager::memory().unwrap())
-            .unwrap()
+        builder.build(DuckdbConnectionManager::memory().unwrap()).unwrap()
     }
 
     mock! {
@@ -275,6 +277,28 @@ mod tests {
         }
     }
 
+    fn create_mock_kline_fetch_for_test_refresh_spot_kline_normal() -> MockKlineFetcher {
+        let mut kline_fetcher = MockKlineFetcher::new();
+        kline_fetcher
+            .expect_get_all_kline_data()
+            .with(predicate::eq("BTCUSDT"), predicate::eq(KlineInterval::OneHour), predicate::eq(Some(1694102400000 + ONE_HOUR_MS)))
+            .returning(|_, _, _| {
+                // 返回模拟数据
+                let klines = generate_test_kline_vec(TEST_BEGIN_TIMESTAMP, ONE_HOUR_MS, 1.0, 2);
+                Ok((klines, 200))
+            });
+
+        kline_fetcher
+            .expect_get_all_kline_data()
+            .with(predicate::eq("ETHUSDT"), predicate::eq(KlineInterval::OneHour), predicate::eq(Some(1694101400000 + ONE_HOUR_MS)))
+            .returning(|_, _, _| {
+                // 返回模拟数据
+                let klines = generate_test_kline_vec(TEST_BEGIN_TIMESTAMP, ONE_HOUR_MS, 1.0, 2);
+                Ok((klines, 200))
+            });
+        kline_fetcher
+    }
+
     #[tokio::test]
     async fn test_refresh_spot_kline_normal() -> Result<(), MingLuanError> {
         // 初始化内存数据库连接并建表
@@ -283,60 +307,22 @@ mod tests {
         let conn = db_provider.acquire()?;
         conn.execute(SpotKline.create_table_statement().as_str(), [])?;
         // 直接从仓库中的本地 CSV 导入并断言行数为 2
-        let csv_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/data/test_refresh_spot_kline_normal.csv");
+        let csv_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/test_refresh_spot_kline_normal.csv");
 
-        import_local_csv_and_assert(
-            &conn,
-            SpotKline.table_name().as_str(),
-            csv_path.as_path(),
-            3,
-        )?;
+        import_local_csv_and_assert(&conn, SpotKline.table_name().as_str(), csv_path.as_path(), 3)?;
 
         // use mockall::predicate::{always, eq};
-        //
+        let mut factory = MockKlineFetcherFactory::default();
+        factory.expect_create_fetcher().times(2).returning(move || create_mock_kline_fetch_for_test_refresh_spot_kline_normal());
 
-        let mut kline_fetcher = MockKlineFetcher::new();
-        kline_fetcher
-            .expect_get_all_kline_data()
-            .with(
-                predicate::eq("BTCUSDT"),
-                predicate::eq(KlineInterval::OneHour),
-                predicate::eq(Some(1694102400000 + ONE_HOUR_MS)),
-            )
-            .times(1)
-            .returning(|_, _, _| {
-                // 返回模拟数据
-                let klines = generate_test_kline_vec(TEST_BEGIN_TIMESTAMP, ONE_HOUR_MS, 1.0, 2);
-                Ok((klines, 200))
-            });
-
-        kline_fetcher
-            .expect_get_all_kline_data()
-            .times(1)
-            .with(
-                predicate::eq("ETHUSDT"),
-                predicate::eq(KlineInterval::OneHour),
-                predicate::eq(Some(1694101400000 + ONE_HOUR_MS)),
-            )
-            .returning(|_, _, _| {
-                // 返回模拟数据
-                let klines = generate_test_kline_vec(TEST_BEGIN_TIMESTAMP, ONE_HOUR_MS, 1.0, 2);
-                Ok((klines, 200))
-            });
-
-        let manager = SpotKlineRefresh::new(&db_provider, Arc::new(kline_fetcher), SpotKline.table_name());
+        let manager: KlineService<MockKlineFetcher, MockKlineFetcherFactory<MockKlineFetcher>> = KlineService::new(&db_provider, SpotKline.table_name(), factory);
         let res = manager.update().await;
 
         assert!(res.is_ok());
 
         let conn = db_provider.acquire()?;
-        let mut stmt =
-            conn.prepare(format!("SELECT * FROM {}", SpotKline.table_name()).as_str())?;
-        let kline_data: Vec<KlinePo> = stmt
-            .query_map([], |row| Ok(KlinePo::from(row)))?
-            .filter_map(Result::ok)
-            .collect();
+        let mut stmt = conn.prepare(format!("SELECT * FROM {}", SpotKline.table_name()).as_str())?;
+        let kline_data: Vec<KlinePo> = stmt.query_map([], |row| Ok(KlinePo::from(row)))?.filter_map(Result::ok).collect();
 
         assert_eq!(&kline_data.len(), &5); // 原有3条 + 每个symbol新增2条
         // 打印查询到的每个 symbol 和对应的 latest 时间戳，便于调试
@@ -349,7 +335,6 @@ mod tests {
                 eth_vec.push(kline);
             }
         }
-
 
         assert_eq!(&btc_vec.len(), &3);
         let insert_btc = btc_vec.last().unwrap();
@@ -364,8 +349,7 @@ mod tests {
         assert_eq!(insert_btc.taker_buy_base_asset_volume, 5.0);
         assert_eq!(insert_btc.taker_buy_quote_asset_volume, 50000.0);
         assert_eq!(insert_btc.close_time, 1609462799999);
-        
-        
+
         assert_eq!(&eth_vec.len(), &2);
 
         Ok(())
