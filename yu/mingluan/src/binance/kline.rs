@@ -240,7 +240,7 @@ where
 mod tests {
     use crate::binance::binance_consts::BinanceTables::SpotKline;
     use crate::binance::binance_consts::ONE_HOUR_MS;
-    use crate::binance::klines::{KlinePo, KlineService};
+    use crate::binance::kline::{KlinePo, KlineService};
     use crate::duck_db::DBProvider;
     use crate::errors::MingLuanError;
     use crate::exchange::{KlineUpdate, MockKlineFetcherFactory};

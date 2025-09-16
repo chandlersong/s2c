@@ -1,4 +1,5 @@
 use mockall::automock;
+use std::sync::{Arc, RwLock};
 use yue::binance::spots::KlineFetcher;
 
 use crate::errors::MingLuanError;
@@ -31,4 +32,14 @@ impl<T: Default + KlineFetcher> KlineFetcherFactory<T> for DefaultKlineFetcherFa
     fn create_fetcher(&self) -> T {
         T::default()
     }
+}
+
+//
+// 交易所信息的交易信息
+pub(crate) trait ExchangeDashBoard {
+    type SpotDashBoard;
+
+    async fn spot_info(&self) -> Arc<RwLock<Self::SpotDashBoard>>;
+
+    async fn refresh(&self) -> Result<(), MingLuanError>;
 }

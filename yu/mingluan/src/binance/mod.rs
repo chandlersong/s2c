@@ -1,2 +1,5 @@
 mod binance_consts;
-pub mod klines;
+
+pub mod kline;
+
+pub mod bn_dashboard;

@@ -2,10 +2,7 @@ use log::LevelFilter;
 use std::time::SystemTime;
 
 pub fn setup_logger(level: Option<LevelFilter>) -> Result<(), fern::InitError> {
-    let filter = match level {
-        None => LevelFilter::Debug,
-        Some(v) => v,
-    };
+    let filter = level.unwrap_or_else(|| LevelFilter::Debug);
     fern::Dispatch::new()
         .format(|out, message, record| {
             out.finish(format_args!(
