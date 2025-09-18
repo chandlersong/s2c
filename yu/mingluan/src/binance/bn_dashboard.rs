@@ -2,6 +2,7 @@ use crate::actix_jobs::AsyncRepeatTask;
 use crate::errors::MingLuanError;
 use crate::exchange::ExchangeDashBoard;
 use async_trait::async_trait;
+use log::error;
 use std::sync::{Arc, RwLock};
 use yue::binance::spots::get_trading_spot_symbols;
 
@@ -35,22 +36,17 @@ impl ExchangeDashBoard for BinanceDashboard {
 impl AsyncRepeatTask for BinanceDashboard {
     async fn execute(&self) -> Result<(), MingLuanError> {
         match get_trading_spot_symbols(None).await {
-            Ok(symbols) => match self.spot_info.write() {
-                Ok(mut vo) => {
-                    let mut trading_symbols = vec![];
-                    for sym in symbols.iter() {
-                        trading_symbols.push(sym.symbol.clone());
-                    }
-                    vo.trading_symbols = trading_symbols;
+            Ok(symbols) => {
+                if let Ok(mut vo) = self.spot_info.write() {
+                    vo.trading_symbols = symbols.iter().map(|sym| sym.symbol.clone()).collect();
                     Ok(())
-                }
-                Err(_) => {
-                    eprintln!("Failed to acquire write lock on spot_info");
+                } else {
+                    error!("Failed to acquire write lock on spot_info");
                     Err(MingLuanError::CustomError("Failed to acquire write lock on spot_info".to_string()))
                 }
-            },
+            }
             Err(e) => {
-                eprintln!("Error fetching trading symbols: {:?}", e);
+                error!("Error fetching trading symbols: {:?}", e);
                 Err(e.into())
             }
         }
