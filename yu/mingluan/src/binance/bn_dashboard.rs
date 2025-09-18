@@ -3,11 +3,11 @@ use crate::errors::MingLuanError;
 use crate::exchange::ExchangeDashBoard;
 use async_trait::async_trait;
 use std::sync::{Arc, RwLock};
-use yue::binance::spots::{TradingSymbolInfo, get_trading_spot_symbols};
+use yue::binance::spots::get_trading_spot_symbols;
 
 #[derive(Debug, Clone)]
 pub struct ExchangeSpotVO {
-    trading_symbols: Vec<TradingSymbolInfo>,
+    trading_symbols: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -37,7 +37,11 @@ impl AsyncRepeatTask for BinanceDashboard {
         match get_trading_spot_symbols(None).await {
             Ok(symbols) => match self.spot_info.write() {
                 Ok(mut vo) => {
-                    vo.trading_symbols = symbols;
+                    let mut trading_symbols = vec![];
+                    for sym in symbols.iter() {
+                        trading_symbols.push(sym.symbol.clone());
+                    }
+                    vo.trading_symbols = trading_symbols;
                     Ok(())
                 }
                 Err(_) => {
