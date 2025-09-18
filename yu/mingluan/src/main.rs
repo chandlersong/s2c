@@ -1,61 +1,32 @@
-use crate::duck_db::DBProvider;
+use crate::binance::jobs::start_bn_jobs;
 use crate::errors::MingLuanError;
-use duckdb::{DuckdbConnectionManager, params};
-use r2d2::PooledConnection;
+use actix::System;
+use li::tools::logs::setup_logger;
+use log::{LevelFilter, error, info};
+use yue::http_client::init_http_client;
 
+pub mod actix_jobs;
 pub(crate) mod binance;
 pub(crate) mod duck_db;
 mod errors;
 mod exchange;
 #[cfg(test)]
 pub mod test_utils;
-mod utils;
+pub mod utils;
 
-struct Duck {
-    id: i32,
-    name: String,
-}
+#[actix::main]
+async fn main() -> Result<(), MingLuanError> {
+    setup_logger(Some(LevelFilter::Info)).unwrap();
+    //TODO： 是否用代理进入Config
+    let proxy = Option::from("http://localhost:7891");
+    init_http_client(proxy);
 
-fn main() -> Result<(), MingLuanError> {
-    let acquire = DBProvider::default();
-    let conn: PooledConnection<DuckdbConnectionManager> = acquire.acquire()?;
-
-    // let manager = SpotKlineRefresh::new(conn);
-    conn.execute(
-        "CREATE TABLE ducks (id INTEGER PRIMARY KEY, name TEXT)",
-        [], // empty list of parameters
-    )
-    .unwrap();
-
-    conn.execute_batch(
-        r#"
-        INSERT INTO ducks (id, name) VALUES (1, 'Donald Duck');
-        INSERT INTO ducks (id, name) VALUES (2, 'Scrooge McDuck');
-        "#,
-    )
-    .unwrap();
-
-    conn.execute(
-        "INSERT INTO ducks (id, name) VALUES (?, ?)",
-        params![3, "Darkwing Duck"],
-    )
-    .unwrap();
-
-    let ducks = conn
-        .prepare("FROM ducks")
-        .unwrap()
-        .query_map([], |row| {
-            Ok(Duck {
-                id: row.get(0)?,
-                name: row.get(1)?,
-            })
-        })
-        .unwrap()
-        .collect::<duckdb::Result<Vec<_>>>()
-        .unwrap();
-
-    for duck in ducks {
-        println!("{}) {}", duck.id, duck.name);
+    match start_bn_jobs() {
+        Ok(_) => info!("Binance jobs started successfully"),
+        Err(e) => error!("Failed to start Binance jobs: {}", e),
     }
+    actix_rt::signal::ctrl_c().await?;
+    println!("Received Ctrl+C, shutting down...");
+    System::current().stop(); // 优雅停止
     Ok(())
 }

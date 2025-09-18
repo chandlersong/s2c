@@ -8,8 +8,14 @@ duckdb = { workspace = true }
 tokio = { workspace = true }
 r2d2 = "0.8.10"
 yue = { path = "../../yue" }
+li = { path = "../../li" }
 thiserror = {workspace = true}
 mockall = { workspace = true }
 async-trait = { workspace = true }
 rs-snowflake = { workspace = true }
 log = { workspace = true }
+
+actix = "0.13.5"
+cron = "0.15.0"
+chrono = "0.4.38"
+actix-rt = "2.10.0"

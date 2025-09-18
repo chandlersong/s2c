@@ -2,6 +2,8 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum MingLuanError {
+    #[error("system io: {0}")]
+    SystemIOError(#[from] std::io::Error),
     #[error("yue error: {0}")]
     YueError(#[from] yue::errors::YueError),
     #[error("duckDB error: {0}")]

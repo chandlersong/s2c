@@ -36,10 +36,8 @@ impl<T: Default + KlineFetcher> KlineFetcherFactory<T> for DefaultKlineFetcherFa
 
 //
 // 交易所信息的交易信息
-pub(crate) trait ExchangeDashBoard {
+pub trait ExchangeDashBoard {
     type SpotDashBoard;
 
-    async fn spot_info(&self) -> Arc<RwLock<Self::SpotDashBoard>>;
-
-    async fn refresh(&self) -> Result<(), MingLuanError>;
+    fn spot_info(&self) -> Arc<RwLock<Self::SpotDashBoard>>;
 }
