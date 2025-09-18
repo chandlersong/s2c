@@ -19,12 +19,11 @@ pub fn get_connection_pool() -> &'static Pool<DuckdbConnectionManager> {
             .min_idle(Some(5)) // 最小空闲连接数
             .connection_timeout(std::time::Duration::from_secs(5)); // 连接超时时间
 
-        builder
-            .build(DuckdbConnectionManager::memory().unwrap())
-            .unwrap()
+        builder.build(DuckdbConnectionManager::memory().unwrap()).unwrap()
     })
 }
 
+#[derive(Clone)]
 pub struct DBProvider {
     pool: Pool<DuckdbConnectionManager>,
 }
@@ -42,8 +41,6 @@ impl DBProvider {
 
 impl Default for DBProvider {
     fn default() -> Self {
-        DBProvider {
-            pool: get_connection_pool().clone(),
-        }
+        DBProvider { pool: get_connection_pool().clone() }
     }
 }

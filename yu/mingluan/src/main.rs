@@ -23,7 +23,10 @@ async fn main() -> Result<(), MingLuanError> {
 
     match start_bn_jobs() {
         Ok(_) => info!("Binance jobs started successfully"),
-        Err(e) => error!("Failed to start Binance jobs: {}", e),
+        Err(e) => {
+            error!("Failed to start Binance jobs: {}", e);
+            panic!("stop process");
+        }
     }
     actix_rt::signal::ctrl_c().await?;
     println!("Received Ctrl+C, shutting down...");
