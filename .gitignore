@@ -265,3 +265,4 @@ fabric.properties
 /test/
 .DS_Store
 /testdata/
+/local_config/

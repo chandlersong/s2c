@@ -1,3 +1,4 @@
+use crate::config::get_config;
 use crate::errors::MingLuanError;
 use duckdb::DuckdbConnectionManager;
 use r2d2;
@@ -7,23 +8,24 @@ use std::sync::OnceLock;
 pub(crate) static CONNECTION_POOL: OnceLock<Pool<DuckdbConnectionManager>> = OnceLock::new();
 
 pub fn get_connection_pool() -> &'static Pool<DuckdbConnectionManager> {
-    //TODO 创建数据库
-    // 1. 有配置读取数据库文件
-    // 2. 没有配置就创建内存数据库
-    // 3. 检查有没有创建表。否则就自动创建
-
     CONNECTION_POOL.get_or_init(|| {
-        /* TODO
-           1， 目前是内存数据库，改成文件数据库。并且位置从配置文件读取
-           2.  修改配置项，比如设置多大的链接痴
-        */
-        let builder = r2d2::Pool::builder()
+        let builder = Pool::builder()
             .max_size(15) // 最大连接数
             .min_idle(Some(5)) // 最小空闲连接数
             .connection_timeout(std::time::Duration::from_secs(5)); // 连接超时时间
-
-        builder.build(DuckdbConnectionManager::memory().unwrap()).unwrap()
+        builder.build(get_duck_connection_manager()).unwrap()
     })
+}
+
+fn get_duck_connection_manager() -> DuckdbConnectionManager {
+    // TODO 读取配置文件
+    let db_config = get_config().database.as_ref();
+    if let Some(db_config) = db_config {
+        if let Some(path) = &db_config.path {
+            return DuckdbConnectionManager::file(path).unwrap();
+        }
+    }
+    DuckdbConnectionManager::memory().unwrap()
 }
 
 #[derive(Clone)]

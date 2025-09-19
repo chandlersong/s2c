@@ -10,3 +10,4 @@ out/
 conf/
 target/
 /testdata/
+/local_config/
