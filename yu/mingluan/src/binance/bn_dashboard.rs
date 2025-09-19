@@ -8,7 +8,7 @@ use yue::binance::spots::get_trading_spot_symbols;
 
 #[derive(Debug, Clone)]
 pub struct ExchangeSpotVO {
-    trading_symbols: Vec<String>,
+    pub trading_symbols: Vec<String>,
 }
 
 #[derive(Clone)]

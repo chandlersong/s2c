@@ -7,7 +7,10 @@ use std::sync::OnceLock;
 pub(crate) static CONNECTION_POOL: OnceLock<Pool<DuckdbConnectionManager>> = OnceLock::new();
 
 pub fn get_connection_pool() -> &'static Pool<DuckdbConnectionManager> {
-    //TODO：像超时这类进行配置。
+    //TODO 创建数据库
+    // 1. 有配置读取数据库文件
+    // 2. 没有配置就创建内存数据库
+    // 3. 检查有没有创建表。否则就自动创建
 
     CONNECTION_POOL.get_or_init(|| {
         /* TODO

@@ -17,11 +17,11 @@ pub mod utils;
 #[actix::main]
 async fn main() -> Result<(), MingLuanError> {
     setup_logger(Some(LevelFilter::Info)).unwrap();
-    //TODO： 是否用代理进入Config
+    //TODO： 用代理进入Config
     let proxy = Option::from("http://localhost:7891");
     init_http_client(proxy);
 
-    match start_bn_jobs() {
+    match start_bn_jobs().await {
         Ok(_) => info!("Binance jobs started successfully"),
         Err(e) => {
             error!("Failed to start Binance jobs: {}", e);

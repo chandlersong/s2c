@@ -1,12 +1,14 @@
 use crate::actix_jobs::AsyncRepeatTask;
-use crate::binance::binance_consts::{ONE_HOUR_MS, QUERY_LATEST_SQL};
+use crate::binance::binance_consts::{GENESIS_2020_MS, ONE_HOUR_MS, QUERY_LATEST_SQL};
+use crate::binance::bn_dashboard::ExchangeSpotVO;
 use crate::duck_db::DBProvider;
 use crate::errors::MingLuanError;
 use crate::exchange::KlineFetcherFactory;
 use crate::utils::get_snowflake_generator;
 use async_trait::async_trait;
 use duckdb::{DropBehavior, appender_params_from_iter};
-use log::{error, trace};
+use log::{error, info, trace};
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 use yue::binance::spots::{KlineFetcher, KlineInterval};
@@ -117,34 +119,42 @@ where
     provider: DBProvider,
     kline_fetcher_factory: F,
     table_name: String,
-    trading_symbols: Arc<RwLock<Vec<String>>>,
+    spot_info: Arc<RwLock<ExchangeSpotVO>>,
 }
 
 impl<F> UpdateKlineTask<F>
 where
     F: KlineFetcherFactory,
 {
-    pub fn new(provider: DBProvider, table_name: String, factory: F, trading_symbols: Arc<RwLock<Vec<String>>>) -> Self {
+    pub fn new(provider: DBProvider, table_name: String, factory: F, spot_info: Arc<RwLock<ExchangeSpotVO>>) -> Self {
         UpdateKlineTask {
             provider,
             kline_fetcher_factory: factory,
             table_name,
-            trading_symbols,
+            spot_info,
         }
     }
 
     fn query_latest_symbols(&self, conn: &duckdb::Connection) -> Result<Vec<(String, u64)>, MingLuanError> {
         let mut stmt = conn.prepare(QUERY_LATEST_SQL)?;
 
-        let latest_symbol: Vec<(String, u64)> = stmt
+        let symbol_in_db: HashMap<String, u64> = stmt
             .query_map([], |row| {
                 let symbol: String = row.get(0)?;
                 let latest: u64 = row.get(1)?;
                 Ok((symbol, latest))
             })?
-            .collect::<Result<Vec<_>, _>>()?;
-        let symbols = self.trading_symbols.read().unwrap();
-        let filtered: Vec<(String, u64)> = latest_symbol.into_iter().filter(|(symbol, _)| symbols.contains(symbol)).collect();
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .collect();
+        let symbols = &self.spot_info.read().unwrap().trading_symbols;
+        //NOTE: 以后加入各种过滤，以让他们支持各种不同的币币交易等
+        let filtered: Vec<(String, u64)> = symbols
+            .into_iter()
+            .filter(|s| s.ends_with("USDT"))
+            .map(|s| (s.clone(), symbol_in_db.get(s).copied().unwrap_or(GENESIS_2020_MS)))
+            .collect();
+        info!("fetched {} trading symbols", filtered.len());
         Ok(filtered)
     }
 
@@ -245,6 +255,7 @@ mod tests {
     use crate::actix_jobs::AsyncRepeatTask;
     use crate::binance::binance_consts::BinanceTables::SpotKline;
     use crate::binance::binance_consts::ONE_HOUR_MS;
+    use crate::binance::bn_dashboard::ExchangeSpotVO;
     use crate::binance::kline::{KlinePo, UpdateKlineTask};
     use crate::duck_db::DBProvider;
     use crate::errors::MingLuanError;
@@ -334,13 +345,14 @@ mod tests {
         // 直接从仓库中的本地 CSV 导入并断言行数为 2
         let csv_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/test_refresh_spot_kline_normal.csv");
 
-        let trading_symbol = Arc::new(RwLock::new(vec!["BTCUSDT".to_string()]));
+        let trading_symbols = vec!["BTCUSDT".to_string()];
+        let spot_info = Arc::new(RwLock::new(ExchangeSpotVO { trading_symbols }));
         import_local_csv_and_assert(&conn, SpotKline.table_name().as_str(), csv_path.as_path(), 7)?;
 
         // use mockall::predicate::{always, eq};
         let factory = MockKlineFetcherFactory {};
 
-        let manager: UpdateKlineTask<MockKlineFetcherFactory> = UpdateKlineTask::new(db_provider.clone(), SpotKline.table_name(), factory, trading_symbol);
+        let manager: UpdateKlineTask<MockKlineFetcherFactory> = UpdateKlineTask::new(db_provider.clone(), SpotKline.table_name(), factory, spot_info);
         let res = manager.execute().await;
 
         println!("{:?}", res);

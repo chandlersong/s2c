@@ -1,7 +1,9 @@
 pub(crate) const ONE_HOUR_MS: u64 = 60 * 60 * 1000;
 
-pub(super) static QUERY_LATEST_SQL: &str =
-    "select symbol,max(candle_begin_time) as latest from spot_kline group by symbol;";
+// 2020年1月1日零点的毫秒时间戳
+pub(crate) const GENESIS_2020_MS: u64 = 1577836800000;
+
+pub(super) static QUERY_LATEST_SQL: &str = "select symbol,max(candle_begin_time) as latest from spot_kline group by symbol;";
 
 static CREATE_KLINE_TABLE: &str = "CREATE TABLE IF NOT EXISTS spot_kline
                         (
