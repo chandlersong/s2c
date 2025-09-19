@@ -1,5 +1,5 @@
 use crate::errors::MingLuanError;
-use actix::{Actor, AsyncContext, Context, Message};
+use actix::{Actor, AsyncContext, Context};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use cron::Schedule;

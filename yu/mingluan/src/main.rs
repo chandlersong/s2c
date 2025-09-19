@@ -2,11 +2,12 @@ use crate::binance::jobs::start_bn_jobs;
 use crate::errors::MingLuanError;
 use actix::System;
 use li::tools::logs::setup_logger;
-use log::{LevelFilter, error, info};
+use log::{error, info, LevelFilter};
 use yue::http_client::init_http_client;
 
 pub mod actix_jobs;
 pub(crate) mod binance;
+mod config;
 pub(crate) mod duck_db;
 mod errors;
 mod exchange;

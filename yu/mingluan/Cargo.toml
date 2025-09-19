@@ -1,21 +1,24 @@
 [package]
 name = "mingluan"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
 duckdb = { workspace = true }
 tokio = { workspace = true }
-r2d2 = "0.8.10"
 yue = { path = "../../yue" }
 li = { path = "../../li" }
-thiserror = {workspace = true}
+thiserror = { workspace = true }
 mockall = { workspace = true }
 async-trait = { workspace = true }
 rs-snowflake = { workspace = true }
 log = { workspace = true }
+config = { workspace = true }
+actix = { workspace = true }
+actix-rt = { workspace = true }
 
-actix = "0.13.5"
+
+r2d2 = "0.8.10"
 cron = "0.15.0"
 chrono = "0.4.38"
-actix-rt = "2.10.0"
+serde = { version = "1.0.225", features = ["derive"] }

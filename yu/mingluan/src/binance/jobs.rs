@@ -8,6 +8,11 @@ use crate::exchange::{DefaultKlineFetcherFactory, ExchangeDashBoard};
 use actix::Actor;
 use yue::binance::spots::SpotKlineFetcher;
 
+///
+/// NOTE: 加入的功能
+/// 1. 检测数据完整性的进程。
+///
+///
 pub async fn start_bn_jobs() -> Result<(), MingLuanError> {
     let dashboard = BinanceDashboard::new();
     //每六个小时更新一次。因为这样频率不要那么高

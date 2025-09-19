@@ -31,6 +31,9 @@ backon = "1.5.2"
 duckdb = { version = "1.3.2", features = ["r2d2"] }
 thiserror = "2.0.16"
 rs-snowflake = "0.6.0"
+config = { version = "0.15.16", features = ["yaml"] }
+actix = "0.13.5"
+actix-rt = "2.11.0"
 ### DEV ####
 mockall = { version = "0.13.1" }
 
