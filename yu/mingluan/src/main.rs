@@ -17,10 +17,15 @@ pub mod utils;
 
 #[actix::main]
 async fn main() -> Result<(), MingLuanError> {
+    let app_config = config::get_config();
     setup_logger(Some(LevelFilter::Info)).unwrap();
-    //TODO： 用代理进入Config
-    let proxy = Option::from("http://localhost:7891");
-    init_http_client(proxy);
+    let proxy = app_config.proxy_url.clone();
+    if let Some(url_proxy) = proxy {
+        info!("Using proxy: {}", url_proxy);
+        init_http_client(Some(&url_proxy));
+    } else {
+        init_http_client(None);
+    }
 
     match start_bn_jobs().await {
         Ok(_) => info!("Binance jobs started successfully"),

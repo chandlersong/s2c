@@ -1,2 +1,3 @@
+proxyUrl: "http://localhost:7891"
 database:
   path: "test.db"

@@ -6,6 +6,8 @@ use std::sync::OnceLock;
 
 #[derive(Deserialize, Debug)]
 pub struct AppConfig {
+    #[serde(rename = "proxyUrl")]
+    pub proxy_url: Option<String>,
     pub database: Option<DuckDBConfig>,
 }
 
