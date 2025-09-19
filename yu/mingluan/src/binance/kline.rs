@@ -8,7 +8,7 @@ use crate::utils::get_snowflake_generator;
 use async_trait::async_trait;
 use duckdb::{appender_params_from_iter, DropBehavior};
 use li::tools::time::unix_2_readable;
-use log::{debug, error, info, trace};
+use log::{debug, error, info};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
@@ -169,7 +169,7 @@ where
                 } else {
                     //因为币安最后一个都是脏数据，比如说我在11:30获取，他会返回12:00的，但是12:00的还没收盘。所以就默认舍弃
                     let data = &kline_data[..len - 1];
-                    debug!("Fetched {} klines for symbol {}: HTTP status {}", len, symbol, fail_times);
+                    debug!("Fetched {} klines for symbol {}: fail times {}", len, symbol, fail_times);
                     let kline_pos: Vec<KlinePo> = data.iter().map(|kline| KlinePo::from_binance_kline(&symbol, kline)).collect();
                     Ok(kline_pos)
                 }
