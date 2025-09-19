@@ -19,16 +19,16 @@ pub async fn start_bn_jobs() -> Result<(), MingLuanError> {
     dashboard.execute().await?;
 
     let spot_info = dashboard.spot_info();
-    //TODO： 更新交易所时间表达式进入Config
-    let _ = CronActor::new("30 59 */6 * * * *", dashboard, "update exchange info").start();
-
     //TODO：这段代码，以后移动到数据库初始连接的时候处理
     let conn = DBProvider::default().acquire()?;
     conn.execute(SpotKline.create_table_statement().as_str(), [])?;
     let kline_fetch_factory: DefaultKlineFetcherFactory<SpotKlineFetcher> = DefaultKlineFetcherFactory::new();
 
     let spot_kline_task = UpdateKlineTask::new(DBProvider::default(), SpotKline.table_name(), kline_fetch_factory, spot_info);
-    //TODO: 正式发布的时候，每个小时过后的10s执行，现在这样方便测试
-    let _ = CronActor::new("*/10 * * * * * *", spot_kline_task, "fetch spot ").start();
+    spot_kline_task.execute().await?;
+
+    //TODO： 更新交易所时间表达式进入Config
+    let _ = CronActor::new("30 59 */6 * * * *", dashboard, "update exchange info").start();
+    let _ = CronActor::new("10 0 * * * * *", spot_kline_task, "fetch spot ").start();
     Ok(())
 }

@@ -3,6 +3,7 @@ use crate::errors::MingLuanError;
 use actix::System;
 use li::tools::logs::setup_logger;
 use log::{error, info, LevelFilter};
+use std::collections::HashMap;
 use yue::http_client::init_http_client;
 
 pub mod actix_jobs;
@@ -18,7 +19,10 @@ pub mod utils;
 #[actix::main]
 async fn main() -> Result<(), MingLuanError> {
     let app_config = config::get_config();
-    setup_logger(Some(LevelFilter::Info)).unwrap();
+
+    let mut special_log = HashMap::new();
+    special_log.insert("mingluan".to_string(), LevelFilter::Debug);
+    setup_logger(Some(LevelFilter::Info), special_log).unwrap();
     let proxy = app_config.proxy_url.clone();
     if let Some(url_proxy) = proxy {
         info!("Using proxy: {}", url_proxy);

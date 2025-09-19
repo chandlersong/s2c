@@ -6,8 +6,8 @@ use crate::errors::MingLuanError;
 use crate::exchange::KlineFetcherFactory;
 use crate::utils::get_snowflake_generator;
 use async_trait::async_trait;
-use duckdb::{DropBehavior, appender_params_from_iter};
-use log::{error, info, trace};
+use duckdb::{appender_params_from_iter, DropBehavior};
+use log::{debug, error, info, trace};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
@@ -159,7 +159,7 @@ where
     }
 
     async fn fetch_symbol_data<T: KlineFetcher>(kline_fetcher: T, symbol: String, timestamp: u64, tx: mpsc::Sender<Result<Vec<KlinePo>, yue::errors::YueError>>) {
-        trace!("update -> symbol: {}, latest: {}", symbol, timestamp);
+        debug!("update -> symbol: {}, latest: {}", symbol, timestamp);
         let result = match kline_fetcher.get_all_kline_data(&symbol, KlineInterval::OneHour, Some(timestamp + ONE_HOUR_MS)).await {
             Ok((kline_data, fail_times)) => {
                 let len = kline_data.len();
@@ -260,7 +260,7 @@ mod tests {
     use crate::duck_db::DBProvider;
     use crate::errors::MingLuanError;
     use crate::exchange::KlineFetcherFactory;
-    use crate::test_utils::{TEST_BEGIN_TIMESTAMP, generate_test_kline_vec, import_local_csv_and_assert};
+    use crate::test_utils::{generate_test_kline_vec, import_local_csv_and_assert, TEST_BEGIN_TIMESTAMP};
     use async_trait::async_trait;
     use duckdb::DuckdbConnectionManager;
     use mockall::{mock, predicate};
@@ -362,7 +362,7 @@ mod tests {
         let kline_data: Vec<KlinePo> = stmt.query_map([], |row| Ok(KlinePo::from(row)))?.filter_map(Result::ok).collect();
 
         assert_eq!(&kline_data.len(), &8); // 原有3条 + 每个symbol新增2条
-        // 打印查询到的每个 symbol 和对应的 latest 时间戳，便于调试
+                                           // 打印查询到的每个 symbol 和对应的 latest 时间戳，便于调试
         let mut btc_vec: Vec<KlinePo> = vec![];
         let mut eth_vec: Vec<KlinePo> = vec![];
         for kline in kline_data {
