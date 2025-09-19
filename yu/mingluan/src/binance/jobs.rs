@@ -6,6 +6,7 @@ use crate::duck_db::DBProvider;
 use crate::errors::MingLuanError;
 use crate::exchange::{DefaultKlineFetcherFactory, ExchangeDashBoard};
 use actix::Actor;
+use duckdb::Connection;
 use yue::binance::spots::SpotKlineFetcher;
 
 ///
@@ -19,9 +20,7 @@ pub async fn start_bn_jobs() -> Result<(), MingLuanError> {
     dashboard.execute().await?;
 
     let spot_info = dashboard.spot_info();
-    //TODO：这段代码，以后移动到数据库初始连接的时候处理
-    let conn = DBProvider::default().acquire()?;
-    conn.execute(SpotKline.create_table_statement().as_str(), [])?;
+    initial_table()?;
     let kline_fetch_factory: DefaultKlineFetcherFactory<SpotKlineFetcher> = DefaultKlineFetcherFactory::new();
 
     let spot_kline_task = UpdateKlineTask::new(DBProvider::default(), SpotKline.table_name(), kline_fetch_factory, spot_info);
@@ -30,5 +29,22 @@ pub async fn start_bn_jobs() -> Result<(), MingLuanError> {
     //TODO： 更新交易所时间表达式进入Config
     let _ = CronActor::new("30 59 */6 * * * *", dashboard, "update exchange info").start();
     let _ = CronActor::new("10 0 * * * * *", spot_kline_task, "fetch spot ").start();
+    Ok(())
+}
+
+fn table_exists(conn: &Connection, table_name: &str) -> Result<bool, MingLuanError> {
+    let check_sql = format!("SELECT name FROM sqlite_master WHERE type='table' AND name='{}'", table_name);
+    let mut stmt = conn.prepare(&check_sql)?;
+    let mut rows = stmt.query([])?;
+    Ok(rows.next()?.is_some())
+}
+
+fn initial_table() -> Result<(), MingLuanError> {
+    let conn = DBProvider::default().acquire()?;
+    let table_name = SpotKline.table_name();
+    if !table_exists(&conn, &table_name)? {
+        // 表不存在，执行建表
+        conn.execute(SpotKline.create_table_statement().as_str(), [])?;
+    }
     Ok(())
 }
