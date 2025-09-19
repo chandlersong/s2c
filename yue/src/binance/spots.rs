@@ -1,7 +1,5 @@
 pub use crate::binance::bn_models::{BinanceKline, EmptyQueryParams, ExchangeInfo, ToQueryParams};
-use crate::binance::bn_restful_commands::{
-    EXCHANGE_INFO_COMMAND, PING_COMMAND, SPOT_KLINE_COMMAND, execute_bn_get,
-};
+use crate::binance::bn_restful_commands::{EXCHANGE_INFO_COMMAND, PING_COMMAND, SPOT_KLINE_COMMAND, execute_bn_get};
 use crate::errors::YueError;
 use crate::http_client::{DefaultRateLimiter, NonAuthRequestBuilder};
 use crate::models::EmptyObject;
@@ -21,12 +19,7 @@ static SPOT_RATE_LIMITER: OnceLock<DefaultRateLimiter> = OnceLock::new();
 static SPOT_RATE_LIMITER_PER_SECOND: u32 = 1200;
 /// 获取 RateLimiter 的静态引用
 fn get_bn_spot_rate_limit(per_second_num: u32) -> Option<&'static DefaultRateLimiter> {
-    Some(SPOT_RATE_LIMITER.get_or_init(|| {
-        RateLimiter::direct(
-            Quota::per_second(NonZeroU32::new(per_second_num).unwrap())
-                .allow_burst(NonZeroU32::new(per_second_num).unwrap()),
-        )
-    }))
+    Some(SPOT_RATE_LIMITER.get_or_init(|| RateLimiter::direct(Quota::per_second(NonZeroU32::new(per_second_num).unwrap()).allow_burst(NonZeroU32::new(per_second_num).unwrap()))))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,13 +121,9 @@ impl ToQueryParams for KlineParams {
 }
 
 pub async fn execute_ping() -> Result<(), YueError> {
-    let _ = execute_bn_get::<EmptyQueryParams, NonAuthRequestBuilder, EmptyObject>(
-        &PING_COMMAND,
-        None,
-        NonAuthRequestBuilder {},
-    )
-    .execute(get_bn_spot_rate_limit(SPOT_RATE_LIMITER_PER_SECOND))
-    .await?;
+    let _ = execute_bn_get::<EmptyQueryParams, NonAuthRequestBuilder, EmptyObject>(&PING_COMMAND, None, NonAuthRequestBuilder {})
+        .execute(get_bn_spot_rate_limit(SPOT_RATE_LIMITER_PER_SECOND))
+        .await?;
     Ok(())
 }
 
@@ -153,16 +142,10 @@ pub async fn execute_ping() -> Result<(), YueError> {
 ///
 /// # 返回
 /// 返回符合条件的交易对信息列表，包含 symbol, status, base_asset, quote_asset_precision, order_types
-pub async fn get_trading_spot_symbols(
-    status: Option<&str>,
-) -> Result<Vec<TradingSymbolInfo>, YueError> {
-    let exchange_info: ExchangeInfo = execute_bn_get::<
-        EmptyQueryParams,
-        NonAuthRequestBuilder,
-        ExchangeInfo,
-    >(&EXCHANGE_INFO_COMMAND, None, NonAuthRequestBuilder {})
-    .execute(get_bn_spot_rate_limit(SPOT_RATE_LIMITER_PER_SECOND))
-    .await?;
+pub async fn get_trading_spot_symbols(status: Option<&str>) -> Result<Vec<TradingSymbolInfo>, YueError> {
+    let exchange_info: ExchangeInfo = execute_bn_get::<EmptyQueryParams, NonAuthRequestBuilder, ExchangeInfo>(&EXCHANGE_INFO_COMMAND, None, NonAuthRequestBuilder {})
+        .execute(get_bn_spot_rate_limit(SPOT_RATE_LIMITER_PER_SECOND))
+        .await?;
 
     let filter_status = status.unwrap_or("TRADING");
 
@@ -202,12 +185,7 @@ pub async fn get_trading_spot_symbols(
 
 #[async_trait]
 pub trait KlineFetcher {
-    async fn get_all_kline_data(
-        &self,
-        symbol: &str,
-        interval: KlineInterval,
-        start_time: Option<u64>,
-    ) -> Result<(Vec<BinanceKline>, u16), YueError>;
+    async fn get_all_kline_data(&self, symbol: &str, interval: KlineInterval, start_time: Option<u64>) -> Result<(Vec<BinanceKline>, u16), YueError>;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -216,8 +194,6 @@ pub struct SpotKlineFetcher {}
 #[async_trait]
 impl KlineFetcher for SpotKlineFetcher {
     /// 获取指定交易对和时间间隔的K线数据
-    /// FIXME：如果start_time之后的一个周期没有。就不会取道数据
-    ///       比如你从2021年1月1日取，但是这个币是2022年1月上市的。这里就会是空
     ///
     /// 注意点
     /// 1. 最后一段时间最好废弃。比如说现在是11:30:00， interval是1h。那么最后一段就是11点到12点的一段时间。
@@ -228,12 +204,7 @@ impl KlineFetcher for SpotKlineFetcher {
     ///
     /// # 返回
     /// 返回K线数据列表，由于API限制，每次最多1000条，会自动分页获取
-    async fn get_all_kline_data(
-        &self,
-        symbol: &str,
-        interval: KlineInterval,
-        start_time: Option<u64>,
-    ) -> Result<(Vec<BinanceKline>, u16), YueError> {
+    async fn get_all_kline_data(&self, symbol: &str, interval: KlineInterval, start_time: Option<u64>) -> Result<(Vec<BinanceKline>, u16), YueError> {
         let mut res: Vec<BinanceKline> = Vec::new();
         let mut current_start_time = start_time;
         let request_builder = NonAuthRequestBuilder {};
@@ -253,12 +224,7 @@ impl KlineFetcher for SpotKlineFetcher {
                 .with_min_delay(std::time::Duration::from_millis(100)) // 最小延迟 500ms
                 .with_max_delay(std::time::Duration::from_secs(10))
                 .build();
-            let klines: Vec<BinanceKline> =
-                execute_bn_get::<KlineParams, NonAuthRequestBuilder, Vec<BinanceKline>>(
-                    &SPOT_KLINE_COMMAND,
-                    Some(&params),
-                    request_builder.clone(),
-                )
+            let klines: Vec<BinanceKline> = execute_bn_get::<KlineParams, NonAuthRequestBuilder, Vec<BinanceKline>>(&SPOT_KLINE_COMMAND, Some(&params), request_builder.clone())
                 .into_retryable(get_bn_spot_rate_limit(SPOT_RATE_LIMITER_PER_SECOND))
                 .retry(retry_policy)
                 .notify(|_err, _dur| {
@@ -267,9 +233,7 @@ impl KlineFetcher for SpotKlineFetcher {
                 .await?;
 
             if let Some(last_kline) = klines.last() {
-                if current_start_time.is_some()
-                    && current_start_time.unwrap() == last_kline.close_time
-                {
+                if current_start_time.is_some() && current_start_time.unwrap() == last_kline.close_time {
                     break;
                 }
                 current_start_time = Some(last_kline.close_time);
@@ -355,14 +319,8 @@ mod tests {
             .mount(&mock_server)
             .await;
         let fetcher = SpotKlineFetcher {};
-        let kline_res = fetcher
-            .get_all_kline_data("BTCUSDT", KlineInterval::OneHour, None)
-            .await;
-        assert!(
-            kline_res.is_ok(),
-            "获取K线数据失败: {:?}",
-            kline_res.as_ref().err()
-        );
+        let kline_res = fetcher.get_all_kline_data("BTCUSDT", KlineInterval::OneHour, None).await;
+        assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
         let (kline, _) = kline_res.unwrap();
         assert_eq!(kline.len(), 500);
         assert_eq!(kline[0].open_time, 1609459200000);
@@ -411,14 +369,8 @@ mod tests {
             .mount(&mock_server)
             .await;
         let fetcher = SpotKlineFetcher {};
-        let kline_res = fetcher
-            .get_all_kline_data("BTCUSDT", KlineInterval::OneHour, Some(1609459200000))
-            .await;
-        assert!(
-            kline_res.is_ok(),
-            "获取K线数据失败: {:?}",
-            kline_res.as_ref().err()
-        );
+        let kline_res = fetcher.get_all_kline_data("BTCUSDT", KlineInterval::OneHour, Some(1609459200000)).await;
+        assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
         let (kline, _) = kline_res.unwrap();
         assert_eq!(kline.len(), 1200);
         assert!(kline[0].open_time == 1609459200000);
@@ -435,9 +387,7 @@ mod tests {
             .mount(&mock_server)
             .await;
         let fetcher = SpotKlineFetcher {};
-        let kline_res = fetcher
-            .get_all_kline_data("BTCUSDT", KlineInterval::OneHour, Some(1609459200000))
-            .await;
+        let kline_res = fetcher.get_all_kline_data("BTCUSDT", KlineInterval::OneHour, Some(1609459200000)).await;
         assert!(kline_res.is_err());
     }
 
@@ -463,14 +413,8 @@ mod tests {
             .mount(&mock_server)
             .await;
         let fetcher = SpotKlineFetcher {};
-        let kline_res = fetcher
-            .get_all_kline_data("BTCUSDT", KlineInterval::OneHour, Some(1609459200000))
-            .await;
-        assert!(
-            kline_res.is_ok(),
-            "获取K线数据失败: {:?}",
-            kline_res.as_ref().err()
-        );
+        let kline_res = fetcher.get_all_kline_data("BTCUSDT", KlineInterval::OneHour, Some(1609459200000)).await;
+        assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
         let (kline, _) = kline_res.unwrap();
         assert_eq!(kline.len(), 1000);
         assert!(kline[0].open_time == 1609459200000);
@@ -499,14 +443,8 @@ mod tests {
             .mount(&mock_server)
             .await;
         let fetcher = SpotKlineFetcher {};
-        let kline_res = fetcher
-            .get_all_kline_data("BTCUSDT", KlineInterval::OneHour, Some(1609459200000))
-            .await;
-        assert!(
-            kline_res.is_ok(),
-            "获取K线数据失败: {:?}",
-            kline_res.as_ref().err()
-        );
+        let kline_res = fetcher.get_all_kline_data("BTCUSDT", KlineInterval::OneHour, Some(1609459200000)).await;
+        assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
         let (kline, _) = kline_res.unwrap();
         assert_eq!(kline.len(), 1000);
         assert_eq!(kline[0].open_time, 1609459200000);

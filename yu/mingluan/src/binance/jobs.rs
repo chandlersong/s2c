@@ -14,7 +14,7 @@ pub async fn start_bn_jobs() -> Result<(), MingLuanError> {
     dashboard.execute().await?;
 
     let spot_info = dashboard.spot_info();
-    //TODO： 这里的时间表达式进入Config
+    //TODO： 更新交易所时间表达式进入Config
     let _ = CronActor::new("30 59 */6 * * * *", dashboard, "update exchange info").start();
 
     //TODO：这段代码，以后移动到数据库初始连接的时候处理

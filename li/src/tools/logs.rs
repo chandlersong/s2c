@@ -1,6 +1,7 @@
 use log::LevelFilter;
 use std::time::SystemTime;
 
+//NOTE: 以后加入一些分布式的log库
 pub fn setup_logger(level: Option<LevelFilter>) -> Result<(), fern::InitError> {
     let filter = level.unwrap_or_else(|| LevelFilter::Debug);
     fern::Dispatch::new()
