@@ -1,4 +1,3 @@
-use mockall::automock;
 use std::sync::{Arc, RwLock};
 use yue::binance::spots::KlineFetcher;
 

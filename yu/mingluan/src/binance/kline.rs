@@ -7,7 +7,7 @@ use crate::utils::get_snowflake_generator;
 use async_trait::async_trait;
 use duckdb::{DropBehavior, appender_params_from_iter};
 use log::{error, trace};
-use mockall::automock;
+use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 use yue::binance::spots::{KlineFetcher, KlineInterval};
 
@@ -117,22 +117,25 @@ where
     provider: DBProvider,
     kline_fetcher_factory: F,
     table_name: String,
+    trading_symbols: Arc<RwLock<Vec<String>>>,
 }
 
 impl<F> UpdateKlineTask<F>
 where
     F: KlineFetcherFactory,
 {
-    pub fn new(provider: DBProvider, table_name: String, factory: F) -> Self {
+    pub fn new(provider: DBProvider, table_name: String, factory: F, trading_symbols: Arc<RwLock<Vec<String>>>) -> Self {
         UpdateKlineTask {
             provider,
             kline_fetcher_factory: factory,
             table_name,
+            trading_symbols,
         }
     }
 
     fn query_latest_symbols(&self, conn: &duckdb::Connection) -> Result<Vec<(String, u64)>, MingLuanError> {
         let mut stmt = conn.prepare(QUERY_LATEST_SQL)?;
+
         let latest_symbol: Vec<(String, u64)> = stmt
             .query_map([], |row| {
                 let symbol: String = row.get(0)?;
@@ -140,7 +143,9 @@ where
                 Ok((symbol, latest))
             })?
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(latest_symbol)
+        let symbols = self.trading_symbols.read().unwrap();
+        let filtered: Vec<(String, u64)> = latest_symbol.into_iter().filter(|(symbol, _)| symbols.contains(symbol)).collect();
+        Ok(filtered)
     }
 
     async fn fetch_symbol_data<T: KlineFetcher>(kline_fetcher: T, symbol: String, timestamp: u64, tx: mpsc::Sender<Result<Vec<KlinePo>, yue::errors::YueError>>) {
@@ -250,6 +255,7 @@ mod tests {
     use mockall::{mock, predicate};
     use r2d2::Pool;
     use std::path::Path;
+    use std::sync::{Arc, RwLock};
     use yue::binance::bn_models::BinanceKline;
     use yue::binance::spots::{KlineFetcher, KlineInterval};
     use yue::errors::YueError;
@@ -328,12 +334,13 @@ mod tests {
         // 直接从仓库中的本地 CSV 导入并断言行数为 2
         let csv_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/test_refresh_spot_kline_normal.csv");
 
+        let trading_symbol = Arc::new(RwLock::new(vec!["BTCUSDT".to_string()]));
         import_local_csv_and_assert(&conn, SpotKline.table_name().as_str(), csv_path.as_path(), 7)?;
 
         // use mockall::predicate::{always, eq};
         let factory = MockKlineFetcherFactory {};
 
-        let manager: UpdateKlineTask<MockKlineFetcherFactory> = UpdateKlineTask::new(db_provider.clone(), SpotKline.table_name(), factory);
+        let manager: UpdateKlineTask<MockKlineFetcherFactory> = UpdateKlineTask::new(db_provider.clone(), SpotKline.table_name(), factory, trading_symbol);
         let res = manager.execute().await;
 
         println!("{:?}", res);
@@ -342,7 +349,7 @@ mod tests {
         let mut stmt = conn.prepare(format!("SELECT * FROM {}", SpotKline.table_name()).as_str())?;
         let kline_data: Vec<KlinePo> = stmt.query_map([], |row| Ok(KlinePo::from(row)))?.filter_map(Result::ok).collect();
 
-        assert_eq!(&kline_data.len(), &9); // 原有3条 + 每个symbol新增2条
+        assert_eq!(&kline_data.len(), &8); // 原有3条 + 每个symbol新增2条
         // 打印查询到的每个 symbol 和对应的 latest 时间戳，便于调试
         let mut btc_vec: Vec<KlinePo> = vec![];
         let mut eth_vec: Vec<KlinePo> = vec![];
@@ -368,7 +375,7 @@ mod tests {
         assert_eq!(insert_btc.taker_buy_quote_asset_volume, 50000.0);
         assert_eq!(insert_btc.close_time, 1609462799999);
 
-        assert_eq!(&eth_vec.len(), &3);
+        assert_eq!(&eth_vec.len(), &2);
 
         Ok(())
     }
