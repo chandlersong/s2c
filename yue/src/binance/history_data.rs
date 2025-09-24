@@ -1,4 +1,4 @@
-pub use crate::binance::bn_models::HistoryData;
+pub use crate::binance::bn_models::HistoryVo;
 pub use crate::binance::bn_models::{BinanceKline, EmptyQueryParams, ExchangeInfo, ToQueryParams};
 use crate::binance::bn_restful_commands::{EXCHANGE_INFO_COMMAND, PING_COMMAND, SPOT_KLINE_COMMAND, execute_bn_get};
 use crate::errors::YueError;
@@ -221,7 +221,7 @@ pub async fn get_trading_spot_symbols(status: Option<&str>) -> Result<Vec<Tradin
 pub trait HistoryFetcher<T, O>
 where
     T: MuteHistoryParam + ToQueryParams + Send + Sync,
-    O: HistoryData,
+    O: HistoryVo,
 {
     async fn get_all_kline_data(&self, base_param: T, start_time: Option<u64>) -> Result<(Vec<O>, u16), YueError>;
 }
@@ -233,7 +233,7 @@ pub struct SimpleHistoryFetcher {}
 impl<'a, T, O> HistoryFetcher<T, O> for SimpleHistoryFetcher
 where
     T: MuteHistoryParam + ToQueryParams + Send + Sync + 'static,
-    O: HistoryData + Send,
+    O: HistoryVo + Send,
 {
     /// 获取指定交易对和时间间隔的K线数据
     ///

@@ -123,7 +123,7 @@ pub const WS_SUBSCRIBE_COMMAND: &str = "SUBSCRIBE";
 pub const WS_SET_PROPERTY_COMMAND: &str = "SET_PROPERTY";
 pub const WS_GET_PROPERTY_COMMAND: &str = "GET_PROPERTY";
 
-pub trait HistoryData: DeserializeOwned {
+pub trait HistoryVo: DeserializeOwned {
     fn get_close_time(&self) -> u64;
 
     fn get_open_time(&self) -> u64;
@@ -641,7 +641,7 @@ pub struct BinanceKline {
     pub ignore: String, // 忽略字段
 }
 
-impl HistoryData for BinanceKline {
+impl HistoryVo for BinanceKline {
     fn get_close_time(&self) -> u64 {
         self.close_time
     }
