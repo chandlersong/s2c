@@ -1,7 +1,4 @@
-use crate::binance::bn_models::{
-    BINANCE_API_BASE, EXCHANGE_INFO_PATH, PING_PATH, SERVER_TIME_PATH, SPOT_KLINE_PATH,
-    ToQueryParams,
-};
+use crate::binance::bn_models::{BINANCE_API_BASE, PING_PATH, SPOT_EXCHANGE_INFO_PATH, SPOT_KLINE_PATH, SPOT_SERVER_TIME_PATH, ToQueryParams};
 use crate::errors::YueError;
 use crate::http_client::{YueRequest, YueRequestBuilder};
 use crate::models::RequestInfo;
@@ -19,13 +16,7 @@ pub struct BNSecurityRequestBuilder {
 }
 
 impl YueRequestBuilder for BNSecurityRequestBuilder {
-    fn compose_request(
-        &self,
-        client: &Client,
-        info: &RequestInfo,
-        param: Option<String>,
-        method: Method,
-    ) -> Result<RequestBuilder, YueError> {
+    fn compose_request(&self, client: &Client, info: &RequestInfo, param: Option<String>, method: Method) -> Result<RequestBuilder, YueError> {
         let mut url = info.as_ref().clone();
         let base_query_string = param.filter(|s| !s.is_empty()).unwrap_or_default();
         let signature = sign_hmac(&base_query_string, &self.api_secret)?;
@@ -44,8 +35,7 @@ impl YueRequestBuilder for BNSecurityRequestBuilder {
 
 /// Wrapper for Binance requests to enable retry with backon
 
-pub static PING_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_API_BASE, PING_PATH, false, 1).unwrap());
+pub static PING_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| RequestInfo::from_base_path(BINANCE_API_BASE, PING_PATH, false, 1).unwrap());
 
 ///币安当前有 1479 个交易对
 /// 时区: UTC
@@ -96,25 +86,15 @@ pub static PING_COMMAND: LazyLock<RequestInfo> =
     allowed_self_trade_prevention_modes: ["EXPIRE_TAKER", "EXPIRE_MAKER", "EXPIRE_BOTH", "DECREMENT"]
   }
 **/
-pub static EXCHANGE_INFO_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| {
-    RequestInfo::from_base_path(BINANCE_API_BASE, EXCHANGE_INFO_PATH, false, 20).unwrap()
-});
+pub static EXCHANGE_INFO_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| RequestInfo::from_base_path(BINANCE_API_BASE, SPOT_EXCHANGE_INFO_PATH, false, 20).unwrap());
 
-pub static SERVER_TIME_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| {
-    RequestInfo::from_base_path(BINANCE_API_BASE, SERVER_TIME_PATH, false, 1).unwrap()
-});
+pub static SERVER_TIME_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| RequestInfo::from_base_path(BINANCE_API_BASE, SPOT_SERVER_TIME_PATH, false, 1).unwrap());
 
-pub static SPOT_KLINE_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| {
-    RequestInfo::from_base_path(BINANCE_API_BASE, SPOT_KLINE_PATH, false, 2).unwrap()
-});
+pub static SPOT_KLINE_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| RequestInfo::from_base_path(BINANCE_API_BASE, SPOT_KLINE_PATH, false, 2).unwrap());
 
 /// 全局 RateLimiter，使用 OnceLock 延迟初始化
 
-pub fn execute_bn_get<'a, P, T, U>(
-    info: &'a RequestInfo,
-    param: Option<&'a P>,
-    request_builder: T,
-) -> YueRequest<'a, T, U>
+pub fn execute_bn_get<'a, P, T, U>(info: &'a RequestInfo, param: Option<&'a P>, request_builder: T) -> YueRequest<'a, T, U>
 where
     P: ToQueryParams,
     T: YueRequestBuilder + Clone,
@@ -131,12 +111,7 @@ where
     }
 }
 
-pub fn execute_bn_post<'a, P, T, U>(
-    info: &'a RequestInfo,
-    param: Option<&'a P>,
-    body: Option<&'a Value>,
-    request_builder: T,
-) -> YueRequest<'a, T, U>
+pub fn execute_bn_post<'a, P, T, U>(info: &'a RequestInfo, param: Option<&'a P>, body: Option<&'a Value>, request_builder: T) -> YueRequest<'a, T, U>
 where
     P: ToQueryParams,
     T: YueRequestBuilder + Clone,
@@ -153,12 +128,7 @@ where
     }
 }
 
-pub fn execute_bn_put<'a, P, T, U>(
-    info: &'a RequestInfo,
-    param: Option<&'a P>,
-    body: Option<&'a Value>,
-    request_builder: T,
-) -> YueRequest<'a, T, U>
+pub fn execute_bn_put<'a, P, T, U>(info: &'a RequestInfo, param: Option<&'a P>, body: Option<&'a Value>, request_builder: T) -> YueRequest<'a, T, U>
 where
     P: ToQueryParams,
     T: YueRequestBuilder + Clone,
@@ -195,8 +165,7 @@ mod tests {
     #[test]
     fn test_compose_request_with_valid_security_info() {
         let client = Client::new();
-        let request_info =
-            RequestInfo::from_base_path("https://example.com", "/api/v3/test", false, 1).unwrap();
+        let request_info = RequestInfo::from_base_path("https://example.com", "/api/v3/test", false, 1).unwrap();
         let builder = BNSecurityRequestBuilder {
             api_key: "test_api_key".to_string(),
             api_secret: "test_api_secret".to_string(),
@@ -210,17 +179,13 @@ mod tests {
             request.url().as_str(),
             "https://example.com/api/v3/test?signature=4c4df0c09aaefc2fe10f409703fd08d6754229e4c9b99897331efa42d8d65e47"
         );
-        assert_eq!(
-            request.headers().get("X-MBX-APIKEY").unwrap(),
-            "test_api_key"
-        );
+        assert_eq!(request.headers().get("X-MBX-APIKEY").unwrap(), "test_api_key");
     }
 
     #[test]
     fn test_compose_request_without_security_info() {
         let client = Client::new();
-        let request_info =
-            RequestInfo::from_base_path("https://example.com", "/api/v3/test", false, 1).unwrap();
+        let request_info = RequestInfo::from_base_path("https://example.com", "/api/v3/test", false, 1).unwrap();
         let builder = NonAuthRequestBuilder {};
 
         let result = builder.compose_request(&client, &request_info, None, Method::GET);
@@ -234,19 +199,13 @@ mod tests {
     #[test]
     fn test_compose_request_with_query_params() {
         let client = Client::new();
-        let request_info =
-            RequestInfo::from_base_path("https://example.com", "/api/v3/test", false, 1).unwrap();
+        let request_info = RequestInfo::from_base_path("https://example.com", "/api/v3/test", false, 1).unwrap();
         let builder = BNSecurityRequestBuilder {
             api_key: "test_api_key".to_string(),
             api_secret: "test_api_secret".to_string(),
         };
 
-        let result = builder.compose_request(
-            &client,
-            &request_info,
-            Some("symbol=BTCUSDT".to_string()),
-            Method::GET,
-        );
+        let result = builder.compose_request(&client, &request_info, Some("symbol=BTCUSDT".to_string()), Method::GET);
         assert!(result.is_ok());
 
         let request = result.unwrap().build().unwrap();
@@ -254,10 +213,7 @@ mod tests {
             request.url().as_str(),
             "https://example.com/api/v3/test?symbol=BTCUSDT&signature=e383f8d24830bb711f0e833507b66798c5936a8fedd29b51bc5403cffd0ba755"
         );
-        assert_eq!(
-            request.headers().get("X-MBX-APIKEY").unwrap(),
-            "test_api_key"
-        );
+        assert_eq!(request.headers().get("X-MBX-APIKEY").unwrap(), "test_api_key");
     }
 
     #[tokio::test]
@@ -280,13 +236,9 @@ mod tests {
             .await;
 
         // Execute the request
-        let result: serde_json::Value = execute_bn_get::<
-            EmptyQueryParams,
-            NonAuthRequestBuilder,
-            serde_json::Value,
-        >(&request_info, None, NonAuthRequestBuilder {})
-        .execute(None)
-        .await?;
+        let result: serde_json::Value = execute_bn_get::<EmptyQueryParams, NonAuthRequestBuilder, serde_json::Value>(&request_info, None, NonAuthRequestBuilder {})
+            .execute(None)
+            .await?;
 
         assert_eq!(result["message"], "success");
         Ok(())
@@ -315,10 +267,7 @@ mod tests {
         params.insert("symbol", "BTCUSDT".to_string());
 
         // Execute request with parameters
-        let result: serde_json::Value =
-            execute_bn_get(&request_info, Some(&params), NonAuthRequestBuilder {})
-                .execute(None)
-                .await?;
+        let result: serde_json::Value = execute_bn_get(&request_info, Some(&params), NonAuthRequestBuilder {}).execute(None).await?;
 
         assert_eq!(result["symbol"], "BTCUSDT");
         assert_eq!(result["price"], "50000.00");
@@ -343,17 +292,16 @@ mod tests {
             .await;
 
         // Execute request with security info
-        let result: serde_json::Value =
-            execute_bn_get::<EmptyQueryParams, BNSecurityRequestBuilder, serde_json::Value>(
-                &request_info,
-                None,
-                BNSecurityRequestBuilder {
-                    api_key: "test_key".to_string(),
-                    api_secret: "test_secret".to_string(),
-                },
-            )
-            .execute(None)
-            .await?;
+        let result: serde_json::Value = execute_bn_get::<EmptyQueryParams, BNSecurityRequestBuilder, serde_json::Value>(
+            &request_info,
+            None,
+            BNSecurityRequestBuilder {
+                api_key: "test_key".to_string(),
+                api_secret: "test_secret".to_string(),
+            },
+        )
+        .execute(None)
+        .await?;
 
         assert_eq!(result["authenticated"], true);
         Ok(())
@@ -377,13 +325,9 @@ mod tests {
             .await;
 
         // Execute request and expect error
-        let result = execute_bn_get::<EmptyQueryParams, NonAuthRequestBuilder, serde_json::Value>(
-            &request_info,
-            None,
-            NonAuthRequestBuilder {},
-        )
-        .execute(None)
-        .await;
+        let result = execute_bn_get::<EmptyQueryParams, NonAuthRequestBuilder, serde_json::Value>(&request_info, None, NonAuthRequestBuilder {})
+            .execute(None)
+            .await;
         assert!(result.is_err());
         Ok(())
     }

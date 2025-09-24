@@ -13,10 +13,7 @@ pub trait ToQueryParams {
 // BTreeMap实现ToQueryParams
 impl ToQueryParams for std::collections::BTreeMap<&str, String> {
     fn to_query_string(&self) -> String {
-        self.iter()
-            .map(|(k, v)| format!("{}={}", k, v))
-            .collect::<Vec<String>>()
-            .join("&")
+        self.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<String>>().join("&")
     }
 }
 
@@ -51,18 +48,12 @@ pub mod bin {
         fn from(value: SpotDepthData) -> Self {
             let mut bids = vec![];
             for b in &value.bids {
-                bids.push(SpotDepthLevel {
-                    price: b.price,
-                    quantity: b.quantity,
-                });
+                bids.push(SpotDepthLevel { price: b.price, quantity: b.quantity });
             }
 
             let mut asks = vec![];
             for a in &value.asks {
-                asks.push(SpotDepthLevel {
-                    price: a.price,
-                    quantity: a.quantity,
-                });
+                asks.push(SpotDepthLevel { price: a.price, quantity: a.quantity });
             }
 
             Self {
@@ -108,10 +99,18 @@ pub const PORTFOLIO_MARGIN_BASE: &str = "http://127.0.0.1:8080"; // Mock PM
 pub const PORTFOLIO_MARGIN_BASE: &str = "https://papi.binance.com/";
 
 pub const PING_PATH: &str = "/api/v3/ping";
-pub const EXCHANGE_INFO_PATH: &str = "/api/v3/exchangeInfo";
-pub const SERVER_TIME_PATH: &str = "/api/v3/time";
+pub const SPOT_EXCHANGE_INFO_PATH: &str = "/api/v3/exchangeInfo";
+pub const SPOT_SERVER_TIME_PATH: &str = "/api/v3/time";
 pub const SPOT_KLINE_PATH: &str = "/api/v3/klines";
 pub const SPOT_TICKER_API_PATH: &str = "/api/v3/ticker/price";
+
+pub const SWAP_PATH: &str = "/fapi/v1/ping";
+pub const SWAP_EXCHANGE_INFO_PATH: &str = "/fapi/v1/exchangeInfo";
+pub const SWAP_SERVER_TIME_PATH: &str = "/fapi/v1/time";
+
+pub const SWAP_KLINE_PATH: &str = "/fapi/v1/klines";
+pub const SWAP_FUNDING_RATE_PATH: &str = "/fapi/v1/fundingRate";
+pub const SWAP_FUNDING_INFO_PATH: &str = "/fapi/v1/fundingInfo";
 
 pub const BALANCE_PATH: &str = "/papi/v1/balance";
 pub const SWAP_POSITION_PATH: &str = "/papi/v1/um/positionRisk";
@@ -438,11 +437,7 @@ pub struct TimeStampRequest {
 
 impl fmt::Display for TimeStampRequest {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "timestamp={}&recvWindow={}",
-            self.timestamp, self.rec_window
-        )
+        write!(f, "timestamp={}&recvWindow={}", self.timestamp, self.rec_window)
     }
 }
 
@@ -563,13 +558,7 @@ pub struct MiniTicker {
 
 impl fmt::Display for MiniTicker {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "MiniTicker: symbol:{},time:{},close:{}",
-            self.symbol,
-            unix_2_readable(&self.event_time),
-            self.close
-        )
+        write!(f, "MiniTicker: symbol:{},time:{},close:{}", self.symbol, unix_2_readable(&self.event_time), self.close)
     }
 }
 
