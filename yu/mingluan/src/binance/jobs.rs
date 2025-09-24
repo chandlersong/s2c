@@ -1,7 +1,7 @@
 use crate::actix_jobs::{AsyncRepeatTask, CronActor};
 use crate::binance::binance_consts::BinanceTables::SpotKline;
 use crate::binance::bn_dashboard::BinanceDashboard;
-use crate::binance::kline::UpdateKlineTask;
+use crate::binance::history_task::UpdateHistoryTask;
 use crate::duck_db::DBProvider;
 use crate::errors::MingLuanError;
 use crate::exchange::{DefaultHistoryFetcherFactory, ExchangeDashBoard};
@@ -24,7 +24,7 @@ pub async fn start_bn_jobs() -> Result<(), MingLuanError> {
     initial_table()?;
     let kline_fetch_factory: DefaultHistoryFetcherFactory<SimpleHistoryFetcher, KlineParams, BinanceKline> = DefaultHistoryFetcherFactory::new();
 
-    let spot_kline_task = UpdateKlineTask::new(DBProvider::default(), SpotKline.table_name(), kline_fetch_factory, spot_info);
+    let spot_kline_task = UpdateHistoryTask::new(DBProvider::default(), SpotKline.table_name(), kline_fetch_factory, spot_info);
     spot_kline_task.execute().await?;
 
     //TODO： 更新交易所时间表达式进入Config

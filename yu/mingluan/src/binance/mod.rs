@@ -1,6 +1,6 @@
 mod binance_consts;
 
-pub mod kline;
+pub mod history_task;
 
 pub mod bn_dashboard;
 

@@ -12,7 +12,16 @@ use log::{debug, error, info};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
-use yue::binance::history_data::{HistoryFetcher, KlineParams, MuteHistoryParam};
+use yue::binance::bn_models::BinanceKline;
+use yue::binance::history_data::{HistoryFetcher, HistoryVo, KlineParams, MuteHistoryParam};
+
+trait HistoryPO {
+    type Source: HistoryVo;
+
+    fn from_source(symbol: Option<&str>, source: &Self::Source) -> Self;
+
+    fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>>;
+}
 
 #[derive(Debug, Clone)]
 pub struct KlinePo {
@@ -51,27 +60,29 @@ impl<'a> From<&duckdb::Row<'a>> for KlinePo {
     }
 }
 
-impl KlinePo {
-    pub fn from_binance_kline(symbol: &str, kline: &yue::binance::bn_models::BinanceKline) -> Self {
+impl HistoryPO for KlinePo {
+    type Source = BinanceKline;
+
+    fn from_source(symbol: Option<&str>, source: &Self::Source) -> Self {
         let id = get_snowflake_generator().lock().unwrap().real_time_generate();
         KlinePo {
             id,
-            symbol: symbol.to_string(),
-            candle_begin_time: kline.open_time,
-            open: kline.open,
-            high: kline.high,
-            low: kline.low,
-            close: kline.close,
-            volume: kline.volume,
-            quote_volume: kline.quote_asset_volume,
-            number_of_trades: kline.number_of_trades,
-            taker_buy_base_asset_volume: kline.taker_buy_base_asset_volume,
-            taker_buy_quote_asset_volume: kline.taker_buy_quote_asset_volume,
-            close_time: kline.close_time,
+            symbol: symbol.expect("Symbol must be provided").to_string(),
+            candle_begin_time: source.open_time,
+            open: source.open,
+            high: source.high,
+            low: source.low,
+            close: source.close,
+            volume: source.volume,
+            quote_volume: source.quote_asset_volume,
+            number_of_trades: source.number_of_trades,
+            taker_buy_base_asset_volume: source.taker_buy_base_asset_volume,
+            taker_buy_quote_asset_volume: source.taker_buy_quote_asset_volume,
+            close_time: source.close_time,
         }
     }
 
-    pub fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>> {
+    fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>> {
         appender_params_from_iter(vec![
             &self.id as &dyn duckdb::ToSql,
             &self.symbol as &dyn duckdb::ToSql,
@@ -113,7 +124,7 @@ impl std::fmt::Display for KlinePo {
 }
 
 #[derive(Clone)]
-pub struct UpdateKlineTask<F>
+pub struct UpdateHistoryTask<F>
 where
     F: HistoryFetcherFactory,
 {
@@ -123,12 +134,12 @@ where
     spot_info: Arc<RwLock<ExchangeSpotVO>>,
 }
 
-impl<F> UpdateKlineTask<F>
+impl<F> UpdateHistoryTask<F>
 where
     F: HistoryFetcherFactory,
 {
     pub fn new(provider: DBProvider, table_name: String, factory: F, spot_info: Arc<RwLock<ExchangeSpotVO>>) -> Self {
-        UpdateKlineTask {
+        UpdateHistoryTask {
             provider,
             kline_fetcher_factory: factory,
             table_name,
@@ -174,7 +185,7 @@ where
                 } else {
                     let data = &kline_data[..len - 1];
                     debug!("Fetched {} klines for symbol {}: fail times {}", len, param.get_symbol(), fail_times);
-                    let kline_pos: Vec<KlinePo> = data.iter().map(|kline| KlinePo::from_binance_kline(param.get_symbol(), kline)).collect();
+                    let kline_pos: Vec<KlinePo> = data.iter().map(|kline| KlinePo::from_source(Some(param.get_symbol()), kline)).collect();
                     Ok(kline_pos)
                 }
             }
@@ -222,7 +233,7 @@ where
 }
 
 #[async_trait]
-impl<F> AsyncRepeatTask for UpdateKlineTask<F>
+impl<F> AsyncRepeatTask for UpdateHistoryTask<F>
 where
     F: HistoryFetcherFactory<Param = KlineParams, Output = yue::binance::bn_models::BinanceKline> + Clone + Send + Sync + Unpin + 'static,
 {
@@ -263,7 +274,7 @@ mod tests {
     use crate::binance::binance_consts::BinanceTables::SpotKline;
     use crate::binance::binance_consts::ONE_HOUR_MS;
     use crate::binance::bn_dashboard::ExchangeSpotVO;
-    use crate::binance::kline::{KlinePo, UpdateKlineTask};
+    use crate::binance::history_task::{KlinePo, UpdateHistoryTask};
     use crate::duck_db::DBProvider;
     use crate::errors::MingLuanError;
     use crate::exchange::HistoryFetcherFactory;
@@ -357,7 +368,7 @@ mod tests {
         // use mockall::predicate::{always, eq};
         let factory = MockHistoryFetcherFactory {};
 
-        let manager: UpdateKlineTask<MockHistoryFetcherFactory> = UpdateKlineTask::new(db_provider.clone(), SpotKline.table_name(), factory, spot_info);
+        let manager: UpdateHistoryTask<MockHistoryFetcherFactory> = UpdateHistoryTask::new(db_provider.clone(), SpotKline.table_name(), factory, spot_info);
         let res = manager.execute().await;
 
         println!("{:?}", res);
