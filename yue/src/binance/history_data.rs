@@ -1,3 +1,4 @@
+pub use crate::binance::bn_models::HistoryData;
 pub use crate::binance::bn_models::{BinanceKline, EmptyQueryParams, ExchangeInfo, ToQueryParams};
 use crate::binance::bn_restful_commands::{EXCHANGE_INFO_COMMAND, PING_COMMAND, SPOT_KLINE_COMMAND, execute_bn_get};
 use crate::errors::YueError;
@@ -39,7 +40,7 @@ pub struct TradingSymbolInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum KlineInterval {
+pub enum HistoryInterval {
     OneSecond,
     OneMinute,
     ThreeMinutes,
@@ -58,47 +59,80 @@ pub enum KlineInterval {
     OneMonth,
 }
 
-impl AsRef<str> for KlineInterval {
+impl AsRef<str> for HistoryInterval {
     fn as_ref(&self) -> &str {
         match self {
-            KlineInterval::OneSecond => "1s",
-            KlineInterval::OneMinute => "1m",
-            KlineInterval::ThreeMinutes => "3m",
-            KlineInterval::FiveMinutes => "5m",
-            KlineInterval::FifteenMinutes => "15m",
-            KlineInterval::ThirtyMinutes => "30m",
-            KlineInterval::OneHour => "1h",
-            KlineInterval::TwoHours => "2h",
-            KlineInterval::FourHours => "4h",
-            KlineInterval::SixHours => "6h",
-            KlineInterval::EightHours => "8h",
-            KlineInterval::TwelveHours => "12h",
-            KlineInterval::OneDay => "1d",
-            KlineInterval::ThreeDays => "3d",
-            KlineInterval::OneWeek => "1w",
-            KlineInterval::OneMonth => "1M",
+            HistoryInterval::OneSecond => "1s",
+            HistoryInterval::OneMinute => "1m",
+            HistoryInterval::ThreeMinutes => "3m",
+            HistoryInterval::FiveMinutes => "5m",
+            HistoryInterval::FifteenMinutes => "15m",
+            HistoryInterval::ThirtyMinutes => "30m",
+            HistoryInterval::OneHour => "1h",
+            HistoryInterval::TwoHours => "2h",
+            HistoryInterval::FourHours => "4h",
+            HistoryInterval::SixHours => "6h",
+            HistoryInterval::EightHours => "8h",
+            HistoryInterval::TwelveHours => "12h",
+            HistoryInterval::OneDay => "1d",
+            HistoryInterval::ThreeDays => "3d",
+            HistoryInterval::OneWeek => "1w",
+            HistoryInterval::OneMonth => "1M",
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+pub trait MuteHistoryParam: ToQueryParams {
+    fn initial(symbol: String, limit: u32, interval: HistoryInterval) -> Self;
+    fn create_new(&self, start_time: Option<u64>, end_time: Option<u64>) -> Self;
+
+    fn get_symbol(&self) -> &String;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct KlineParams {
     pub symbol: String,
-    pub interval: KlineInterval,
+    pub interval: HistoryInterval,
     pub start_time: Option<u64>,
     pub end_time: Option<u64>,
     pub limit: Option<u32>,
 }
 
 impl KlineParams {
-    pub fn new(symbol: String) -> Self {
+    pub fn new(symbol: String, limit: u32, interval: HistoryInterval) -> Self {
         Self {
             symbol,
-            interval: KlineInterval::OneHour,
+            interval,
             start_time: None,
             end_time: None,
-            limit: None,
+            limit: Some(limit),
         }
+    }
+}
+
+impl MuteHistoryParam for KlineParams {
+    fn initial(symbol: String, limit: u32, interval: HistoryInterval) -> Self {
+        KlineParams {
+            symbol,
+            interval,
+            start_time: None,
+            end_time: None,
+            limit: Some(limit),
+        }
+    }
+
+    fn create_new(&self, start_time: Option<u64>, end_time: Option<u64>) -> Self {
+        KlineParams {
+            symbol: self.symbol.clone(),
+            interval: self.interval.clone(),
+            start_time,
+            end_time,
+            limit: self.limit.clone(),
+        }
+    }
+
+    fn get_symbol(&self) -> &String {
+        &self.symbol
     }
 }
 
@@ -184,15 +218,23 @@ pub async fn get_trading_spot_symbols(status: Option<&str>) -> Result<Vec<Tradin
 }
 
 #[async_trait]
-pub trait KlineFetcher {
-    async fn get_all_kline_data(&self, symbol: &str, interval: KlineInterval, start_time: Option<u64>) -> Result<(Vec<BinanceKline>, u16), YueError>;
+pub trait HistoryFetcher<T, O>
+where
+    T: MuteHistoryParam + ToQueryParams + Send + Sync,
+    O: HistoryData,
+{
+    async fn get_all_kline_data(&self, base_param: T, start_time: Option<u64>) -> Result<(Vec<O>, u16), YueError>;
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct SpotKlineFetcher {}
+pub struct SimpleHistoryFetcher {}
 
 #[async_trait]
-impl KlineFetcher for SpotKlineFetcher {
+impl<'a, T, O> HistoryFetcher<T, O> for SimpleHistoryFetcher
+where
+    T: MuteHistoryParam + ToQueryParams + Send + Sync + 'static,
+    O: HistoryData + Send,
+{
     /// 获取指定交易对和时间间隔的K线数据
     ///
     /// 注意点
@@ -204,19 +246,14 @@ impl KlineFetcher for SpotKlineFetcher {
     ///
     /// # 返回
     /// 返回K线数据列表，由于API限制，每次最多1000条，会自动分页获取
-    async fn get_all_kline_data(&self, symbol: &str, interval: KlineInterval, start_time: Option<u64>) -> Result<(Vec<BinanceKline>, u16), YueError> {
-        let mut res: Vec<BinanceKline> = Vec::new();
+    async fn get_all_kline_data(&self, base_param: T, start_time: Option<u64>) -> Result<(Vec<O>, u16), YueError> {
+        let mut res: Vec<O> = Vec::new();
         let mut current_start_time = start_time;
         let request_builder = NonAuthRequestBuilder {};
         let retry_count = AtomicU16::new(0);
+        let symbol = base_param.get_symbol();
         loop {
-            let params = KlineParams {
-                symbol: symbol.to_string(),
-                interval: interval.clone(),
-                start_time: current_start_time,
-                end_time: None,
-                limit: Some(1000),
-            };
+            let params = base_param.create_new(current_start_time, None);
             let retry_policy = ExponentialBuilder::default()
                 .with_jitter() // 添加随机抖动
                 .with_factor(1.5) // 指数因子 1.5
@@ -224,7 +261,7 @@ impl KlineFetcher for SpotKlineFetcher {
                 .with_min_delay(std::time::Duration::from_millis(100)) // 最小延迟 500ms
                 .with_max_delay(std::time::Duration::from_secs(10))
                 .build();
-            let klines: Vec<BinanceKline> = execute_bn_get::<KlineParams, NonAuthRequestBuilder, Vec<BinanceKline>>(&SPOT_KLINE_COMMAND, Some(&params), request_builder.clone())
+            let klines: Vec<O> = execute_bn_get::<T, NonAuthRequestBuilder, Vec<O>>(&SPOT_KLINE_COMMAND, Some(&params), request_builder.clone())
                 .into_retryable(get_bn_spot_rate_limit(SPOT_RATE_LIMITER_PER_SECOND))
                 .retry(retry_policy)
                 .notify(|_err, _dur| {
@@ -233,10 +270,10 @@ impl KlineFetcher for SpotKlineFetcher {
                 .await?;
 
             if let Some(last_kline) = klines.last() {
-                if current_start_time.is_some() && current_start_time.unwrap() == last_kline.close_time {
+                if current_start_time.is_some() && current_start_time.unwrap() == last_kline.get_close_time() {
                     break;
                 }
-                current_start_time = Some(last_kline.close_time);
+                current_start_time = Some(last_kline.get_close_time());
             } else {
                 break;
             }
@@ -248,16 +285,14 @@ impl KlineFetcher for SpotKlineFetcher {
             if klines_count < 1000 {
                 break;
             }
-
-            // Set next start_time to the close_time of the last kline
         }
 
         debug!(
             "{} fetch {} kline,from {} to {}",
             symbol,
             res.len(),
-            unix_2_readable(&res.first().unwrap().open_time),
-            unix_2_readable(&res.last().unwrap().open_time)
+            unix_2_readable(&res.first().unwrap().get_open_time()),
+            unix_2_readable(&res.last().unwrap().get_open_time())
         );
         Ok((res, retry_count.load(Ordering::SeqCst)))
     }
@@ -265,7 +300,9 @@ impl KlineFetcher for SpotKlineFetcher {
 
 #[cfg(test)]
 mod tests {
-    use crate::binance::spots::{KlineFetcher, KlineInterval, SpotKlineFetcher};
+    use crate::binance::bn_models::BinanceKline;
+    use crate::binance::history_data::{HistoryFetcher, HistoryInterval, KlineParams, SimpleHistoryFetcher};
+    use crate::errors::YueError;
     use crate::http_client::init_http_client;
     use serde_json::json;
     use serial_test::serial;
@@ -318,8 +355,9 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(mock_klines))
             .mount(&mock_server)
             .await;
-        let fetcher = SpotKlineFetcher {};
-        let kline_res = fetcher.get_all_kline_data("BTCUSDT", KlineInterval::OneHour, None).await;
+        let fetcher = SimpleHistoryFetcher {};
+        let base_param = KlineParams::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
+        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher.get_all_kline_data(base_param, None).await;
         assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
         let (kline, _) = kline_res.unwrap();
         assert_eq!(kline.len(), 500);
@@ -368,12 +406,13 @@ mod tests {
             .expect(1)
             .mount(&mock_server)
             .await;
-        let fetcher = SpotKlineFetcher {};
-        let kline_res = fetcher.get_all_kline_data("BTCUSDT", KlineInterval::OneHour, Some(1609459200000)).await;
+        let fetcher = SimpleHistoryFetcher {};
+        let base_param = KlineParams::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
+        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher.get_all_kline_data(base_param, Some(1609459200000)).await;
         assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
         let (kline, _) = kline_res.unwrap();
         assert_eq!(kline.len(), 1200);
-        assert!(kline[0].open_time == 1609459200000);
+        assert_eq!(kline[0].open_time, 1609459200000);
     }
 
     #[tokio::test]
@@ -386,8 +425,9 @@ mod tests {
             .respond_with(ResponseTemplate::new(500))
             .mount(&mock_server)
             .await;
-        let fetcher = SpotKlineFetcher {};
-        let kline_res = fetcher.get_all_kline_data("BTCUSDT", KlineInterval::OneHour, Some(1609459200000)).await;
+        let fetcher = SimpleHistoryFetcher {};
+        let base_param = KlineParams::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
+        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher.get_all_kline_data(base_param, Some(1609459200000)).await;
         assert!(kline_res.is_err());
     }
 
@@ -412,12 +452,13 @@ mod tests {
             .expect(2) // Only one request
             .mount(&mock_server)
             .await;
-        let fetcher = SpotKlineFetcher {};
-        let kline_res = fetcher.get_all_kline_data("BTCUSDT", KlineInterval::OneHour, Some(1609459200000)).await;
+        let fetcher = SimpleHistoryFetcher {};
+        let base_param = KlineParams::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
+        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher.get_all_kline_data(base_param, Some(1609459200000)).await;
         assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
         let (kline, _) = kline_res.unwrap();
         assert_eq!(kline.len(), 1000);
-        assert!(kline[0].open_time == 1609459200000);
+        assert_eq!(kline[0].open_time, 1609459200000);
     }
 
     #[tokio::test]
@@ -442,8 +483,9 @@ mod tests {
             .expect(2) // Only one request
             .mount(&mock_server)
             .await;
-        let fetcher = SpotKlineFetcher {};
-        let kline_res = fetcher.get_all_kline_data("BTCUSDT", KlineInterval::OneHour, Some(1609459200000)).await;
+        let fetcher = SimpleHistoryFetcher {};
+        let base_param = KlineParams::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
+        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher.get_all_kline_data(base_param, Some(1609459200000)).await;
         assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
         let (kline, _) = kline_res.unwrap();
         assert_eq!(kline.len(), 1000);

@@ -1,7 +1,9 @@
 use li::tools::logs::{setup_logger, setup_logger_all};
 use li::tools::time::{unix_2_readable, unix_time_now_u64};
 use log::LevelFilter;
-use yue::binance::spots::{KlineFetcher, KlineInterval, SpotKlineFetcher};
+use yue::binance::bn_models::BinanceKline;
+use yue::binance::history_data::{HistoryFetcher, HistoryInterval, KlineParams, SimpleHistoryFetcher};
+use yue::errors::YueError;
 use yue::http_client::init_http_client;
 
 #[tokio::main]
@@ -15,8 +17,10 @@ async fn main() {
     let start_ms = now_ms - 1500 * one_hour;
     println!("Now (ms) = {}, start_time (ms) = {}", now_ms, start_ms);
     let symbol = "BTCUSDT";
-    let fetcher = SpotKlineFetcher {};
-    match fetcher.get_all_kline_data(symbol, KlineInterval::OneHour, Some(start_ms)).await {
+    let fetcher = SimpleHistoryFetcher {};
+    let base_param = KlineParams::new(symbol.to_string(), 1000, HistoryInterval::OneHour);
+    let res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher.get_all_kline_data(base_param, Some(start_ms)).await;
+    match res {
         Ok((klines, fail_count)) => {
             println!("Fetched {} klines", klines.len());
             if let Some(first) = klines.first() {

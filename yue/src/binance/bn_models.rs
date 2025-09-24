@@ -2,6 +2,7 @@ use crate::models::Decimal;
 use crate::tools;
 use crate::tools::string_to_float;
 use li::tools::time::{UnixTimeStamp, unix_2_readable, unix_time_now_u64};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -122,6 +123,11 @@ pub const WS_SUBSCRIBE_COMMAND: &str = "SUBSCRIBE";
 pub const WS_SET_PROPERTY_COMMAND: &str = "SET_PROPERTY";
 pub const WS_GET_PROPERTY_COMMAND: &str = "GET_PROPERTY";
 
+pub trait HistoryData: DeserializeOwned {
+    fn get_close_time(&self) -> u64;
+
+    fn get_open_time(&self) -> u64;
+}
 #[derive(Serialize, Deserialize, Debug)]
 pub enum SpotWsSubscribe {
     AllMiniTicker,
@@ -633,4 +639,14 @@ pub struct BinanceKline {
 
     #[serde(rename = "ignore")]
     pub ignore: String, // 忽略字段
+}
+
+impl HistoryData for BinanceKline {
+    fn get_close_time(&self) -> u64 {
+        self.close_time
+    }
+
+    fn get_open_time(&self) -> u64 {
+        self.open_time
+    }
 }

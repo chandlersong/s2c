@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fs::File;
 use std::io::Write;
-use yue::binance::spots::get_trading_spot_symbols;
+use yue::binance::history_data::get_trading_spot_symbols;
 use yue::http_client::init_http_client;
 
 /// 获取所有币安现货交易对信息并��存到CSV文件
@@ -39,14 +39,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut writer = csv::Writer::from_writer(file);
 
     // 写入CSV头部
-    writer.write_record(&[
-        "symbol",
-        "status",
-        "base_asset",
-        "quote_asset",
-        "quote_asset_precision",
-        "order_types",
-    ])?;
+    writer.write_record(&["symbol", "status", "base_asset", "quote_asset", "quote_asset_precision", "order_types"])?;
 
     // 写入数据行
     for symbol_info in &symbols {
@@ -79,10 +72,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("  暂停交易 (HALT): {}", halt_count);
     println!("  休市 (BREAK): {}", break_count);
     println!("  收盘 (END_OF_DAY): {}", end_of_day_count);
-    println!(
-        "  其他状态: {}",
-        symbols.len() - trading_count - halt_count - break_count - end_of_day_count
-    );
+    println!("  其他状态: {}", symbols.len() - trading_count - halt_count - break_count - end_of_day_count);
 
     // 显示前5个交易对作为示例
     println!("\n前5个交易对示例:");

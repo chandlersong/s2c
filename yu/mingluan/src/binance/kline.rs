@@ -3,7 +3,7 @@ use crate::binance::binance_consts::{GENESIS_2020_MS, ONE_HOUR_MS, QUERY_LATEST_
 use crate::binance::bn_dashboard::ExchangeSpotVO;
 use crate::duck_db::DBProvider;
 use crate::errors::MingLuanError;
-use crate::exchange::KlineFetcherFactory;
+use crate::exchange::HistoryFetcherFactory;
 use crate::utils::get_snowflake_generator;
 use async_trait::async_trait;
 use duckdb::{appender_params_from_iter, DropBehavior};
@@ -12,7 +12,7 @@ use log::{debug, error, info};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
-use yue::binance::spots::{KlineFetcher, KlineInterval};
+use yue::binance::history_data::{HistoryFetcher, KlineParams, MuteHistoryParam};
 
 #[derive(Debug, Clone)]
 pub struct KlinePo {
@@ -115,7 +115,7 @@ impl std::fmt::Display for KlinePo {
 #[derive(Clone)]
 pub struct UpdateKlineTask<F>
 where
-    F: KlineFetcherFactory,
+    F: HistoryFetcherFactory,
 {
     provider: DBProvider,
     kline_fetcher_factory: F,
@@ -125,7 +125,7 @@ where
 
 impl<F> UpdateKlineTask<F>
 where
-    F: KlineFetcherFactory,
+    F: HistoryFetcherFactory,
 {
     pub fn new(provider: DBProvider, table_name: String, factory: F, spot_info: Arc<RwLock<ExchangeSpotVO>>) -> Self {
         UpdateKlineTask {
@@ -159,28 +159,32 @@ where
         Ok(filtered)
     }
 
-    async fn fetch_symbol_data<T: KlineFetcher>(kline_fetcher: T, symbol: String, timestamp: u64, tx: mpsc::Sender<Result<Vec<KlinePo>, yue::errors::YueError>>) {
-        debug!("update -> symbol: {}, latest: {}", symbol, unix_2_readable(&timestamp));
-        let result = match kline_fetcher.get_all_kline_data(&symbol, KlineInterval::OneHour, Some(timestamp + ONE_HOUR_MS)).await {
+    async fn fetch_symbol_data<T: HistoryFetcher<KlineParams, yue::binance::bn_models::BinanceKline>>(
+        kline_fetcher: T,
+        param: KlineParams,
+        timestamp: u64,
+        tx: mpsc::Sender<Result<Vec<KlinePo>, yue::errors::YueError>>,
+    ) {
+        debug!("update -> symbol: {}, latest: {}", param.get_symbol(), unix_2_readable(&timestamp));
+        let result = match kline_fetcher.get_all_kline_data(param.clone(), Some(timestamp + ONE_HOUR_MS)).await {
             Ok((kline_data, fail_times)) => {
                 let len = kline_data.len();
                 if len <= 1 {
                     Ok(Vec::new())
                 } else {
-                    //因为币安最后一个都是脏数据，比如说我在11:30获取，他会返回12:00的，但是12:00的还没收盘。所以就默认舍弃
                     let data = &kline_data[..len - 1];
-                    debug!("Fetched {} klines for symbol {}: fail times {}", len, symbol, fail_times);
-                    let kline_pos: Vec<KlinePo> = data.iter().map(|kline| KlinePo::from_binance_kline(&symbol, kline)).collect();
+                    debug!("Fetched {} klines for symbol {}: fail times {}", len, param.get_symbol(), fail_times);
+                    let kline_pos: Vec<KlinePo> = data.iter().map(|kline| KlinePo::from_binance_kline(param.get_symbol(), kline)).collect();
                     Ok(kline_pos)
                 }
             }
             Err(e) => {
-                error!("Error fetching klines for symbol {}: {}", symbol, e);
+                error!("Error fetching klines for symbol {}: {}", param.get_symbol(), e);
                 Err(e)
             }
         };
         if tx.send(result).await.is_err() {
-            error!("Failed to send result for symbol {}", symbol);
+            error!("Failed to send result for symbol {}", param.get_symbol());
         }
     }
 
@@ -220,7 +224,7 @@ where
 #[async_trait]
 impl<F> AsyncRepeatTask for UpdateKlineTask<F>
 where
-    F: KlineFetcherFactory + Clone + Send + Sync + Unpin + 'static,
+    F: HistoryFetcherFactory<Param = KlineParams, Output = yue::binance::bn_models::BinanceKline> + Clone + Send + Sync + Unpin + 'static,
 {
     async fn execute(&self) -> Result<(), MingLuanError> {
         let conn = self.provider.acquire()?;
@@ -232,8 +236,10 @@ where
         for (symbol, timestamp) in latest_symbol {
             let tx_clone = tx.clone();
             let kline_fetcher = self.kline_fetcher_factory.create_fetcher();
+            // 构造 KlineParams，假设 interval 固定为 HistoryInterval::OneHour，limit 固定为 1000
+            let param = KlineParams::initial(symbol, 1000, yue::binance::history_data::HistoryInterval::OneHour);
             tokio::spawn(async move {
-                Self::fetch_symbol_data(kline_fetcher, symbol, timestamp, tx_clone).await;
+                Self::fetch_symbol_data(kline_fetcher, param, timestamp, tx_clone).await;
             });
         }
 
@@ -260,7 +266,7 @@ mod tests {
     use crate::binance::kline::{KlinePo, UpdateKlineTask};
     use crate::duck_db::DBProvider;
     use crate::errors::MingLuanError;
-    use crate::exchange::KlineFetcherFactory;
+    use crate::exchange::HistoryFetcherFactory;
     use crate::test_utils::{generate_test_kline_vec, import_local_csv_and_assert, TEST_BEGIN_TIMESTAMP};
     use async_trait::async_trait;
     use duckdb::DuckdbConnectionManager;
@@ -269,7 +275,7 @@ mod tests {
     use std::path::Path;
     use std::sync::{Arc, RwLock};
     use yue::binance::bn_models::BinanceKline;
-    use yue::binance::spots::{KlineFetcher, KlineInterval};
+    use yue::binance::history_data::{HistoryFetcher, HistoryInterval, KlineParams, MuteHistoryParam};
     use yue::errors::YueError;
 
     fn initial_db() -> Pool<DuckdbConnectionManager> {
@@ -281,59 +287,57 @@ mod tests {
         builder.build(DuckdbConnectionManager::memory().unwrap()).unwrap()
     }
 
+    // mock 测试部分同步修正
     mock! {
-        pub KlineFetcher {}
+        pub HistoryFetcher {}
 
-          impl Clone for KlineFetcher {
+        impl Clone for HistoryFetcher {
             fn clone(&self) -> Self {
-                KlineFetcher {}
+                HistoryFetcher {}
             }
         }
 
         #[async_trait]
-        impl KlineFetcher for KlineFetcher {
-               async fn get_all_kline_data(
-                                    &self,
-                                    symbol: &str,
-                                    interval: KlineInterval,
-                                    start_time: Option<u64>,
-                                ) -> Result<(Vec<BinanceKline>, u16), YueError>;
+        impl HistoryFetcher<KlineParams, BinanceKline> for HistoryFetcher {
+            async fn get_all_kline_data(
+                &self,
+                param: KlineParams,
+                start_time: Option<u64>,
+            ) -> Result<(Vec<BinanceKline>, u16), YueError>;
         }
-
-
     }
 
     #[derive(Clone)]
-    struct MockKlineFetcherFactory {}
+    struct MockHistoryFetcherFactory {}
 
-    impl KlineFetcherFactory for MockKlineFetcherFactory {
-        type Fetcher = MockKlineFetcher;
-
+    impl HistoryFetcherFactory for MockHistoryFetcherFactory {
+        type Param = KlineParams;
+        type Output = BinanceKline;
+        type Fetcher = MockHistoryFetcher;
         fn create_fetcher(&self) -> Self::Fetcher {
-            create_mock_kline_fetch_for_test_refresh_spot_kline_normal()
+            create_mock_history_fetch_for_test_refresh_spot_kline_normal()
         }
     }
 
-    fn create_mock_kline_fetch_for_test_refresh_spot_kline_normal() -> MockKlineFetcher {
-        let mut kline_fetcher = MockKlineFetcher::new();
-        kline_fetcher
+    fn create_mock_history_fetch_for_test_refresh_spot_kline_normal() -> MockHistoryFetcher {
+        let mut fetcher = MockHistoryFetcher::new();
+        let btc_param = KlineParams::initial("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
+        let eth_param = KlineParams::initial("ETHUSDT".to_string(), 1000, HistoryInterval::OneHour);
+        fetcher
             .expect_get_all_kline_data()
-            .with(predicate::eq("BTCUSDT"), predicate::eq(KlineInterval::OneHour), predicate::eq(Some(1694102300000 + ONE_HOUR_MS)))
-            .returning(|_, _, _| {
-                // 返回模拟数据
+            .with(predicate::eq(btc_param.clone()), predicate::eq(Some(1694102300000 + ONE_HOUR_MS)))
+            .returning(|_, _| {
                 let klines = generate_test_kline_vec(TEST_BEGIN_TIMESTAMP, ONE_HOUR_MS, 1.0, 2);
                 Ok((klines, 200))
             });
-
-        kline_fetcher
+        fetcher
             .expect_get_all_kline_data()
-            .with(predicate::eq("ETHUSDT"), predicate::eq(KlineInterval::OneHour), predicate::eq(Some(1694101300000 + ONE_HOUR_MS)))
-            .returning(|_, _, _| {
-                // 返回模拟数据
+            .with(predicate::eq(eth_param.clone()), predicate::eq(Some(1694101300000 + ONE_HOUR_MS)))
+            .returning(|_, _| {
                 let klines = generate_test_kline_vec(TEST_BEGIN_TIMESTAMP, ONE_HOUR_MS, 1.0, 2);
                 Ok((klines, 200))
             });
-        kline_fetcher
+        fetcher
     }
 
     #[tokio::test]
@@ -351,9 +355,9 @@ mod tests {
         import_local_csv_and_assert(&conn, SpotKline.table_name().as_str(), csv_path.as_path(), 7)?;
 
         // use mockall::predicate::{always, eq};
-        let factory = MockKlineFetcherFactory {};
+        let factory = MockHistoryFetcherFactory {};
 
-        let manager: UpdateKlineTask<MockKlineFetcherFactory> = UpdateKlineTask::new(db_provider.clone(), SpotKline.table_name(), factory, spot_info);
+        let manager: UpdateKlineTask<MockHistoryFetcherFactory> = UpdateKlineTask::new(db_provider.clone(), SpotKline.table_name(), factory, spot_info);
         let res = manager.execute().await;
 
         println!("{:?}", res);

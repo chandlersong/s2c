@@ -4,10 +4,11 @@ use crate::binance::bn_dashboard::BinanceDashboard;
 use crate::binance::kline::UpdateKlineTask;
 use crate::duck_db::DBProvider;
 use crate::errors::MingLuanError;
-use crate::exchange::{DefaultKlineFetcherFactory, ExchangeDashBoard};
+use crate::exchange::{DefaultHistoryFetcherFactory, ExchangeDashBoard};
 use actix::Actor;
 use duckdb::Connection;
-use yue::binance::spots::SpotKlineFetcher;
+use yue::binance::bn_models::BinanceKline;
+use yue::binance::history_data::{KlineParams, SimpleHistoryFetcher};
 
 ///
 /// NOTE: 加入的功能
@@ -21,7 +22,7 @@ pub async fn start_bn_jobs() -> Result<(), MingLuanError> {
 
     let spot_info = dashboard.spot_info();
     initial_table()?;
-    let kline_fetch_factory: DefaultKlineFetcherFactory<SpotKlineFetcher> = DefaultKlineFetcherFactory::new();
+    let kline_fetch_factory: DefaultHistoryFetcherFactory<SimpleHistoryFetcher, KlineParams, BinanceKline> = DefaultHistoryFetcherFactory::new();
 
     let spot_kline_task = UpdateKlineTask::new(DBProvider::default(), SpotKline.table_name(), kline_fetch_factory, spot_info);
     spot_kline_task.execute().await?;

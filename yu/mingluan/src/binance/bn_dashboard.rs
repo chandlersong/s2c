@@ -4,7 +4,7 @@ use crate::exchange::ExchangeDashBoard;
 use async_trait::async_trait;
 use log::error;
 use std::sync::{Arc, RwLock};
-use yue::binance::spots::get_trading_spot_symbols;
+use yue::binance::history_data::get_trading_spot_symbols;
 
 #[derive(Debug, Clone)]
 pub struct ExchangeSpotVO {
