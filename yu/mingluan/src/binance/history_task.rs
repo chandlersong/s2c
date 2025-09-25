@@ -26,6 +26,7 @@ pub trait HistoryPO: Debug {
 
 pub trait HistoryDataWriter<O: HistoryPO>: Send + Sync {
     fn write_batch(&self, data: Vec<O>) -> Result<(), MingLuanError>;
+    fn query_latest_symbols(&self, spot_info: &ExchangeSpotVO) -> Result<Vec<(String, u64)>, MingLuanError>;
 }
 
 pub struct DuckDBHistoryDataWriter {
@@ -64,6 +65,28 @@ impl<O: HistoryPO> HistoryDataWriter<O> for DuckDBHistoryDataWriter {
             error!("Failed to flush appender for table {}: {}", self.table_name, e);
         };
         Ok(())
+    }
+
+    fn query_latest_symbols(&self, spot_info: &ExchangeSpotVO) -> Result<Vec<(String, u64)>, MingLuanError> {
+        let conn = self.provider.acquire()?;
+        let mut stmt = conn.prepare(QUERY_LATEST_SQL)?;
+        let symbol_in_db: HashMap<String, u64> = stmt
+            .query_map([], |row| {
+                let symbol: String = row.get(0)?;
+                let latest: u64 = row.get(1)?;
+                Ok((symbol, latest))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .collect();
+        let symbols = &spot_info.trading_symbols;
+        let filtered: Vec<(String, u64)> = symbols
+            .into_iter()
+            .filter(|s| s.ends_with("USDT"))
+            .map(|s| (s.clone(), symbol_in_db.get(s).copied().unwrap_or(GENESIS_2020_MS)))
+            .collect();
+        info!("fetched {} trading symbols", filtered.len());
+        Ok(filtered)
     }
 }
 
@@ -174,9 +197,7 @@ where
     P: MuteHistoryParam + ToQueryParams + Clone + Send + Sync,
     R: HistoryPO + Clone,
 {
-    provider: DBProvider,
     kline_fetcher_factory: F,
-    table_name: String,
     spot_info: Arc<RwLock<ExchangeSpotVO>>,
     data_writer: Arc<dyn HistoryDataWriter<R> + Send + Sync>,
 }
@@ -187,43 +208,12 @@ where
     P: MuteHistoryParam + ToQueryParams + Clone + Send + Sync,
     R: HistoryPO + Clone,
 {
-    pub fn new(
-        provider: DBProvider,
-        table_name: String,
-        factory: F,
-        spot_info: Arc<RwLock<ExchangeSpotVO>>,
-        data_writer: Arc<dyn HistoryDataWriter<R> + Send + Sync>,
-    ) -> Self {
+    pub fn new(factory: F, spot_info: Arc<RwLock<ExchangeSpotVO>>, data_writer: Arc<dyn HistoryDataWriter<R> + Send + Sync>) -> Self {
         UpdateHistoryTask {
-            provider,
             kline_fetcher_factory: factory,
-            table_name,
             spot_info,
             data_writer,
         }
-    }
-
-    fn query_latest_symbols(&self, conn: &duckdb::Connection) -> Result<Vec<(String, u64)>, MingLuanError> {
-        let mut stmt = conn.prepare(QUERY_LATEST_SQL)?;
-
-        let symbol_in_db: HashMap<String, u64> = stmt
-            .query_map([], |row| {
-                let symbol: String = row.get(0)?;
-                let latest: u64 = row.get(1)?;
-                Ok((symbol, latest))
-            })?
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .collect();
-        let symbols = &self.spot_info.read().unwrap().trading_symbols;
-        //NOTE: 以后加入各种过滤，以让他们支持各种不同的币币交易等
-        let filtered: Vec<(String, u64)> = symbols
-            .into_iter()
-            .filter(|s| s.ends_with("USDT"))
-            .map(|s| (s.clone(), symbol_in_db.get(s).copied().unwrap_or(GENESIS_2020_MS)))
-            .collect();
-        info!("fetched {} trading symbols", filtered.len());
-        Ok(filtered)
     }
 
     async fn fetch_symbol_data<T>(kline_fetcher: T, param: P, timestamp: u64, tx: mpsc::Sender<Result<Vec<R>, yue::errors::YueError>>)
@@ -264,9 +254,7 @@ where
     R: HistoryPO<Source = BinanceKline> + Send + Sync + Clone + 'static,
 {
     async fn execute(&self) -> Result<(), MingLuanError> {
-        let conn = self.provider.acquire()?;
-        let latest_symbol = self.query_latest_symbols(&conn)?;
-
+        let latest_symbol = self.data_writer.query_latest_symbols(&self.spot_info.read().unwrap())?;
         let (tx, mut rx) = mpsc::channel(100);
         let symbol_count = latest_symbol.len();
 
@@ -284,8 +272,6 @@ where
                 }
             });
         }
-
-        drop(conn);
         drop(tx);
 
         // 在主线程中接收结果并串行插入数据库
@@ -328,7 +314,7 @@ mod tests {
     use yue::errors::YueError;
 
     fn initial_db() -> Pool<DuckdbConnectionManager> {
-        let builder = r2d2::Pool::builder()
+        let builder = Pool::builder()
             .max_size(2) // 最大连接数
             .min_idle(Some(1)) // 最小空闲连接数
             .connection_timeout(std::time::Duration::from_secs(5)); // 连接超时时间
@@ -405,8 +391,7 @@ mod tests {
 
         let factory = MockHistoryFetcherFactory {};
         let data_writer = Arc::new(DuckDBHistoryDataWriter::new(db_provider.clone(), SpotKline.table_name()));
-        let manager: UpdateHistoryTask<MockHistoryFetcherFactory, KlineParams, KlinePo> =
-            UpdateHistoryTask::new(db_provider.clone(), SpotKline.table_name(), factory, spot_info, data_writer);
+        let manager: UpdateHistoryTask<MockHistoryFetcherFactory, KlineParams, KlinePo> = UpdateHistoryTask::new(factory, spot_info, data_writer);
         let res = manager.execute().await;
 
         println!("{:?}", res);

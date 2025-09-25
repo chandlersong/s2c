@@ -27,8 +27,7 @@ pub async fn start_bn_jobs() -> Result<(), MingLuanError> {
 
     let data_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SpotKline.table_name()));
 
-    let spot_update =
-        UpdateHistoryTask::<_, _, KlinePo>::new(DBProvider::default(), SpotKline.table_name(), kline_fetch_factory, spot_info, data_writer);
+    let spot_update = UpdateHistoryTask::<_, _, KlinePo>::new(kline_fetch_factory, spot_info, data_writer);
     spot_update.execute().await?;
 
     //TODO： 更新交易所时间表达式进入Config
