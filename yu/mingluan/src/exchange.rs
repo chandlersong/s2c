@@ -12,31 +12,33 @@ pub trait HistoryFetcherFactory: Clone {
 }
 
 #[derive(Clone)]
-pub struct DefaultHistoryFetcherFactory<T, P, O>
+pub struct CloneHistoryFetcherFactory<T, P, O>
 where
-    T: Default + HistoryFetcher<P, O> + Clone + Send,
+    T: HistoryFetcher<P, O> + Clone + Send,
     P: MuteHistoryParam + ToQueryParams + Send + Sync + Clone,
     O: HistoryVo + Clone,
 {
-    _marker: std::marker::PhantomData<(T, P, O)>,
+    base: T,
+    _maker: std::marker::PhantomData<(T, P, O)>,
 }
 
-impl<T, P, O> DefaultHistoryFetcherFactory<T, P, O>
+impl<T, P, O> CloneHistoryFetcherFactory<T, P, O>
 where
-    T: Default + HistoryFetcher<P, O> + Clone + Send,
+    T: HistoryFetcher<P, O> + Clone + Send,
     P: MuteHistoryParam + ToQueryParams + Send + Sync + Clone,
     O: HistoryVo + Clone,
 {
-    pub fn new() -> Self {
-        DefaultHistoryFetcherFactory {
-            _marker: std::marker::PhantomData,
+    pub fn new(base: T) -> Self {
+        CloneHistoryFetcherFactory {
+            base,
+            _maker: Default::default(),
         }
     }
 }
 
-impl<T, P, O> HistoryFetcherFactory for DefaultHistoryFetcherFactory<T, P, O>
+impl<T, P, O> HistoryFetcherFactory for CloneHistoryFetcherFactory<T, P, O>
 where
-    T: Default + HistoryFetcher<P, O> + Clone + Send + Sync + 'static,
+    T: HistoryFetcher<P, O> + Clone + Send + Sync + 'static,
     P: MuteHistoryParam + ToQueryParams + Send + Sync + Clone,
     O: HistoryVo + Clone + Send,
 {
@@ -45,7 +47,7 @@ where
     type Fetcher = T;
 
     fn create_fetcher(&self) -> T {
-        T::default()
+        self.base.clone()
     }
 }
 
