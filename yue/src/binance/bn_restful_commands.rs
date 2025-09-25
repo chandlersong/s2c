@@ -1,6 +1,6 @@
 use crate::binance::bn_models::{
-    BINANCE_SPOT_API, BINANCE_SWAP_API, PING_PATH, SPOT_EXCHANGE_INFO_PATH, SPOT_KLINE_PATH, SPOT_SERVER_TIME_PATH, SWAP_FUNDING_RATE_PATH,
-    SWAP_KLINE_PATH, ToQueryParams,
+    BINANCE_SPOT_API, BINANCE_SWAP_API, PING_PATH, SPOT_EXCHANGE_INFO_PATH, SPOT_KLINE_PATH, SPOT_SERVER_TIME_PATH, SWAP_EXCHANGE_INFO_PATH,
+    SWAP_FUNDING_RATE_PATH, SWAP_KLINE_PATH, ToQueryParams,
 };
 use crate::errors::YueError;
 use crate::http_client::{YueRequest, YueRequestBuilder};
@@ -91,7 +91,7 @@ pub static PING_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| RequestInfo::f
 **/
 
 /// SPOT API
-pub static EXCHANGE_INFO_COMMAND: LazyLock<RequestInfo> =
+pub static SPOT_EXCHANGE_COMMAND: LazyLock<RequestInfo> =
     LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_EXCHANGE_INFO_PATH, false, 20).unwrap());
 
 pub static SERVER_TIME_COMMAND: LazyLock<RequestInfo> =
@@ -101,6 +101,9 @@ pub static SPOT_KLINE_COMMAND: LazyLock<RequestInfo> =
     LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_KLINE_PATH, false, 2).unwrap());
 
 /// SWAP API
+
+pub static SWAP_EXCHANGE_COMMAND: LazyLock<RequestInfo> =
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_API, SWAP_EXCHANGE_INFO_PATH, false, 20).unwrap());
 
 pub static SWAP_FUNDING_RATE_COMMAND: LazyLock<RequestInfo> =
     LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_API, SWAP_FUNDING_RATE_PATH, false, 2).unwrap());

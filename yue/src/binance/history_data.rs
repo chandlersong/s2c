@@ -1,6 +1,6 @@
 pub use crate::binance::bn_models::HistoryVo;
 pub use crate::binance::bn_models::{BinanceKline, EmptyQueryParams, ExchangeInfo, ToQueryParams};
-use crate::binance::bn_restful_commands::{EXCHANGE_INFO_COMMAND, PING_COMMAND, execute_bn_get};
+use crate::binance::bn_restful_commands::{PING_COMMAND, SPOT_EXCHANGE_COMMAND, execute_bn_get};
 use crate::errors::YueError;
 use crate::http_client::{DefaultRateLimiter, NonAuthRequestBuilder};
 use crate::models::{EmptyObject, RequestInfo};
@@ -179,7 +179,7 @@ pub async fn execute_ping() -> Result<(), YueError> {
 /// 返回符合条件的交易对信息列表，包含 symbol, status, base_asset, quote_asset_precision, order_types
 pub async fn get_trading_spot_symbols(status: Option<&str>) -> Result<Vec<TradingSymbolInfo>, YueError> {
     let exchange_info: ExchangeInfo =
-        execute_bn_get::<EmptyQueryParams, NonAuthRequestBuilder, ExchangeInfo>(&EXCHANGE_INFO_COMMAND, None, NonAuthRequestBuilder {})
+        execute_bn_get::<EmptyQueryParams, NonAuthRequestBuilder, ExchangeInfo>(&SPOT_EXCHANGE_COMMAND, None, NonAuthRequestBuilder {})
             .execute(get_bn_spot_rate_limit(SPOT_RATE_LIMITER_PER_SECOND))
             .await?;
 
