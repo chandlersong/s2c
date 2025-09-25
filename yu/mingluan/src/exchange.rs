@@ -7,7 +7,7 @@ use yue::binance::history_data::{HistoryFetcher, MuteHistoryParam};
 pub trait HistoryFetcherFactory: Clone {
     type Param: MuteHistoryParam + ToQueryParams + Send + Sync + Clone;
     type Output: HistoryVo + Clone;
-    type Fetcher: HistoryFetcher<Self::Param, Self::Output> + Send;
+    type Fetcher: HistoryFetcher<Self::Param, Self::Output> + Send + Sync + 'static;
     fn create_fetcher(&self) -> Self::Fetcher;
 }
 
@@ -28,15 +28,17 @@ where
     O: HistoryVo + Clone,
 {
     pub fn new() -> Self {
-        DefaultHistoryFetcherFactory { _marker: std::marker::PhantomData }
+        DefaultHistoryFetcherFactory {
+            _marker: std::marker::PhantomData,
+        }
     }
 }
 
 impl<T, P, O> HistoryFetcherFactory for DefaultHistoryFetcherFactory<T, P, O>
 where
-    T: Default + HistoryFetcher<P, O> + Clone + Send,
+    T: Default + HistoryFetcher<P, O> + Clone + Send + Sync + 'static,
     P: MuteHistoryParam + ToQueryParams + Send + Sync + Clone,
-    O: HistoryVo + Clone,
+    O: HistoryVo + Clone + Send,
 {
     type Param = P;
     type Output = O;

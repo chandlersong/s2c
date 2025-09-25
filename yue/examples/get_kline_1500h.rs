@@ -1,4 +1,4 @@
-use li::tools::logs::{setup_logger, setup_logger_all};
+use li::tools::logs::setup_logger_all;
 use li::tools::time::{unix_2_readable, unix_time_now_u64};
 use log::LevelFilter;
 use yue::binance::bn_models::BinanceKline;
@@ -33,7 +33,11 @@ async fn main() {
             for k in &klines {
                 let gap = k.open_time - prev;
                 if gap != one_hour {
-                    println!("Time gap detected!prev is {},now is {}", unix_2_readable(&prev), unix_2_readable(&k.open_time));
+                    println!(
+                        "Time gap detected!prev is {},now is {}",
+                        unix_2_readable(&prev),
+                        unix_2_readable(&k.open_time)
+                    );
                 }
                 prev = k.open_time;
             }

@@ -10,17 +10,61 @@ use duckdb::{appender_params_from_iter, DropBehavior};
 use li::tools::time::unix_2_readable;
 use log::{debug, error, info};
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
-use yue::binance::bn_models::BinanceKline;
-use yue::binance::history_data::{HistoryFetcher, HistoryVo, KlineParams, MuteHistoryParam};
+use yue::binance::bn_models::{BinanceKline, ToQueryParams};
+use yue::binance::history_data::{HistoryFetcher, HistoryVo, MuteHistoryParam};
 
-trait HistoryPO {
+pub trait HistoryPO: Debug {
     type Source: HistoryVo;
 
     fn from_source(symbol: Option<&str>, source: &Self::Source) -> Self;
 
     fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>>;
+}
+
+pub trait HistoryDataWriter<O: HistoryPO>: Send + Sync {
+    fn write_batch(&self, data: Vec<O>) -> Result<(), MingLuanError>;
+}
+
+pub struct DuckDBHistoryDataWriter {
+    provider: DBProvider,
+    table_name: String,
+}
+
+impl DuckDBHistoryDataWriter {
+    pub fn new(provider: DBProvider, table_name: String) -> Self {
+        DuckDBHistoryDataWriter { provider, table_name }
+    }
+}
+
+impl<O: HistoryPO> HistoryDataWriter<O> for DuckDBHistoryDataWriter {
+    fn write_batch(&self, data: Vec<O>) -> Result<(), MingLuanError> {
+        if data.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.provider.acquire()?;
+        let mut tx = conn.transaction()?;
+        tx.set_drop_behavior(DropBehavior::Commit);
+        let mut appender = match tx.appender(&self.table_name) {
+            Ok(a) => a,
+            Err(e) => {
+                error!("Failed to create appender for table {}: {}", self.table_name, e);
+                return Err(MingLuanError::CustomError("Failed to create appender".to_string()));
+            }
+        };
+
+        for po in data {
+            if let Err(e) = appender.append_row(po.to_params()) {
+                error!("Failed to append kline {:?}: {}", po, e);
+            }
+        }
+        if let Err(e) = appender.flush() {
+            error!("Failed to flush appender for table {}: {}", self.table_name, e);
+        };
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -124,26 +168,38 @@ impl std::fmt::Display for KlinePo {
 }
 
 #[derive(Clone)]
-pub struct UpdateHistoryTask<F>
+pub struct UpdateHistoryTask<F, P, R>
 where
-    F: HistoryFetcherFactory,
+    F: HistoryFetcherFactory<Param = P, Output = BinanceKline>,
+    P: MuteHistoryParam + ToQueryParams + Clone + Send + Sync,
+    R: HistoryPO + Clone,
 {
     provider: DBProvider,
     kline_fetcher_factory: F,
     table_name: String,
     spot_info: Arc<RwLock<ExchangeSpotVO>>,
+    data_writer: Arc<dyn HistoryDataWriter<R> + Send + Sync>,
 }
 
-impl<F> UpdateHistoryTask<F>
+impl<F, P, R> UpdateHistoryTask<F, P, R>
 where
-    F: HistoryFetcherFactory,
+    F: HistoryFetcherFactory<Param = P, Output = BinanceKline>,
+    P: MuteHistoryParam + ToQueryParams + Clone + Send + Sync,
+    R: HistoryPO + Clone,
 {
-    pub fn new(provider: DBProvider, table_name: String, factory: F, spot_info: Arc<RwLock<ExchangeSpotVO>>) -> Self {
+    pub fn new(
+        provider: DBProvider,
+        table_name: String,
+        factory: F,
+        spot_info: Arc<RwLock<ExchangeSpotVO>>,
+        data_writer: Arc<dyn HistoryDataWriter<R> + Send + Sync>,
+    ) -> Self {
         UpdateHistoryTask {
             provider,
             kline_fetcher_factory: factory,
             table_name,
             spot_info,
+            data_writer,
         }
     }
 
@@ -170,12 +226,11 @@ where
         Ok(filtered)
     }
 
-    async fn fetch_symbol_data<T: HistoryFetcher<KlineParams, yue::binance::bn_models::BinanceKline>>(
-        kline_fetcher: T,
-        param: KlineParams,
-        timestamp: u64,
-        tx: mpsc::Sender<Result<Vec<KlinePo>, yue::errors::YueError>>,
-    ) {
+    async fn fetch_symbol_data<T>(kline_fetcher: T, param: P, timestamp: u64, tx: mpsc::Sender<Result<Vec<R>, yue::errors::YueError>>)
+    where
+        T: HistoryFetcher<P, BinanceKline> + Send + Sync + 'static,
+        R: HistoryPO<Source = BinanceKline> + Clone,
+    {
         debug!("update -> symbol: {}, latest: {}", param.get_symbol(), unix_2_readable(&timestamp));
         let result = match kline_fetcher.get_all_kline_data(param.clone(), Some(timestamp + ONE_HOUR_MS)).await {
             Ok((kline_data, fail_times)) => {
@@ -185,7 +240,8 @@ where
                 } else {
                     let data = &kline_data[..len - 1];
                     debug!("Fetched {} klines for symbol {}: fail times {}", len, param.get_symbol(), fail_times);
-                    let kline_pos: Vec<KlinePo> = data.iter().map(|kline| KlinePo::from_source(Some(param.get_symbol()), kline)).collect();
+                    // 写入数据库
+                    let kline_pos: Vec<R> = data.iter().map(|kline| R::from_source(Some(param.get_symbol()), kline)).collect();
                     Ok(kline_pos)
                 }
             }
@@ -198,44 +254,14 @@ where
             error!("Failed to send result for symbol {}", param.get_symbol());
         }
     }
-
-    async fn insert_kline_data(&self, result: Result<Vec<KlinePo>, yue::errors::YueError>) {
-        match result {
-            Ok(kline_pos) => {
-                if kline_pos.is_empty() {
-                    return;
-                }
-                let mut conn = self.provider.acquire().unwrap();
-                let mut tx = conn.transaction().unwrap();
-                tx.set_drop_behavior(DropBehavior::Commit);
-                let mut appender = match tx.appender(&self.table_name) {
-                    Ok(a) => a,
-                    Err(e) => {
-                        error!("Failed to create appender for table {}: {}", self.table_name, e);
-                        return;
-                    }
-                };
-
-                for kline_po in kline_pos {
-                    if let Err(e) = appender.append_row(kline_po.to_params()) {
-                        error!("Failed to append kline {}: {}", kline_po, e);
-                    }
-                }
-                if let Err(e) = appender.flush() {
-                    error!("Failed to flush appender for table {}: {}", self.table_name, e);
-                }
-            }
-            Err(_) => {
-                // 错误已在任务中记录
-            }
-        }
-    }
 }
 
 #[async_trait]
-impl<F> AsyncRepeatTask for UpdateHistoryTask<F>
+impl<F, P, R> AsyncRepeatTask for UpdateHistoryTask<F, P, R>
 where
-    F: HistoryFetcherFactory<Param = KlineParams, Output = yue::binance::bn_models::BinanceKline> + Clone + Send + Sync + Unpin + 'static,
+    F: HistoryFetcherFactory<Param = P, Output = BinanceKline> + Clone + Send + Sync + Unpin + 'static,
+    P: MuteHistoryParam + ToQueryParams + Clone + Send + Sync + 'static,
+    R: HistoryPO<Source = BinanceKline> + Send + Sync + Clone + 'static,
 {
     async fn execute(&self) -> Result<(), MingLuanError> {
         let conn = self.provider.acquire()?;
@@ -247,10 +273,15 @@ where
         for (symbol, timestamp) in latest_symbol {
             let tx_clone = tx.clone();
             let kline_fetcher = self.kline_fetcher_factory.create_fetcher();
-            // 构造 KlineParams，假设 interval 固定为 HistoryInterval::OneHour，limit 固定为 1000
-            let param = KlineParams::initial(symbol, 1000, yue::binance::history_data::HistoryInterval::OneHour);
-            tokio::spawn(async move {
-                Self::fetch_symbol_data(kline_fetcher, param, timestamp, tx_clone).await;
+            // 构造 Param
+            let param = P::initial(symbol, 1000, yue::binance::history_data::HistoryInterval::OneHour);
+            tokio::spawn({
+                let tx_clone = tx_clone.clone();
+                let param = param.clone();
+                let kline_fetcher = kline_fetcher;
+                async move {
+                    Self::fetch_symbol_data::<_>(kline_fetcher, param, timestamp, tx_clone).await;
+                }
             });
         }
 
@@ -260,7 +291,14 @@ where
         // 在主线程中接收结果并串行插入数据库
         for _ in 0..symbol_count {
             if let Some(result) = rx.recv().await {
-                self.insert_kline_data(result).await;
+                match result {
+                    Ok(data) => {
+                        let _ = self.data_writer.write_batch(data);
+                    }
+                    Err(e) => {
+                        error!("Failed to fetch symbol data: {}", e);
+                    }
+                }
             }
         }
 
@@ -274,7 +312,7 @@ mod tests {
     use crate::binance::binance_consts::BinanceTables::SpotKline;
     use crate::binance::binance_consts::ONE_HOUR_MS;
     use crate::binance::bn_dashboard::ExchangeSpotVO;
-    use crate::binance::history_task::{KlinePo, UpdateHistoryTask};
+    use crate::binance::history_task::{DuckDBHistoryDataWriter, KlinePo, UpdateHistoryTask};
     use crate::duck_db::DBProvider;
     use crate::errors::MingLuanError;
     use crate::exchange::HistoryFetcherFactory;
@@ -365,10 +403,10 @@ mod tests {
         let spot_info = Arc::new(RwLock::new(ExchangeSpotVO { trading_symbols }));
         import_local_csv_and_assert(&conn, SpotKline.table_name().as_str(), csv_path.as_path(), 7)?;
 
-        // use mockall::predicate::{always, eq};
         let factory = MockHistoryFetcherFactory {};
-
-        let manager: UpdateHistoryTask<MockHistoryFetcherFactory> = UpdateHistoryTask::new(db_provider.clone(), SpotKline.table_name(), factory, spot_info);
+        let data_writer = Arc::new(DuckDBHistoryDataWriter::new(db_provider.clone(), SpotKline.table_name()));
+        let manager: UpdateHistoryTask<MockHistoryFetcherFactory, KlineParams, KlinePo> =
+            UpdateHistoryTask::new(db_provider.clone(), SpotKline.table_name(), factory, spot_info, data_writer);
         let res = manager.execute().await;
 
         println!("{:?}", res);
@@ -378,7 +416,6 @@ mod tests {
         let kline_data: Vec<KlinePo> = stmt.query_map([], |row| Ok(KlinePo::from(row)))?.filter_map(Result::ok).collect();
 
         assert_eq!(&kline_data.len(), &8); // 原有3条 + 每个symbol新增2条
-                                           // 打印查询到的每个 symbol 和对应的 latest 时间戳，便于调试
         let mut btc_vec: Vec<KlinePo> = vec![];
         let mut eth_vec: Vec<KlinePo> = vec![];
         for kline in kline_data {

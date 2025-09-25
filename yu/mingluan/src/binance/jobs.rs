@@ -1,12 +1,13 @@
 use crate::actix_jobs::{AsyncRepeatTask, CronActor};
 use crate::binance::binance_consts::BinanceTables::SpotKline;
 use crate::binance::bn_dashboard::BinanceDashboard;
-use crate::binance::history_task::UpdateHistoryTask;
+use crate::binance::history_task::{DuckDBHistoryDataWriter, KlinePo, UpdateHistoryTask};
 use crate::duck_db::DBProvider;
 use crate::errors::MingLuanError;
 use crate::exchange::{DefaultHistoryFetcherFactory, ExchangeDashBoard};
 use actix::Actor;
 use duckdb::Connection;
+use std::sync::Arc;
 use yue::binance::bn_models::BinanceKline;
 use yue::binance::history_data::{KlineParams, SimpleHistoryFetcher};
 
@@ -24,12 +25,15 @@ pub async fn start_bn_jobs() -> Result<(), MingLuanError> {
     initial_table()?;
     let kline_fetch_factory: DefaultHistoryFetcherFactory<SimpleHistoryFetcher, KlineParams, BinanceKline> = DefaultHistoryFetcherFactory::new();
 
-    let spot_kline_task = UpdateHistoryTask::new(DBProvider::default(), SpotKline.table_name(), kline_fetch_factory, spot_info);
-    spot_kline_task.execute().await?;
+    let data_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SpotKline.table_name()));
+
+    let spot_update =
+        UpdateHistoryTask::<_, _, KlinePo>::new(DBProvider::default(), SpotKline.table_name(), kline_fetch_factory, spot_info, data_writer);
+    spot_update.execute().await?;
 
     //TODO： 更新交易所时间表达式进入Config
     let _ = CronActor::new("30 59 */6 * * * *", dashboard, "update exchange info").start();
-    let _ = CronActor::new("10 0 * * * * *", spot_kline_task, "fetch spot ").start();
+    let _ = CronActor::new("10 0 * * * * *", spot_update, "fetch spot ").start();
     Ok(())
 }
 

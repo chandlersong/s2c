@@ -20,7 +20,9 @@ static SPOT_RATE_LIMITER: OnceLock<DefaultRateLimiter> = OnceLock::new();
 static SPOT_RATE_LIMITER_PER_SECOND: u32 = 1200;
 /// 获取 RateLimiter 的静态引用
 fn get_bn_spot_rate_limit(per_second_num: u32) -> Option<&'static DefaultRateLimiter> {
-    Some(SPOT_RATE_LIMITER.get_or_init(|| RateLimiter::direct(Quota::per_second(NonZeroU32::new(per_second_num).unwrap()).allow_burst(NonZeroU32::new(per_second_num).unwrap()))))
+    Some(SPOT_RATE_LIMITER.get_or_init(|| {
+        RateLimiter::direct(Quota::per_second(NonZeroU32::new(per_second_num).unwrap()).allow_burst(NonZeroU32::new(per_second_num).unwrap()))
+    }))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,7 +88,7 @@ pub trait MuteHistoryParam: ToQueryParams {
     fn initial(symbol: String, limit: u32, interval: HistoryInterval) -> Self;
     fn create_new(&self, start_time: Option<u64>, end_time: Option<u64>) -> Self;
 
-    fn get_symbol(&self) -> &String;
+    fn get_symbol(&self) -> &str;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -111,6 +113,9 @@ impl KlineParams {
 }
 
 impl MuteHistoryParam for KlineParams {
+    fn get_symbol(&self) -> &str {
+        &self.symbol
+    }
     fn initial(symbol: String, limit: u32, interval: HistoryInterval) -> Self {
         KlineParams {
             symbol,
@@ -129,10 +134,6 @@ impl MuteHistoryParam for KlineParams {
             end_time,
             limit: self.limit.clone(),
         }
-    }
-
-    fn get_symbol(&self) -> &String {
-        &self.symbol
     }
 }
 
@@ -177,9 +178,10 @@ pub async fn execute_ping() -> Result<(), YueError> {
 /// # 返回
 /// 返回符合条件的交易对信息列表，包含 symbol, status, base_asset, quote_asset_precision, order_types
 pub async fn get_trading_spot_symbols(status: Option<&str>) -> Result<Vec<TradingSymbolInfo>, YueError> {
-    let exchange_info: ExchangeInfo = execute_bn_get::<EmptyQueryParams, NonAuthRequestBuilder, ExchangeInfo>(&EXCHANGE_INFO_COMMAND, None, NonAuthRequestBuilder {})
-        .execute(get_bn_spot_rate_limit(SPOT_RATE_LIMITER_PER_SECOND))
-        .await?;
+    let exchange_info: ExchangeInfo =
+        execute_bn_get::<EmptyQueryParams, NonAuthRequestBuilder, ExchangeInfo>(&EXCHANGE_INFO_COMMAND, None, NonAuthRequestBuilder {})
+            .execute(get_bn_spot_rate_limit(SPOT_RATE_LIMITER_PER_SECOND))
+            .await?;
 
     let filter_status = status.unwrap_or("TRADING");
 
