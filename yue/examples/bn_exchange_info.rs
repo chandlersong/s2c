@@ -1,8 +1,7 @@
 use std::error::Error;
 use std::fs::File;
 use std::io::Write;
-use yue::binance::bn_restful_commands::{SPOT_EXCHANGE_COMMAND, SWAP_EXCHANGE_COMMAND};
-use yue::binance::history_data::{TradingSymbolInfo, get_trading_spot_symbols};
+use yue::binance::history_data::{CONTRACT_TYPE_PERPETUAL, TradingSymbolInfo, get_trading_spot_symbols, get_trading_swap_symbols};
 use yue::http_client::init_http_client;
 
 /// 将symbols写入CSV文件
@@ -11,7 +10,15 @@ fn write_symbols_to_csv(file_path: &str, symbols: &[TradingSymbolInfo]) -> Resul
     // 写入UTF-8-BOM (0xEF, 0xBB, 0xBF)
     file.write_all(&[0xEF, 0xBB, 0xBF])?;
     let mut writer = csv::Writer::from_writer(file);
-    writer.write_record(&["symbol", "status", "base_asset", "quote_asset", "quote_asset_precision", "order_types"])?;
+    writer.write_record(&[
+        "symbol",
+        "status",
+        "base_asset",
+        "quote_asset",
+        "quote_asset_precision",
+        "order_types",
+        "type",
+    ])?;
     for symbol_info in symbols {
         let order_types_str = symbol_info.order_types.join(",");
         writer.write_record(&[
@@ -21,6 +28,7 @@ fn write_symbols_to_csv(file_path: &str, symbols: &[TradingSymbolInfo]) -> Resul
             &symbol_info.quote_asset,
             &symbol_info.quote_asset_precision.to_string(),
             &order_types_str,
+            &symbol_info.symbol_type,
         ])?;
     }
     writer.flush()?;
@@ -39,9 +47,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     write_symbols_to_csv("binance_spot_symbols.csv", &spot_symbols)?;
     println!("现货数据已保存到 binance_spot_symbols.csv");
 
-    // 获取swap交易对信息
+    // 获取swap交易对信息l
     println!("开始获取币安U本位合约交易对信息...");
-    let swap_symbols = get_trading_spot_symbols(Some("ALL")).await?;
+    let swap_symbols = get_trading_swap_symbols(Some("ALL"), Some(CONTRACT_TYPE_PERPETUAL)).await?;
     println!("成功获取到 {} 个U本位合约交易对信息", swap_symbols.len());
     write_symbols_to_csv("binance_swap_symbols.csv", &swap_symbols)?;
     println!("U本位合约数据已保存到 binance_swap_symbols.csv");

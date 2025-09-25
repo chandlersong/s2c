@@ -1,6 +1,7 @@
 pub use crate::binance::bn_models::HistoryVo;
 pub use crate::binance::bn_models::{BinanceKline, EmptyQueryParams, ExchangeInfo, ToQueryParams};
-use crate::binance::bn_restful_commands::{PING_COMMAND, SPOT_EXCHANGE_COMMAND, execute_bn_get};
+use crate::binance::bn_models::{ExchangeInfoTrait, SwapExchangeInfo, SymbolInfoTrait};
+use crate::binance::bn_restful_commands::{PING_COMMAND, SPOT_EXCHANGE_COMMAND, SWAP_EXCHANGE_COMMAND, execute_bn_get};
 use crate::errors::YueError;
 use crate::http_client::{DefaultRateLimiter, NonAuthRequestBuilder};
 use crate::models::{EmptyObject, RequestInfo};
@@ -39,6 +40,8 @@ pub struct TradingSymbolInfo {
     pub quote_asset_precision: i32,
     /// 支持的订单类型数组
     pub order_types: Vec<String>,
+    /// 类型字段，spot统一填"spot"，swap填contract_type
+    pub symbol_type: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -162,61 +165,63 @@ pub async fn execute_ping() -> Result<(), YueError> {
     Ok(())
 }
 
-/// 获取现货交易对信息
-/// 按照币安的策略。如果一个币在2022年1月1日上线。那么start_time设定为2021年为1月1日。
-/// 那么返回的第一个日期是2022年1月1日
-///
-/// TODO： 听过一个stream的接口，获得一些就返回。
-///
-/// # 参数
-/// * `status` - 交易对状态过滤器
-///   - `None` 或 `Some("TRADING")`: 只返回交易中的交易对 (默认)
-///   - `Some("ALL")`: 返回所有交易对 (不进行状态过滤)
-///   - `Some("HALT")`: 只返回暂停交易的交易对
-///   - 其他值: 按指定状态过滤
-///
-/// # 返回
-/// 返回符合条件的交易对信息列表，包含 symbol, status, base_asset, quote_asset_precision, order_types
-pub async fn get_trading_spot_symbols(status: Option<&str>) -> Result<Vec<TradingSymbolInfo>, YueError> {
-    let exchange_info: ExchangeInfo =
-        execute_bn_get::<EmptyQueryParams, NonAuthRequestBuilder, ExchangeInfo>(&SPOT_EXCHANGE_COMMAND, None, NonAuthRequestBuilder {})
-            .execute(get_bn_spot_rate_limit(SPOT_RATE_LIMITER_PER_SECOND))
-            .await?;
-
+/// 通用获取交易对信息方法，支持现货和合约
+pub fn extract_trading_symbols<S: SymbolInfoTrait>(symbols: &[S], status: Option<&str>) -> Vec<TradingSymbolInfo> {
     let filter_status = status.unwrap_or("TRADING");
+    symbols
+        .iter()
+        .filter(|symbol| filter_status == "ALL" || symbol.status() == filter_status)
+        .map(|symbol| TradingSymbolInfo {
+            symbol: symbol.symbol().to_string(),
+            status: symbol.status().to_string(),
+            base_asset: symbol.base_asset().to_string(),
+            quote_asset: symbol.quote_asset().to_string(),
+            quote_asset_precision: symbol.quote_precision(),
+            order_types: symbol.order_types().clone(),
+            symbol_type: symbol.symbol_type().to_string(),
+        })
+        .collect()
+}
 
-    let trading_symbols: Vec<TradingSymbolInfo> = if filter_status == "ALL" {
-        // Return all symbols without filtering
-        exchange_info
-            .symbols
-            .into_iter()
-            .map(|symbol| TradingSymbolInfo {
-                symbol: symbol.symbol,
-                status: symbol.status,
-                base_asset: symbol.base_asset,
-                quote_asset: symbol.quote_asset,
-                quote_asset_precision: symbol.quote_asset_precision,
-                order_types: symbol.order_types,
-            })
-            .collect()
+/// 统一异步获取交易对信息
+async fn get_trading_symbols<E, S, F>(fetch: F, status: Option<&str>) -> Result<Vec<TradingSymbolInfo>, YueError>
+where
+    E: ExchangeInfoTrait<SymbolInfo = S>,
+    S: SymbolInfoTrait,
+    F: Future<Output = Result<E, YueError>>,
+{
+    let exchange_info = fetch.await?;
+    Ok(extract_trading_symbols(exchange_info.symbols(), status))
+}
+
+/// 获取现货交易对信息
+pub async fn get_trading_spot_symbols(status: Option<&str>) -> Result<Vec<TradingSymbolInfo>, YueError> {
+    get_trading_symbols(
+        execute_bn_get::<EmptyQueryParams, NonAuthRequestBuilder, ExchangeInfo>(&SPOT_EXCHANGE_COMMAND, None, NonAuthRequestBuilder {})
+            .execute(get_bn_spot_rate_limit(SPOT_RATE_LIMITER_PER_SECOND)),
+        status,
+    )
+    .await
+}
+
+pub const CONTRACT_TYPE_PERPETUAL: &str = "PERPETUAL";
+
+/// 获取合约交易对信息
+/// PERPETUAL 为永续
+/// CURRENT_QUARTER：为下一季
+/// NEXT_QUARTER：当前季度合约
+pub async fn get_trading_swap_symbols(status: Option<&str>, type_filter: Option<&str>) -> Result<Vec<TradingSymbolInfo>, YueError> {
+    let all = get_trading_symbols(
+        execute_bn_get::<EmptyQueryParams, NonAuthRequestBuilder, SwapExchangeInfo>(&SWAP_EXCHANGE_COMMAND, None, NonAuthRequestBuilder {})
+            .execute(get_bn_spot_rate_limit(SPOT_RATE_LIMITER_PER_SECOND)),
+        status,
+    )
+    .await?;
+    if let Some(filter) = type_filter {
+        Ok(all.into_iter().filter(|s| s.symbol_type == filter).collect())
     } else {
-        // Filter by specified status
-        exchange_info
-            .symbols
-            .into_iter()
-            .filter(|symbol| symbol.status == filter_status)
-            .map(|symbol| TradingSymbolInfo {
-                symbol: symbol.symbol,
-                status: symbol.status,
-                base_asset: symbol.base_asset,
-                quote_asset: symbol.quote_asset,
-                quote_asset_precision: symbol.quote_asset_precision,
-                order_types: symbol.order_types,
-            })
-            .collect()
-    };
-
-    Ok(trading_symbols)
+        Ok(all)
+    }
 }
 
 #[async_trait]

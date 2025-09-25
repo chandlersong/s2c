@@ -811,3 +811,94 @@ impl HistoryVo for FundingRate {
         self.funding_time
     }
 }
+
+pub trait SymbolInfoTrait {
+    fn symbol(&self) -> &str;
+    fn status(&self) -> &str;
+    fn base_asset(&self) -> &str;
+    fn quote_asset(&self) -> &str;
+    fn order_types(&self) -> &Vec<String>;
+    fn quote_precision(&self) -> i32;
+    fn symbol_type(&self) -> &str;
+}
+
+impl SymbolInfoTrait for ExchangeSymbol {
+    fn symbol(&self) -> &str {
+        &self.symbol
+    }
+    fn status(&self) -> &str {
+        &self.status
+    }
+    fn base_asset(&self) -> &str {
+        &self.base_asset
+    }
+    fn quote_asset(&self) -> &str {
+        &self.quote_asset
+    }
+    fn order_types(&self) -> &Vec<String> {
+        &self.order_types
+    }
+    fn quote_precision(&self) -> i32 {
+        self.quote_asset_precision
+    }
+    fn symbol_type(&self) -> &str {
+        "spot"
+    }
+}
+
+impl SymbolInfoTrait for SwapExchangeSymbol {
+    fn symbol(&self) -> &str {
+        &self.symbol
+    }
+    fn status(&self) -> &str {
+        &self.status
+    }
+    fn base_asset(&self) -> &str {
+        &self.base_asset
+    }
+    fn quote_asset(&self) -> &str {
+        &self.quote_asset
+    }
+    fn order_types(&self) -> &Vec<String> {
+        &self.order_types
+    }
+    fn quote_precision(&self) -> i32 {
+        self.quote_precision
+    }
+    fn symbol_type(&self) -> &str {
+        &self.contract_type
+    }
+}
+
+pub trait ExchangeInfoTrait {
+    type SymbolInfo: SymbolInfoTrait;
+    fn timezone(&self) -> &str;
+    fn server_time(&self) -> u64;
+    fn symbols(&self) -> &Vec<Self::SymbolInfo>;
+}
+
+impl ExchangeInfoTrait for ExchangeInfo {
+    type SymbolInfo = ExchangeSymbol;
+    fn timezone(&self) -> &str {
+        &self.timezone
+    }
+    fn server_time(&self) -> u64 {
+        self.server_time
+    }
+    fn symbols(&self) -> &Vec<Self::SymbolInfo> {
+        &self.symbols
+    }
+}
+
+impl ExchangeInfoTrait for SwapExchangeInfo {
+    type SymbolInfo = SwapExchangeSymbol;
+    fn timezone(&self) -> &str {
+        &self.timezone
+    }
+    fn server_time(&self) -> u64 {
+        self.server_time
+    }
+    fn symbols(&self) -> &Vec<Self::SymbolInfo> {
+        &self.symbols
+    }
+}
