@@ -1,5 +1,6 @@
 use crate::binance::bn_models::{
-    BINANCE_SPOT_API, BINANCE_SWAP_API, PING_PATH, SPOT_EXCHANGE_INFO_PATH, SPOT_KLINE_PATH, SPOT_SERVER_TIME_PATH, SWAP_KLINE_PATH, ToQueryParams,
+    BINANCE_SPOT_API, BINANCE_SWAP_API, PING_PATH, SPOT_EXCHANGE_INFO_PATH, SPOT_KLINE_PATH, SPOT_SERVER_TIME_PATH, SWAP_FUNDING_RATE_PATH,
+    SWAP_KLINE_PATH, ToQueryParams,
 };
 use crate::errors::YueError;
 use crate::http_client::{YueRequest, YueRequestBuilder};
@@ -100,6 +101,9 @@ pub static SPOT_KLINE_COMMAND: LazyLock<RequestInfo> =
     LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_KLINE_PATH, false, 2).unwrap());
 
 /// SWAP API
+
+pub static SWAP_FUNDING_RATE_COMMAND: LazyLock<RequestInfo> =
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_API, SWAP_FUNDING_RATE_PATH, false, 2).unwrap());
 pub static SWAP_KLINE_COMMAND: LazyLock<RequestInfo> =
     LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_API, SWAP_KLINE_PATH, false, 2).unwrap());
 

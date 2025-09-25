@@ -673,3 +673,29 @@ impl HistoryVo for BinanceKline {
         self.open_time
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FundingRate {
+    #[serde(rename = "symbol")]
+    pub symbol: String,
+
+    #[serde(rename = "fundingRate")]
+    #[serde(with = "string_to_float")]
+    pub funding_rate: f64,
+
+    #[serde(rename = "fundingTime")]
+    pub funding_time: u64,
+
+    #[serde(rename = "markPrice")]
+    #[serde(with = "string_to_float")]
+    pub mark_price: f64, // 资金费对应标记价格
+}
+
+impl HistoryVo for FundingRate {
+    fn get_close_time(&self) -> u64 {
+        self.funding_time
+    }
+    fn get_open_time(&self) -> u64 {
+        self.funding_time
+    }
+}
