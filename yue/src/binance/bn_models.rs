@@ -49,12 +49,18 @@ pub mod bin {
         fn from(value: SpotDepthData) -> Self {
             let mut bids = vec![];
             for b in &value.bids {
-                bids.push(SpotDepthLevel { price: b.price, quantity: b.quantity });
+                bids.push(SpotDepthLevel {
+                    price: b.price,
+                    quantity: b.quantity,
+                });
             }
 
             let mut asks = vec![];
             for a in &value.asks {
-                asks.push(SpotDepthLevel { price: a.price, quantity: a.quantity });
+                asks.push(SpotDepthLevel {
+                    price: a.price,
+                    quantity: a.quantity,
+                });
             }
 
             Self {
@@ -75,15 +81,26 @@ pub mod bin {
 
 // For Unit Tests with WireMock
 #[cfg(test)]
-pub const BINANCE_API_BASE: &str = "http://127.0.0.1:18080"; // WireMock server address
+pub const BINANCE_SPOT_API: &str = "http://127.0.0.1:18080"; // WireMock server address
 
 // For Examples and Testnet Applications
 #[cfg(all(feature = "binance-testnet", not(test)))]
-pub const BINANCE_API_BASE: &str = "https://testnet.binance.vision/";
+pub const BINANCE_SPOT_API: &str = "https://testnet.binance.vision/";
 
 // For Production (Default)
 #[cfg(not(any(feature = "binance-testnet", test)))]
-pub const BINANCE_API_BASE: &str = "https://api.binance.com/";
+pub const BINANCE_SPOT_API: &str = "https://api.binance.com/";
+
+#[cfg(test)]
+pub const BINANCE_SWAP_API: &str = "http://127.0.0.1:18081"; // WireMock server address
+
+// For Examples and Testnet Applications
+#[cfg(all(feature = "binance-testnet", not(test)))]
+pub const BINANCE_SWAP_API: &str = "https://testnet.binance.vision/";
+
+// For Production (Default)
+#[cfg(not(any(feature = "binance-testnet", test)))]
+pub const BINANCE_SWAP_API: &str = "https://fapi.binance.com/";
 
 // WebSocket URL
 #[cfg(test)]
@@ -564,7 +581,13 @@ pub struct MiniTicker {
 
 impl fmt::Display for MiniTicker {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "MiniTicker: symbol:{},time:{},close:{}", self.symbol, unix_2_readable(&self.event_time), self.close)
+        write!(
+            f,
+            "MiniTicker: symbol:{},time:{},close:{}",
+            self.symbol,
+            unix_2_readable(&self.event_time),
+            self.close
+        )
     }
 }
 

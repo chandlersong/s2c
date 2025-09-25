@@ -1,4 +1,6 @@
-use crate::binance::bn_models::{BINANCE_API_BASE, PING_PATH, SPOT_EXCHANGE_INFO_PATH, SPOT_KLINE_PATH, SPOT_SERVER_TIME_PATH, ToQueryParams};
+use crate::binance::bn_models::{
+    BINANCE_SPOT_API, BINANCE_SWAP_API, PING_PATH, SPOT_EXCHANGE_INFO_PATH, SPOT_KLINE_PATH, SPOT_SERVER_TIME_PATH, SWAP_KLINE_PATH, ToQueryParams,
+};
 use crate::errors::YueError;
 use crate::http_client::{YueRequest, YueRequestBuilder};
 use crate::models::RequestInfo;
@@ -35,7 +37,7 @@ impl YueRequestBuilder for BNSecurityRequestBuilder {
 
 /// Wrapper for Binance requests to enable retry with backon
 
-pub static PING_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| RequestInfo::from_base_path(BINANCE_API_BASE, PING_PATH, false, 1).unwrap());
+pub static PING_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, PING_PATH, false, 1).unwrap());
 
 ///币安当前有 1479 个交易对
 /// 时区: UTC
@@ -86,11 +88,20 @@ pub static PING_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| RequestInfo::f
     allowed_self_trade_prevention_modes: ["EXPIRE_TAKER", "EXPIRE_MAKER", "EXPIRE_BOTH", "DECREMENT"]
   }
 **/
-pub static EXCHANGE_INFO_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| RequestInfo::from_base_path(BINANCE_API_BASE, SPOT_EXCHANGE_INFO_PATH, false, 20).unwrap());
 
-pub static SERVER_TIME_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| RequestInfo::from_base_path(BINANCE_API_BASE, SPOT_SERVER_TIME_PATH, false, 1).unwrap());
+/// SPOT API
+pub static EXCHANGE_INFO_COMMAND: LazyLock<RequestInfo> =
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_EXCHANGE_INFO_PATH, false, 20).unwrap());
 
-pub static SPOT_KLINE_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| RequestInfo::from_base_path(BINANCE_API_BASE, SPOT_KLINE_PATH, false, 2).unwrap());
+pub static SERVER_TIME_COMMAND: LazyLock<RequestInfo> =
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_SERVER_TIME_PATH, false, 1).unwrap());
+
+pub static SPOT_KLINE_COMMAND: LazyLock<RequestInfo> =
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_KLINE_PATH, false, 2).unwrap());
+
+/// SWAP API
+pub static SWAP_KLINE_COMMAND: LazyLock<RequestInfo> =
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_API, SWAP_KLINE_PATH, false, 2).unwrap());
 
 /// 全局 RateLimiter，使用 OnceLock 延迟初始化
 
@@ -236,9 +247,10 @@ mod tests {
             .await;
 
         // Execute the request
-        let result: serde_json::Value = execute_bn_get::<EmptyQueryParams, NonAuthRequestBuilder, serde_json::Value>(&request_info, None, NonAuthRequestBuilder {})
-            .execute(None)
-            .await?;
+        let result: serde_json::Value =
+            execute_bn_get::<EmptyQueryParams, NonAuthRequestBuilder, serde_json::Value>(&request_info, None, NonAuthRequestBuilder {})
+                .execute(None)
+                .await?;
 
         assert_eq!(result["message"], "success");
         Ok(())
@@ -267,7 +279,9 @@ mod tests {
         params.insert("symbol", "BTCUSDT".to_string());
 
         // Execute request with parameters
-        let result: serde_json::Value = execute_bn_get(&request_info, Some(&params), NonAuthRequestBuilder {}).execute(None).await?;
+        let result: serde_json::Value = execute_bn_get(&request_info, Some(&params), NonAuthRequestBuilder {})
+            .execute(None)
+            .await?;
 
         assert_eq!(result["symbol"], "BTCUSDT");
         assert_eq!(result["price"], "50000.00");
