@@ -60,6 +60,6 @@ async fn main() {
     let swap_funding_rate_fetch = SimpleHistoryFetcher::new(&SWAP_FUNDING_RATE_COMMAND);
     let base_param = KlineParams::new(symbol.to_string(), 1000, HistoryInterval::OneHour);
     let btc_funding_rate: Result<(Vec<FundingRate>, u16), YueError> = swap_funding_rate_fetch.get_all_kline_data(base_param, Some(start_ms)).await;
-    info!("================fetch swap btc==============");
+    info!("================fetch btc funding rate ==============");
     print_kline_result(&btc_funding_rate);
 }
