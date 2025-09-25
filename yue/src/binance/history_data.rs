@@ -116,9 +116,6 @@ impl KlineParams {
 }
 
 impl MuteHistoryParam for KlineParams {
-    fn get_symbol(&self) -> &str {
-        &self.symbol
-    }
     fn initial(symbol: String, limit: u32, interval: HistoryInterval) -> Self {
         KlineParams {
             symbol,
@@ -128,7 +125,6 @@ impl MuteHistoryParam for KlineParams {
             limit: Some(limit),
         }
     }
-
     fn create_new(&self, start_time: Option<u64>, end_time: Option<u64>) -> Self {
         KlineParams {
             symbol: self.symbol.clone(),
@@ -137,6 +133,10 @@ impl MuteHistoryParam for KlineParams {
             end_time,
             limit: self.limit.clone(),
         }
+    }
+
+    fn get_symbol(&self) -> &str {
+        &self.symbol
     }
 }
 

@@ -18,6 +18,11 @@ impl ToQueryParams for std::collections::BTreeMap<&str, String> {
     }
 }
 
+pub enum SymbolType {
+    Spot,
+    Swap,
+}
+
 pub struct EmptyQueryParams;
 
 impl ToQueryParams for EmptyQueryParams {

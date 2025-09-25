@@ -79,7 +79,7 @@ impl<O: HistoryPO> HistoryDataWriter<O> for DuckDBHistoryDataWriter {
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .collect();
-        let symbols = &spot_info.trading_symbols;
+        let symbols = &spot_info.trading_spot_symbols;
         let filtered: Vec<(String, u64)> = symbols
             .into_iter()
             .filter(|s| s.ends_with("USDT"))
@@ -386,7 +386,10 @@ mod tests {
         let csv_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/test_refresh_spot_kline_normal.csv");
 
         let trading_symbols = vec!["BTCUSDT".to_string()];
-        let spot_info = Arc::new(RwLock::new(ExchangeSpotVO { trading_symbols }));
+        let spot_info = Arc::new(RwLock::new(ExchangeSpotVO {
+            trading_spot_symbols: trading_symbols,
+            trading_swap_symbols: vec![],
+        }));
         import_local_csv_and_assert(&conn, SpotKline.table_name().as_str(), csv_path.as_path(), 7)?;
 
         let factory = MockHistoryFetcherFactory {};
