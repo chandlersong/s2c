@@ -7,20 +7,20 @@ use std::sync::{Arc, RwLock};
 use yue::binance::history_data::{get_trading_spot_symbols, get_trading_swap_symbols, CONTRACT_TYPE_PERPETUAL};
 
 #[derive(Debug, Clone)]
-pub struct ExchangeSpotVO {
+pub struct TradingSymbols {
     pub trading_spot_symbols: Vec<String>,
     pub trading_swap_symbols: Vec<String>,
 }
 
 #[derive(Clone)]
 pub struct BinanceDashboard {
-    spot_info: Arc<RwLock<ExchangeSpotVO>>,
+    spot_info: Arc<RwLock<TradingSymbols>>,
 }
 
 impl BinanceDashboard {
     pub fn new() -> Self {
         BinanceDashboard {
-            spot_info: Arc::new(RwLock::new(ExchangeSpotVO {
+            spot_info: Arc::new(RwLock::new(TradingSymbols {
                 trading_spot_symbols: vec![],
                 trading_swap_symbols: vec![],
             })),
@@ -29,9 +29,9 @@ impl BinanceDashboard {
 }
 
 impl ExchangeDashBoard for BinanceDashboard {
-    type SpotDashBoard = ExchangeSpotVO;
+    type TradingSymbol = TradingSymbols;
 
-    fn spot_info(&self) -> Arc<RwLock<ExchangeSpotVO>> {
+    fn spot_info(&self) -> Arc<RwLock<TradingSymbols>> {
         self.spot_info.clone()
     }
 }

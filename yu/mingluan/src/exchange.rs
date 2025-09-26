@@ -54,7 +54,7 @@ where
 //
 // 交易所信息的交易信息
 pub trait ExchangeDashBoard {
-    type SpotDashBoard;
+    type TradingSymbol;
 
-    fn spot_info(&self) -> Arc<RwLock<Self::SpotDashBoard>>;
+    fn spot_info(&self) -> Arc<RwLock<Self::TradingSymbol>>;
 }

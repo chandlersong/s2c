@@ -1,6 +1,6 @@
 use crate::actix_jobs::AsyncRepeatTask;
 use crate::binance::binance_consts::{GENESIS_2020_MS, ONE_HOUR_MS, QUERY_LATEST_SQL};
-use crate::binance::bn_dashboard::ExchangeSpotVO;
+use crate::binance::bn_dashboard::TradingSymbols;
 use crate::duck_db::DBProvider;
 use crate::errors::MingLuanError;
 use crate::exchange::HistoryFetcherFactory;
@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
-use yue::binance::bn_models::{BinanceKline, ToQueryParams};
+use yue::binance::bn_models::{BinanceKline, SymbolType, ToQueryParams};
 use yue::binance::history_data::{HistoryFetcher, HistoryVo, MuteHistoryParam};
 
 pub trait HistoryPO: Debug {
@@ -26,17 +26,22 @@ pub trait HistoryPO: Debug {
 
 pub trait HistoryDataWriter<O: HistoryPO>: Send + Sync {
     fn write_batch(&self, data: Vec<O>) -> Result<(), MingLuanError>;
-    fn query_latest_symbols(&self, spot_info: &ExchangeSpotVO) -> Result<Vec<(String, u64)>, MingLuanError>;
+    fn query_latest_symbols(&self, spot_info: &TradingSymbols) -> Result<Vec<(String, u64)>, MingLuanError>;
 }
 
 pub struct DuckDBHistoryDataWriter {
     provider: DBProvider,
     table_name: String,
+    symbol_type: SymbolType,
 }
 
 impl DuckDBHistoryDataWriter {
-    pub fn new(provider: DBProvider, table_name: String) -> Self {
-        DuckDBHistoryDataWriter { provider, table_name }
+    pub fn new(provider: DBProvider, table_name: String, symbol_type: SymbolType) -> Self {
+        DuckDBHistoryDataWriter {
+            provider,
+            table_name,
+            symbol_type,
+        }
     }
 }
 
@@ -67,7 +72,7 @@ impl<O: HistoryPO> HistoryDataWriter<O> for DuckDBHistoryDataWriter {
         Ok(())
     }
 
-    fn query_latest_symbols(&self, spot_info: &ExchangeSpotVO) -> Result<Vec<(String, u64)>, MingLuanError> {
+    fn query_latest_symbols(&self, spot_info: &TradingSymbols) -> Result<Vec<(String, u64)>, MingLuanError> {
         let conn = self.provider.acquire()?;
         let mut stmt = conn.prepare(QUERY_LATEST_SQL)?;
         let symbol_in_db: HashMap<String, u64> = stmt
@@ -79,7 +84,11 @@ impl<O: HistoryPO> HistoryDataWriter<O> for DuckDBHistoryDataWriter {
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .collect();
-        let symbols = &spot_info.trading_spot_symbols;
+        let symbols = match self.symbol_type {
+            SymbolType::Spot => &spot_info.trading_spot_symbols,
+            SymbolType::Swap => &spot_info.trading_swap_symbols,
+        };
+
         let filtered: Vec<(String, u64)> = symbols
             .into_iter()
             .filter(|s| s.ends_with("USDT"))
@@ -198,7 +207,7 @@ where
     R: HistoryPO + Clone,
 {
     kline_fetcher_factory: F,
-    spot_info: Arc<RwLock<ExchangeSpotVO>>,
+    spot_info: Arc<RwLock<TradingSymbols>>,
     data_writer: Arc<dyn HistoryDataWriter<R> + Send + Sync>,
 }
 
@@ -208,7 +217,7 @@ where
     P: MuteHistoryParam + ToQueryParams + Clone + Send + Sync,
     R: HistoryPO + Clone,
 {
-    pub fn new(factory: F, spot_info: Arc<RwLock<ExchangeSpotVO>>, data_writer: Arc<dyn HistoryDataWriter<R> + Send + Sync>) -> Self {
+    pub fn new(factory: F, spot_info: Arc<RwLock<TradingSymbols>>, data_writer: Arc<dyn HistoryDataWriter<R> + Send + Sync>) -> Self {
         UpdateHistoryTask {
             kline_fetcher_factory: factory,
             spot_info,
@@ -297,7 +306,7 @@ mod tests {
     use crate::actix_jobs::AsyncRepeatTask;
     use crate::binance::binance_consts::BinanceTables::SpotKline;
     use crate::binance::binance_consts::ONE_HOUR_MS;
-    use crate::binance::bn_dashboard::ExchangeSpotVO;
+    use crate::binance::bn_dashboard::TradingSymbols;
     use crate::binance::history_task::{DuckDBHistoryDataWriter, KlinePo, UpdateHistoryTask};
     use crate::duck_db::DBProvider;
     use crate::errors::MingLuanError;
@@ -309,7 +318,7 @@ mod tests {
     use r2d2::Pool;
     use std::path::Path;
     use std::sync::{Arc, RwLock};
-    use yue::binance::bn_models::BinanceKline;
+    use yue::binance::bn_models::{BinanceKline, SymbolType};
     use yue::binance::history_data::{HistoryFetcher, HistoryInterval, KlineParams, MuteHistoryParam};
     use yue::errors::YueError;
 
@@ -386,14 +395,18 @@ mod tests {
         let csv_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/test_refresh_spot_kline_normal.csv");
 
         let trading_symbols = vec!["BTCUSDT".to_string()];
-        let spot_info = Arc::new(RwLock::new(ExchangeSpotVO {
+        let spot_info = Arc::new(RwLock::new(TradingSymbols {
             trading_spot_symbols: trading_symbols,
             trading_swap_symbols: vec![],
         }));
         import_local_csv_and_assert(&conn, SpotKline.table_name().as_str(), csv_path.as_path(), 7)?;
 
         let factory = MockHistoryFetcherFactory {};
-        let data_writer = Arc::new(DuckDBHistoryDataWriter::new(db_provider.clone(), SpotKline.table_name()));
+        let data_writer = Arc::new(DuckDBHistoryDataWriter::new(
+            db_provider.clone(),
+            SpotKline.table_name(),
+            SymbolType::Spot,
+        ));
         let manager: UpdateHistoryTask<MockHistoryFetcherFactory, KlineParams, KlinePo> = UpdateHistoryTask::new(factory, spot_info, data_writer);
         let res = manager.execute().await;
 
