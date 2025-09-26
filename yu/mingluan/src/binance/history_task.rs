@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
-use yue::binance::bn_models::{BinanceKline, SymbolType, ToQueryParams};
+use yue::binance::bn_models::{BinanceKline, FundingRate, SymbolType, ToQueryParams};
 use yue::binance::history_data::{HistoryFetcher, HistoryVo, MuteHistoryParam};
 
 pub trait HistoryPO: Debug {
@@ -196,6 +196,52 @@ impl std::fmt::Display for KlinePo {
             self.taker_buy_quote_asset_volume,
             self.close_time
         )
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FundingRatePo {
+    pub id: i64,
+    pub symbol: String,
+    pub funding_rate: f64,
+    pub funding_time: u64,
+    pub mark_price: f64,
+}
+
+impl<'a> From<&duckdb::Row<'a>> for FundingRatePo {
+    fn from(row: &duckdb::Row) -> Self {
+        FundingRatePo {
+            id: row.get(0).unwrap_or_default(),
+            symbol: row.get(1).unwrap_or_default(),
+            funding_rate: row.get(2).unwrap_or_default(),
+            funding_time: row.get(3).unwrap_or_default(),
+            mark_price: row.get(4).unwrap_or_default(),
+        }
+    }
+}
+
+impl HistoryPO for FundingRatePo {
+    type Source = FundingRate;
+
+    fn from_source(symbol: Option<&str>, source: &Self::Source) -> Self {
+        let id = get_snowflake_generator().lock().unwrap().real_time_generate();
+        FundingRatePo {
+            id,
+            symbol: symbol.expect("Symbol must be provided").to_string(),
+            funding_rate: source.funding_rate,
+            funding_time: source.funding_time,
+            mark_price: source.mark_price,
+        }
+    }
+
+    fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>> {
+        appender_params_from_iter(vec![
+            &self.id as &dyn duckdb::ToSql,
+            &self.symbol as &dyn duckdb::ToSql,
+            &self.funding_rate as &dyn duckdb::ToSql,
+            &self.funding_time as &dyn duckdb::ToSql,
+            &self.mark_price as &dyn duckdb::ToSql,
+        ])
     }
 }
 
