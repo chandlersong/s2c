@@ -1,5 +1,6 @@
 use crate::actix_jobs::{AsyncRepeatTask, CronActor};
-use crate::binance::binance_consts::BinanceTables::SpotKline;
+use crate::binance::binance_consts::BinanceTables::{SpotKline, SwapFundingRate, SwapKline};
+use crate::binance::binance_consts::ALL_BINANCE_TABLES;
 use crate::binance::bn_dashboard::BinanceDashboard;
 use crate::binance::history_task::{DuckDBHistoryDataWriter, KlinePo, UpdateHistoryTask};
 use crate::duck_db::DBProvider;
@@ -11,7 +12,6 @@ use std::sync::Arc;
 use yue::binance::bn_models::{BinanceKline, SymbolType};
 use yue::binance::bn_restful_commands::SPOT_KLINE_COMMAND;
 use yue::binance::history_data::{KlineParams, SimpleHistoryFetcher};
-
 ///
 /// NOTE: 加入的功能
 /// 1. 检测数据完整性的进程。
@@ -52,10 +52,12 @@ fn table_exists(conn: &Connection, table_name: &str) -> Result<bool, MingLuanErr
 
 fn initial_table() -> Result<(), MingLuanError> {
     let conn = DBProvider::default().acquire()?;
-    let table_name = SpotKline.table_name();
-    if !table_exists(&conn, &table_name)? {
-        // 表不存在，执行建表
-        conn.execute(SpotKline.create_table_statement().as_str(), [])?;
+    for table in ALL_BINANCE_TABLES.iter() {
+        let table_name = table.table_name();
+        if !table_exists(&conn, &table_name)? {
+            // 表不存在，执行建表
+            conn.execute(table.create_table_statement().as_str(), [])?;
+        }
     }
     Ok(())
 }

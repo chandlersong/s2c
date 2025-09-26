@@ -76,4 +76,7 @@ CREATE TABLE IF NOT EXISTS swap_funding_rate (
 );
 "#;
 
+// 原生方式：维护一个静态数组，便于遍历所有表类型
+pub(crate) const ALL_BINANCE_TABLES: &[BinanceTables] = &[BinanceTables::SpotKline, BinanceTables::SwapKline, BinanceTables::SwapFundingRate];
+
 // K线表字段定义
