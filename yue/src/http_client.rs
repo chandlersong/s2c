@@ -33,18 +33,12 @@ pub fn init_http_client(proxy: Option<&str>) -> &'static Client {
 }
 
 pub trait YueRequestBuilder: Send + Sync {
-    fn compose_request(
-        &self,
-        client: &Client,
-        info: &RequestInfo,
-        param: Option<String>,
-        method: Method,
-    ) -> Result<RequestBuilder, YueError>;
+    fn compose_request(&self, client: &Client, info: &RequestInfo, param: Option<String>, method: Method) -> Result<RequestBuilder, YueError>;
 }
 
 pub async fn check_rate_limit(weight: u32, limiter: &DefaultRateLimiter) -> Result<(), YueError> {
     // 超时时间：2 秒
-    let timeout_duration = Duration::from_secs(2);
+    let timeout_duration = Duration::from_secs(60);
     // 抖动避免请求堆积
     let jitter = Jitter::up_to(Duration::from_millis(100));
 
@@ -54,11 +48,7 @@ pub async fn check_rate_limit(weight: u32, limiter: &DefaultRateLimiter) -> Resu
         None => return Err(YueError::new("权重必须为非零")),
     };
     // 等待令牌或�����时
-    let result = timeout(
-        timeout_duration,
-        limiter.until_n_ready_with_jitter(weight, jitter),
-    )
-    .await;
+    let result = timeout(timeout_duration, limiter.until_n_ready_with_jitter(weight, jitter)).await;
     match result {
         Ok(inner_result) => match inner_result {
             Ok(()) => Ok(()),
@@ -78,13 +68,7 @@ impl NonAuthRequestBuilder {
 }
 
 impl YueRequestBuilder for NonAuthRequestBuilder {
-    fn compose_request(
-        &self,
-        client: &Client,
-        info: &RequestInfo,
-        param: Option<String>,
-        method: Method,
-    ) -> Result<RequestBuilder, YueError> {
+    fn compose_request(&self, client: &Client, info: &RequestInfo, param: Option<String>, method: Method) -> Result<RequestBuilder, YueError> {
         let mut url = info.as_ref().clone();
         if let Some(p) = param {
             if !p.is_empty() {
@@ -165,8 +149,7 @@ where
     pub fn into_retryable(
         self,
         rate_limit: Option<&'a DefaultRateLimiter>,
-    ) -> impl FnMut() -> std::pin::Pin<Box<dyn Future<Output = Result<U, YueError>> + Send + 'a>> + 'a
-    {
+    ) -> impl FnMut() -> std::pin::Pin<Box<dyn Future<Output = Result<U, YueError>> + Send + 'a>> + 'a {
         let info = self.info;
         let param = self.param.clone();
         let request_builder = self.request_builder;
@@ -178,25 +161,11 @@ where
             let request_builder = request_builder.clone();
             let body = body;
             let method = method.clone();
-            Box::pin(async move {
-                YueRequest::<T, U>::perform_request_async(
-                    info,
-                    param,
-                    &request_builder,
-                    body,
-                    method.clone(),
-                    rate_limit,
-                )
-                .await
-            })
+            Box::pin(async move { YueRequest::<T, U>::perform_request_async(info, param, &request_builder, body, method.clone(), rate_limit).await })
         }
     }
 
-    pub fn retry<B: Backoff>(
-        self,
-        builder: B,
-        rate_limit: Option<&'a DefaultRateLimiter>,
-    ) -> impl Future<Output = Result<U, YueError>> {
+    pub fn retry<B: Backoff>(self, builder: B, rate_limit: Option<&'a DefaultRateLimiter>) -> impl Future<Output = Result<U, YueError>> {
         self.into_retryable(rate_limit).retry(builder)
     }
 }

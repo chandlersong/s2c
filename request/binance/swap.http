@@ -5,3 +5,9 @@ GET https://fapi.binance.com/fapi/v1/fundingRate
     &endTime=1692700800000
     &limit=1000 HTTP/1.1
 content-type: application/json
+
+
+### 查询HUSDT
+GET https://fapi.binance.com/fapi/v1/fundingRate
+    ?symbol=HUSDT HTTP/1.1
+content-type: application/json

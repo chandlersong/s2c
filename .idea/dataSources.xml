@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="DataSourceManagerImpl" format="xml" multifile-model="true">
-    <data-source source="LOCAL" name="mingyu" uuid="b0f9625f-9f5d-4daa-9db0-88e3ddfb82cf">
+    <data-source source="LOCAL" name="mingyu" read-only="true" uuid="b0f9625f-9f5d-4daa-9db0-88e3ddfb82cf">
       <driver-ref>duckdb</driver-ref>
       <synchronize>true</synchronize>
       <jdbc-driver>org.duckdb.DuckDBDriver</jdbc-driver>
