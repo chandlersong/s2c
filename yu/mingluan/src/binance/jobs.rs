@@ -34,25 +34,27 @@ pub async fn start_bn_jobs() -> Result<(), MingLuanError> {
     spot_kline_task.execute().await?;
 
     //TODO： 更新交易所时间表达式进入Config
-    let _ = CronActor::new("30 59 */6 * * * *", dashboard, "update exchange info").start();
-    let _ = CronActor::new("10 0 * * * * *", spot_kline_task, "fetch spot kline").start();
 
     let base_swap_kline_fetcher = SimpleHistoryFetcher::new(&SWAP_KLINE_COMMAND);
     let swap_kline_fetcher: CloneHistoryFetcherFactory<SimpleHistoryFetcher, KlineParams, BinanceKline> =
         CloneHistoryFetcherFactory::new(base_swap_kline_fetcher);
     let swap_kline_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SwapKline, SymbolType::Swap));
     let swap_kline_task = UpdateHistoryTask::<_, _, KlinePo, BinanceKline>::new(swap_kline_fetcher, trading_symbols.clone(), swap_kline_writer);
-    let _ = CronActor::new("10 0 * * * * *", swap_kline_task, "fetch swap kline").start();
+    swap_kline_task.execute().await?;
 
     //TODO: 写一个资金费率的专用的param
     let base_swap_funding_rate_fetcher = SimpleHistoryFetcher::new(&SWAP_FUNDING_RATE_COMMAND);
     let swap_funding_rate_fetcher: CloneHistoryFetcherFactory<SimpleHistoryFetcher, KlineParams, FundingRate> =
         CloneHistoryFetcherFactory::new(base_swap_funding_rate_fetcher);
-
     let swap_funding_rate_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SwapFundingRate, SymbolType::Swap));
-    let swap_kline_task =
+    let swap_funding_rate_task =
         UpdateHistoryTask::<_, _, FundingRatePo, FundingRate>::new(swap_funding_rate_fetcher, trading_symbols.clone(), swap_funding_rate_writer);
-    let _ = CronActor::new("10 0 * * * * *", swap_kline_task, "fetch swap funding rate").start();
+    swap_funding_rate_task.execute().await?;
+
+    let _ = CronActor::new("30 59 */6 * * * *", dashboard, "update exchange info").start();
+    let _ = CronActor::new("10 0 * * * * *", spot_kline_task, "fetch spot kline").start();
+    let _ = CronActor::new("10 0 * * * * *", swap_funding_rate_task, "fetch swap funding rate").start();
+    let _ = CronActor::new("10 0 * * * * *", swap_kline_task, "fetch swap kline").start();
 
     Ok(())
 }
