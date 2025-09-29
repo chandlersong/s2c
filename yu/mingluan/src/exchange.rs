@@ -56,5 +56,5 @@ where
 pub trait ExchangeDashBoard {
     type TradingSymbol;
 
-    fn spot_info(&self) -> Arc<RwLock<Self::TradingSymbol>>;
+    fn trading_symbols(&self) -> Arc<RwLock<Self::TradingSymbol>>;
 }

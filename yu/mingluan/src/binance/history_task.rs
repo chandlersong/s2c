@@ -246,10 +246,11 @@ impl HistoryPO for FundingRatePo {
 }
 
 #[derive(Clone)]
-pub struct UpdateHistoryTask<F, P, R>
+pub struct UpdateHistoryTask<F, P, R, V>
 where
-    F: HistoryFetcherFactory<Param = P, Output = BinanceKline>,
+    F: HistoryFetcherFactory<Param = P, Output = V>,
     P: MuteHistoryParam + ToQueryParams + Clone + Send + Sync,
+    V: HistoryVo + Clone,
     R: HistoryPO + Clone,
 {
     kline_fetcher_factory: F,
@@ -257,10 +258,11 @@ where
     data_writer: Arc<dyn HistoryDataWriter<R> + Send + Sync>,
 }
 
-impl<F, P, R> UpdateHistoryTask<F, P, R>
+impl<F, P, R, V> UpdateHistoryTask<F, P, R, V>
 where
-    F: HistoryFetcherFactory<Param = P, Output = BinanceKline>,
+    F: HistoryFetcherFactory<Param = P, Output = V>,
     P: MuteHistoryParam + ToQueryParams + Clone + Send + Sync,
+    V: HistoryVo + Clone,
     R: HistoryPO + Clone,
 {
     pub fn new(factory: F, spot_info: Arc<RwLock<TradingSymbols>>, data_writer: Arc<dyn HistoryDataWriter<R> + Send + Sync>) -> Self {
@@ -273,8 +275,8 @@ where
 
     async fn fetch_symbol_data<T>(kline_fetcher: T, param: P, timestamp: u64, tx: mpsc::Sender<Result<Vec<R>, yue::errors::YueError>>)
     where
-        T: HistoryFetcher<P, BinanceKline> + Send + Sync + 'static,
-        R: HistoryPO<Source = BinanceKline> + Clone,
+        T: HistoryFetcher<P, V> + Send + Sync + 'static,
+        R: HistoryPO<Source = V> + Clone,
     {
         debug!("update -> symbol: {}, latest: {}", param.get_symbol(), unix_2_readable(&timestamp));
         let result = match kline_fetcher.get_all_kline_data(param.clone(), Some(timestamp + ONE_HOUR_MS)).await {
@@ -302,11 +304,12 @@ where
 }
 
 #[async_trait]
-impl<F, P, R> AsyncRepeatTask for UpdateHistoryTask<F, P, R>
+impl<F, P, R, V> AsyncRepeatTask for UpdateHistoryTask<F, P, R, V>
 where
-    F: HistoryFetcherFactory<Param = P, Output = BinanceKline> + Clone + Send + Sync + Unpin + 'static,
+    F: HistoryFetcherFactory<Param = P, Output = V> + Clone + Send + Sync + Unpin + 'static,
     P: MuteHistoryParam + ToQueryParams + Clone + Send + Sync + 'static,
-    R: HistoryPO<Source = BinanceKline> + Send + Sync + Clone + 'static,
+    V: HistoryVo + Clone + Send + Sync + Clone + 'static,
+    R: HistoryPO<Source = V> + Send + Sync + Clone + 'static,
 {
     async fn execute(&self) -> Result<(), MingLuanError> {
         let latest_symbol = self.data_writer.query_latest_symbols(&self.spot_info.read().unwrap())?;
@@ -453,7 +456,8 @@ mod tests {
             SpotKline.table_name(),
             SymbolType::Spot,
         ));
-        let manager: UpdateHistoryTask<MockHistoryFetcherFactory, KlineParams, KlinePo> = UpdateHistoryTask::new(factory, spot_info, data_writer);
+        let manager: UpdateHistoryTask<MockHistoryFetcherFactory, KlineParams, KlinePo, BinanceKline> =
+            UpdateHistoryTask::new(factory, spot_info, data_writer);
         let res = manager.execute().await;
 
         println!("{:?}", res);

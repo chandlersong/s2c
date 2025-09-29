@@ -14,13 +14,13 @@ pub struct TradingSymbols {
 
 #[derive(Clone)]
 pub struct BinanceDashboard {
-    spot_info: Arc<RwLock<TradingSymbols>>,
+    trading_symbols: Arc<RwLock<TradingSymbols>>,
 }
 
 impl BinanceDashboard {
     pub fn new() -> Self {
         BinanceDashboard {
-            spot_info: Arc::new(RwLock::new(TradingSymbols {
+            trading_symbols: Arc::new(RwLock::new(TradingSymbols {
                 trading_spot_symbols: vec![],
                 trading_swap_symbols: vec![],
             })),
@@ -31,8 +31,8 @@ impl BinanceDashboard {
 impl ExchangeDashBoard for BinanceDashboard {
     type TradingSymbol = TradingSymbols;
 
-    fn spot_info(&self) -> Arc<RwLock<TradingSymbols>> {
-        self.spot_info.clone()
+    fn trading_symbols(&self) -> Arc<RwLock<TradingSymbols>> {
+        self.trading_symbols.clone()
     }
 }
 
@@ -46,7 +46,7 @@ impl AsyncRepeatTask for BinanceDashboard {
 
         match (spot_res, swap_res) {
             (Ok(spot_symbols), Ok(swap_symbols)) => {
-                if let Ok(mut vo) = self.spot_info.write() {
+                if let Ok(mut vo) = self.trading_symbols.write() {
                     vo.trading_spot_symbols = spot_symbols.iter().map(|sym| sym.symbol.clone()).collect();
                     vo.trading_swap_symbols = swap_symbols.iter().map(|sym| sym.symbol.clone()).collect();
                     Ok(())
