@@ -28,11 +28,7 @@ pub async fn start_bn_jobs() -> Result<(), MingLuanError> {
     let spot_kline_fetcher: CloneHistoryFetcherFactory<SimpleHistoryFetcher, KlineParams, BinanceKline> =
         CloneHistoryFetcherFactory::new(base_spot_kline_fetcher);
 
-    let spot_data_writer = Arc::new(DuckDBHistoryDataWriter::new(
-        DBProvider::default(),
-        SpotKline.table_name(),
-        SymbolType::Spot,
-    ));
+    let spot_data_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SpotKline, SymbolType::Spot));
 
     let spot_kline_task = UpdateHistoryTask::<_, _, KlinePo, BinanceKline>::new(spot_kline_fetcher, trading_symbols.clone(), spot_data_writer);
     spot_kline_task.execute().await?;
@@ -44,11 +40,7 @@ pub async fn start_bn_jobs() -> Result<(), MingLuanError> {
     let base_swap_kline_fetcher = SimpleHistoryFetcher::new(&SWAP_KLINE_COMMAND);
     let swap_kline_fetcher: CloneHistoryFetcherFactory<SimpleHistoryFetcher, KlineParams, BinanceKline> =
         CloneHistoryFetcherFactory::new(base_swap_kline_fetcher);
-    let swap_kline_writer = Arc::new(DuckDBHistoryDataWriter::new(
-        DBProvider::default(),
-        SwapKline.table_name(),
-        SymbolType::Swap,
-    ));
+    let swap_kline_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SwapKline, SymbolType::Swap));
     let swap_kline_task = UpdateHistoryTask::<_, _, KlinePo, BinanceKline>::new(swap_kline_fetcher, trading_symbols.clone(), swap_kline_writer);
     let _ = CronActor::new("10 0 * * * * *", swap_kline_task, "fetch swap kline").start();
 
@@ -57,11 +49,7 @@ pub async fn start_bn_jobs() -> Result<(), MingLuanError> {
     let swap_funding_rate_fetcher: CloneHistoryFetcherFactory<SimpleHistoryFetcher, KlineParams, FundingRate> =
         CloneHistoryFetcherFactory::new(base_swap_funding_rate_fetcher);
 
-    let swap_funding_rate_writer = Arc::new(DuckDBHistoryDataWriter::new(
-        DBProvider::default(),
-        SwapFundingRate.table_name(),
-        SymbolType::Swap,
-    ));
+    let swap_funding_rate_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SwapFundingRate, SymbolType::Swap));
     let swap_kline_task =
         UpdateHistoryTask::<_, _, FundingRatePo, FundingRate>::new(swap_funding_rate_fetcher, trading_symbols.clone(), swap_funding_rate_writer);
     let _ = CronActor::new("10 0 * * * * *", swap_kline_task, "fetch swap funding rate").start();

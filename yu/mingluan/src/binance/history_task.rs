@@ -1,5 +1,5 @@
 use crate::actix_jobs::AsyncRepeatTask;
-use crate::binance::binance_consts::{GENESIS_2020_MS, ONE_HOUR_MS, QUERY_LATEST_SQL};
+use crate::binance::binance_consts::{BinanceTables, GENESIS_2020_MS, ONE_HOUR_MS};
 use crate::binance::bn_dashboard::TradingSymbols;
 use crate::duck_db::DBProvider;
 use crate::errors::MingLuanError;
@@ -26,20 +26,20 @@ pub trait HistoryPO: Debug {
 
 pub trait HistoryDataWriter<O: HistoryPO>: Send + Sync {
     fn write_batch(&self, data: Vec<O>) -> Result<(), MingLuanError>;
-    fn query_latest_symbols(&self, spot_info: &TradingSymbols) -> Result<Vec<(String, u64)>, MingLuanError>;
+    fn query_latest_symbols(&self, trading_symbols: &TradingSymbols) -> Result<Vec<(String, u64)>, MingLuanError>;
 }
 
 pub struct DuckDBHistoryDataWriter {
     provider: DBProvider,
-    table_name: String,
+    table: BinanceTables,
     symbol_type: SymbolType,
 }
 
 impl DuckDBHistoryDataWriter {
-    pub fn new(provider: DBProvider, table_name: String, symbol_type: SymbolType) -> Self {
+    pub fn new(provider: DBProvider, table: BinanceTables, symbol_type: SymbolType) -> Self {
         DuckDBHistoryDataWriter {
             provider,
-            table_name,
+            table,
             symbol_type,
         }
     }
@@ -53,10 +53,10 @@ impl<O: HistoryPO> HistoryDataWriter<O> for DuckDBHistoryDataWriter {
         let mut conn = self.provider.acquire()?;
         let mut tx = conn.transaction()?;
         tx.set_drop_behavior(DropBehavior::Commit);
-        let mut appender = match tx.appender(&self.table_name) {
+        let mut appender = match tx.appender(&self.table.table_name()) {
             Ok(a) => a,
             Err(e) => {
-                error!("Failed to create appender for table {}: {}", self.table_name, e);
+                error!("Failed to create appender for table {}: {}", self.table.table_name(), e);
                 return Err(MingLuanError::CustomError("Failed to create appender".to_string()));
             }
         };
@@ -67,14 +67,21 @@ impl<O: HistoryPO> HistoryDataWriter<O> for DuckDBHistoryDataWriter {
             }
         }
         if let Err(e) = appender.flush() {
-            error!("Failed to flush appender for table {}: {}", self.table_name, e);
+            error!("Failed to flush appender for table {}: {}", self.table.table_name(), e);
         };
         Ok(())
     }
 
-    fn query_latest_symbols(&self, spot_info: &TradingSymbols) -> Result<Vec<(String, u64)>, MingLuanError> {
+    fn query_latest_symbols(&self, trading_symbols: &TradingSymbols) -> Result<Vec<(String, u64)>, MingLuanError> {
         let conn = self.provider.acquire()?;
-        let mut stmt = conn.prepare(QUERY_LATEST_SQL)?;
+        let query_sql = match self.table.query_lastest_record() {
+            None => Err(MingLuanError::new(&format!(
+                "Table {} does not support querying latest record",
+                self.table.table_name()
+            )))?,
+            Some(s) => s,
+        };
+        let mut stmt = conn.prepare(&query_sql)?;
         let symbol_in_db: HashMap<String, u64> = stmt
             .query_map([], |row| {
                 let symbol: String = row.get(0)?;
@@ -85,8 +92,8 @@ impl<O: HistoryPO> HistoryDataWriter<O> for DuckDBHistoryDataWriter {
             .into_iter()
             .collect();
         let symbols = match self.symbol_type {
-            SymbolType::Spot => &spot_info.trading_spot_symbols,
-            SymbolType::Swap => &spot_info.trading_swap_symbols,
+            SymbolType::Spot => &trading_symbols.trading_spot_symbols,
+            SymbolType::Swap => &trading_symbols.trading_swap_symbols,
         };
 
         let filtered: Vec<(String, u64)> = symbols
@@ -451,11 +458,7 @@ mod tests {
         import_local_csv_and_assert(&conn, SpotKline.table_name().as_str(), csv_path.as_path(), 7)?;
 
         let factory = MockHistoryFetcherFactory {};
-        let data_writer = Arc::new(DuckDBHistoryDataWriter::new(
-            db_provider.clone(),
-            SpotKline.table_name(),
-            SymbolType::Spot,
-        ));
+        let data_writer = Arc::new(DuckDBHistoryDataWriter::new(db_provider.clone(), SpotKline, SymbolType::Spot));
         let manager: UpdateHistoryTask<MockHistoryFetcherFactory, KlineParams, KlinePo, BinanceKline> =
             UpdateHistoryTask::new(factory, spot_info, data_writer);
         let res = manager.execute().await;

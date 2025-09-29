@@ -3,7 +3,10 @@ pub(crate) const ONE_HOUR_MS: u64 = 60 * 60 * 1000;
 // 2020年1月1日零点的毫秒时间戳
 pub(crate) const GENESIS_2020_MS: u64 = 1577836800000;
 
-pub(super) static QUERY_LATEST_SQL: &str = "select symbol,max(candle_begin_time) as latest from spot_kline group by symbol;";
+pub static QUERY_LATEST_SPOT_KLINE_SQL: &str = "select symbol,max(candle_begin_time) as latest from spot_kline group by symbol;";
+pub static QUERY_LATEST_SWAP_KLINE_SQL: &str = "select symbol,max(candle_begin_time) as latest from swap_kline group by symbol;";
+
+pub static QUERY_LATEST_FUNDING_RATE_SQL: &str = "select symbol,max(funding_time) as latest from swap_funding_rate group by symbol;";
 
 pub(crate) enum BinanceTables {
     SpotKline,
@@ -27,10 +30,19 @@ impl BinanceTables {
             BinanceTables::SwapFundingRate => String::from(CREATE_FUNDING_RATE_TABLE),
         }
     }
+
+    pub(crate) fn query_lastest_record(&self) -> Option<String> {
+        match self {
+            BinanceTables::SpotKline => Some(String::from(QUERY_LATEST_SPOT_KLINE_SQL)),
+            BinanceTables::SwapKline => Some(String::from(QUERY_LATEST_SWAP_KLINE_SQL)),
+            BinanceTables::SwapFundingRate => Some(String::from(QUERY_LATEST_FUNDING_RATE_SQL)),
+            // _ => None,
+        }
+    }
 }
 
 // 直接为三张表生成格式化建表SQL（不带索引），字段对齐、注释清晰
-pub(crate) const CREATE_SPOT_KLINE_TABLE: &str = r#"
+pub const CREATE_SPOT_KLINE_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS spot_kline (
     id                          BIGINT,   -- 主键ID
     symbol                      VARCHAR,  -- 交易对
@@ -48,7 +60,7 @@ CREATE TABLE IF NOT EXISTS spot_kline (
 );
 "#;
 
-pub(crate) const CREATE_SWAP_KLINE_TABLE: &str = r#"
+pub const CREATE_SWAP_KLINE_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS swap_kline (
     id                          BIGINT,   -- 主键ID
     symbol                      VARCHAR,  -- 交易对
@@ -66,7 +78,7 @@ CREATE TABLE IF NOT EXISTS swap_kline (
 );
 "#;
 
-pub(crate) const CREATE_FUNDING_RATE_TABLE: &str = r#"
+pub const CREATE_FUNDING_RATE_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS swap_funding_rate (
     id           BIGINT,   -- 主键ID
     symbol       VARCHAR,  -- 交易对
