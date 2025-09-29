@@ -38,7 +38,7 @@ pub trait YueRequestBuilder: Send + Sync {
 
 pub async fn check_rate_limit(weight: u32, limiter: &DefaultRateLimiter) -> Result<(), YueError> {
     // 超时时间：2 秒
-    let timeout_duration = Duration::from_secs(60);
+    let timeout_duration = Duration::from_secs(2);
     // 抖动避免请求堆积
     let jitter = Jitter::up_to(Duration::from_millis(100));
 

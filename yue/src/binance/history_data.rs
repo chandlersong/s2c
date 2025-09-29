@@ -19,6 +19,9 @@ static SPOT_RATE_LIMITER: OnceLock<DefaultRateLimiter> = OnceLock::new();
 
 ///TODO: 做成配置，优先级低
 /// 这里很奇怪，我500个也是报错的
+/// TODO： 分开来每个接口做限流
+/// 1. 写在Command里面
+/// 2. 每个url单独一个
 static SPOT_RATE_LIMITER_PER_SECOND: u32 = 500;
 /// 获取 RateLimiter 的静态引用
 fn get_bn_spot_rate_limit(per_second_num: u32) -> Option<&'static DefaultRateLimiter> {
