@@ -5,7 +5,7 @@ use crate::binance::bn_dashboard::BinanceDashboard;
 use crate::binance::history_task::{DuckDBHistoryDataWriter, FundingRatePo, KlinePo, UpdateHistoryTask};
 use crate::duck_db::DBProvider;
 use crate::errors::MingLuanError;
-use crate::exchange::{CloneHistoryFetcherFactory, ExchangeDashBoard};
+use crate::exchange::CloneHistoryFetcherFactory;
 use actix::Actor;
 use duckdb::Connection;
 use std::sync::Arc;
@@ -21,8 +21,8 @@ pub async fn start_bn_jobs() -> Result<(), MingLuanError> {
     let dashboard = BinanceDashboard::new();
     //每六个小时更新一次。因为这样频率不要那么高
     dashboard.execute().await?;
-
-    let trading_symbols = dashboard.trading_symbols();
+    let update_dashboard_task = dashboard.clone();
+    let dash_board = Arc::new(dashboard);
     initial_table()?;
     let base_spot_kline_fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_COMMAND);
     let spot_kline_fetcher: CloneHistoryFetcherFactory<SimpleHistoryFetcher, KlineParams, BinanceKline> =
@@ -30,7 +30,8 @@ pub async fn start_bn_jobs() -> Result<(), MingLuanError> {
 
     let spot_data_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SpotKline, SymbolType::Spot));
 
-    let spot_kline_task = UpdateHistoryTask::<_, _, KlinePo, BinanceKline>::new(spot_kline_fetcher, trading_symbols.clone(), spot_data_writer);
+    let spot_kline_task =
+        UpdateHistoryTask::<_, _, KlinePo, BinanceKline, BinanceDashboard>::new(spot_kline_fetcher, dash_board.clone(), spot_data_writer);
     spot_kline_task.execute().await?;
 
     //TODO： 更新交易所时间表达式进入Config
@@ -39,7 +40,8 @@ pub async fn start_bn_jobs() -> Result<(), MingLuanError> {
     let swap_kline_fetcher: CloneHistoryFetcherFactory<SimpleHistoryFetcher, KlineParams, BinanceKline> =
         CloneHistoryFetcherFactory::new(base_swap_kline_fetcher);
     let swap_kline_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SwapKline, SymbolType::Swap));
-    let swap_kline_task = UpdateHistoryTask::<_, _, KlinePo, BinanceKline>::new(swap_kline_fetcher, trading_symbols.clone(), swap_kline_writer);
+    let swap_kline_task =
+        UpdateHistoryTask::<_, _, KlinePo, BinanceKline, BinanceDashboard>::new(swap_kline_fetcher, dash_board.clone(), swap_kline_writer);
     swap_kline_task.execute().await?;
 
     //TODO: 写一个资金费率的专用的param
@@ -47,11 +49,14 @@ pub async fn start_bn_jobs() -> Result<(), MingLuanError> {
     let swap_funding_rate_fetcher: CloneHistoryFetcherFactory<SimpleHistoryFetcher, KlineParams, FundingRate> =
         CloneHistoryFetcherFactory::new(base_swap_funding_rate_fetcher);
     let swap_funding_rate_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SwapFundingRate, SymbolType::Swap));
-    let swap_funding_rate_task =
-        UpdateHistoryTask::<_, _, FundingRatePo, FundingRate>::new(swap_funding_rate_fetcher, trading_symbols.clone(), swap_funding_rate_writer);
+    let swap_funding_rate_task = UpdateHistoryTask::<_, _, FundingRatePo, FundingRate, BinanceDashboard>::new(
+        swap_funding_rate_fetcher,
+        dash_board.clone(),
+        swap_funding_rate_writer,
+    );
     swap_funding_rate_task.execute().await?;
 
-    let _ = CronActor::new("30 59 */6 * * * *", dashboard, "update exchange info").start();
+    let _ = CronActor::new("30 59 */6 * * * *", update_dashboard_task, "update exchange info").start();
     let _ = CronActor::new("10 0 * * * * *", spot_kline_task, "fetch spot kline").start();
     let _ = CronActor::new("10 0 * * * * *", swap_funding_rate_task, "fetch swap funding rate").start();
     let _ = CronActor::new("10 0 * * * * *", swap_kline_task, "fetch swap kline").start();

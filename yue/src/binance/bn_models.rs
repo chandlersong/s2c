@@ -760,6 +760,10 @@ pub trait SymbolInfoTrait {
     fn order_types(&self) -> &Vec<String>;
     fn quote_precision(&self) -> i32;
     fn symbol_type(&self) -> &str;
+
+    fn get_on_board_time(&self) -> Option<u64> {
+        None
+    }
 }
 
 impl SymbolInfoTrait for ExchangeSymbol {
@@ -807,6 +811,9 @@ impl SymbolInfoTrait for SwapExchangeSymbol {
     }
     fn symbol_type(&self) -> &str {
         &self.contract_type
+    }
+    fn get_on_board_time(&self) -> Option<u64> {
+        self.onboard_date
     }
 }
 

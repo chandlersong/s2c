@@ -10,34 +10,45 @@ use yue::binance::history_data::{get_trading_spot_symbols, get_trading_swap_symb
 /// 这里用户可以获取字符串的symbol,也能获取一些计算其他需要的信息，比如说
 /// 1. swap的上市时间
 /// 2. 最小交易单位
-
 #[derive(Debug, Clone)]
-pub struct TradingSymbols {
-    pub trading_spot_symbols: Vec<String>,
-    pub trading_swap_symbols: Vec<String>,
+pub struct TradingSymbol {
+    pub symbol: String,
+    pub on_board_time: Option<u64>,
+    pub quote_asset: String, //报价资产
 }
 
 #[derive(Clone)]
 pub struct BinanceDashboard {
-    trading_symbols: Arc<RwLock<TradingSymbols>>,
+    spot_symbols: Arc<RwLock<Vec<TradingSymbol>>>,
+    swap_symbols: Arc<RwLock<Vec<TradingSymbol>>>,
 }
 
 impl BinanceDashboard {
     pub fn new() -> Self {
         BinanceDashboard {
-            trading_symbols: Arc::new(RwLock::new(TradingSymbols {
-                trading_spot_symbols: vec![],
-                trading_swap_symbols: vec![],
-            })),
+            spot_symbols: Arc::new(RwLock::new(vec![])),
+            swap_symbols: Arc::new(RwLock::new(vec![])),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn new_with_data(spot_symbol: Vec<TradingSymbol>, swap_symbol: Vec<TradingSymbol>) -> Self {
+        BinanceDashboard {
+            spot_symbols: Arc::new(RwLock::new(spot_symbol)),
+            swap_symbols: Arc::new(RwLock::new(swap_symbol)),
         }
     }
 }
 
 impl ExchangeDashBoard for BinanceDashboard {
-    type TradingSymbol = TradingSymbols;
+    type TradingSymbol = TradingSymbol;
 
-    fn trading_symbols(&self) -> Arc<RwLock<TradingSymbols>> {
-        self.trading_symbols.clone()
+    fn spot_symbols(&self) -> Arc<RwLock<Vec<TradingSymbol>>> {
+        self.spot_symbols.clone()
+    }
+
+    fn swap_symbols(&self) -> Arc<RwLock<Vec<TradingSymbol>>> {
+        self.swap_symbols.clone()
     }
 }
 
@@ -51,14 +62,26 @@ impl AsyncRepeatTask for BinanceDashboard {
 
         match (spot_res, swap_res) {
             (Ok(spot_symbols), Ok(swap_symbols)) => {
-                if let Ok(mut vo) = self.trading_symbols.write() {
-                    vo.trading_spot_symbols = spot_symbols.iter().map(|sym| sym.symbol.clone()).collect();
-                    vo.trading_swap_symbols = swap_symbols.iter().map(|sym| sym.symbol.clone()).collect();
-                    Ok(())
-                } else {
-                    error!("Failed to acquire write lock on spot_info");
-                    Err(MingLuanError::CustomError("Failed to acquire write lock on spot_info".to_string()))
-                }
+                let trading_spot_symbols: Vec<TradingSymbol> = spot_symbols
+                    .iter()
+                    .map(|sym| TradingSymbol {
+                        symbol: sym.symbol.clone(),
+                        on_board_time: None,
+                        quote_asset: sym.quote_asset.clone(),
+                    })
+                    .collect();
+                let trading_swap_symbols: Vec<TradingSymbol> = swap_symbols
+                    .iter()
+                    .map(|sym| TradingSymbol {
+                        symbol: sym.symbol.clone(),
+                        on_board_time: sym.on_board_time,
+                        quote_asset: sym.quote_asset.clone(),
+                    })
+                    .collect();
+
+                *self.spot_symbols.write().unwrap() = trading_spot_symbols;
+                *self.swap_symbols.write().unwrap() = trading_swap_symbols;
+                Ok(())
             }
             (Err(e), _) => {
                 error!("Error fetching trading spot symbols: {:?}", e);

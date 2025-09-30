@@ -1,9 +1,9 @@
 use crate::actix_jobs::AsyncRepeatTask;
 use crate::binance::binance_consts::{BinanceTables, GENESIS_2020_MS, ONE_HOUR_MS};
-use crate::binance::bn_dashboard::TradingSymbols;
+use crate::binance::bn_dashboard::TradingSymbol;
 use crate::duck_db::DBProvider;
 use crate::errors::MingLuanError;
-use crate::exchange::HistoryFetcherFactory;
+use crate::exchange::{ExchangeDashBoard, HistoryFetcherFactory};
 use crate::utils::get_snowflake_generator;
 use async_trait::async_trait;
 use duckdb::{appender_params_from_iter, DropBehavior};
@@ -11,7 +11,7 @@ use li::tools::time::unix_2_readable;
 use log::{debug, error, info};
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use yue::binance::bn_models::{BinanceKline, FundingRate, SymbolType, ToQueryParams};
 use yue::binance::history_data::{HistoryFetcher, HistoryVo, MuteHistoryParam};
@@ -24,9 +24,9 @@ pub trait HistoryPO: Debug {
     fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>>;
 }
 
-pub trait HistoryDataWriter<O: HistoryPO>: Send + Sync {
+pub trait HistoryDataWriter<O: HistoryPO, D: ExchangeDashBoard<TradingSymbol = TradingSymbol>>: Send + Sync {
     fn write_batch(&self, data: Vec<O>) -> Result<(), MingLuanError>;
-    fn query_latest_symbols(&self, trading_symbols: &TradingSymbols) -> Result<Vec<(String, u64)>, MingLuanError>;
+    fn query_latest_symbols(&self, dash_board: Arc<D>) -> Result<Vec<(String, u64)>, MingLuanError>;
 }
 
 pub struct DuckDBHistoryDataWriter {
@@ -45,7 +45,7 @@ impl DuckDBHistoryDataWriter {
     }
 }
 
-impl<O: HistoryPO> HistoryDataWriter<O> for DuckDBHistoryDataWriter {
+impl<O: HistoryPO, D: ExchangeDashBoard<TradingSymbol = TradingSymbol>> HistoryDataWriter<O, D> for DuckDBHistoryDataWriter {
     fn write_batch(&self, data: Vec<O>) -> Result<(), MingLuanError> {
         if data.is_empty() {
             return Ok(());
@@ -72,7 +72,7 @@ impl<O: HistoryPO> HistoryDataWriter<O> for DuckDBHistoryDataWriter {
         Ok(())
     }
 
-    fn query_latest_symbols(&self, trading_symbols: &TradingSymbols) -> Result<Vec<(String, u64)>, MingLuanError> {
+    fn query_latest_symbols(&self, dashboard: Arc<D>) -> Result<Vec<(String, u64)>, MingLuanError> {
         let conn = self.provider.acquire()?;
         let query_sql = match self.table.query_lastest_record() {
             None => Err(MingLuanError::new(&format!(
@@ -95,14 +95,22 @@ impl<O: HistoryPO> HistoryDataWriter<O> for DuckDBHistoryDataWriter {
         // 1 这里传入那个最外面的锁。这里获取锁
         // 2，symbol为对象，而不是string。来判断开始日期
         let symbols = match self.symbol_type {
-            SymbolType::Spot => &trading_symbols.trading_spot_symbols,
-            SymbolType::Swap => &trading_symbols.trading_swap_symbols,
+            SymbolType::Spot => dashboard.spot_symbols().read().unwrap().clone(),
+            SymbolType::Swap => dashboard.swap_symbols().read().unwrap().clone(),
         };
 
         let filtered: Vec<(String, u64)> = symbols
             .into_iter()
-            .filter(|s| s.ends_with("USDT"))
-            .map(|s| (s.clone(), symbol_in_db.get(s).copied().unwrap_or(GENESIS_2020_MS)))
+            .filter(|s| s.quote_asset.eq("USDT"))
+            .map(|s| {
+                (
+                    s.symbol.clone(),
+                    symbol_in_db
+                        .get(&s.symbol)
+                        .copied()
+                        .unwrap_or(s.on_board_time.unwrap_or_else(|| GENESIS_2020_MS)),
+                )
+            })
             .collect();
         info!("fetched {} trading symbols", filtered.len());
         Ok(filtered)
@@ -256,29 +264,31 @@ impl HistoryPO for FundingRatePo {
 }
 
 #[derive(Clone)]
-pub struct UpdateHistoryTask<F, P, R, V>
+pub struct UpdateHistoryTask<F, P, R, V, D>
 where
     F: HistoryFetcherFactory<Param = P, Output = V>,
     P: MuteHistoryParam + ToQueryParams + Clone + Send + Sync,
     V: HistoryVo + Clone,
     R: HistoryPO + Clone,
+    D: ExchangeDashBoard<TradingSymbol = TradingSymbol> + Send + Sync,
 {
     kline_fetcher_factory: F,
-    spot_info: Arc<RwLock<TradingSymbols>>,
-    data_writer: Arc<dyn HistoryDataWriter<R> + Send + Sync>,
+    exchange_dashboard: Arc<D>,
+    data_writer: Arc<dyn HistoryDataWriter<R, D> + Send + Sync>,
 }
 
-impl<F, P, R, V> UpdateHistoryTask<F, P, R, V>
+impl<F, P, R, V, D> UpdateHistoryTask<F, P, R, V, D>
 where
     F: HistoryFetcherFactory<Param = P, Output = V>,
     P: MuteHistoryParam + ToQueryParams + Clone + Send + Sync,
     V: HistoryVo + Clone,
     R: HistoryPO + Clone,
+    D: ExchangeDashBoard<TradingSymbol = TradingSymbol> + Send + Sync,
 {
-    pub fn new(factory: F, spot_info: Arc<RwLock<TradingSymbols>>, data_writer: Arc<dyn HistoryDataWriter<R> + Send + Sync>) -> Self {
+    pub fn new(factory: F, exchange_dashboard: Arc<D>, data_writer: Arc<dyn HistoryDataWriter<R, D> + Send + Sync>) -> Self {
         UpdateHistoryTask {
             kline_fetcher_factory: factory,
-            spot_info,
+            exchange_dashboard,
             data_writer,
         }
     }
@@ -314,15 +324,16 @@ where
 }
 
 #[async_trait]
-impl<F, P, R, V> AsyncRepeatTask for UpdateHistoryTask<F, P, R, V>
+impl<F, P, R, V, D> AsyncRepeatTask for UpdateHistoryTask<F, P, R, V, D>
 where
     F: HistoryFetcherFactory<Param = P, Output = V> + Clone + Send + Sync + Unpin + 'static,
     P: MuteHistoryParam + ToQueryParams + Clone + Send + Sync + 'static,
     V: HistoryVo + Clone + Send + Sync + Clone + 'static,
     R: HistoryPO<Source = V> + Send + Sync + Clone + 'static,
+    D: ExchangeDashBoard<TradingSymbol = TradingSymbol> + Send + Sync + Clone + 'static,
 {
     async fn execute(&self) -> Result<(), MingLuanError> {
-        let latest_symbol = self.data_writer.query_latest_symbols(&self.spot_info.read().unwrap())?;
+        let latest_symbol = self.data_writer.query_latest_symbols(self.exchange_dashboard.clone())?;
         let (tx, mut rx) = mpsc::channel(100);
         let symbol_count = latest_symbol.len();
 
@@ -365,7 +376,7 @@ mod tests {
     use crate::actix_jobs::AsyncRepeatTask;
     use crate::binance::binance_consts::BinanceTables::SpotKline;
     use crate::binance::binance_consts::ONE_HOUR_MS;
-    use crate::binance::bn_dashboard::TradingSymbols;
+    use crate::binance::bn_dashboard::{BinanceDashboard, TradingSymbol};
     use crate::binance::history_task::{DuckDBHistoryDataWriter, KlinePo, UpdateHistoryTask};
     use crate::duck_db::DBProvider;
     use crate::errors::MingLuanError;
@@ -376,7 +387,7 @@ mod tests {
     use mockall::{mock, predicate};
     use r2d2::Pool;
     use std::path::Path;
-    use std::sync::{Arc, RwLock};
+    use std::sync::Arc;
     use yue::binance::bn_models::{BinanceKline, SymbolType};
     use yue::binance::history_data::{HistoryFetcher, HistoryInterval, KlineParams, MuteHistoryParam};
     use yue::errors::YueError;
@@ -453,17 +464,18 @@ mod tests {
         // 直接从仓库中的本地 CSV 导入并断言行数为 2
         let csv_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/test_refresh_spot_kline_normal.csv");
 
-        let trading_symbols = vec!["BTCUSDT".to_string()];
-        let spot_info = Arc::new(RwLock::new(TradingSymbols {
-            trading_spot_symbols: trading_symbols,
-            trading_swap_symbols: vec![],
-        }));
+        let trading_symbols = vec![TradingSymbol {
+            symbol: "BTCUSDT".to_string(),
+            on_board_time: None,
+            quote_asset: "USDT".to_string(),
+        }];
+        let dash_board = Arc::new(BinanceDashboard::new_with_data(trading_symbols, vec![]));
         import_local_csv_and_assert(&conn, SpotKline.table_name().as_str(), csv_path.as_path(), 7)?;
 
         let factory = MockHistoryFetcherFactory {};
         let data_writer = Arc::new(DuckDBHistoryDataWriter::new(db_provider.clone(), SpotKline, SymbolType::Spot));
-        let manager: UpdateHistoryTask<MockHistoryFetcherFactory, KlineParams, KlinePo, BinanceKline> =
-            UpdateHistoryTask::new(factory, spot_info, data_writer);
+        let manager: UpdateHistoryTask<MockHistoryFetcherFactory, KlineParams, KlinePo, BinanceKline, BinanceDashboard> =
+            UpdateHistoryTask::new(factory, dash_board, data_writer);
         let res = manager.execute().await;
 
         println!("{:?}", res);

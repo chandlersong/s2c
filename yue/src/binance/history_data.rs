@@ -28,6 +28,8 @@ pub struct TradingSymbolInfo {
     pub order_types: Vec<String>,
     /// 类型字段，spot统一填"spot"，swap填contract_type
     pub symbol_type: String,
+    /// 上线时间，单位毫秒时间戳，spot取不到，所以为None，swap有值
+    pub on_board_time: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -165,6 +167,7 @@ pub fn extract_trading_symbols<S: SymbolInfoTrait>(symbols: &[S], status: Option
             quote_asset_precision: symbol.quote_precision(),
             order_types: symbol.order_types().clone(),
             symbol_type: symbol.symbol_type().to_string(),
+            on_board_time: symbol.get_on_board_time(),
         })
         .collect()
 }

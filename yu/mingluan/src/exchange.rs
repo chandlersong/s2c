@@ -56,5 +56,7 @@ where
 pub trait ExchangeDashBoard {
     type TradingSymbol;
 
-    fn trading_symbols(&self) -> Arc<RwLock<Self::TradingSymbol>>;
+    fn spot_symbols(&self) -> Arc<RwLock<Vec<Self::TradingSymbol>>>;
+
+    fn swap_symbols(&self) -> Arc<RwLock<Vec<Self::TradingSymbol>>>;
 }
