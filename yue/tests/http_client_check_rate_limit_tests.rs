@@ -14,11 +14,11 @@ mod tests {
     async fn test_rate_limited() {
         let limiter = get_test_rate_limiter(1200);
         // 测试正常调��
-        let result = check_rate_limit(1, &limiter).await;
+        let result = check_rate_limit(1, &limiter, 2).await;
         assert!(result.is_ok());
 
         // 测试高权重调用，触发超时
-        let result = check_rate_limit(1201, &limiter).await; // 超过突发容量
+        let result = check_rate_limit(1201, &limiter, 2).await; // 超过突发容量
         assert!(result.is_err());
     }
 
@@ -26,7 +26,7 @@ mod tests {
     async fn test_zero_weight() {
         let limiter = get_test_rate_limiter(1200);
         // 测试零权重，预期错误
-        let result = check_rate_limit(0, &limiter).await;
+        let result = check_rate_limit(0, &limiter, 2).await;
         assert!(result.is_err());
     }
 }

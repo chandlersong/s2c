@@ -13,7 +13,7 @@ use yue::binance::bn_models::{BinanceKline, FundingRate, SymbolType};
 use yue::binance::bn_restful_commands::{SPOT_KLINE_COMMAND, SWAP_FUNDING_RATE_COMMAND, SWAP_KLINE_COMMAND};
 use yue::binance::history_data::{KlineParams, SimpleHistoryFetcher};
 ///
-/// NOTE: 加入的功能
+/// NEXT: 加入的功能
 /// 1. 检测数据完整性的进程。
 ///
 ///

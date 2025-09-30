@@ -1,9 +1,10 @@
+use crate::http_client::DefaultRateLimiter;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::collections::HashMap;
 use url::Url;
 
 ///
-/// TODO：去除交易所之类的类的定义，因为发现这样没有办法统一
+/// PLAN：去除交易所之类的类的定义，因为发现这样没有办法统一
 
 //不太确定哪个好，就先用这个用于高精度计算
 pub type Decimal = rust_decimal::Decimal;
@@ -49,6 +50,8 @@ pub struct RequestInfo {
     inner: Url,
     pub has_security: bool,
     pub weight: u32,
+    pub rate_limit: Option<&'static DefaultRateLimiter>,
+    timeout_secs: Option<u64>,
 }
 
 impl RequestInfo {
@@ -57,12 +60,16 @@ impl RequestInfo {
         full_url: S,
         has_security: bool,
         weight: u32,
+        rate_limit: Option<&'static DefaultRateLimiter>,
+        timeout_secs: Option<u64>,
     ) -> Result<Self, url::ParseError> {
         let inner = Url::parse(full_url.as_ref())?;
         Ok(Self {
             inner,
             has_security,
             weight,
+            rate_limit,
+            timeout_secs,
         })
     }
 
@@ -72,6 +79,8 @@ impl RequestInfo {
         path: P,
         has_security: bool,
         weight: u32,
+        rate_limit: Option<&'static DefaultRateLimiter>,
+        timeout_secs: Option<u64>,
     ) -> Result<Self, url::ParseError> {
         let base = base.as_ref().trim_end_matches('/');
         let path = path.as_ref();
@@ -80,7 +89,7 @@ impl RequestInfo {
         } else {
             format!("{base}/{path}")
         };
-        Self::new_full_url(full, has_security, weight)
+        Self::new_full_url(full, has_security, weight, rate_limit, timeout_secs)
     }
 
     // 如需获取内部 Url 的只读引用
@@ -91,6 +100,10 @@ impl RequestInfo {
     // 字符串视图
     pub fn as_str(&self) -> &str {
         self.inner.as_str()
+    }
+
+    pub fn get_timeout(&self) -> u64 {
+        self.timeout_secs.unwrap_or_else(|| 2)
     }
 }
 

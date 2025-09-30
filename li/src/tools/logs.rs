@@ -2,7 +2,7 @@ use log::LevelFilter;
 use std::collections::HashMap;
 use std::time::SystemTime;
 
-//NOTE: 以后加入一些分布式的log库
+//PLAN: 以后加入一些分布式的log库
 
 pub fn setup_logger_all(log_level: Option<LevelFilter>) -> Result<(), fern::InitError> {
     setup_logger(log_level, HashMap::new())?;

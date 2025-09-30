@@ -19,8 +19,6 @@ pub(crate) static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
 pub type DefaultRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
 
 pub fn init_http_client(proxy: Option<&str>) -> &'static Client {
-    //TODO：像超时这类进行配置。
-
     HTTP_CLIENT.get_or_init(|| {
         let mut res = Client::builder();
         if let Some(proxy_url) = proxy {
@@ -36,9 +34,9 @@ pub trait YueRequestBuilder: Send + Sync {
     fn compose_request(&self, client: &Client, info: &RequestInfo, param: Option<String>, method: Method) -> Result<RequestBuilder, YueError>;
 }
 
-pub async fn check_rate_limit(weight: u32, limiter: &DefaultRateLimiter) -> Result<(), YueError> {
+pub async fn check_rate_limit(weight: u32, limiter: &DefaultRateLimiter, timeout_secs: u64) -> Result<(), YueError> {
     // 超时时间：2 秒
-    let timeout_duration = Duration::from_secs(2);
+    let timeout_duration = Duration::from_secs(timeout_secs);
     // 抖动避免请求堆积
     let jitter = Jitter::up_to(Duration::from_millis(100));
 
@@ -47,7 +45,7 @@ pub async fn check_rate_limit(weight: u32, limiter: &DefaultRateLimiter) -> Resu
         Some(w) => w,
         None => return Err(YueError::new("权重必须为非零")),
     };
-    // 等待令牌或�����时
+    // 等待令牌等待是
     let result = timeout(timeout_duration, limiter.until_n_ready_with_jitter(weight, jitter)).await;
     match result {
         Ok(inner_result) => match inner_result {
@@ -116,10 +114,9 @@ where
         request_builder: &T,
         body: Option<&'a Value>,
         method: Method,
-        rate_limit: Option<&'a DefaultRateLimiter>,
     ) -> Result<U, YueError> {
-        if let Some(limiter) = rate_limit {
-            check_rate_limit(info.weight, limiter).await?;
+        if let Some(limiter) = info.rate_limit {
+            check_rate_limit(info.weight, limiter, info.get_timeout()).await?;
         }
         let client = HTTP_CLIENT.get().ok_or(YueError::new("客户端没有初始化"))?;
         let mut request = request_builder.compose_request(client, info, param, method.clone())?;
@@ -134,22 +131,11 @@ where
         Ok(result)
     }
 
-    pub async fn execute(&self, rate_limit: Option<&'a DefaultRateLimiter>) -> Result<U, YueError> {
-        Self::perform_request_async(
-            self.info,
-            self.param.clone(),
-            &self.request_builder,
-            self.body,
-            self.method.clone(),
-            rate_limit,
-        )
-        .await
+    pub async fn execute(&self) -> Result<U, YueError> {
+        Self::perform_request_async(self.info, self.param.clone(), &self.request_builder, self.body, self.method.clone()).await
     }
 
-    pub fn into_retryable(
-        self,
-        rate_limit: Option<&'a DefaultRateLimiter>,
-    ) -> impl FnMut() -> std::pin::Pin<Box<dyn Future<Output = Result<U, YueError>> + Send + 'a>> + 'a {
+    pub fn into_retryable(self) -> impl FnMut() -> std::pin::Pin<Box<dyn Future<Output = Result<U, YueError>> + Send + 'a>> + 'a {
         let info = self.info;
         let param = self.param.clone();
         let request_builder = self.request_builder;
@@ -161,11 +147,11 @@ where
             let request_builder = request_builder.clone();
             let body = body;
             let method = method.clone();
-            Box::pin(async move { YueRequest::<T, U>::perform_request_async(info, param, &request_builder, body, method.clone(), rate_limit).await })
+            Box::pin(async move { YueRequest::<T, U>::perform_request_async(info, param, &request_builder, body, method.clone()).await })
         }
     }
 
-    pub fn retry<B: Backoff>(self, builder: B, rate_limit: Option<&'a DefaultRateLimiter>) -> impl Future<Output = Result<U, YueError>> {
-        self.into_retryable(rate_limit).retry(builder)
+    pub fn retry<B: Backoff>(self, builder: B) -> impl Future<Output = Result<U, YueError>> {
+        self.into_retryable().retry(builder)
     }
 }

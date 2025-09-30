@@ -18,7 +18,7 @@ mod http_clients_yue_request_tests {
         setup();
         let mock_server = MockServer::start().await;
         let test_path = "/api/v3/test";
-        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1)?;
+        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1, None, None)?;
 
         Mock::given(method("GET"))
             .and(path(test_path))
@@ -36,7 +36,7 @@ mod http_clients_yue_request_tests {
             method: Method::GET,
             _phantom: std::marker::PhantomData::<serde_json::Value>,
         }
-        .execute(None)
+        .execute()
         .await?;
 
         assert_eq!(result["message"], "success");
@@ -48,7 +48,7 @@ mod http_clients_yue_request_tests {
         setup();
         let mock_server = MockServer::start().await;
         let test_path = "/api/v3/test";
-        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1)?;
+        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1, None, None)?;
 
         Mock::given(method("GET"))
             .and(path(test_path))
@@ -71,7 +71,7 @@ mod http_clients_yue_request_tests {
             method: Method::GET,
             _phantom: std::marker::PhantomData::<serde_json::Value>,
         }
-        .execute(None)
+        .execute()
         .await?;
 
         assert_eq!(result["symbol"], "BTCUSDT");
@@ -84,7 +84,7 @@ mod http_clients_yue_request_tests {
         setup();
         let mock_server = MockServer::start().await;
         let test_path = "/api/v3/test";
-        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1)?;
+        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1, None, None)?;
 
         Mock::given(method("GET"))
             .and(path(test_path))
@@ -106,7 +106,7 @@ mod http_clients_yue_request_tests {
             method: Method::GET,
             _phantom: std::marker::PhantomData::<serde_json::Value>,
         }
-        .execute(None)
+        .execute()
         .await?;
 
         assert_eq!(result["authenticated"], true);
@@ -118,7 +118,7 @@ mod http_clients_yue_request_tests {
         setup();
         let mock_server = MockServer::start().await;
         let test_path = "/api/v3/test";
-        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1)?;
+        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1, None, None)?;
 
         Mock::given(method("GET"))
             .and(path(test_path))
@@ -137,7 +137,7 @@ mod http_clients_yue_request_tests {
             method: Method::GET,
             _phantom: std::marker::PhantomData::<serde_json::Value>,
         }
-        .execute(None)
+        .execute()
         .await;
 
         assert!(result.is_err());
@@ -149,7 +149,7 @@ mod http_clients_yue_request_tests {
         setup();
         let mock_server = MockServer::start().await;
         let test_path = "/api/v3/retry_test";
-        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1)?;
+        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1, None, None)?;
 
         // First call fails with 500
         Mock::given(method("GET"))
@@ -160,7 +160,6 @@ mod http_clients_yue_request_tests {
             .expect(3)
             .mount(&mock_server)
             .await;
-
         // Second call succeeds
 
         let yue_request = YueRequest {
@@ -173,7 +172,7 @@ mod http_clients_yue_request_tests {
         };
 
         let builder = backon::ConstantBuilder::default().with_max_times(2).build();
-        let response = yue_request.retry(builder, None).await;
+        let response = yue_request.retry(builder).await;
         assert!(response.is_err());
         Ok(())
     }

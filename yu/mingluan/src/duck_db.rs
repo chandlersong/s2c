@@ -18,7 +18,6 @@ pub fn get_connection_pool() -> &'static Pool<DuckdbConnectionManager> {
 }
 
 fn get_duck_connection_manager() -> DuckdbConnectionManager {
-    // TODO 读取配置文件
     let db_config = get_config().database.as_ref();
     if let Some(db_config) = db_config {
         if let Some(path) = &db_config.path {
@@ -46,6 +45,8 @@ impl DBProvider {
 
 impl Default for DBProvider {
     fn default() -> Self {
-        DBProvider { pool: get_connection_pool().clone() }
+        DBProvider {
+            pool: get_connection_pool().clone(),
+        }
     }
 }

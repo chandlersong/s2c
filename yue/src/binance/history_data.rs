@@ -3,32 +3,14 @@ pub use crate::binance::bn_models::{BinanceKline, EmptyQueryParams, ExchangeInfo
 use crate::binance::bn_models::{ExchangeInfoTrait, SwapExchangeInfo, SymbolInfoTrait};
 use crate::binance::bn_restful_commands::{PING_COMMAND, SPOT_EXCHANGE_COMMAND, SWAP_EXCHANGE_COMMAND, execute_bn_get};
 use crate::errors::YueError;
-use crate::http_client::{DefaultRateLimiter, NonAuthRequestBuilder};
+use crate::http_client::NonAuthRequestBuilder;
 use crate::models::{EmptyObject, RequestInfo};
 use async_trait::async_trait;
 use backon::{BackoffBuilder, ExponentialBuilder, Retryable};
-use governor::{Quota, RateLimiter};
 use li::tools::time::unix_2_readable;
 use log::{debug, trace};
 use serde::{Deserialize, Serialize};
-use std::num::NonZeroU32;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU16, Ordering};
-
-static SPOT_RATE_LIMITER: OnceLock<DefaultRateLimiter> = OnceLock::new();
-
-///TODO: 做成配置，优先级低
-/// 这里很奇怪，我500个也是报错的
-/// TODO： 分开来每个接口做限流
-/// 1. 写在Command里面
-/// 2. 每个url单独一个
-static SPOT_RATE_LIMITER_PER_SECOND: u32 = 500;
-/// 获取 RateLimiter 的静态引用
-fn get_bn_spot_rate_limit(per_second_num: u32) -> Option<&'static DefaultRateLimiter> {
-    Some(SPOT_RATE_LIMITER.get_or_init(|| {
-        RateLimiter::direct(Quota::per_second(NonZeroU32::new(per_second_num).unwrap()).allow_burst(NonZeroU32::new(per_second_num).unwrap()))
-    }))
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradingSymbolInfo {
@@ -164,7 +146,7 @@ impl ToQueryParams for KlineParams {
 
 pub async fn execute_ping() -> Result<(), YueError> {
     let _ = execute_bn_get::<EmptyQueryParams, NonAuthRequestBuilder, EmptyObject>(&PING_COMMAND, None, NonAuthRequestBuilder {})
-        .execute(get_bn_spot_rate_limit(SPOT_RATE_LIMITER_PER_SECOND))
+        .execute()
         .await?;
     Ok(())
 }
@@ -201,8 +183,7 @@ where
 /// 获取现货交易对信息
 pub async fn get_trading_spot_symbols(status: Option<&str>) -> Result<Vec<TradingSymbolInfo>, YueError> {
     get_trading_symbols(
-        execute_bn_get::<EmptyQueryParams, NonAuthRequestBuilder, ExchangeInfo>(&SPOT_EXCHANGE_COMMAND, None, NonAuthRequestBuilder {})
-            .execute(get_bn_spot_rate_limit(SPOT_RATE_LIMITER_PER_SECOND)),
+        execute_bn_get::<EmptyQueryParams, NonAuthRequestBuilder, ExchangeInfo>(&SPOT_EXCHANGE_COMMAND, None, NonAuthRequestBuilder {}).execute(),
         status,
     )
     .await
@@ -216,8 +197,7 @@ pub const CONTRACT_TYPE_PERPETUAL: &str = "PERPETUAL";
 /// NEXT_QUARTER：当前季度合约
 pub async fn get_trading_swap_symbols(status: Option<&str>, type_filter: Option<&str>) -> Result<Vec<TradingSymbolInfo>, YueError> {
     let all = get_trading_symbols(
-        execute_bn_get::<EmptyQueryParams, NonAuthRequestBuilder, SwapExchangeInfo>(&SWAP_EXCHANGE_COMMAND, None, NonAuthRequestBuilder {})
-            .execute(get_bn_spot_rate_limit(SPOT_RATE_LIMITER_PER_SECOND)),
+        execute_bn_get::<EmptyQueryParams, NonAuthRequestBuilder, SwapExchangeInfo>(&SWAP_EXCHANGE_COMMAND, None, NonAuthRequestBuilder {}).execute(),
         status,
     )
     .await?;
@@ -283,7 +263,7 @@ where
                 .with_max_delay(std::time::Duration::from_secs(10))
                 .build();
             let klines: Vec<O> = execute_bn_get::<T, NonAuthRequestBuilder, Vec<O>>(&self.request_info, Some(&params), request_builder.clone())
-                .into_retryable(get_bn_spot_rate_limit(SPOT_RATE_LIMITER_PER_SECOND))
+                .into_retryable()
                 .retry(retry_policy)
                 .notify(|_err, _dur| {
                     retry_count.fetch_add(1, Ordering::SeqCst); // 每次重试加 1

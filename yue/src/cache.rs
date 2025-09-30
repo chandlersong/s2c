@@ -37,9 +37,7 @@ pub struct RealTimeDashBoard<T: Send + Clone + Sync + 'static> {
 
 impl<T: Send + Clone + Sync + 'static> RealTimeDashBoard<T> {
     pub fn new() -> Self {
-        RealTimeDashBoard {
-            cache: Cache::new(3000),
-        }
+        RealTimeDashBoard { cache: Cache::new(3000) }
     }
 }
 
@@ -68,10 +66,7 @@ pub struct FrequencyDashBoard<T: Send + Clone + Sync + 'static> {
     frequency_reducers: HashMap<String, FrequencyReducer<(String, T)>>,
 }
 
-async fn cache_update<T: Send + Clone + Sync + 'static>(
-    cache: Cache<String, T>,
-    mut cache_rx: broadcast::Receiver<(String, T)>,
-) {
+async fn cache_update<T: Send + Clone + Sync + 'static>(cache: Cache<String, T>, mut cache_rx: broadcast::Receiver<(String, T)>) {
     loop {
         if let Ok((key, value)) = cache_rx.recv().await {
             cache.insert(key, value).await;
@@ -79,7 +74,7 @@ async fn cache_update<T: Send + Clone + Sync + 'static>(
     }
 }
 
-/// TODO：
+/// PLAN：
 /// 1. 可以配置cache. channel的capacity和cache的都要。
 impl<T: Send + Clone + Sync + 'static> FrequencyDashBoard<T> {
     #[cfg(test)]
@@ -126,8 +121,7 @@ impl<T: Send + Clone + Sync + 'static> DashBoard<T> for FrequencyDashBoard<T> {
                 reducer.update((key, value)).await;
             }
             None => {
-                let mut new_frequency_reducer =
-                    FrequencyReducer::new(self.cache_tx.clone(), self.frequency_mill_seconds).await;
+                let mut new_frequency_reducer = FrequencyReducer::new(self.cache_tx.clone(), self.frequency_mill_seconds).await;
                 new_frequency_reducer.update((key.clone(), value)).await;
                 self.frequency_reducers.insert(key, new_frequency_reducer);
             }
