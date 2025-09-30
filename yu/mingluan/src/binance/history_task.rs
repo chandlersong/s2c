@@ -91,9 +91,6 @@ impl<O: HistoryPO, D: ExchangeDashBoard<TradingSymbol = TradingSymbol>> HistoryD
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .collect();
-        //TODO:
-        // 1 这里传入那个最外面的锁。这里获取锁
-        // 2，symbol为对象，而不是string。来判断开始日期
         let symbols = match self.symbol_type {
             SymbolType::Spot => dashboard.spot_symbols().read().unwrap().clone(),
             SymbolType::Swap => dashboard.swap_symbols().read().unwrap().clone(),

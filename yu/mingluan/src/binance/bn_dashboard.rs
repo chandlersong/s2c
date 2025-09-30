@@ -6,10 +6,6 @@ use log::error;
 use std::sync::{Arc, RwLock};
 use yue::binance::history_data::{get_trading_spot_symbols, get_trading_swap_symbols, CONTRACT_TYPE_PERPETUAL};
 
-/// TODO： 这里返回对象
-/// 这里用户可以获取字符串的symbol,也能获取一些计算其他需要的信息，比如说
-/// 1. swap的上市时间
-/// 2. 最小交易单位
 #[derive(Debug, Clone)]
 pub struct TradingSymbol {
     pub symbol: String,

@@ -82,7 +82,7 @@ macro_rules! define_rate_limiter {
         /// 获取 RateLimiter 的静态引用，由宏自动生成
         pub fn $fn_name() -> Option<&'static DefaultRateLimiter> {
             Some($name.get_or_init(|| {
-                RateLimiter::direct(Quota::per_second(NonZeroU32::new($rate_const).unwrap()).allow_burst(NonZeroU32::new($rate_const).unwrap()))
+                RateLimiter::direct(Quota::per_minute(NonZeroU32::new($rate_const).unwrap()).allow_burst(NonZeroU32::new($rate_const).unwrap()))
             }))
         }
     };
@@ -180,23 +180,24 @@ pub static PING_COMMAND: LazyLock<RequestInfo> =
 
 /// SPOT API
 pub static SPOT_EXCHANGE_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_EXCHANGE_INFO_PATH, false, 20, get_bn_spot_limit(), None).unwrap());
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_EXCHANGE_INFO_PATH, false, 20, get_bn_spot_limit(), Some(10)).unwrap());
 
 pub static SERVER_TIME_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_SERVER_TIME_PATH, false, 1, get_bn_spot_limit(), None).unwrap());
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_SERVER_TIME_PATH, false, 1, get_bn_spot_limit(), Some(2)).unwrap());
 
 pub static SPOT_KLINE_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_KLINE_PATH, false, 2, get_bn_spot_limit(), None).unwrap());
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_KLINE_PATH, false, 2, get_bn_spot_limit(), Some(90)).unwrap());
 
 /// SWAP API
 
 pub static SWAP_EXCHANGE_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_API, SWAP_EXCHANGE_INFO_PATH, false, 20, get_bn_swap_limit(), None).unwrap());
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_API, SWAP_EXCHANGE_INFO_PATH, false, 20, get_bn_swap_limit(), Some(90)).unwrap());
 
-pub static SWAP_FUNDING_RATE_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_API, SWAP_FUNDING_RATE_PATH, false, 1, get_bn_funding_rate_limit(), Some(30)).unwrap());
+pub static SWAP_FUNDING_RATE_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| {
+    RequestInfo::from_base_path(BINANCE_SWAP_API, SWAP_FUNDING_RATE_PATH, false, 1, get_bn_funding_rate_limit(), Some(120)).unwrap()
+});
 pub static SWAP_KLINE_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_API, SWAP_KLINE_PATH, false, 2, get_bn_swap_limit(), None).unwrap());
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_API, SWAP_KLINE_PATH, false, 2, get_bn_swap_limit(), Some(90)).unwrap());
 
 /// 全局 RateLimiter，使用 OnceLock 延迟初始化
 
