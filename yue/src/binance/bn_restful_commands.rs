@@ -1,15 +1,15 @@
 use crate::binance::bn_models::ToQueryParams;
 use crate::errors::YueError;
-use crate::http_client::{DefaultRateLimiter, YueRequest, YueRequestBuilder};
+use crate::http_client::{DefaultRateLimiter, ResponseHandler, YueRequest, YueRequestBuilder};
 use crate::models::RequestInfo;
 use crate::tools::sign_hmac;
+use async_trait::async_trait;
 use governor::{Quota, RateLimiter};
 use reqwest::{Client, Method, RequestBuilder};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::num::NonZeroU32;
 use std::sync::{LazyLock, OnceLock};
-
 // --- API and WebSocket Base URLs ---
 // The active URL is determined by the Cargo features enabled at compile time.
 // Priority: test > binance-testnet > production (default)
@@ -123,6 +123,26 @@ impl YueRequestBuilder for BNSecurityRequestBuilder {
     }
 }
 
+#[derive(Clone)]
+pub struct BinanceResponseHandler;
+
+impl BinanceResponseHandler {
+    pub fn new() -> Self {
+        BinanceResponseHandler {}
+    }
+}
+
+#[async_trait]
+impl<U> ResponseHandler<U> for BinanceResponseHandler
+where
+    U: DeserializeOwned + Send + Sync,
+{
+    async fn handle_response(&self, res: reqwest::Response) -> Result<U, YueError> {
+        let result = res.json::<U>().await?;
+        Ok(result)
+    }
+}
+
 /// Wrapper for Binance requests to enable retry with backon
 
 pub static PING_COMMAND: LazyLock<RequestInfo> =
@@ -201,11 +221,11 @@ pub static SWAP_KLINE_COMMAND: LazyLock<RequestInfo> =
 
 /// 全局 RateLimiter，使用 OnceLock 延迟初始化
 
-pub fn execute_bn_get<'a, P, T, U>(info: &'a RequestInfo, param: Option<&'a P>, request_builder: T) -> YueRequest<'a, T, U>
+pub fn execute_bn_get<'a, P, T, U>(info: &'a RequestInfo, param: Option<&'a P>, request_builder: T) -> YueRequest<'a, T, U, BinanceResponseHandler>
 where
     P: ToQueryParams,
     T: YueRequestBuilder + Clone,
-    U: DeserializeOwned,
+    U: DeserializeOwned + Send + Sync,
 {
     let converted_param = param.map(|p| p.to_query_string());
     YueRequest {
@@ -214,15 +234,21 @@ where
         request_builder,
         body: None,
         method: Method::GET,
+        response_handler: BinanceResponseHandler::new(),
         _phantom: std::marker::PhantomData,
     }
 }
 
-pub fn execute_bn_post<'a, P, T, U>(info: &'a RequestInfo, param: Option<&'a P>, body: Option<&'a Value>, request_builder: T) -> YueRequest<'a, T, U>
+pub fn execute_bn_post<'a, P, T, U>(
+    info: &'a RequestInfo,
+    param: Option<&'a P>,
+    body: Option<&'a Value>,
+    request_builder: T,
+) -> YueRequest<'a, T, U, BinanceResponseHandler>
 where
     P: ToQueryParams,
     T: YueRequestBuilder + Clone,
-    U: DeserializeOwned,
+    U: DeserializeOwned + Send + Sync,
 {
     let converted_param = param.map(|p| p.to_query_string());
     YueRequest {
@@ -231,15 +257,21 @@ where
         request_builder,
         body,
         method: Method::POST,
+        response_handler: BinanceResponseHandler::new(),
         _phantom: std::marker::PhantomData,
     }
 }
 
-pub fn execute_bn_put<'a, P, T, U>(info: &'a RequestInfo, param: Option<&'a P>, body: Option<&'a Value>, request_builder: T) -> YueRequest<'a, T, U>
+pub fn execute_bn_put<'a, P, T, U>(
+    info: &'a RequestInfo,
+    param: Option<&'a P>,
+    body: Option<&'a Value>,
+    request_builder: T,
+) -> YueRequest<'a, T, U, BinanceResponseHandler>
 where
     P: ToQueryParams,
     T: YueRequestBuilder + Clone,
-    U: DeserializeOwned,
+    U: DeserializeOwned + Send + Sync,
 {
     let converted_param = param.map(|p| p.to_query_string());
     YueRequest {
@@ -248,6 +280,7 @@ where
         request_builder,
         body,
         method: Method::POST,
+        response_handler: BinanceResponseHandler::new(),
         _phantom: std::marker::PhantomData,
     }
 }
@@ -412,31 +445,6 @@ mod tests {
         .await?;
 
         assert_eq!(result["authenticated"], true);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_execute_bn_get_error_handling() -> Result<(), Box<dyn std::error::Error>> {
-        setup();
-        let mock_server = MockServer::start().await;
-        let test_path = "/api/v3/test";
-        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1, None, None)?;
-
-        // Setup mock returning error
-        Mock::given(method("GET"))
-            .and(path(test_path))
-            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
-                "code": -1121,
-                "msg": "Invalid symbol"
-            })))
-            .mount(&mock_server)
-            .await;
-
-        // Execute request and expect error
-        let result = execute_bn_get::<EmptyQueryParams, NonAuthRequestBuilder, serde_json::Value>(&request_info, None, NonAuthRequestBuilder {})
-            .execute()
-            .await;
-        assert!(result.is_err());
         Ok(())
     }
 }

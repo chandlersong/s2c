@@ -1,14 +1,42 @@
 mod http_clients_yue_request_tests {
+    use async_trait::async_trait;
     use backon::BackoffBuilder;
     use reqwest::Method;
+    use serde::de::DeserializeOwned;
     use std::collections::BTreeMap;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
     use yue::binance::bn_models::ToQueryParams;
     use yue::binance::bn_restful_commands::BNSecurityRequestBuilder;
-    use yue::http_client::{NonAuthRequestBuilder, YueRequest};
+    use yue::errors::YueError;
+    use yue::http_client::{NonAuthRequestBuilder, ResponseHandler, YueRequest};
     use yue::models::RequestInfo;
 
+    #[derive(Clone)]
+    pub struct JsonResponseHandler;
+
+    impl JsonResponseHandler {
+        pub fn new() -> Self {
+            JsonResponseHandler {}
+        }
+    }
+
+    #[async_trait]
+    impl<U> ResponseHandler<U> for JsonResponseHandler
+    where
+        U: DeserializeOwned + Send + Sync,
+    {
+        async fn handle_response(&self, res: reqwest::Response) -> Result<U, YueError> {
+            if res.status() != reqwest::StatusCode::OK {
+                return Err(YueError::ExchangeRequestError {
+                    code: res.status().as_u16(),
+                    body: res.text().await.unwrap_or_default(),
+                });
+            }
+            let result = res.json::<U>().await?;
+            Ok(result)
+        }
+    }
     fn setup() {
         yue::http_client::init_http_client(None);
     }
@@ -34,6 +62,7 @@ mod http_clients_yue_request_tests {
             request_builder: NonAuthRequestBuilder {},
             body: None,
             method: Method::GET,
+            response_handler: JsonResponseHandler::new(),
             _phantom: std::marker::PhantomData::<serde_json::Value>,
         }
         .execute()
@@ -69,6 +98,7 @@ mod http_clients_yue_request_tests {
             request_builder: NonAuthRequestBuilder {},
             body: None,
             method: Method::GET,
+            response_handler: JsonResponseHandler::new(),
             _phantom: std::marker::PhantomData::<serde_json::Value>,
         }
         .execute()
@@ -104,6 +134,7 @@ mod http_clients_yue_request_tests {
             },
             body: None,
             method: Method::GET,
+            response_handler: JsonResponseHandler::new(),
             _phantom: std::marker::PhantomData::<serde_json::Value>,
         }
         .execute()
@@ -135,6 +166,7 @@ mod http_clients_yue_request_tests {
             request_builder: NonAuthRequestBuilder {},
             body: None,
             method: Method::GET,
+            response_handler: JsonResponseHandler::new(),
             _phantom: std::marker::PhantomData::<serde_json::Value>,
         }
         .execute()
@@ -168,6 +200,7 @@ mod http_clients_yue_request_tests {
             request_builder: NonAuthRequestBuilder {},
             body: None,
             method: Method::GET,
+            response_handler: JsonResponseHandler::new(),
             _phantom: std::marker::PhantomData::<serde_json::Value>,
         };
 

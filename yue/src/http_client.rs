@@ -1,5 +1,6 @@
 use crate::errors::YueError;
 use crate::models::RequestInfo;
+use async_trait::async_trait;
 use backon::{Backoff, Retryable};
 use governor::clock::DefaultClock;
 use governor::state::{InMemoryState, NotKeyed};
@@ -56,6 +57,12 @@ pub async fn check_rate_limit(weight: u32, limiter: &DefaultRateLimiter, timeout
     }
 }
 
+/// Trait：用于抽象 HTTP 响应处理逻辑，每个交易所可自定义实现
+#[async_trait]
+pub trait ResponseHandler<U>: Send + Sync + Clone {
+    async fn handle_response(&self, res: reqwest::Response) -> Result<U, YueError>;
+}
+
 #[derive(Clone)]
 pub struct NonAuthRequestBuilder {}
 
@@ -78,61 +85,48 @@ impl YueRequestBuilder for NonAuthRequestBuilder {
     }
 }
 
-macro_rules! check_status {
-    ($res:expr) => {
-        if $res.status() != reqwest::StatusCode::OK {
-            return Err(YueError::ExchangeRequestError {
-                code: $res.status().as_u16(),
-                body: $res.text().await.unwrap_or_default(),
-            });
-        }
-    };
-}
-
-/// 通用请求包装器，支持限流和重试
-pub struct YueRequest<'a, T, U>
+/// 通用请求包装器，支持限流、重试和自定义响应处理
+pub struct YueRequest<'a, T, U, H>
 where
     T: YueRequestBuilder + Clone,
     U: DeserializeOwned,
+    H: ResponseHandler<U>,
 {
     pub info: &'a RequestInfo,
     pub param: Option<String>,
     pub request_builder: T,
     pub body: Option<&'a Value>,
     pub method: Method,
+    pub response_handler: H, // 新增属性
     pub _phantom: PhantomData<U>,
 }
 
-impl<'a, T, U> YueRequest<'a, T, U>
+impl<'a, T, U, H> YueRequest<'a, T, U, H>
 where
     T: YueRequestBuilder + Clone + 'a,
-    U: DeserializeOwned,
+    U: DeserializeOwned + Send + Sync + 'static,
+    H: ResponseHandler<U> + 'a,
 {
-    async fn perform_request_async(
-        info: &'a RequestInfo,
-        param: Option<String>,
-        request_builder: &T,
-        body: Option<&'a Value>,
-        method: Method,
-    ) -> Result<U, YueError> {
-        if let Some(limiter) = info.rate_limit {
-            check_rate_limit(info.weight, limiter, info.get_timeout()).await?;
+    async fn perform_request_async(&self) -> Result<U, YueError> {
+        if let Some(limiter) = self.info.rate_limit {
+            check_rate_limit(self.info.weight, limiter, self.info.get_timeout()).await?;
         }
         let client = HTTP_CLIENT.get().ok_or(YueError::new("客户端没有初始化"))?;
-        let mut request = request_builder.compose_request(client, info, param, method.clone())?;
-        if method == Method::POST || method == Method::PUT {
-            if let Some(body) = body {
+        let mut request = self
+            .request_builder
+            .compose_request(client, self.info, self.param.clone(), self.method.clone())?;
+        if self.method == Method::POST || self.method == Method::PUT {
+            if let Some(body) = self.body {
                 request = request.json(body);
             }
         }
         let res = request.send().await?;
-        check_status!(res);
-        let result: U = res.json::<U>().await?;
-        Ok(result)
+        // 调用 trait 处理响应
+        self.response_handler.handle_response(res).await
     }
 
     pub async fn execute(&self) -> Result<U, YueError> {
-        Self::perform_request_async(self.info, self.param.clone(), &self.request_builder, self.body, self.method.clone()).await
+        self.perform_request_async().await
     }
 
     pub fn into_retryable(self) -> impl FnMut() -> std::pin::Pin<Box<dyn Future<Output = Result<U, YueError>> + Send + 'a>> + 'a {
@@ -141,13 +135,26 @@ where
         let request_builder = self.request_builder;
         let body = self.body;
         let method = self.method;
+        let response_handler = self.response_handler.clone();
         move || {
             let info = info;
             let param = param.clone();
             let request_builder = request_builder.clone();
             let body = body;
             let method = method.clone();
-            Box::pin(async move { YueRequest::<T, U>::perform_request_async(info, param, &request_builder, body, method.clone()).await })
+            let response_handler = response_handler.clone();
+            Box::pin(async move {
+                let req = YueRequest {
+                    info,
+                    param,
+                    request_builder,
+                    body,
+                    method,
+                    response_handler,
+                    _phantom: PhantomData,
+                };
+                req.perform_request_async().await
+            })
         }
     }
 

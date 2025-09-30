@@ -237,7 +237,7 @@ impl SimpleHistoryFetcher {
 impl<'a, T, O> HistoryFetcher<T, O> for SimpleHistoryFetcher
 where
     T: MuteHistoryParam + ToQueryParams + Send + Sync + 'static,
-    O: HistoryVo + Send,
+    O: HistoryVo + Send + Sync + 'static,
 {
     /// 获取指定交易对和时间间隔的K线数据
     ///
