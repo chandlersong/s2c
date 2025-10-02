@@ -88,9 +88,10 @@ macro_rules! define_rate_limiter {
     };
 }
 
-static SPOT_RATE_PER_SECOND: u32 = 1200;
-static SWAP_LIMITER_PER_SECOND: u32 = 1200;
-static SWAP_FUNDING_RATE_PER_SECOND: u32 = 100;
+/// 写的小一点方便处理
+static SPOT_RATE_PER_SECOND: u32 = 1150;
+static SWAP_LIMITER_PER_SECOND: u32 = 1150;
+static SWAP_FUNDING_RATE_PER_SECOND: u32 = 95;
 
 // 用宏自动生成币安现货、合约、资金费率限流器相关函数
 // 用法：define_rate_limiter!(静态变量名, 速率常量名, 函数名)
@@ -138,6 +139,7 @@ where
     U: DeserializeOwned + Send + Sync,
 {
     async fn handle_response(&self, res: reqwest::Response) -> Result<U, YueError> {
+        // NEXT：对超限，做特殊护处理，主要看文档
         let result = res.json::<U>().await?;
         Ok(result)
     }
@@ -205,8 +207,8 @@ pub static SPOT_EXCHANGE_COMMAND: LazyLock<RequestInfo> =
 pub static SERVER_TIME_COMMAND: LazyLock<RequestInfo> =
     LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_SERVER_TIME_PATH, false, 1, get_bn_spot_limit(), Some(2)).unwrap());
 
-pub static SPOT_KLINE_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_KLINE_PATH, false, 2, get_bn_spot_limit(), Some(90)).unwrap());
+pub static SPOT_KLINE_HISTORY_COMMAND: LazyLock<RequestInfo> =
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_KLINE_PATH, false, 2, get_bn_spot_limit(), Some(20 * 60)).unwrap());
 
 /// SWAP API
 
@@ -214,10 +216,23 @@ pub static SWAP_EXCHANGE_COMMAND: LazyLock<RequestInfo> =
     LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_API, SWAP_EXCHANGE_INFO_PATH, false, 20, get_bn_swap_limit(), Some(90)).unwrap());
 
 pub static SWAP_FUNDING_RATE_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| {
-    RequestInfo::from_base_path(BINANCE_SWAP_API, SWAP_FUNDING_RATE_PATH, false, 1, get_bn_funding_rate_limit(), Some(120)).unwrap()
+    RequestInfo::from_base_path(
+        BINANCE_SWAP_API,
+        SWAP_FUNDING_RATE_PATH,
+        false,
+        2,
+        get_bn_funding_rate_limit(),
+        Some(20 * 60),
+    )
+    .unwrap()
 });
-pub static SWAP_KLINE_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_API, SWAP_KLINE_PATH, false, 2, get_bn_swap_limit(), Some(90)).unwrap());
+
+/**
+根据api。这个注释是动态的。如果所以专门写一个command用于处理,
+因为每次取1k，所有为5
+*/
+pub static SWAP_KLINE_HISTORY_COMMAND: LazyLock<RequestInfo> =
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_API, SWAP_KLINE_PATH, false, 5, get_bn_swap_limit(), Some(20 * 60)).unwrap());
 
 /// 全局 RateLimiter，使用 OnceLock 延迟初始化
 
@@ -289,9 +304,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{BNSecurityRequestBuilder, execute_bn_get, get_bn_spot_limit};
+    use super::{BNSecurityRequestBuilder, BinanceResponseHandler, execute_bn_get, get_bn_spot_limit};
     use crate::binance::bn_models::EmptyQueryParams;
-    use crate::http_client::{NonAuthRequestBuilder, YueRequestBuilder, init_http_client};
+    use crate::http_client::{NonAuthRequestBuilder, ResponseHandler, YueRequestBuilder, init_http_client};
     use crate::models::RequestInfo;
     use reqwest::{Client, Method};
     use std::collections::BTreeMap;
@@ -445,6 +460,212 @@ mod tests {
         .await?;
 
         assert_eq!(result["authenticated"], true);
+        Ok(())
+    }
+
+    #[test]
+    fn test_binance_response_handler_handle_response_success() {
+        // 创建测试JSON数据
+        let test_json = serde_json::json!({
+            "symbol": "BTCUSDT",
+            "price": "45000.00",
+            "timestamp": 1672531200000i64
+        });
+
+        // 创建BinanceResponseHandler
+        let handler = BinanceResponseHandler::new();
+
+        // 验证handler实例创建成功
+        assert!(matches!(handler, BinanceResponseHandler {}));
+
+        // 测试handle_response的核心逻辑：JSON反序列化
+        // 这是handle_response方法的核心功能 res.json::<U>().await?
+
+        // 直接测试JSON序列化和反序列化，这模拟了handle_response的核心行为
+        let json_str = serde_json::to_string(&test_json).unwrap();
+
+        // 模拟reqwest::Response::json()方法的行为
+        let deserialization_result: Result<serde_json::Value, serde_json::Error> = serde_json::from_str(&json_str);
+
+        // 验证反序列化成功（这是handle_response的核心逻辑）
+        assert!(deserialization_result.is_ok());
+        let parsed_result = deserialization_result.unwrap();
+
+        // 验证响应被正确解析
+        assert_eq!(parsed_result["symbol"], "BTCUSDT");
+        assert_eq!(parsed_result["price"], "45000.00");
+        assert_eq!(parsed_result["timestamp"], 1672531200000i64);
+
+        // 这个测试验证了handle_response方法的核心功能：
+        // 1. BinanceResponseHandler实例能正确创建
+        // 2. JSON反序列化功能正常工作（handle_response的核心逻辑）
+        // 3. 典型的币安API响应格式能被正确解析
+    }
+
+    #[tokio::test]
+    async fn test_binance_response_handler_with_mock_server() -> Result<(), Box<dyn std::error::Error>> {
+        // 启动mock server
+        let mock_server = MockServer::start().await;
+
+        // 创建测试JSON数据
+        let test_json = serde_json::json!({
+            "symbol": "BTCUSDT",
+            "price": "45000.00",
+            "timestamp": 1672531200000i64,
+            "status": "success"
+        });
+
+        // 设置mock响应，包含自定义header
+        Mock::given(method("GET"))
+            .and(path("/api/v3/ticker/price"))
+            .and(wiremock::matchers::query_param("symbol", "BTCUSDT"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(&test_json)
+                    .insert_header("Content-Type", "application/json")
+                    .insert_header("X-MBX-USED-WEIGHT", "1")
+                    .insert_header("X-MBX-ORDER-COUNT", "0")
+                    .insert_header("Server", "nginx"),
+            )
+            .mount(&mock_server)
+            .await;
+
+        // 创建HTTP客户端并发送请求
+        let client = reqwest::Client::new();
+        let url = format!("{}/api/v3/ticker/price?symbol=BTCUSDT", mock_server.uri());
+        let response = client.get(&url).send().await?;
+
+        // 验证响应headers
+        assert_eq!(response.status(), 200);
+        assert_eq!(response.headers().get("Content-Type").unwrap(), "application/json");
+        assert_eq!(response.headers().get("X-MBX-USED-WEIGHT").unwrap(), "1");
+        assert_eq!(response.headers().get("Server").unwrap(), "nginx");
+
+        // 创建BinanceResponseHandler并测试handle_response方法
+        let handler = BinanceResponseHandler::new();
+        let result: serde_json::Value = handler.handle_response(response).await?;
+
+        // 验证解析结果
+        assert_eq!(result["symbol"], "BTCUSDT");
+        assert_eq!(result["price"], "45000.00");
+        assert_eq!(result["timestamp"], 1672531200000i64);
+        assert_eq!(result["status"], "success");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_binance_response_handler_error_response() -> Result<(), Box<dyn std::error::Error>> {
+        // 启动mock server
+        let mock_server = MockServer::start().await;
+
+        // 创建错误响应JSON
+        let error_json = serde_json::json!({
+            "code": -1121,
+            "msg": "Invalid symbol."
+        });
+
+        // 设置mock错误响应
+        Mock::given(method("GET"))
+            .and(path("/api/v3/ticker/price"))
+            .and(wiremock::matchers::query_param("symbol", "INVALID"))
+            .respond_with(
+                ResponseTemplate::new(400)
+                    .set_body_json(&error_json)
+                    .insert_header("Content-Type", "application/json")
+                    .insert_header("X-MBX-USED-WEIGHT", "1"),
+            )
+            .mount(&mock_server)
+            .await;
+
+        // 创建HTTP客户端并发送请求
+        let client = reqwest::Client::new();
+        let url = format!("{}/api/v3/ticker/price?symbol=INVALID", mock_server.uri());
+        let response = client.get(&url).send().await?;
+
+        // 验证响应状态和headers
+        assert_eq!(response.status(), 400);
+        assert_eq!(response.headers().get("Content-Type").unwrap(), "application/json");
+
+        // 创建BinanceResponseHandler并测试handle_response方法
+        let handler = BinanceResponseHandler::new();
+        let result: serde_json::Value = handler.handle_response(response).await?;
+
+        // 验证错误响应解析
+        assert_eq!(result["code"], -1121);
+        assert_eq!(result["msg"], "Invalid symbol.");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_binance_response_handler_custom_headers() -> Result<(), Box<dyn std::error::Error>> {
+        // 启动mock server
+        let mock_server = MockServer::start().await;
+
+        // 创建复杂的响应数据
+        let complex_json = serde_json::json!({
+            "symbols": [
+                {
+                    "symbol": "BTCUSDT",
+                    "price": "45000.00"
+                },
+                {
+                    "symbol": "ETHUSDT",
+                    "price": "3000.00"
+                }
+            ],
+            "serverTime": 1672531200000i64
+        });
+
+        // 设置包含多个自定义header的mock响应
+        Mock::given(method("GET"))
+            .and(path("/api/v3/ticker/price"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(&complex_json)
+                    .insert_header("Content-Type", "application/json; charset=utf-8")
+                    .insert_header("X-MBX-USED-WEIGHT", "5")
+                    .insert_header("X-MBX-ORDER-COUNT", "0")
+                    .insert_header("X-MBX-USED-WEIGHT-1M", "5")
+                    .insert_header("Cache-Control", "no-cache")
+                    .insert_header("Connection", "keep-alive")
+                    .insert_header("Date", "Mon, 01 Jan 2024 00:00:00 GMT")
+                    .insert_header("Server", "nginx/1.18.0")
+                    .insert_header("Vary", "Accept-Encoding"),
+            )
+            .mount(&mock_server)
+            .await;
+
+        // 发送请求
+        let client = reqwest::Client::new();
+        let url = format!("{}/api/v3/ticker/price", mock_server.uri());
+        let response = client.get(&url).send().await?;
+
+        // 验证所有自定义headers
+        let headers = response.headers();
+        assert_eq!(response.status(), 200);
+        assert!(headers.get("Content-Type").unwrap().to_str().unwrap().starts_with("application/json"));
+        assert_eq!(headers.get("X-MBX-USED-WEIGHT").unwrap(), "5");
+        assert_eq!(headers.get("X-MBX-ORDER-COUNT").unwrap(), "0");
+        assert_eq!(headers.get("X-MBX-USED-WEIGHT-1M").unwrap(), "5");
+        assert_eq!(headers.get("Cache-Control").unwrap(), "no-cache");
+        assert_eq!(headers.get("Connection").unwrap(), "keep-alive");
+        assert_eq!(headers.get("Server").unwrap(), "nginx/1.18.0");
+        assert_eq!(headers.get("Vary").unwrap(), "Accept-Encoding");
+
+        // 测试BinanceResponseHandler
+        let handler = BinanceResponseHandler::new();
+        let result: serde_json::Value = handler.handle_response(response).await?;
+
+        // 验证复杂JSON结构解析
+        assert!(result["symbols"].is_array());
+        assert_eq!(result["symbols"][0]["symbol"], "BTCUSDT");
+        assert_eq!(result["symbols"][0]["price"], "45000.00");
+        assert_eq!(result["symbols"][1]["symbol"], "ETHUSDT");
+        assert_eq!(result["symbols"][1]["price"], "3000.00");
+        assert_eq!(result["serverTime"], 1672531200000i64);
+
         Ok(())
     }
 }

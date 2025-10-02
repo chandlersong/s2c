@@ -2,7 +2,7 @@ use li::tools::logs::setup_logger_all;
 use li::tools::time::{unix_2_readable, unix_time_now_u64};
 use log::{LevelFilter, debug, error, info};
 use yue::binance::bn_models::{BinanceKline, FundingRate};
-use yue::binance::bn_restful_commands::{SPOT_KLINE_COMMAND, SWAP_FUNDING_RATE_COMMAND, SWAP_KLINE_COMMAND};
+use yue::binance::bn_restful_commands::{SPOT_KLINE_HISTORY_COMMAND, SWAP_FUNDING_RATE_COMMAND, SWAP_KLINE_HISTORY_COMMAND};
 use yue::binance::history_data::{HistoryFetcher, HistoryInterval, HistoryVo, KlineParams, SimpleHistoryFetcher};
 use yue::errors::YueError;
 use yue::http_client::init_http_client;
@@ -45,13 +45,13 @@ async fn main() {
     let start_ms = now_ms - 1500 * one_hour;
     println!("Now (ms) = {}, start_time (ms) = {}", now_ms, start_ms);
     let symbol = "BTCUSDT";
-    let spot_kline_fetch = SimpleHistoryFetcher::new(&SPOT_KLINE_COMMAND);
+    let spot_kline_fetch = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
     let base_param = KlineParams::new(symbol.to_string(), 1000, HistoryInterval::OneHour);
     let spot_btc: Result<(Vec<BinanceKline>, u16), YueError> = spot_kline_fetch.get_all_kline_data(base_param, Some(start_ms)).await;
     info!("================fetch spot btc==============");
     print_kline_result(&spot_btc);
 
-    let swap_kline_fetch = SimpleHistoryFetcher::new(&SWAP_KLINE_COMMAND);
+    let swap_kline_fetch = SimpleHistoryFetcher::new(&SWAP_KLINE_HISTORY_COMMAND);
     let base_param = KlineParams::new(symbol.to_string(), 1000, HistoryInterval::OneHour);
     let swap_btc: Result<(Vec<BinanceKline>, u16), YueError> = swap_kline_fetch.get_all_kline_data(base_param, Some(start_ms)).await;
     info!("================fetch swap btc==============");

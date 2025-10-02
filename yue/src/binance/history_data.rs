@@ -305,7 +305,7 @@ where
 #[cfg(test)]
 mod tests {
     use crate::binance::bn_models::BinanceKline;
-    use crate::binance::bn_restful_commands::SPOT_KLINE_COMMAND;
+    use crate::binance::bn_restful_commands::SPOT_KLINE_HISTORY_COMMAND;
     use crate::binance::history_data::{HistoryFetcher, HistoryInterval, KlineParams, SimpleHistoryFetcher};
     use crate::errors::YueError;
     use crate::http_client::init_http_client;
@@ -360,7 +360,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(mock_klines))
             .mount(&mock_server)
             .await;
-        let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_COMMAND);
+        let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = KlineParams::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
         let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher.get_all_kline_data(base_param, None).await;
         assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
@@ -411,7 +411,7 @@ mod tests {
             .expect(1)
             .mount(&mock_server)
             .await;
-        let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_COMMAND);
+        let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = KlineParams::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
         let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher.get_all_kline_data(base_param, Some(1609459200000)).await;
         assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
@@ -430,7 +430,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(500))
             .mount(&mock_server)
             .await;
-        let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_COMMAND);
+        let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = KlineParams::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
         let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher.get_all_kline_data(base_param, Some(1609459200000)).await;
         assert!(kline_res.is_err());
@@ -457,7 +457,7 @@ mod tests {
             .expect(2) // Only one request
             .mount(&mock_server)
             .await;
-        let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_COMMAND);
+        let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = KlineParams::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
         let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher.get_all_kline_data(base_param, Some(1609459200000)).await;
         assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
@@ -488,7 +488,7 @@ mod tests {
             .expect(2) // Only one request
             .mount(&mock_server)
             .await;
-        let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_COMMAND);
+        let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = KlineParams::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
         let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher.get_all_kline_data(base_param, Some(1609459200000)).await;
         assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());

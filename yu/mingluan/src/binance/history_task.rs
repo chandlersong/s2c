@@ -337,7 +337,7 @@ where
         for (symbol, timestamp) in latest_symbol {
             let tx_clone = tx.clone();
             let kline_fetcher = self.kline_fetcher_factory.create_fetcher();
-            // 构造 Param
+            // NEXT： 这里1000变成参数化，现在是历史数据无所谓。但是实盘需要准确一点
             let param = P::initial(symbol, 1000, yue::binance::history_data::HistoryInterval::OneHour);
             tokio::spawn({
                 let tx_clone = tx_clone.clone();
