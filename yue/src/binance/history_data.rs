@@ -256,6 +256,7 @@ where
         let request_builder = NonAuthRequestBuilder {};
         let retry_count = AtomicU16::new(0);
         let symbol = base_param.get_symbol();
+        debug!("start fetch {} kline data from {:?}", symbol, start_time);
         loop {
             let params = base_param.create_new(current_start_time, None);
             let retry_policy = ExponentialBuilder::default()
