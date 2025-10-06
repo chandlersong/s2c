@@ -1,5 +1,5 @@
 use crate::actix_jobs::AsyncRepeatTask;
-use crate::binance::binance_consts::{BinanceTables, GENESIS_2020_MS};
+use crate::binance::binance_consts::BinanceTables;
 use crate::binance::bn_dashboard::TradingSymbol;
 use crate::duck_db::DBProvider;
 use crate::errors::MingLuanError;
@@ -7,7 +7,7 @@ use crate::exchange::{ExchangeDashBoard, HistoryFetcherFactory};
 use crate::utils::get_snowflake_generator;
 use async_trait::async_trait;
 use duckdb::{appender_params_from_iter, DropBehavior};
-use li::tools::time::{unix_2_readable, unix_time_now_u64_utc, ONE_HOUR_MS};
+use li::tools::time::{unix_2_readable, unix_time_now_u64_utc, GENESIS_2020_MS, ONE_HOUR_MS};
 use log::{debug, error, info};
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -110,7 +110,7 @@ impl<O: HistoryPO, D: ExchangeDashBoard<TradingSymbol = TradingSymbol>> HistoryD
             })
             .filter(|r| now - r.1 > ONE_HOUR_MS)
             .collect();
-        info!("fetched {} trading symbols", filtered.len());
+        info!("{}:fetched {} trading symbols", self.table.table_name(), filtered.len());
         Ok(filtered)
     }
 }
@@ -295,7 +295,7 @@ where
         }
     }
 
-    async fn fetch_symbol_data<T>(
+    pub async fn fetch_symbol_data<T>(
         kline_fetcher: T,
         param: P,
         timestamp: u64,
@@ -356,6 +356,8 @@ where
         let (tx, mut rx) = mpsc::channel(100);
         let symbol_count = latest_symbol.len();
 
+        info!("start fetch {},symbol:{}", self.task_name, symbol_count);
+
         for (symbol, timestamp) in latest_symbol {
             let tx_clone = tx.clone();
             let kline_fetcher = self.kline_fetcher_factory.create_fetcher();
@@ -386,7 +388,7 @@ where
                 }
             }
         }
-
+        info!("finish fetch {}", self.task_name);
         Ok(())
     }
 
@@ -405,25 +407,15 @@ mod tests {
     use crate::errors::MingLuanError;
     use crate::exchange::HistoryFetcherFactory;
     use crate::test_utils::{generate_test_kline_vec, import_local_csv_and_assert, TEST_BEGIN_TIMESTAMP};
+    use crate::utils::initial_memory_db;
     use async_trait::async_trait;
-    use duckdb::DuckdbConnectionManager;
     use li::tools::time::ONE_HOUR_MS;
     use mockall::{mock, predicate};
-    use r2d2::Pool;
     use std::path::Path;
     use std::sync::Arc;
     use yue::binance::bn_models::{BinanceKline, SymbolType};
     use yue::binance::history_data::{HistoryFetcher, HistoryInterval, KlineParams, MuteHistoryParam};
     use yue::errors::YueError;
-
-    fn initial_db() -> Pool<DuckdbConnectionManager> {
-        let builder = Pool::builder()
-            .max_size(2) // 最大连接数
-            .min_idle(Some(1)) // 最小空闲连接数
-            .connection_timeout(std::time::Duration::from_secs(5)); // 连接超时时间
-
-        builder.build(DuckdbConnectionManager::memory().unwrap()).unwrap()
-    }
 
     // mock 测试部分同步修正
     mock! {
@@ -481,7 +473,7 @@ mod tests {
     #[tokio::test]
     async fn test_refresh_spot_kline_normal() -> Result<(), MingLuanError> {
         // 初始化内存数据库连接并建表
-        let pool = initial_db();
+        let pool = initial_memory_db();
         let db_provider = DBProvider::new(pool);
         let conn = db_provider.acquire()?;
         let binding = SpotKline.create_table_statement();

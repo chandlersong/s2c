@@ -1,19 +1,18 @@
 // 2020年1月1日零点的毫秒时间戳
-pub(crate) const GENESIS_2020_MS: u64 = 1577836800000;
 
 pub static QUERY_LATEST_SPOT_KLINE_SQL: &str = "select symbol,max(close_time) as latest from spot_kline group by symbol;";
 pub static QUERY_LATEST_SWAP_KLINE_SQL: &str = "select symbol,max(close_time) as latest from swap_kline group by symbol;";
 
 pub static QUERY_LATEST_FUNDING_RATE_SQL: &str = "select symbol,max(funding_time)+60000 as latest from swap_funding_rate group by symbol;";
 
-pub(crate) enum BinanceTables {
+pub enum BinanceTables {
     SpotKline,
     SwapKline,
     SwapFundingRate,
 }
 
 impl BinanceTables {
-    pub(crate) fn table_name(&self) -> String {
+    pub fn table_name(&self) -> String {
         match self {
             BinanceTables::SpotKline => String::from("spot_kline"),
             BinanceTables::SwapKline => String::from("swap_kline"),
@@ -21,7 +20,7 @@ impl BinanceTables {
         }
     }
 
-    pub(crate) fn create_table_statement(&self) -> String {
+    pub fn create_table_statement(&self) -> String {
         match self {
             BinanceTables::SpotKline => String::from(CREATE_SPOT_KLINE_TABLE),
             BinanceTables::SwapKline => String::from(CREATE_SWAP_KLINE_TABLE),
@@ -29,7 +28,7 @@ impl BinanceTables {
         }
     }
 
-    pub(crate) fn query_lastest_record(&self) -> Option<String> {
+    pub fn query_lastest_record(&self) -> Option<String> {
         match self {
             BinanceTables::SpotKline => Some(String::from(QUERY_LATEST_SPOT_KLINE_SQL)),
             BinanceTables::SwapKline => Some(String::from(QUERY_LATEST_SWAP_KLINE_SQL)),

@@ -27,7 +27,6 @@ impl BinanceDashboard {
         }
     }
 
-    #[cfg(test)]
     pub fn new_with_data(spot_symbol: Vec<TradingSymbol>, swap_symbol: Vec<TradingSymbol>) -> Self {
         BinanceDashboard {
             spot_symbols: Arc::new(RwLock::new(spot_symbol)),

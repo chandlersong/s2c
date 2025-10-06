@@ -33,7 +33,6 @@ pub struct DBProvider {
 }
 
 impl DBProvider {
-    #[cfg(test)]
     pub fn new(pool: Pool<DuckdbConnectionManager>) -> Self {
         DBProvider { pool }
     }

@@ -7,8 +7,8 @@ use crate::http_client::NonAuthRequestBuilder;
 use crate::models::{EmptyObject, RequestInfo};
 use async_trait::async_trait;
 use backon::{BackoffBuilder, ExponentialBuilder, Retryable};
-use li::tools::time::unix_2_readable;
-use log::{debug, trace};
+use li::tools::time::{ONE_SECOND_MS, unix_2_readable};
+use log::debug;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU16, Ordering};
 
@@ -278,12 +278,12 @@ where
                 if current_start_time.is_some() && current_start_time.unwrap() == last_kline.get_close_time() {
                     break;
                 }
-                current_start_time = Some(last_kline.get_close_time());
+                current_start_time = Some(last_kline.get_close_time() + ONE_SECOND_MS);
             } else {
                 break;
             }
-
-            trace!("{} fetch {} kline", symbol, klines.len());
+            // 1745467200003
+            debug!("{} fetch {} kline", symbol, klines.len());
             let klines_count = klines.len();
             res.extend(klines);
 

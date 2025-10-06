@@ -1,24 +1,15 @@
-use crate::binance::jobs::start_bn_jobs;
-use crate::errors::MingLuanError;
 use actix::System;
 use li::tools::logs::setup_logger;
 use log::{error, info, LevelFilter};
+use mingluan::binance::jobs::start_bn_jobs;
+use mingluan::config::get_config;
+use mingluan::errors::MingLuanError;
 use std::collections::HashMap;
 use yue::http_client::init_http_client;
 
-pub mod actix_jobs;
-pub(crate) mod binance;
-mod config;
-pub(crate) mod duck_db;
-mod errors;
-mod exchange;
-#[cfg(test)]
-pub mod test_utils;
-pub mod utils;
-
 #[actix::main]
 async fn main() -> Result<(), MingLuanError> {
-    let app_config = config::get_config();
+    let app_config = get_config();
 
     let mut special_log = HashMap::new();
     special_log.insert("mingluan".to_string(), LevelFilter::Info);

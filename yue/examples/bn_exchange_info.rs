@@ -5,7 +5,7 @@ use yue::binance::history_data::{CONTRACT_TYPE_PERPETUAL, TradingSymbolInfo, get
 use yue::http_client::init_http_client;
 
 /// 将symbols写入CSV文件
-fn write_symbols_to_csv(file_path: &str, symbols: &[TradingSymbolInfo]) -> Result<(), Box<dyn Error>> {
+fn write_symbols_to_csv(file_path: &str, symbols: &[TradingSymbolInfo], is_swap: bool) -> Result<(), Box<dyn Error>> {
     let mut file = File::create(file_path)?;
     // 写入UTF-8-BOM (0xEF, 0xBB, 0xBF)
     file.write_all(&[0xEF, 0xBB, 0xBF])?;
@@ -18,9 +18,15 @@ fn write_symbols_to_csv(file_path: &str, symbols: &[TradingSymbolInfo]) -> Resul
         "quote_asset_precision",
         "order_types",
         "type",
+        "on_board_time",
     ])?;
     for symbol_info in symbols {
         let order_types_str = symbol_info.order_types.join(",");
+        let on_board_time_str = if is_swap {
+            symbol_info.on_board_time.map(|t| t.to_string()).unwrap_or_default()
+        } else {
+            String::new()
+        };
         writer.write_record(&[
             &symbol_info.symbol,
             &symbol_info.status,
@@ -29,6 +35,7 @@ fn write_symbols_to_csv(file_path: &str, symbols: &[TradingSymbolInfo]) -> Resul
             &symbol_info.quote_asset_precision.to_string(),
             &order_types_str,
             &symbol_info.symbol_type,
+            &on_board_time_str,
         ])?;
     }
     writer.flush()?;
@@ -44,14 +51,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("开始获取币安现货交易对信息...");
     let spot_symbols = get_trading_spot_symbols(Some("ALL")).await?;
     println!("成功获取到 {} 个现货交易对信息", spot_symbols.len());
-    write_symbols_to_csv("binance_spot_symbols.csv", &spot_symbols)?;
+    write_symbols_to_csv("binance_spot_symbols.csv", &spot_symbols, false)?;
     println!("现货数据已保存到 binance_spot_symbols.csv");
 
     // 获取swap交易对信息l
     println!("开始获取币安U本位合约交易对信息...");
     let swap_symbols = get_trading_swap_symbols(Some("ALL"), Some(CONTRACT_TYPE_PERPETUAL)).await?;
     println!("成功获取到 {} 个U本位合约交易对信息", swap_symbols.len());
-    write_symbols_to_csv("binance_swap_symbols.csv", &swap_symbols)?;
+    write_symbols_to_csv("binance_swap_symbols.csv", &swap_symbols, true)?;
     println!("U本位合约数据已保存到 binance_swap_symbols.csv");
 
     // 统计信息输出函数
