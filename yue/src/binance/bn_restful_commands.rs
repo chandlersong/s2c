@@ -219,7 +219,7 @@ pub static SERVER_TIME_COMMAND: LazyLock<RequestInfo> =
     LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_SERVER_TIME_PATH, false, 1, get_bn_spot_limit(), Some(2)).unwrap());
 
 pub static SPOT_KLINE_HISTORY_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_KLINE_PATH, false, 2, get_bn_spot_limit(), Some(20 * 60)).unwrap());
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_KLINE_PATH, false, 2, get_bn_spot_limit(), Some(60 * 60)).unwrap());
 
 /// SWAP API
 
@@ -243,7 +243,7 @@ pub static SWAP_FUNDING_RATE_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| {
 因为每次取1k，所有为5
 */
 pub static SWAP_KLINE_HISTORY_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_API, SWAP_KLINE_PATH, false, 5, get_bn_swap_limit(), Some(20 * 60)).unwrap());
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_API, SWAP_KLINE_PATH, false, 5, get_bn_swap_limit(), Some(60 * 60)).unwrap());
 
 /// 全局 RateLimiter，使用 OnceLock 延迟初始化
 
