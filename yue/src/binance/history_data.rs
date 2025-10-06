@@ -275,7 +275,7 @@ where
                 .await?;
 
             if let Some(last_kline) = klines.last() {
-                if current_start_time.is_some() && current_start_time.unwrap() == last_kline.get_close_time() {
+                if current_start_time.is_some() && current_start_time.unwrap() == last_kline.get_close_time() + ONE_SECOND_MS {
                     break;
                 }
                 current_start_time = Some(last_kline.get_close_time() + ONE_SECOND_MS);
@@ -407,7 +407,7 @@ mod tests {
             .and(query_param("symbol", "BTCUSDT"))
             .and(query_param("interval", "1h"))
             .and(query_param("limit", "1000"))
-            .and(query_param("startTime", "1613059199999")) // close_time of last in first batch
+            .and(query_param("startTime", "1613059200999")) // close_time of last in first batch
             .respond_with(ResponseTemplate::new(200).set_body_json(second_batch))
             .expect(1)
             .mount(&mock_server)
