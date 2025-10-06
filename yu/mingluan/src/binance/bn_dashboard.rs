@@ -91,6 +91,6 @@ impl AsyncRepeatTask for BinanceDashboard {
     }
 
     fn task_name(&self) -> &str {
-        todo!()
+        "binance dashboard"
     }
 }

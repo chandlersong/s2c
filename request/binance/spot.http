@@ -4,5 +4,5 @@ GET https://api.binance.com/api/v3/klines
     &interval=5m
     &startTime=1692614400000
     &endTime=1692700800000
-    &limit=1000 HTTP/1.1
+    &limit=5 HTTP/1.1
 content-type: application/json

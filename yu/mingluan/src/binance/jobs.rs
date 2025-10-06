@@ -2,7 +2,7 @@ use crate::actix_jobs::{AsyncRepeatTask, CronActor};
 use crate::binance::binance_consts::BinanceTables::{SpotKline, SwapFundingRate, SwapKline};
 use crate::binance::binance_consts::ALL_BINANCE_TABLES;
 use crate::binance::bn_dashboard::BinanceDashboard;
-use crate::binance::history_task::{DuckDBHistoryDataWriter, FundingRatePo, KlinePo, UpdateHistoryTask};
+use crate::binance::history_task::{DuckDBHistoryDataWriter, FundingRatePo, InitialHistoryTask, KlinePo};
 use crate::duck_db::DBProvider;
 use crate::errors::MingLuanError;
 use crate::exchange::CloneHistoryFetcherFactory;
@@ -15,6 +15,9 @@ use yue::binance::history_data::{KlineParams, SimpleHistoryFetcher};
 ///
 /// NEXT: 加入的功能
 /// 1. 检测数据完整性的进程。
+/// 2. 初始化并行执行。
+///     - spot和swap的kline阻塞
+///     - funding rate非阻塞
 ///
 ///
 pub async fn start_bn_jobs() -> Result<(), MingLuanError> {
@@ -30,7 +33,7 @@ pub async fn start_bn_jobs() -> Result<(), MingLuanError> {
 
     let spot_data_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SpotKline, SymbolType::Spot));
 
-    let spot_kline_task = UpdateHistoryTask::<_, _, KlinePo, BinanceKline, BinanceDashboard>::new(
+    let spot_kline_task = InitialHistoryTask::<_, _, KlinePo, BinanceKline, BinanceDashboard>::new(
         spot_kline_fetcher,
         dash_board.clone(),
         spot_data_writer,
@@ -38,13 +41,11 @@ pub async fn start_bn_jobs() -> Result<(), MingLuanError> {
     );
     spot_kline_task.execute().await?;
 
-    //TODO： 更新交易所时间表达式进入Config
-
     let base_swap_kline_fetcher = SimpleHistoryFetcher::new(&SWAP_KLINE_HISTORY_COMMAND);
     let swap_kline_fetcher: CloneHistoryFetcherFactory<SimpleHistoryFetcher, KlineParams, BinanceKline> =
         CloneHistoryFetcherFactory::new(base_swap_kline_fetcher);
     let swap_kline_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SwapKline, SymbolType::Swap));
-    let swap_kline_task = UpdateHistoryTask::<_, _, KlinePo, BinanceKline, BinanceDashboard>::new(
+    let swap_kline_task = InitialHistoryTask::<_, _, KlinePo, BinanceKline, BinanceDashboard>::new(
         swap_kline_fetcher,
         dash_board.clone(),
         swap_kline_writer,
@@ -52,19 +53,19 @@ pub async fn start_bn_jobs() -> Result<(), MingLuanError> {
     );
     swap_kline_task.execute().await?;
 
-    //TODO: 写一个资金费率的专用的param
+    //NEXT: 写一个资金费率的专用的param
     let base_swap_funding_rate_fetcher = SimpleHistoryFetcher::new(&SWAP_FUNDING_RATE_COMMAND);
     let swap_funding_rate_fetcher: CloneHistoryFetcherFactory<SimpleHistoryFetcher, KlineParams, FundingRate> =
         CloneHistoryFetcherFactory::new(base_swap_funding_rate_fetcher);
     let swap_funding_rate_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SwapFundingRate, SymbolType::Swap));
-    let swap_funding_rate_task = UpdateHistoryTask::<_, _, FundingRatePo, FundingRate, BinanceDashboard>::new(
+    let swap_funding_rate_task = InitialHistoryTask::<_, _, FundingRatePo, FundingRate, BinanceDashboard>::new(
         swap_funding_rate_fetcher,
         dash_board.clone(),
         swap_funding_rate_writer,
         "refresh swap funding rate".to_string(),
     );
     swap_funding_rate_task.execute().await?;
-
+    //TODO： 更新交易所时间表达式进入Config
     let _ = CronActor::new("30 59 */6 * * * *", update_dashboard_task).start();
     let _ = CronActor::new("10 0 * * * * *", spot_kline_task).start();
     let _ = CronActor::new("10 0 * * * * *", swap_funding_rate_task).start();
@@ -86,7 +87,14 @@ fn initial_table() -> Result<(), MingLuanError> {
         let table_name = table.table_name();
         if !table_exists(&conn, &table_name)? {
             // 表不存在，执行建表
-            conn.execute(table.create_table_statement().as_str(), [])?;
+            let create_sql = table.create_table_statement();
+            let table_initial_stmt = create_sql.split(';');
+            for stmt in table_initial_stmt {
+                let sql = stmt.trim();
+                if !sql.is_empty() {
+                    conn.execute(sql, [])?;
+                }
+            }
         }
     }
     Ok(())

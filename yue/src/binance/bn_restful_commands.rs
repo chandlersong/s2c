@@ -220,9 +220,9 @@ pub static SWAP_FUNDING_RATE_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| {
         BINANCE_SWAP_API,
         SWAP_FUNDING_RATE_PATH,
         false,
-        2,
+        1,
         get_bn_funding_rate_limit(),
-        Some(20 * 60),
+        Some(60 * 60),
     )
     .unwrap()
 });

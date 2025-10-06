@@ -1,5 +1,5 @@
 use crate::actix_jobs::AsyncRepeatTask;
-use crate::binance::binance_consts::{BinanceTables, GENESIS_2020_MS, ONE_HOUR_MS};
+use crate::binance::binance_consts::{BinanceTables, GENESIS_2020_MS};
 use crate::binance::bn_dashboard::TradingSymbol;
 use crate::duck_db::DBProvider;
 use crate::errors::MingLuanError;
@@ -7,7 +7,7 @@ use crate::exchange::{ExchangeDashBoard, HistoryFetcherFactory};
 use crate::utils::get_snowflake_generator;
 use async_trait::async_trait;
 use duckdb::{appender_params_from_iter, DropBehavior};
-use li::tools::time::unix_2_readable;
+use li::tools::time::{unix_2_readable, unix_time_now_u64_utc, ONE_HOUR_MS};
 use log::{debug, error, info};
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -26,7 +26,7 @@ pub trait HistoryPO: Debug {
 
 pub trait HistoryDataWriter<O: HistoryPO, D: ExchangeDashBoard<TradingSymbol = TradingSymbol>>: Send + Sync {
     fn write_batch(&self, data: Vec<O>) -> Result<(), MingLuanError>;
-    fn query_latest_symbols(&self, dash_board: Arc<D>) -> Result<Vec<(String, u64)>, MingLuanError>;
+    fn query_latest_symbols(&self, dash_board: Arc<D>, now: u64) -> Result<Vec<(String, u64)>, MingLuanError>;
 }
 
 pub struct DuckDBHistoryDataWriter {
@@ -72,7 +72,7 @@ impl<O: HistoryPO, D: ExchangeDashBoard<TradingSymbol = TradingSymbol>> HistoryD
         Ok(())
     }
 
-    fn query_latest_symbols(&self, dashboard: Arc<D>) -> Result<Vec<(String, u64)>, MingLuanError> {
+    fn query_latest_symbols(&self, dashboard: Arc<D>, now: u64) -> Result<Vec<(String, u64)>, MingLuanError> {
         //TODO：做一个判断，数据库和现在的时间相差不满1h，则过不用更新
         let conn = self.provider.acquire()?;
         let query_sql = match self.table.query_lastest_record() {
@@ -86,8 +86,8 @@ impl<O: HistoryPO, D: ExchangeDashBoard<TradingSymbol = TradingSymbol>> HistoryD
         let symbol_in_db: HashMap<String, u64> = stmt
             .query_map([], |row| {
                 let symbol: String = row.get(0)?;
-                let latest: u64 = row.get(1)?;
-                Ok((symbol, latest))
+                let close: u64 = row.get(1)?;
+                Ok((symbol, close))
             })?
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
@@ -109,6 +109,7 @@ impl<O: HistoryPO, D: ExchangeDashBoard<TradingSymbol = TradingSymbol>> HistoryD
                         .unwrap_or(s.on_board_time.unwrap_or_else(|| GENESIS_2020_MS)),
                 )
             })
+            .filter(|r| now - r.1 > ONE_HOUR_MS)
             .collect();
         info!("fetched {} trading symbols", filtered.len());
         Ok(filtered)
@@ -261,8 +262,10 @@ impl HistoryPO for FundingRatePo {
     }
 }
 
+/// 初始化的历史数据任务，每次启动的时候，都会调用
+/// NEXT：写一个实时更新的task
 #[derive(Clone)]
-pub struct UpdateHistoryTask<F, P, R, V, D>
+pub struct InitialHistoryTask<F, P, R, V, D>
 where
     F: HistoryFetcherFactory<Param = P, Output = V>,
     P: MuteHistoryParam + ToQueryParams + Clone + Send + Sync,
@@ -276,7 +279,7 @@ where
     task_name: String,
 }
 
-impl<F, P, R, V, D> UpdateHistoryTask<F, P, R, V, D>
+impl<F, P, R, V, D> InitialHistoryTask<F, P, R, V, D>
 where
     F: HistoryFetcherFactory<Param = P, Output = V>,
     P: MuteHistoryParam + ToQueryParams + Clone + Send + Sync,
@@ -285,7 +288,7 @@ where
     D: ExchangeDashBoard<TradingSymbol = TradingSymbol> + Send + Sync,
 {
     pub fn new(factory: F, exchange_dashboard: Arc<D>, data_writer: Arc<dyn HistoryDataWriter<R, D> + Send + Sync>, task_name: String) -> Self {
-        UpdateHistoryTask {
+        InitialHistoryTask {
             kline_fetcher_factory: factory,
             exchange_dashboard,
             data_writer,
@@ -293,12 +296,22 @@ where
         }
     }
 
-    async fn fetch_symbol_data<T>(kline_fetcher: T, param: P, timestamp: u64, tx: mpsc::Sender<Result<Vec<R>, yue::errors::YueError>>)
-    where
+    async fn fetch_symbol_data<T>(
+        kline_fetcher: T,
+        param: P,
+        timestamp: u64,
+        tx: mpsc::Sender<Result<Vec<R>, yue::errors::YueError>>,
+        task_name: &str,
+    ) where
         T: HistoryFetcher<P, V> + Send + Sync + 'static,
         R: HistoryPO<Source = V> + Clone,
     {
-        debug!("update -> symbol: {}, latest: {}", param.get_symbol(), unix_2_readable(&timestamp));
+        debug!(
+            "update {} -> symbol: {}, latest: {}",
+            task_name,
+            param.get_symbol(),
+            unix_2_readable(&timestamp)
+        );
         let result = match kline_fetcher.get_all_kline_data(param.clone(), Some(timestamp + ONE_HOUR_MS)).await {
             Ok((kline_data, fail_times)) => {
                 let len = kline_data.len();
@@ -306,25 +319,31 @@ where
                     Ok(Vec::new())
                 } else {
                     let data = &kline_data[..len - 1];
-                    debug!("Fetched {} klines for symbol {}: fail times {}", len, param.get_symbol(), fail_times);
+                    debug!(
+                        "{}:Fetched {} klines for symbol {}: fail times {}",
+                        task_name,
+                        len,
+                        param.get_symbol(),
+                        fail_times
+                    );
                     // 写入数据库
                     let kline_pos: Vec<R> = data.iter().map(|kline| R::from_source(Some(param.get_symbol()), kline)).collect();
                     Ok(kline_pos)
                 }
             }
             Err(e) => {
-                error!("Error fetching klines for symbol {}: {}", param.get_symbol(), e);
+                error!("{}:Error fetching klines for symbol {}: {}", task_name, param.get_symbol(), e);
                 Err(e)
             }
         };
         if tx.send(result).await.is_err() {
-            error!("Failed to send result for symbol {}", param.get_symbol());
+            error!("{}:Failed to send result for symbol {}", task_name, param.get_symbol());
         }
     }
 }
 
 #[async_trait]
-impl<F, P, R, V, D> AsyncRepeatTask for UpdateHistoryTask<F, P, R, V, D>
+impl<F, P, R, V, D> AsyncRepeatTask for InitialHistoryTask<F, P, R, V, D>
 where
     F: HistoryFetcherFactory<Param = P, Output = V> + Clone + Send + Sync + Unpin + 'static,
     P: MuteHistoryParam + ToQueryParams + Clone + Send + Sync + 'static,
@@ -333,7 +352,8 @@ where
     D: ExchangeDashBoard<TradingSymbol = TradingSymbol> + Send + Sync + Clone + 'static,
 {
     async fn execute(&self) -> Result<(), MingLuanError> {
-        let latest_symbol = self.data_writer.query_latest_symbols(self.exchange_dashboard.clone())?;
+        let now = unix_time_now_u64_utc();
+        let latest_symbol = self.data_writer.query_latest_symbols(self.exchange_dashboard.clone(), now)?;
         let (tx, mut rx) = mpsc::channel(100);
         let symbol_count = latest_symbol.len();
 
@@ -342,12 +362,13 @@ where
             let kline_fetcher = self.kline_fetcher_factory.create_fetcher();
             // NEXT： 这里1000变成参数化，现在是历史数据无所谓。但是实盘需要准确一点
             let param = P::initial(symbol, 1000, yue::binance::history_data::HistoryInterval::OneHour);
+            let task_name = self.task_name().to_string();
             tokio::spawn({
                 let tx_clone = tx_clone.clone();
                 let param = param.clone();
                 let kline_fetcher = kline_fetcher;
                 async move {
-                    Self::fetch_symbol_data::<_>(kline_fetcher, param, timestamp, tx_clone).await;
+                    Self::fetch_symbol_data::<_>(kline_fetcher, param, timestamp, tx_clone, &task_name).await;
                 }
             });
         }
@@ -379,15 +400,15 @@ where
 mod tests {
     use crate::actix_jobs::AsyncRepeatTask;
     use crate::binance::binance_consts::BinanceTables::SpotKline;
-    use crate::binance::binance_consts::ONE_HOUR_MS;
     use crate::binance::bn_dashboard::{BinanceDashboard, TradingSymbol};
-    use crate::binance::history_task::{DuckDBHistoryDataWriter, KlinePo, UpdateHistoryTask};
+    use crate::binance::history_task::{DuckDBHistoryDataWriter, InitialHistoryTask, KlinePo};
     use crate::duck_db::DBProvider;
     use crate::errors::MingLuanError;
     use crate::exchange::HistoryFetcherFactory;
     use crate::test_utils::{generate_test_kline_vec, import_local_csv_and_assert, TEST_BEGIN_TIMESTAMP};
     use async_trait::async_trait;
     use duckdb::DuckdbConnectionManager;
+    use li::tools::time::ONE_HOUR_MS;
     use mockall::{mock, predicate};
     use r2d2::Pool;
     use std::path::Path;
@@ -478,8 +499,8 @@ mod tests {
 
         let factory = MockHistoryFetcherFactory {};
         let data_writer = Arc::new(DuckDBHistoryDataWriter::new(db_provider.clone(), SpotKline, SymbolType::Spot));
-        let manager: UpdateHistoryTask<MockHistoryFetcherFactory, KlineParams, KlinePo, BinanceKline, BinanceDashboard> =
-            UpdateHistoryTask::new(factory, dash_board, data_writer, "test_refresh_spot_kline_normal".to_string());
+        let manager: InitialHistoryTask<MockHistoryFetcherFactory, KlineParams, KlinePo, BinanceKline, BinanceDashboard> =
+            InitialHistoryTask::new(factory, dash_board, data_writer, "test_refresh_spot_kline_normal".to_string());
         let res = manager.execute().await;
 
         println!("{:?}", res);

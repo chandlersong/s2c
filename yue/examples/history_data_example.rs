@@ -1,5 +1,5 @@
 use li::tools::logs::setup_logger_all;
-use li::tools::time::{unix_2_readable, unix_time_now_u64};
+use li::tools::time::{unix_2_readable, unix_time_now_u64_utc};
 use log::{LevelFilter, debug, error, info};
 use yue::binance::bn_models::{BinanceKline, FundingRate};
 use yue::binance::bn_restful_commands::{SPOT_KLINE_HISTORY_COMMAND, SWAP_FUNDING_RATE_COMMAND, SWAP_KLINE_HISTORY_COMMAND};
@@ -40,7 +40,7 @@ async fn main() {
     let proxy = Option::from("http://localhost:7891");
     init_http_client(proxy);
     let _ = setup_logger_all(Some(LevelFilter::Debug));
-    let now_ms = unix_time_now_u64();
+    let now_ms = unix_time_now_u64_utc();
     let one_hour: u64 = 60 * 60 * 1000;
     let start_ms = now_ms - 1500 * one_hour;
     println!("Now (ms) = {}, start_time (ms) = {}", now_ms, start_ms);

@@ -1,12 +1,10 @@
-pub(crate) const ONE_HOUR_MS: u64 = 60 * 60 * 1000;
-
 // 2020年1月1日零点的毫秒时间戳
 pub(crate) const GENESIS_2020_MS: u64 = 1577836800000;
 
-pub static QUERY_LATEST_SPOT_KLINE_SQL: &str = "select symbol,max(candle_begin_time) as latest from spot_kline group by symbol;";
-pub static QUERY_LATEST_SWAP_KLINE_SQL: &str = "select symbol,max(candle_begin_time) as latest from swap_kline group by symbol;";
+pub static QUERY_LATEST_SPOT_KLINE_SQL: &str = "select symbol,max(close_time) as latest from spot_kline group by symbol;";
+pub static QUERY_LATEST_SWAP_KLINE_SQL: &str = "select symbol,max(close_time) as latest from swap_kline group by symbol;";
 
-pub static QUERY_LATEST_FUNDING_RATE_SQL: &str = "select symbol,max(funding_time) as latest from swap_funding_rate group by symbol;";
+pub static QUERY_LATEST_FUNDING_RATE_SQL: &str = "select symbol,max(funding_time)+1 as latest from swap_funding_rate group by symbol;";
 
 pub(crate) enum BinanceTables {
     SpotKline,
@@ -58,6 +56,7 @@ CREATE TABLE IF NOT EXISTS spot_kline (
     taker_buy_quote_asset_volume DOUBLE,  -- 主动买入成交额
     close_time                  BIGINT    -- K线结束时间
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_spot_kline_symbol_candle_begin_time ON spot_kline(symbol, candle_begin_time);
 "#;
 
 pub const CREATE_SWAP_KLINE_TABLE: &str = r#"
@@ -76,6 +75,7 @@ CREATE TABLE IF NOT EXISTS swap_kline (
     taker_buy_quote_asset_volume DOUBLE,  -- 主动买入成交额
     close_time                  BIGINT    -- K线结束时间
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_swap_kline_symbol_candle_begin_time ON swap_kline(symbol, candle_begin_time);
 "#;
 
 pub const CREATE_FUNDING_RATE_TABLE: &str = r#"
@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS swap_funding_rate (
     funding_time BIGINT,   -- 资金费率时间
     mark_price   DOUBLE    -- 标记价格
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_swap_funding_rate_symbol_funding_time ON swap_funding_rate(symbol, funding_time);
 "#;
 
 // 原生方式：维护一个静态数组，便于遍历所有表类型

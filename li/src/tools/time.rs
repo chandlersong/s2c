@@ -1,6 +1,8 @@
 use chrono::{DateTime, Datelike, Duration as ChronoDuration, TimeZone, Timelike, Utc};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::Instant;
+
+pub const ONE_HOUR_MS: u64 = 60 * 60 * 1000;
 pub fn current_date_string() -> String {
     let now: DateTime<Utc> = Utc::now();
     now.format("%Y-%m-%d").to_string()
@@ -46,10 +48,7 @@ pub fn get_next_utc_day_begin() -> Instant {
 
     // 转换为 Instant
     let instant_now = Instant::now();
-    instant_now
-        + (today_end_duration - now_duration)
-            .to_std()
-            .expect("Duration out of range")
+    instant_now + (today_end_duration - now_duration).to_std().expect("Duration out of range")
 }
 
 pub fn get_prev_utc_hour_end() -> u64 {
@@ -87,10 +86,7 @@ pub fn get_next_utc_hour_begin() -> Instant {
 
     // 转换为 Instant
     let instant_now = Instant::now();
-    instant_now
-        + (today_end_duration - now_duration)
-            .to_std()
-            .expect("Duration out of range")
+    instant_now + (today_end_duration - now_duration).to_std().expect("Duration out of range")
 }
 
 pub fn unix_2_readable(unix_timestamp_millis: &u64) -> DateTime<Utc> {
@@ -108,7 +104,7 @@ pub fn unix_2_readable(unix_timestamp_millis: &u64) -> DateTime<Utc> {
 
 pub type UnixTimeStamp = u64;
 
-pub fn unix_time_now_u64() -> UnixTimeStamp {
+pub fn unix_time_now_u64_utc() -> UnixTimeStamp {
     let now = SystemTime::now();
     let since_epoch = now.duration_since(UNIX_EPOCH).unwrap();
     since_epoch.as_secs() * 1000 + u64::from(since_epoch.subsec_nanos()) / 1_000_000
@@ -116,10 +112,7 @@ pub fn unix_time_now_u64() -> UnixTimeStamp {
 
 #[cfg(test)]
 mod tests {
-    use crate::tools::time::{
-        get_next_utc_day_begin, get_next_utc_hour_begin, get_prev_utc_hour_end,
-        instant_to_datetime, unix_2_readable,
-    };
+    use crate::tools::time::{get_next_utc_day_begin, get_next_utc_hour_begin, get_prev_utc_hour_end, instant_to_datetime, unix_2_readable};
     use chrono::{Datelike, TimeZone, Timelike, Utc};
     use tokio::time::Instant;
 
