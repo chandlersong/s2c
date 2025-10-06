@@ -10,6 +10,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::num::NonZeroU32;
 use std::sync::{LazyLock, OnceLock};
+use std::time::Duration;
 // --- API and WebSocket Base URLs ---
 // The active URL is determined by the Cargo features enabled at compile time.
 // Priority: test > binance-testnet > production (default)
@@ -89,16 +90,26 @@ macro_rules! define_rate_limiter {
 }
 
 /// 写的小一点方便处理
-static SPOT_RATE_PER_SECOND: u32 = 1150;
-static SWAP_LIMITER_PER_SECOND: u32 = 1150;
-static SWAP_FUNDING_RATE_PER_SECOND: u32 = 95;
+static SPOT_RATE_PER_MINUTE: u32 = 1190;
+static SWAP_LIMITER_PER_MINUTE: u32 = 1190;
+static SWAP_FUNDING_RATE_5_MINUTE: u32 = 495;
 
 // 用宏自动生成币安现货、合约、资金费率限流器相关函数
 // 用法：define_rate_limiter!(静态变量名, 速率常量名, 函数名)
-define_rate_limiter!(SPOT_RATE_LIMITER, SPOT_RATE_PER_SECOND, get_bn_spot_limit);
-define_rate_limiter!(SWAP_RATE_LIMITER, SWAP_LIMITER_PER_SECOND, get_bn_swap_limit);
-define_rate_limiter!(FUNDING_RATE_RATE_LIMITER, SWAP_FUNDING_RATE_PER_SECOND, get_bn_funding_rate_limit);
+define_rate_limiter!(SPOT_RATE_LIMITER, SPOT_RATE_PER_MINUTE, get_bn_spot_limit);
+define_rate_limiter!(SWAP_RATE_LIMITER, SWAP_LIMITER_PER_MINUTE, get_bn_swap_limit);
 
+static FUNDING_RATE_RATE_LIMITER: OnceLock<DefaultRateLimiter> = OnceLock::new();
+
+pub fn get_bn_funding_rate_limit() -> Option<&'static DefaultRateLimiter> {
+    Some(FUNDING_RATE_RATE_LIMITER.get_or_init(|| {
+        RateLimiter::direct(
+            Quota::with_period(Duration::from_secs(60 * 5))
+                .unwrap()
+                .allow_burst(NonZeroU32::new(SWAP_FUNDING_RATE_5_MINUTE).unwrap()),
+        )
+    }))
+}
 #[derive(Clone)]
 pub struct BNSecurityRequestBuilder {
     //PLAN: 用security的那个包来包裹一下，优先级低
