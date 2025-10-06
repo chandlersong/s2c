@@ -1,6 +1,6 @@
 # 查询BTCUSDT，资金费率，从2023-08-21 00:00:00到2023-08-22 00:00:00（UTC时间
 GET https://fapi.binance.com/fapi/v1/fundingRate
-    ?symbol=BTCUSDT
+    ?symbol=RAYSOLUSDT
     &startTime=1692614400000
     &endTime=1692700800000
     &limit=1000 HTTP/1.1
@@ -9,5 +9,5 @@ content-type: application/json
 
 ### 查询HUSDT
 GET https://fapi.binance.com/fapi/v1/fundingRate
-    ?symbol=HUSDT HTTP/1.1
+    ?symbol=RAYSOLUSDT HTTP/1.1
 content-type: application/json

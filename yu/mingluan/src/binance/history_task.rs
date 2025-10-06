@@ -311,7 +311,7 @@ where
             param.get_symbol(),
             unix_2_readable(&timestamp)
         );
-        let result = match kline_fetcher.get_all_kline_data(param.clone(), Some(timestamp + ONE_HOUR_MS)).await {
+        let result = match kline_fetcher.get_all_kline_data(param.clone(), Some(timestamp)).await {
             Ok((kline_data, fail_times)) => {
                 let len = kline_data.len();
                 if len <= 1 {
@@ -463,14 +463,14 @@ mod tests {
         let eth_param = KlineParams::initial("ETHUSDT".to_string(), 1000, HistoryInterval::OneHour);
         fetcher
             .expect_get_all_kline_data()
-            .with(predicate::eq(btc_param.clone()), predicate::eq(Some(1694102300000 + ONE_HOUR_MS)))
+            .with(predicate::eq(btc_param.clone()), predicate::eq(Some(1694102460000)))
             .returning(|_, _| {
                 let klines = generate_test_kline_vec(TEST_BEGIN_TIMESTAMP, ONE_HOUR_MS, 1.0, 2);
                 Ok((klines, 200))
             });
         fetcher
             .expect_get_all_kline_data()
-            .with(predicate::eq(eth_param.clone()), predicate::eq(Some(1694101300000 + ONE_HOUR_MS)))
+            .with(predicate::eq(eth_param.clone()), predicate::eq(Some(1694101300000)))
             .returning(|_, _| {
                 let klines = generate_test_kline_vec(TEST_BEGIN_TIMESTAMP, ONE_HOUR_MS, 1.0, 2);
                 Ok((klines, 200))
@@ -484,7 +484,14 @@ mod tests {
         let pool = initial_db();
         let db_provider = DBProvider::new(pool);
         let conn = db_provider.acquire()?;
-        conn.execute(SpotKline.create_table_statement().as_str(), [])?;
+        let binding = SpotKline.create_table_statement();
+        let table_initial_stmt = binding.split(';');
+        for stmt in table_initial_stmt {
+            let sql = stmt.trim();
+            if !sql.is_empty() {
+                conn.execute(sql, [])?;
+            }
+        }
         // 直接从仓库中的本地 CSV 导入并断言行数为 2
         let csv_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/test_refresh_spot_kline_normal.csv");
 

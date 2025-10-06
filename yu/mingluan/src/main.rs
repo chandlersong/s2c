@@ -21,8 +21,8 @@ async fn main() -> Result<(), MingLuanError> {
     let app_config = config::get_config();
 
     let mut special_log = HashMap::new();
-    special_log.insert("mingluan".to_string(), LevelFilter::Debug);
-    setup_logger(Some(LevelFilter::Info), special_log).unwrap();
+    special_log.insert("mingluan".to_string(), LevelFilter::Info);
+    setup_logger(Some(LevelFilter::Warn), special_log).unwrap();
     let proxy = app_config.proxy_url.clone();
     if let Some(url_proxy) = proxy {
         info!("Using proxy: {}", url_proxy);

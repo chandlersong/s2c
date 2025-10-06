@@ -4,7 +4,7 @@ pub(crate) const GENESIS_2020_MS: u64 = 1577836800000;
 pub static QUERY_LATEST_SPOT_KLINE_SQL: &str = "select symbol,max(close_time) as latest from spot_kline group by symbol;";
 pub static QUERY_LATEST_SWAP_KLINE_SQL: &str = "select symbol,max(close_time) as latest from swap_kline group by symbol;";
 
-pub static QUERY_LATEST_FUNDING_RATE_SQL: &str = "select symbol,max(funding_time)+1 as latest from swap_funding_rate group by symbol;";
+pub static QUERY_LATEST_FUNDING_RATE_SQL: &str = "select symbol,max(funding_time)+60000 as latest from swap_funding_rate group by symbol;";
 
 pub(crate) enum BinanceTables {
     SpotKline,

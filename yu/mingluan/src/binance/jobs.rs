@@ -54,6 +54,11 @@ pub async fn start_bn_jobs() -> Result<(), MingLuanError> {
     swap_kline_task.execute().await?;
 
     //NEXT: 写一个资金费率的专用的param
+    // FIXME
+    // Error fetching klines for symbol GRASSUSDT: Reqwest error: error decoding response body
+    // Error fetching klines for symbol NKNUSDT: Reqwest error: error decoding response body
+    //
+    //
     let base_swap_funding_rate_fetcher = SimpleHistoryFetcher::new(&SWAP_FUNDING_RATE_COMMAND);
     let swap_funding_rate_fetcher: CloneHistoryFetcherFactory<SimpleHistoryFetcher, KlineParams, FundingRate> =
         CloneHistoryFetcherFactory::new(base_swap_funding_rate_fetcher);
