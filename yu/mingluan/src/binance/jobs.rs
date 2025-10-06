@@ -65,7 +65,7 @@ pub async fn start_bn_jobs() -> Result<(), MingLuanError> {
         "refresh swap funding rate".to_string(),
     );
     swap_funding_rate_task.execute().await?;
-    //TODO： 更新交易所时间表达式进入Config
+    //PLAN： 更新交易所时间表达式进入Config
     let _ = CronActor::new("30 59 */6 * * * *", update_dashboard_task).start();
     let _ = CronActor::new("10 0 * * * * *", spot_kline_task).start();
     let _ = CronActor::new("10 0 * * * * *", swap_funding_rate_task).start();

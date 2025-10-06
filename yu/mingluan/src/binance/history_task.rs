@@ -73,7 +73,6 @@ impl<O: HistoryPO, D: ExchangeDashBoard<TradingSymbol = TradingSymbol>> HistoryD
     }
 
     fn query_latest_symbols(&self, dashboard: Arc<D>, now: u64) -> Result<Vec<(String, u64)>, MingLuanError> {
-        //TODO：做一个判断，数据库和现在的时间相差不满1h，则过不用更新
         let conn = self.provider.acquire()?;
         let query_sql = match self.table.query_lastest_record() {
             None => Err(MingLuanError::new(&format!(
