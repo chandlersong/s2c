@@ -2,11 +2,10 @@ use crate::errors::YueError;
 use crate::models::RequestInfo;
 use async_trait::async_trait;
 use backon::{Backoff, Retryable};
-use governor::RateLimiter;
 use governor::clock::DefaultClock;
 use governor::state::{InMemoryState, NotKeyed};
+use governor::{Jitter, RateLimiter};
 use log::error;
-use rand::Rng;
 use reqwest::{Client, Method, RequestBuilder, StatusCode, header::HeaderMap};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -39,26 +38,25 @@ pub trait YueRequestBuilder: Send + Sync {
 pub async fn check_rate_limit(weight: u32, limiter: &DefaultRateLimiter, timeout_secs: u64) -> Result<(), YueError> {
     // 超时时间：timeout_secs 秒
     let timeout_duration = Duration::from_secs(timeout_secs);
-    let start = std::time::Instant::now();
     // 验证权重非零
     let weight = match NonZeroU32::new(weight) {
         Some(w) => w,
         None => return Err(YueError::new("权重必须为非零")),
     };
-    loop {
-        // 检查是否可以立即获得令牌
-        if limiter.check_n(weight).is_ok() {
-            return Ok(());
-        }
-        // 每次循环新建 rng，避免非 Send 类型跨 await
-        let sleep_ms = rand::thread_rng().gen_range(10..=100);
-        let sleep_duration = Duration::from_millis(sleep_ms);
-        tokio::time::sleep(sleep_duration).await;
-        let waited = start.elapsed();
-        if waited >= timeout_duration {
-            error!("获取令牌超时,timeout 时间:{}秒", timeout_secs);
+    let jitter = Jitter::up_to(Duration::from_millis(500));
+    // 优雅处理超时和 governor 错误
+    match tokio::time::timeout(timeout_duration, limiter.until_n_ready_with_jitter(weight, jitter)).await {
+        Err(e) => {
+            error!("获取令牌超时, timeout 时间:{}秒, 错误:{}", timeout_secs, e);
             return Err(YueError::new("限流超时"));
         }
+        Ok(res) => match res {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                error!("限流器内部错误: {:?}", e);
+                Err(YueError::new(&format!("限流器内部错误: {:?}", e)))
+            }
+        },
     }
 }
 
