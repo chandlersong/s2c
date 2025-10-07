@@ -13,6 +13,7 @@ pub struct TradingSymbol {
     pub quote_asset: String, //报价资产
 }
 
+//NEXT：把这些存入数据库
 #[derive(Clone)]
 pub struct BinanceDashboard {
     spot_symbols: Arc<RwLock<Vec<TradingSymbol>>>,

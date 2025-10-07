@@ -1,6 +1,6 @@
 use crate::models::Decimal;
 use crate::tools;
-use crate::tools::string_to_float;
+use crate::tools::{string_to_float, string_to_option_float};
 use li::tools::time::{UnixTimeStamp, unix_2_readable, unix_time_now_u64_utc};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -739,8 +739,8 @@ pub struct FundingRate {
     pub funding_time: u64,
 
     #[serde(rename = "markPrice")]
-    #[serde(with = "string_to_float")]
-    pub mark_price: f64, // 资金费对应标记价格
+    #[serde(with = "string_to_option_float")]
+    pub mark_price: Option<f64>, // 资金费对应标记价格，允许为空
 }
 
 impl HistoryVo for FundingRate {

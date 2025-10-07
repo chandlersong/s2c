@@ -104,7 +104,7 @@ static FUNDING_RATE_RATE_LIMITER: OnceLock<DefaultRateLimiter> = OnceLock::new()
 pub fn get_bn_funding_rate_limit() -> Option<&'static DefaultRateLimiter> {
     Some(FUNDING_RATE_RATE_LIMITER.get_or_init(|| {
         RateLimiter::direct(
-            Quota::with_period(Duration::from_secs(300))
+            Quota::with_period(Duration::from_secs(5 * 60))
                 .unwrap()
                 .allow_burst(NonZeroU32::new(SWAP_FUNDING_RATE_5_MINUTE).unwrap()),
         )

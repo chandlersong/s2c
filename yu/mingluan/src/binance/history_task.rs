@@ -221,7 +221,7 @@ pub struct FundingRatePo {
     pub symbol: String,
     pub funding_rate: f64,
     pub funding_time: u64,
-    pub mark_price: f64,
+    pub mark_price: Option<f64>,
 }
 
 impl<'a> From<&duckdb::Row<'a>> for FundingRatePo {
@@ -231,7 +231,7 @@ impl<'a> From<&duckdb::Row<'a>> for FundingRatePo {
             symbol: row.get(1).unwrap_or_default(),
             funding_rate: row.get(2).unwrap_or_default(),
             funding_time: row.get(3).unwrap_or_default(),
-            mark_price: row.get(4).unwrap_or_default(),
+            mark_price: row.get(4).ok(), // 支持数据库字段为空
         }
     }
 }
