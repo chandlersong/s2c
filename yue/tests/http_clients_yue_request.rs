@@ -9,7 +9,7 @@ mod http_clients_yue_request_tests {
     use yue::binance::bn_models::ToQueryParams;
     use yue::binance::bn_restful_commands::BNSecurityRequestBuilder;
     use yue::errors::YueError;
-    use yue::http_client::{NonAuthRequestBuilder, ResponseHandler, YueRequest};
+    use yue::http_client::{ClonableResponseCache, NonAuthRequestBuilder, ResponseHandler, YueRequest};
     use yue::models::RequestInfo;
 
     #[derive(Clone)]
@@ -26,14 +26,25 @@ mod http_clients_yue_request_tests {
     where
         U: DeserializeOwned + Send + Sync,
     {
-        async fn handle_response(&self, res: reqwest::Response) -> Result<U, YueError> {
-            if res.status() != reqwest::StatusCode::OK {
+        async fn handle_response(&self, resp: ClonableResponseCache) -> Result<U, YueError> {
+            if resp.status != reqwest::StatusCode::OK {
+                let body = String::from_utf8_lossy(&resp.body).to_string();
                 return Err(YueError::ExchangeRequestError {
-                    code: res.status().as_u16(),
-                    body: res.text().await.unwrap_or_default(),
+                    code: resp.status.as_u16(),
+                    body,
                 });
             }
-            let result = res.json::<U>().await?;
+            let result = match serde_json::from_slice::<U>(&resp.body) {
+                Ok(val) => val,
+                Err(_) => {
+                    let body = String::from_utf8_lossy(&resp.body).to_string();
+                    println!("[handle_response] JSON parse error, body: {}", body);
+                    return Err(YueError::ExchangeRequestError {
+                        code: reqwest::StatusCode::OK.as_u16(),
+                        body,
+                    });
+                }
+            };
             Ok(result)
         }
     }

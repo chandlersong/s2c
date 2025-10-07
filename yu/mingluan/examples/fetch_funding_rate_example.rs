@@ -34,7 +34,7 @@ async fn main() -> Result<(), mingluan::errors::MingLuanError> {
     let swap_funding_rate_fetcher: CloneHistoryFetcherFactory<SimpleHistoryFetcher, KlineParams, FundingRate> =
         CloneHistoryFetcherFactory::new(base_swap_funding_rate_fetcher);
 
-    let param = KlineParams::initial("GRASSUSDT".to_string(), 1000, yue::binance::history_data::HistoryInterval::OneHour);
+    let param = KlineParams::initial("1000SHIBUSDT".to_string(), 1000, yue::binance::history_data::HistoryInterval::OneHour);
     let (tx, mut rx) = mpsc::channel::<Result<Vec<FundingRatePo>, YueError>>(100);
 
     // 用tokio::spawn在后台异步任务中运行fetch_symbol_data

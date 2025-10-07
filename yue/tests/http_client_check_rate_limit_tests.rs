@@ -6,7 +6,8 @@ mod tests {
         use governor::{Quota, RateLimiter};
         use std::num::NonZeroU32;
         let burst = NonZeroU32::new(burst).unwrap();
-        let quota = Quota::per_minute(burst);
+        // 设置速率为每小时 burst 次，突发桶容量为 burst
+        let quota = Quota::per_hour(burst).allow_burst(burst);
         RateLimiter::direct(quota)
     }
 

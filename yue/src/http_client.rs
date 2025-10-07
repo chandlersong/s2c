@@ -2,10 +2,12 @@ use crate::errors::YueError;
 use crate::models::RequestInfo;
 use async_trait::async_trait;
 use backon::{Backoff, Retryable};
+use governor::RateLimiter;
 use governor::clock::DefaultClock;
 use governor::state::{InMemoryState, NotKeyed};
-use governor::{Jitter, RateLimiter};
-use reqwest::{Client, Method, RequestBuilder};
+use log::error;
+use rand::Rng;
+use reqwest::{Client, Method, RequestBuilder, StatusCode, header::HeaderMap};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::future::Future;
@@ -13,7 +15,6 @@ use std::marker::PhantomData;
 use std::num::NonZeroU32;
 use std::sync::OnceLock;
 use std::time::Duration;
-use tokio::time::timeout;
 
 pub(crate) static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
 
@@ -25,7 +26,7 @@ pub fn init_http_client(proxy: Option<&str>) -> &'static Client {
         if let Some(proxy_url) = proxy {
             res = res.proxy(reqwest::Proxy::all(proxy_url).unwrap());
         } else {
-            res = res.no_proxy(); // 明确禁用所有代理,否则他可能走系统代理
+            res = res.no_proxy(); // ��确禁用所有代理,否则他可能走系统代理
         }
         res.build().unwrap()
     })
@@ -36,31 +37,51 @@ pub trait YueRequestBuilder: Send + Sync {
 }
 
 pub async fn check_rate_limit(weight: u32, limiter: &DefaultRateLimiter, timeout_secs: u64) -> Result<(), YueError> {
-    // 超时时间：2 秒
+    // 超时时间：timeout_secs 秒
     let timeout_duration = Duration::from_secs(timeout_secs);
-    // 抖动避免请求堆积
-    let jitter = Jitter::up_to(Duration::from_millis(100));
-
+    let start = std::time::Instant::now();
     // 验证权重非零
     let weight = match NonZeroU32::new(weight) {
         Some(w) => w,
         None => return Err(YueError::new("权重必须为非零")),
     };
-    // 等待令牌等待是
-    let result = timeout(timeout_duration, limiter.until_n_ready_with_jitter(weight, jitter)).await;
-    match result {
-        Ok(inner_result) => match inner_result {
-            Ok(()) => Ok(()),
-            Err(_) => Err(YueError::new("令牌不足")),
-        },
-        Err(_) => Err(YueError::new("限流超时")),
+    loop {
+        // 检查是否可以立即获得令牌
+        if limiter.check_n(weight).is_ok() {
+            return Ok(());
+        }
+        // 每次循环新建 rng，避免非 Send 类型跨 await
+        let sleep_ms = rand::thread_rng().gen_range(10..=100);
+        let sleep_duration = Duration::from_millis(sleep_ms);
+        tokio::time::sleep(sleep_duration).await;
+        let waited = start.elapsed();
+        if waited >= timeout_duration {
+            error!("获取令牌超时,timeout 时间:{}秒", timeout_secs);
+            return Err(YueError::new("限流超时"));
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct ClonableResponseCache {
+    pub body: Vec<u8>,
+    pub status: StatusCode,
+    pub headers: HeaderMap,
+}
+
+impl ClonableResponseCache {
+    pub async fn from_response(res: reqwest::Response) -> Self {
+        let status = res.status();
+        let headers = res.headers().clone();
+        let body = res.bytes().await.unwrap_or_default().to_vec();
+        ClonableResponseCache { body, status, headers }
     }
 }
 
 /// Trait：用于抽象 HTTP 响应处理逻辑，每个交易所可自定义实现
 #[async_trait]
 pub trait ResponseHandler<U>: Send + Sync + Clone {
-    async fn handle_response(&self, res: reqwest::Response) -> Result<U, YueError>;
+    async fn handle_response(&self, resp: ClonableResponseCache) -> Result<U, YueError>;
 }
 
 #[derive(Clone)]
@@ -85,7 +106,7 @@ impl YueRequestBuilder for NonAuthRequestBuilder {
     }
 }
 
-/// 通用请求包装器，支持限流、重试和自定义响应处理
+/// 通用请求包装器，支持限流、重试和自定��响应处理
 pub struct YueRequest<'a, T, U, H>
 where
     T: YueRequestBuilder + Clone,
@@ -121,8 +142,16 @@ where
             }
         }
         let res = request.send().await?;
-        // 调用 trait 处理响应
-        self.response_handler.handle_response(res).await
+        let resp_cache = ClonableResponseCache::from_response(res).await;
+        let result = self.response_handler.handle_response(resp_cache.clone()).await;
+        match result {
+            Ok(val) => Ok(val),
+            Err(e) => {
+                let body_str = String::from_utf8_lossy(&resp_cache.body).to_string();
+                error!("HTTP response error, status: {}, body: {}", resp_cache.status, body_str);
+                Err(e)
+            }
+        }
     }
 
     pub async fn execute(&self) -> Result<U, YueError> {

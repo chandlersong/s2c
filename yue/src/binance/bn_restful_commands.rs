@@ -1,6 +1,6 @@
 use crate::binance::bn_models::ToQueryParams;
 use crate::errors::YueError;
-use crate::http_client::{DefaultRateLimiter, ResponseHandler, YueRequest, YueRequestBuilder};
+use crate::http_client::{ClonableResponseCache, DefaultRateLimiter, ResponseHandler, YueRequest, YueRequestBuilder};
 use crate::models::RequestInfo;
 use crate::tools::sign_hmac;
 use async_trait::async_trait;
@@ -104,7 +104,7 @@ static FUNDING_RATE_RATE_LIMITER: OnceLock<DefaultRateLimiter> = OnceLock::new()
 pub fn get_bn_funding_rate_limit() -> Option<&'static DefaultRateLimiter> {
     Some(FUNDING_RATE_RATE_LIMITER.get_or_init(|| {
         RateLimiter::direct(
-            Quota::with_period(Duration::from_secs(60 * 5))
+            Quota::with_period(Duration::from_secs(300))
                 .unwrap()
                 .allow_burst(NonZeroU32::new(SWAP_FUNDING_RATE_5_MINUTE).unwrap()),
         )
@@ -149,9 +149,8 @@ impl<U> ResponseHandler<U> for BinanceResponseHandler
 where
     U: DeserializeOwned + Send + Sync,
 {
-    async fn handle_response(&self, res: reqwest::Response) -> Result<U, YueError> {
-        // NEXT：对超限，做特殊护处理，主要看文档
-        let result = res.json::<U>().await?;
+    async fn handle_response(&self, res: ClonableResponseCache) -> Result<U, YueError> {
+        let result = serde_json::from_slice::<U>(&res.body)?;
         Ok(result)
     }
 }
@@ -317,7 +316,7 @@ where
 mod tests {
     use super::{BNSecurityRequestBuilder, BinanceResponseHandler, execute_bn_get, get_bn_spot_limit};
     use crate::binance::bn_models::EmptyQueryParams;
-    use crate::http_client::{NonAuthRequestBuilder, ResponseHandler, YueRequestBuilder, init_http_client};
+    use crate::http_client::{ClonableResponseCache, NonAuthRequestBuilder, ResponseHandler, YueRequestBuilder, init_http_client};
     use crate::models::RequestInfo;
     use reqwest::{Client, Method};
     use std::collections::BTreeMap;
@@ -554,7 +553,8 @@ mod tests {
 
         // 创建BinanceResponseHandler并测试handle_response方法
         let handler = BinanceResponseHandler::new();
-        let result: serde_json::Value = handler.handle_response(response).await?;
+        let cache = ClonableResponseCache::from_response(response).await;
+        let result: serde_json::Value = handler.handle_response(cache).await?;
 
         // 验证解析结果
         assert_eq!(result["symbol"], "BTCUSDT");
@@ -600,7 +600,8 @@ mod tests {
 
         // 创建BinanceResponseHandler并测试handle_response方法
         let handler = BinanceResponseHandler::new();
-        let result: serde_json::Value = handler.handle_response(response).await?;
+        let cache = ClonableResponseCache::from_response(response).await;
+        let result: serde_json::Value = handler.handle_response(cache).await?;
 
         // 验证错误响应解析
         assert_eq!(result["code"], -1121);
@@ -667,7 +668,8 @@ mod tests {
 
         // 测试BinanceResponseHandler
         let handler = BinanceResponseHandler::new();
-        let result: serde_json::Value = handler.handle_response(response).await?;
+        let cache = ClonableResponseCache::from_response(response).await;
+        let result: serde_json::Value = handler.handle_response(cache).await?;
 
         // 验证复杂JSON结构解析
         assert!(result["symbols"].is_array());

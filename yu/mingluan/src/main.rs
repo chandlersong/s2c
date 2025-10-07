@@ -13,6 +13,8 @@ async fn main() -> Result<(), MingLuanError> {
 
     let mut special_log = HashMap::new();
     special_log.insert("mingluan".to_string(), LevelFilter::Info);
+    special_log.insert("yue".to_string(), LevelFilter::Info);
+    special_log.insert("li".to_string(), LevelFilter::Info);
     setup_logger(Some(LevelFilter::Warn), special_log).unwrap();
     let proxy = app_config.proxy_url.clone();
     if let Some(url_proxy) = proxy {
