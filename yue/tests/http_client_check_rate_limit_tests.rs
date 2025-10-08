@@ -1,11 +1,15 @@
 #[cfg(test)]
 mod tests {
     use futures_util::future::join_all;
+    use governor::{Quota, RateLimiter};
+    use nonzero::nonzero;
+    use std::num::NonZeroU32;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::task;
     use yue::http_client::{DefaultRateLimiter, check_rate_limit};
 
     fn get_test_rate_limiter(burst: u32) -> DefaultRateLimiter {
-        use governor::{Quota, RateLimiter};
-        use std::num::NonZeroU32;
         let burst = NonZeroU32::new(burst).unwrap();
         // 设置速率为每小时 burst 次，突发桶容量为 burst（允许瞬间通过 burst 个请求）
         let quota = Quota::per_hour(burst).allow_burst(burst);
@@ -51,8 +55,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_rate_limit_with_timeout() {
-        use std::sync::Arc;
-        use tokio::task;
         let limiter = Arc::new(get_test_rate_limiter(5)); // 每小时最多5次，允许瞬间通过5个
         let mut handles = Vec::new();
         for _ in 0..10 {
@@ -74,5 +76,32 @@ mod tests {
         }
         assert_eq!(success_count, 5, "成功任务数应为5，实际为{}", success_count);
         assert_eq!(fail_count, 5, "失败任务数应为5，实际为{}", fail_count);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_rate_limit_full_fill() {
+        let quota = Quota::with_period(Duration::from_millis(200)).unwrap().allow_burst(nonzero!(5u32)); // 每200毫秒补充1个，突发容量5));
+        let limiter = Arc::new(RateLimiter::direct(quota)); // 每小时最多5次，允许瞬间通过5个
+        let mut handles = Vec::new();
+        for _ in 0..10 {
+            let limiter_ref = limiter.clone();
+            handles.push(task::spawn(async move {
+                let res = check_rate_limit(1, &limiter_ref, 2).await;
+                let now = std::time::SystemTime::now();
+                let millis = now.duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
+                println!("当前毫秒: {}", millis);
+                res
+            }));
+        }
+        // clock.advance(Duration::from_secs(300));
+        // 等待所有任务完成
+        let results = join_all(handles).await;
+        assert_eq!(results.len(), 10);
+        let mut success_num = 0;
+        for res in results {
+            let res = res.unwrap(); // task join
+            assert!(res.is_ok(), "任务应该成功,已经成功的次数：{}", success_num);
+            success_num = success_num + 1;
+        }
     }
 }

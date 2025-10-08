@@ -5,7 +5,7 @@ use backon::{Backoff, Retryable};
 use governor::clock::DefaultClock;
 use governor::state::{InMemoryState, NotKeyed};
 use governor::{Jitter, RateLimiter};
-use log::error;
+use log::{debug, error};
 use reqwest::{Client, Method, RequestBuilder, StatusCode, header::HeaderMap};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -38,7 +38,6 @@ pub trait YueRequestBuilder: Send + Sync {
 pub async fn check_rate_limit(weight: u32, limiter: &DefaultRateLimiter, timeout_secs: u64) -> Result<(), YueError> {
     // 超时时间：timeout_secs 秒
     let timeout_duration = Duration::from_secs(timeout_secs);
-    // 验证权重非零
     let weight = match NonZeroU32::new(weight) {
         Some(w) => w,
         None => return Err(YueError::new("权重必须为非零")),
@@ -48,7 +47,7 @@ pub async fn check_rate_limit(weight: u32, limiter: &DefaultRateLimiter, timeout
     match tokio::time::timeout(timeout_duration, limiter.until_n_ready_with_jitter(weight, jitter)).await {
         Err(e) => {
             error!("获取令牌超时, timeout 时间:{}秒, 错误:{}", timeout_secs, e);
-            return Err(YueError::new("限流超时"));
+            Err(YueError::new("限流超时"))
         }
         Ok(res) => match res {
             Ok(_) => Ok(()),
@@ -139,6 +138,7 @@ where
                 request = request.json(body);
             }
         }
+        debug!("execute request: {:?}", request);
         let res = request.send().await?;
         let resp_cache = ClonableResponseCache::from_response(res).await;
         let result = self.response_handler.handle_response(resp_cache.clone()).await;
