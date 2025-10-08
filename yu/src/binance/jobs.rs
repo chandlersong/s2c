@@ -4,7 +4,7 @@ use crate::binance::binance_consts::ALL_BINANCE_TABLES;
 use crate::binance::bn_dashboard::BinanceDashboard;
 use crate::binance::history_task::{DuckDBHistoryDataWriter, FundingRatePo, InitialHistoryTask, KlinePo};
 use crate::duck_db::DBProvider;
-use crate::errors::MingLuanError;
+use crate::errors::YuError;
 use crate::exchange::CloneHistoryFetcherFactory;
 use actix::Actor;
 use duckdb::Connection;
@@ -20,7 +20,7 @@ use yue::binance::history_data::{KlineParams, SimpleHistoryFetcher};
 ///     - funding rate非阻塞
 ///
 ///
-pub async fn start_bn_jobs() -> Result<(), MingLuanError> {
+pub async fn start_bn_jobs() -> Result<(), YuError> {
     let dashboard = BinanceDashboard::new();
     //每六个小时更新一次。因为这样频率不要那么高
     dashboard.execute().await?;
@@ -74,14 +74,14 @@ pub async fn start_bn_jobs() -> Result<(), MingLuanError> {
     Ok(())
 }
 
-fn table_exists(conn: &Connection, table_name: &str) -> Result<bool, MingLuanError> {
+fn table_exists(conn: &Connection, table_name: &str) -> Result<bool, YuError> {
     let check_sql = format!("SELECT name FROM sqlite_master WHERE type='table' AND name='{}'", table_name);
     let mut stmt = conn.prepare(&check_sql)?;
     let mut rows = stmt.query([])?;
     Ok(rows.next()?.is_some())
 }
 
-fn initial_table() -> Result<(), MingLuanError> {
+fn initial_table() -> Result<(), YuError> {
     let conn = DBProvider::default().acquire()?;
     for table in ALL_BINANCE_TABLES.iter() {
         let table_name = table.table_name();

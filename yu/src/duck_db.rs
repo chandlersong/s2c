@@ -1,5 +1,5 @@
 use crate::config::get_config;
-use crate::errors::MingLuanError;
+use crate::errors::YuError;
 use duckdb::DuckdbConnectionManager;
 use r2d2;
 use r2d2::{Pool, PooledConnection};
@@ -37,7 +37,7 @@ impl DBProvider {
         DBProvider { pool }
     }
 
-    pub fn acquire(&self) -> Result<PooledConnection<DuckdbConnectionManager>, MingLuanError> {
+    pub fn acquire(&self) -> Result<PooledConnection<DuckdbConnectionManager>, YuError> {
         Ok(self.pool.get()?)
     }
 }

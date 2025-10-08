@@ -6,7 +6,7 @@ resolver = "2"
 members = [
     "yue",
      "li",
-    "yu/mingluan",
+    "yu",
 ]
 
 

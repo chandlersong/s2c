@@ -2,7 +2,7 @@ use crate::actix_jobs::AsyncRepeatTask;
 use crate::binance::binance_consts::BinanceTables;
 use crate::binance::bn_dashboard::TradingSymbol;
 use crate::duck_db::DBProvider;
-use crate::errors::MingLuanError;
+use crate::errors::YuError;
 use crate::exchange::{ExchangeDashBoard, HistoryFetcherFactory};
 use crate::utils::get_snowflake_generator;
 use async_trait::async_trait;
@@ -25,8 +25,8 @@ pub trait HistoryPO: Debug {
 }
 
 pub trait HistoryDataWriter<O: HistoryPO, D: ExchangeDashBoard<TradingSymbol = TradingSymbol>>: Send + Sync {
-    fn write_batch(&self, data: Vec<O>) -> Result<(), MingLuanError>;
-    fn query_latest_symbols(&self, dash_board: Arc<D>, now: u64) -> Result<Vec<(String, u64)>, MingLuanError>;
+    fn write_batch(&self, data: Vec<O>) -> Result<(), YuError>;
+    fn query_latest_symbols(&self, dash_board: Arc<D>, now: u64) -> Result<Vec<(String, u64)>, YuError>;
 }
 
 pub struct DuckDBHistoryDataWriter {
@@ -46,7 +46,7 @@ impl DuckDBHistoryDataWriter {
 }
 
 impl<O: HistoryPO, D: ExchangeDashBoard<TradingSymbol = TradingSymbol>> HistoryDataWriter<O, D> for DuckDBHistoryDataWriter {
-    fn write_batch(&self, data: Vec<O>) -> Result<(), MingLuanError> {
+    fn write_batch(&self, data: Vec<O>) -> Result<(), YuError> {
         if data.is_empty() {
             return Ok(());
         }
@@ -57,7 +57,7 @@ impl<O: HistoryPO, D: ExchangeDashBoard<TradingSymbol = TradingSymbol>> HistoryD
             Ok(a) => a,
             Err(e) => {
                 error!("Failed to create appender for table {}: {}", self.table.table_name(), e);
-                return Err(MingLuanError::CustomError("Failed to create appender".to_string()));
+                return Err(YuError::CustomError("Failed to create appender".to_string()));
             }
         };
 
@@ -72,10 +72,10 @@ impl<O: HistoryPO, D: ExchangeDashBoard<TradingSymbol = TradingSymbol>> HistoryD
         Ok(())
     }
 
-    fn query_latest_symbols(&self, dashboard: Arc<D>, now: u64) -> Result<Vec<(String, u64)>, MingLuanError> {
+    fn query_latest_symbols(&self, dashboard: Arc<D>, now: u64) -> Result<Vec<(String, u64)>, YuError> {
         let conn = self.provider.acquire()?;
         let query_sql = match self.table.query_lastest_record() {
-            None => Err(MingLuanError::new(&format!(
+            None => Err(YuError::new(&format!(
                 "Table {} does not support querying latest record",
                 self.table.table_name()
             )))?,
@@ -350,7 +350,7 @@ where
     R: HistoryPO<Source = V> + Send + Sync + Clone + 'static,
     D: ExchangeDashBoard<TradingSymbol = TradingSymbol> + Send + Sync + Clone + 'static,
 {
-    async fn execute(&self) -> Result<(), MingLuanError> {
+    async fn execute(&self) -> Result<(), YuError> {
         let now = unix_time_now_u64_utc();
         let latest_symbol = self.data_writer.query_latest_symbols(self.exchange_dashboard.clone(), now)?;
         let (tx, mut rx) = mpsc::channel(100);
@@ -404,7 +404,7 @@ mod tests {
     use crate::binance::bn_dashboard::{BinanceDashboard, TradingSymbol};
     use crate::binance::history_task::{DuckDBHistoryDataWriter, InitialHistoryTask, KlinePo};
     use crate::duck_db::DBProvider;
-    use crate::errors::MingLuanError;
+    use crate::errors::YuError;
     use crate::exchange::HistoryFetcherFactory;
     use crate::test_utils::{generate_test_kline_vec, import_local_csv_and_assert, TEST_BEGIN_TIMESTAMP};
     use crate::utils::initial_memory_db;
@@ -471,7 +471,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_refresh_spot_kline_normal() -> Result<(), MingLuanError> {
+    async fn test_refresh_spot_kline_normal() -> Result<(), YuError> {
         // 初始化内存数据库连接并建表
         let pool = initial_memory_db();
         let db_provider = DBProvider::new(pool);

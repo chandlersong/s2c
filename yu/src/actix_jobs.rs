@@ -1,4 +1,4 @@
-use crate::errors::MingLuanError;
+use crate::errors::YuError;
 use actix::{Actor, AsyncContext, Context};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -9,7 +9,7 @@ use std::time::Duration;
 
 #[async_trait]
 pub trait AsyncRepeatTask: Send + Sync + Clone + Unpin + 'static {
-    async fn execute(&self) -> Result<(), MingLuanError>;
+    async fn execute(&self) -> Result<(), YuError>;
 
     fn task_name(&self) -> &str;
 }
@@ -77,7 +77,7 @@ mod tests {
 
     #[async_trait]
     impl AsyncRepeatTask for SuccessTask {
-        async fn execute(&self) -> Result<(), MingLuanError> {
+        async fn execute(&self) -> Result<(), YuError> {
             let mut count = self.called.lock().unwrap();
             *count += 1;
             Ok(())
@@ -93,8 +93,8 @@ mod tests {
 
     #[async_trait]
     impl AsyncRepeatTask for FailTask {
-        async fn execute(&self) -> Result<(), MingLuanError> {
-            Err(MingLuanError::CustomError("fail".to_string()))
+        async fn execute(&self) -> Result<(), YuError> {
+            Err(YuError::CustomError("fail".to_string()))
         }
 
         fn task_name(&self) -> &str {

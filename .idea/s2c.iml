@@ -17,6 +17,9 @@
       <sourceFolder url="file://$MODULE_DIR$/yu/mingluan/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/yu/mingluan/examples" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/yu/mingluan/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/yu/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/yu/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/yu/tests" isTestSource="true" />
       <excludeFolder url="file://$MODULE_DIR$/.idea/httpRequests" />
       <excludeFolder url="file://$MODULE_DIR$/conf" />
       <excludeFolder url="file://$MODULE_DIR$/target" />

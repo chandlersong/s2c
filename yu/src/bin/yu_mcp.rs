@@ -1,14 +1,14 @@
 use actix::System;
 use li::tools::logs::setup_logger;
 use log::{error, info, LevelFilter};
-use mingluan::binance::jobs::start_bn_jobs;
-use mingluan::config::get_config;
-use mingluan::errors::MingLuanError;
 use std::collections::HashMap;
+use yu::binance::jobs::start_bn_jobs;
+use yu::config::get_config;
+use yu::errors::YuError;
 use yue::http_client::init_http_client;
 
 #[actix::main]
-async fn main() -> Result<(), MingLuanError> {
+async fn main() -> Result<(), YuError> {
     let app_config = get_config();
 
     let mut special_log = HashMap::new();

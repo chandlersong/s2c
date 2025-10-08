@@ -1,4 +1,4 @@
-use duckdb::{Connection, Result, params};
+use duckdb::{params, Connection, Result};
 
 struct Duck {
     id: i32,
@@ -20,10 +20,7 @@ fn main() -> Result<()> {
         "#,
     )?;
 
-    conn.execute(
-        "INSERT INTO ducks (id, name) VALUES (?, ?)",
-        params![3, "Darkwing Duck"],
-    )?;
+    conn.execute("INSERT INTO ducks (id, name) VALUES (?, ?)", params![3, "Darkwing Duck"])?;
 
     let ducks = conn
         .prepare("FROM ducks")?

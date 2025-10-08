@@ -1,11 +1,12 @@
 use li::tools::logs::setup_logger;
 use log::{info, LevelFilter};
-use mingluan::binance::bn_dashboard::BinanceDashboard;
-use mingluan::binance::history_task::{InitialHistoryTask, KlinePo};
-use mingluan::config::get_config;
-use mingluan::exchange::{CloneHistoryFetcherFactory, HistoryFetcherFactory};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
+use yu::binance::bn_dashboard::BinanceDashboard;
+use yu::binance::history_task::{InitialHistoryTask, KlinePo};
+use yu::config::get_config;
+use yu::errors::YuError;
+use yu::exchange::{CloneHistoryFetcherFactory, HistoryFetcherFactory};
 use yue::binance::bn_models::BinanceKline;
 use yue::binance::bn_restful_commands::SWAP_KLINE_HISTORY_COMMAND;
 use yue::binance::history_data::{HistoryInterval, KlineParams, MuteHistoryParam, SimpleHistoryFetcher};
@@ -13,7 +14,7 @@ use yue::errors::YueError;
 use yue::http_client::init_http_client;
 
 #[tokio::main]
-async fn main() -> Result<(), mingluan::errors::MingLuanError> {
+async fn main() -> Result<(), YuError> {
     let app_config = get_config();
     let proxy = app_config.proxy_url.clone();
     if let Some(url_proxy) = proxy {

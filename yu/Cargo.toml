@@ -1,13 +1,13 @@
 [package]
-name = "mingluan"
+name = "yu"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 duckdb = { workspace = true }
 tokio = { workspace = true }
-yue = { path = "../../yue" }
-li = { path = "../../li" }
+yue = { path = "../yue" }
+li = { path = "../li" }
 thiserror = { workspace = true }
 mockall = { workspace = true }
 async-trait = { workspace = true }

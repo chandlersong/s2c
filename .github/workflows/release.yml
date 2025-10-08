@@ -25,9 +25,9 @@ jobs:
           context: ${{ github.workspace }}
           file: ${{ github.workspace }}/dockerfiles/prod_with_duckdb/Dockerfile
           push: true
-          tags: chandlersong/mingluan:${{github.event.inputs.imageTag}}-amd64
+          tags: chandlersong/yu_mcp:${{github.event.inputs.imageTag}}-amd64
           build-args: |
-            APP_NAME=mingluan
+            APP_NAME=yu_mcp
             LIBDIR=x86_64-linux-gnu
           platforms: linux/amd64
   build-arm64:
@@ -48,9 +48,9 @@ jobs:
           context: ${{ github.workspace }}
           file: ${{ github.workspace }}/dockerfiles/prod_with_duckdb/Dockerfile
           push: true
-          tags: chandlersong/mingluan:${{github.event.inputs.imageTag}}-arm64
+          tags: chandlersong/yu_mcp:${{github.event.inputs.imageTag}}-arm64
           build-args: |
-            APP_NAME=mingluan
+            APP_NAME=yu_mcp
             LIBDIR=aarch64-linux-gnu
           platforms: linux/arm64
   build_manifest:
@@ -66,9 +66,9 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
       - name: Create and push multi-arch manifest for mingluan
         run: |
-          docker buildx imagetools create --tag chandlersong/mingluan:${{github.event.inputs.imageTag}} \
-            chandlersong/mingluan:${{github.event.inputs.imageTag}}-amd64 \
-            chandlersong/mingluan:${{github.event.inputs.imageTag}}-arm64
-          docker buildx imagetools create --tag chandlersong/mingluan:latest \
-            chandlersong/mingluan:${{github.event.inputs.imageTag}}-amd64 \
-            chandlersong/mingluan:${{github.event.inputs.imageTag}}-arm64
+          docker buildx imagetools create --tag chandlersong/yu_mcp:${{github.event.inputs.imageTag}} \
+            chandlersong/yu_mcp:${{github.event.inputs.imageTag}}-amd64 \
+            chandlersong/yu_mcp:${{github.event.inputs.imageTag}}-arm64
+          docker buildx imagetools create --tag chandlersong/yu_mcp:latest \
+            chandlersong/yu_mcp:${{github.event.inputs.imageTag}}-amd64 \
+            chandlersong/yu_mcp:${{github.event.inputs.imageTag}}-arm64

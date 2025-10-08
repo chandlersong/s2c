@@ -1,5 +1,5 @@
 use crate::actix_jobs::AsyncRepeatTask;
-use crate::errors::MingLuanError;
+use crate::errors::YuError;
 use crate::exchange::ExchangeDashBoard;
 use async_trait::async_trait;
 use log::error;
@@ -50,7 +50,7 @@ impl ExchangeDashBoard for BinanceDashboard {
 
 #[async_trait]
 impl AsyncRepeatTask for BinanceDashboard {
-    async fn execute(&self) -> Result<(), MingLuanError> {
+    async fn execute(&self) -> Result<(), YuError> {
         let (spot_res, swap_res) = tokio::join!(
             get_trading_spot_symbols(None),
             get_trading_swap_symbols(None, Some(CONTRACT_TYPE_PERPETUAL))

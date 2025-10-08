@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 #[derive(Error, Debug)]
-pub enum MingLuanError {
+pub enum YuError {
     #[error("system io: {0}")]
     SystemIOError(#[from] std::io::Error),
     #[error("yue error: {0}")]
@@ -14,8 +14,8 @@ pub enum MingLuanError {
     CustomError(String),
 }
 
-impl MingLuanError {
+impl YuError {
     pub fn new(message: &str) -> Self {
-        MingLuanError::CustomError(message.to_string())
+        YuError::CustomError(message.to_string())
     }
 }
