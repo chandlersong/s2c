@@ -85,13 +85,7 @@ mod tests {
         let mut handles = Vec::new();
         for _ in 0..10 {
             let limiter_ref = limiter.clone();
-            handles.push(task::spawn(async move {
-                let res = check_rate_limit(1, &limiter_ref, 2).await;
-                let now = std::time::SystemTime::now();
-                let millis = now.duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
-                println!("当前毫秒: {}", millis);
-                res
-            }));
+            handles.push(task::spawn(async move { check_rate_limit(1, &limiter_ref, 2).await }));
         }
         // clock.advance(Duration::from_secs(300));
         // 等待所有任务完成

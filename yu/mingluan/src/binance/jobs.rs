@@ -69,7 +69,7 @@ pub async fn start_bn_jobs() -> Result<(), MingLuanError> {
     let _ = CronActor::new("30 59 */6 * * * *", update_dashboard_task).start();
     let _ = CronActor::new("10 0 * * * * *", spot_kline_task).start();
     let _ = CronActor::new("10 0 * * * * *", swap_funding_rate_task).start();
-    let _ = CronActor::new("10 0 * * * * *", swap_kline_task).start();
+    let _ = CronActor::new("10 1 * * * * *", swap_kline_task).start();
 
     Ok(())
 }

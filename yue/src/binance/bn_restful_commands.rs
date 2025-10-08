@@ -88,10 +88,11 @@ macro_rules! define_rate_limiter {
     };
 }
 
-/// 写的小一点方便处理
-static SPOT_RATE_PER_MINUTE: u32 = 1200;
-static SWAP_LIMITER_PER_MINUTE: u32 = 2400;
-static SWAP_FUNDING_PER_MINUTE: u32 = 100;
+/// PLAN：这些做成配置项。比如一台server需要部署多个instance
+/// 然后经过测试，发觉比上限低一点，如果定格，容易被封
+static SPOT_RATE_PER_MINUTE: u32 = 1190;
+static SWAP_LIMITER_PER_MINUTE: u32 = 1200;
+static SWAP_FUNDING_PER_MINUTE: u32 = 95;
 
 // 用宏自动生成币安现货、合约、资金费率限流器相关函数
 // 用法：define_rate_limiter!(静态变量名, 速率常量名, 函数名)
