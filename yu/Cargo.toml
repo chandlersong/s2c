@@ -16,7 +16,8 @@ log = { workspace = true }
 config = { workspace = true }
 actix = { workspace = true }
 actix-rt = { workspace = true }
-
+rmcp = "0.8.1"  # 根据最新版本调整，从 GitHub crate 获取
+rmcp-macros = "0.8.1"
 
 r2d2 = "0.8.10"
 cron = "0.15.0"

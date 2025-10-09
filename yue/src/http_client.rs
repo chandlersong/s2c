@@ -127,7 +127,7 @@ where
 {
     async fn perform_request_async(&self) -> Result<U, YueError> {
         if let Some(limiter) = self.info.rate_limit {
-            check_rate_limit(self.info.weight, limiter, self.info.get_timeout()).await?;
+            check_rate_limit(self.info.weight, limiter, self.info.get_rate_limit_timeout()).await?;
         }
         let client = HTTP_CLIENT.get().ok_or(YueError::new("客户端没有初始化"))?;
         let mut request = self

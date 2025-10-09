@@ -57,7 +57,7 @@ mod http_clients_yue_request_tests {
         setup();
         let mock_server = MockServer::start().await;
         let test_path = "/api/v3/test";
-        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1, None, None)?;
+        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1, None, None, None)?;
 
         Mock::given(method("GET"))
             .and(path(test_path))
@@ -88,7 +88,7 @@ mod http_clients_yue_request_tests {
         setup();
         let mock_server = MockServer::start().await;
         let test_path = "/api/v3/test";
-        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1, None, None)?;
+        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1, None, None, None)?;
 
         Mock::given(method("GET"))
             .and(path(test_path))
@@ -125,7 +125,7 @@ mod http_clients_yue_request_tests {
         setup();
         let mock_server = MockServer::start().await;
         let test_path = "/api/v3/test";
-        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1, None, None)?;
+        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1, None, None, None)?;
 
         Mock::given(method("GET"))
             .and(path(test_path))
@@ -160,7 +160,7 @@ mod http_clients_yue_request_tests {
         setup();
         let mock_server = MockServer::start().await;
         let test_path = "/api/v3/test";
-        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1, None, None)?;
+        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1, None, None, None)?;
 
         Mock::given(method("GET"))
             .and(path(test_path))
@@ -192,7 +192,7 @@ mod http_clients_yue_request_tests {
         setup();
         let mock_server = MockServer::start().await;
         let test_path = "/api/v3/retry_test";
-        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1, None, None)?;
+        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1, None, None, None)?;
 
         // First call fails with 500
         Mock::given(method("GET"))

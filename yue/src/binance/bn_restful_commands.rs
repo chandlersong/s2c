@@ -56,6 +56,7 @@ pub const SPOT_EXCHANGE_INFO_PATH: &str = "/api/v3/exchangeInfo";
 pub const SPOT_SERVER_TIME_PATH: &str = "/api/v3/time";
 pub const SPOT_KLINE_PATH: &str = "/api/v3/klines";
 pub const SPOT_TICKER_API_PATH: &str = "/api/v3/ticker/price";
+pub const SPOT_AVERAGE_PATH: &str = "/api/v3/avgPrice";
 
 pub const SWAP_PATH: &str = "/fapi/v1/ping";
 pub const SWAP_EXCHANGE_INFO_PATH: &str = "/fapi/v1/exchangeInfo";
@@ -148,7 +149,7 @@ where
 /// Wrapper for Binance requests to enable retry with backon
 
 pub static PING_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, PING_PATH, false, 1, get_bn_spot_limit(), None).unwrap());
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, PING_PATH, false, 1, get_bn_spot_limit(), None, None).unwrap());
 
 ///币安当前有 1479 个交易对
 /// 时区: UTC
@@ -202,18 +203,20 @@ pub static PING_COMMAND: LazyLock<RequestInfo> =
 
 /// SPOT API
 pub static SPOT_EXCHANGE_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_EXCHANGE_INFO_PATH, false, 20, get_bn_spot_limit(), Some(10)).unwrap());
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_EXCHANGE_INFO_PATH, false, 20, get_bn_spot_limit(), None, Some(10)).unwrap());
 
 pub static SERVER_TIME_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_SERVER_TIME_PATH, false, 1, get_bn_spot_limit(), Some(2)).unwrap());
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_SERVER_TIME_PATH, false, 1, get_bn_spot_limit(), None, Some(2)).unwrap());
 
 pub static SPOT_KLINE_HISTORY_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_KLINE_PATH, false, 2, get_bn_spot_limit(), Some(60 * 60)).unwrap());
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_KLINE_PATH, false, 2, get_bn_spot_limit(), None, Some(60 * 60)).unwrap());
 
+pub static SPOT_AVERAGE_PRICE_COMMAND: LazyLock<RequestInfo> =
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_AVERAGE_PATH, false, 2, get_bn_spot_limit(), None, Some(2)).unwrap());
 /// SWAP API
 
 pub static SWAP_EXCHANGE_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_API, SWAP_EXCHANGE_INFO_PATH, false, 20, get_bn_swap_limit(), Some(90)).unwrap());
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_API, SWAP_EXCHANGE_INFO_PATH, false, 20, get_bn_swap_limit(), None, Some(90)).unwrap());
 
 pub static SWAP_FUNDING_RATE_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| {
     RequestInfo::from_base_path(
@@ -222,6 +225,7 @@ pub static SWAP_FUNDING_RATE_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| {
         false,
         1,
         get_bn_funding_rate_limit(),
+        None,
         Some(60 * 60),
     )
     .unwrap()
@@ -232,7 +236,7 @@ pub static SWAP_FUNDING_RATE_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| {
 因为每次取1k，所有为5
 */
 pub static SWAP_KLINE_HISTORY_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_API, SWAP_KLINE_PATH, false, 5, get_bn_swap_limit(), Some(60 * 60)).unwrap());
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_API, SWAP_KLINE_PATH, false, 5, get_bn_swap_limit(), None, Some(60 * 60)).unwrap());
 
 /// 全局 RateLimiter，使用 OnceLock 延迟初始化
 
@@ -320,7 +324,7 @@ mod tests {
     #[test]
     fn test_compose_request_with_valid_security_info() {
         let client = Client::new();
-        let request_info = RequestInfo::from_base_path("https://example.com", "/api/v3/test", false, 1, get_bn_spot_limit(), None).unwrap();
+        let request_info = RequestInfo::from_base_path("https://example.com", "/api/v3/test", false, 1, get_bn_spot_limit(), None, None).unwrap();
         let builder = BNSecurityRequestBuilder {
             api_key: "test_api_key".to_string(),
             api_secret: "test_api_secret".to_string(),
@@ -340,7 +344,7 @@ mod tests {
     #[test]
     fn test_compose_request_without_security_info() {
         let client = Client::new();
-        let request_info = RequestInfo::from_base_path("https://example.com", "/api/v3/test", false, 1, get_bn_spot_limit(), None).unwrap();
+        let request_info = RequestInfo::from_base_path("https://example.com", "/api/v3/test", false, 1, get_bn_spot_limit(), None, None).unwrap();
         let builder = NonAuthRequestBuilder {};
 
         let result = builder.compose_request(&client, &request_info, None, Method::GET);
@@ -354,7 +358,7 @@ mod tests {
     #[test]
     fn test_compose_request_with_query_params() {
         let client = Client::new();
-        let request_info = RequestInfo::from_base_path("https://example.com", "/api/v3/test", false, 1, get_bn_spot_limit(), None).unwrap();
+        let request_info = RequestInfo::from_base_path("https://example.com", "/api/v3/test", false, 1, get_bn_spot_limit(), None, None).unwrap();
         let builder = BNSecurityRequestBuilder {
             api_key: "test_api_key".to_string(),
             api_secret: "test_api_secret".to_string(),
@@ -379,7 +383,7 @@ mod tests {
 
         // Create a test RequestInfo
         let test_path = "/api/v3/test";
-        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1, get_bn_spot_limit(), None)?;
+        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1, get_bn_spot_limit(), None, None)?;
 
         // Setup the mock
         Mock::given(method("GET"))
@@ -405,7 +409,7 @@ mod tests {
         setup();
         let mock_server = MockServer::start().await;
         let test_path = "/api/v3/test";
-        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1, None, None)?;
+        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1, None, None, None)?;
 
         // Setup mock with query parameters
         Mock::given(method("GET"))
@@ -435,7 +439,7 @@ mod tests {
         setup();
         let mock_server = MockServer::start().await;
         let test_path = "/api/v3/test";
-        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1, None, None)?;
+        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1, None, None, None)?;
 
         // Setup mock expecting security headers
         Mock::given(method("GET"))

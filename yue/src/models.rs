@@ -53,7 +53,8 @@ pub struct RequestInfo {
     pub has_security: bool,
     pub weight: u32,
     pub rate_limit: Option<&'static DefaultRateLimiter>,
-    timeout_secs: Option<u64>,
+    request_timeout_mill_secs: u32,
+    rate_limit_timeout_secs: u64,
 }
 
 impl RequestInfo {
@@ -63,7 +64,8 @@ impl RequestInfo {
         has_security: bool,
         weight: u32,
         rate_limit: Option<&'static DefaultRateLimiter>,
-        timeout_secs: Option<u64>,
+        request_timeout_mill_secs: Option<u32>,
+        rate_limit_timeout_secs: Option<u64>,
     ) -> Result<Self, url::ParseError> {
         let inner = Url::parse(full_url.as_ref())?;
         Ok(Self {
@@ -71,7 +73,8 @@ impl RequestInfo {
             has_security,
             weight,
             rate_limit,
-            timeout_secs,
+            request_timeout_mill_secs: request_timeout_mill_secs.unwrap_or_else(|| 1000u32),
+            rate_limit_timeout_secs: rate_limit_timeout_secs.unwrap_or_else(|| 2),
         })
     }
 
@@ -82,7 +85,8 @@ impl RequestInfo {
         has_security: bool,
         weight: u32,
         rate_limit: Option<&'static DefaultRateLimiter>,
-        timeout_secs: Option<u64>,
+        request_timeout_mill_secs: Option<u32>,
+        rate_limit_timeout_secs: Option<u64>,
     ) -> Result<Self, url::ParseError> {
         let base = base.as_ref().trim_end_matches('/');
         let path = path.as_ref();
@@ -91,7 +95,7 @@ impl RequestInfo {
         } else {
             format!("{base}/{path}")
         };
-        Self::new_full_url(full, has_security, weight, rate_limit, timeout_secs)
+        Self::new_full_url(full, has_security, weight, rate_limit, request_timeout_mill_secs, rate_limit_timeout_secs)
     }
 
     // 如需获取内部 Url 的只读引用
@@ -104,8 +108,8 @@ impl RequestInfo {
         self.inner.as_str()
     }
 
-    pub fn get_timeout(&self) -> u64 {
-        self.timeout_secs.unwrap_or_else(|| 2)
+    pub fn get_rate_limit_timeout(&self) -> u64 {
+        self.rate_limit_timeout_secs
     }
 }
 

@@ -10,7 +10,7 @@ mod tests {
     fn test_noauth_request_builder_with_valid_param() {
         let client = Client::new();
         let builder = NonAuthRequestBuilder {};
-        let info = RequestInfo::new_full_url("https://example.com/api", false, 1, None, None).unwrap();
+        let info = RequestInfo::new_full_url("https://example.com/api", false, 1, None, None, None).unwrap();
         let param = Some("key=value".to_string());
         let method = Method::GET;
 
@@ -25,7 +25,7 @@ mod tests {
     fn test_noauth_request_builder_with_empty_param() {
         let client = Client::new();
         let builder = NonAuthRequestBuilder {};
-        let info = RequestInfo::new_full_url("https://example.com/api", false, 1, None, None).unwrap();
+        let info = RequestInfo::new_full_url("https://example.com/api", false, 1, None, None, None).unwrap();
         let param = Some("".to_string());
         let method = Method::GET;
 
@@ -40,7 +40,7 @@ mod tests {
     fn test_noauth_request_builder_with_none_param() {
         let client = Client::new();
         let builder = NonAuthRequestBuilder {};
-        let info = RequestInfo::new_full_url("https://example.com/api", false, 1, None, None).unwrap();
+        let info = RequestInfo::new_full_url("https://example.com/api", false, 1, None, None, None).unwrap();
         let param = None;
         let method = Method::GET;
 
@@ -55,7 +55,7 @@ mod tests {
     fn test_noauth_request_builder_with_post_method() {
         let client = Client::new();
         let builder = NonAuthRequestBuilder {};
-        let info = RequestInfo::new_full_url("https://example.com/api", false, 1, None, None).unwrap();
+        let info = RequestInfo::new_full_url("https://example.com/api", false, 1, None, None, None).unwrap();
         let param = Some("key=value".to_string());
         let method = Method::POST;
 
