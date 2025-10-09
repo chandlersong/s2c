@@ -4,5 +4,5 @@ pub mod history_task;
 
 pub mod bn_dashboard;
 
+mod bn_mcp;
 pub mod jobs;
-mod mcp_resource;

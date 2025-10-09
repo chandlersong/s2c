@@ -414,7 +414,7 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
     use yue::binance::bn_models::{BinanceKline, SymbolType};
-    use yue::binance::history_data::{HistoryFetcher, HistoryInterval, KlineParams, MuteHistoryParam};
+    use yue::binance::history_data::{CommonParam, HistoryFetcher, HistoryInterval, MuteHistoryParam};
     use yue::errors::YueError;
 
     // mock 测试部分同步修正
@@ -428,10 +428,10 @@ mod tests {
         }
 
         #[async_trait]
-        impl HistoryFetcher<KlineParams, BinanceKline> for HistoryFetcher {
+        impl HistoryFetcher<CommonParam, BinanceKline> for HistoryFetcher {
             async fn get_all_kline_data(
                 &self,
-                param: KlineParams,
+                param: CommonParam,
                 start_time: Option<u64>,
             ) -> Result<(Vec<BinanceKline>, u16), YueError>;
         }
@@ -441,7 +441,7 @@ mod tests {
     struct MockHistoryFetcherFactory {}
 
     impl HistoryFetcherFactory for MockHistoryFetcherFactory {
-        type Param = KlineParams;
+        type Param = CommonParam;
         type Output = BinanceKline;
         type Fetcher = MockHistoryFetcher;
         fn create_fetcher(&self) -> Self::Fetcher {
@@ -451,8 +451,8 @@ mod tests {
 
     fn create_mock_history_fetch_for_test_refresh_spot_kline_normal() -> MockHistoryFetcher {
         let mut fetcher = MockHistoryFetcher::new();
-        let btc_param = KlineParams::initial("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
-        let eth_param = KlineParams::initial("ETHUSDT".to_string(), 1000, HistoryInterval::OneHour);
+        let btc_param = CommonParam::initial("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
+        let eth_param = CommonParam::initial("ETHUSDT".to_string(), 1000, HistoryInterval::OneHour);
         fetcher
             .expect_get_all_kline_data()
             .with(predicate::eq(btc_param.clone()), predicate::eq(Some(1694102460000)))
@@ -497,7 +497,7 @@ mod tests {
 
         let factory = MockHistoryFetcherFactory {};
         let data_writer = Arc::new(DuckDBHistoryDataWriter::new(db_provider.clone(), SpotKline, SymbolType::Spot));
-        let manager: InitialHistoryTask<MockHistoryFetcherFactory, KlineParams, KlinePo, BinanceKline, BinanceDashboard> =
+        let manager: InitialHistoryTask<MockHistoryFetcherFactory, CommonParam, KlinePo, BinanceKline, BinanceDashboard> =
             InitialHistoryTask::new(factory, dash_board, data_writer, "test_refresh_spot_kline_normal".to_string());
         let res = manager.execute().await;
 

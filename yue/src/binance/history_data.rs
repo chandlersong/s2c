@@ -83,38 +83,48 @@ pub trait MuteHistoryParam: ToQueryParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct KlineParams {
+pub struct CommonParam {
     pub symbol: String,
-    pub interval: HistoryInterval,
+    pub interval: Option<HistoryInterval>,
     pub start_time: Option<u64>,
     pub end_time: Option<u64>,
     pub limit: Option<u32>,
 }
 
-impl KlineParams {
+impl CommonParam {
     pub fn new(symbol: String, limit: u32, interval: HistoryInterval) -> Self {
         Self {
             symbol,
-            interval,
+            interval: Some(interval),
             start_time: None,
             end_time: None,
             limit: Some(limit),
         }
     }
+
+    pub fn only_symbol(symbol: String) -> Self {
+        Self {
+            symbol,
+            interval: None,
+            start_time: None,
+            end_time: None,
+            limit: None,
+        }
+    }
 }
 
-impl MuteHistoryParam for KlineParams {
+impl MuteHistoryParam for CommonParam {
     fn initial(symbol: String, limit: u32, interval: HistoryInterval) -> Self {
-        KlineParams {
+        CommonParam {
             symbol,
-            interval,
+            interval: Some(interval),
             start_time: None,
             end_time: None,
             limit: Some(limit),
         }
     }
     fn create_new(&self, start_time: Option<u64>, end_time: Option<u64>) -> Self {
-        KlineParams {
+        CommonParam {
             symbol: self.symbol.clone(),
             interval: self.interval.clone(),
             start_time,
@@ -128,11 +138,13 @@ impl MuteHistoryParam for KlineParams {
     }
 }
 
-impl ToQueryParams for KlineParams {
+impl ToQueryParams for CommonParam {
     fn to_query_string(&self) -> String {
         let mut params = vec![];
         params.push(format!("symbol={}", self.symbol));
-        params.push(format!("interval={}", self.interval.as_ref()));
+        if let Some(interval) = self.interval.as_ref() {
+            params.push(format!("interval={}", interval.as_ref()));
+        }
         if let Some(start) = self.start_time {
             params.push(format!("startTime={}", start));
         }
@@ -307,7 +319,7 @@ where
 mod tests {
     use crate::binance::bn_models::BinanceKline;
     use crate::binance::bn_restful_commands::SPOT_KLINE_HISTORY_COMMAND;
-    use crate::binance::history_data::{HistoryFetcher, HistoryInterval, KlineParams, SimpleHistoryFetcher};
+    use crate::binance::history_data::{CommonParam, HistoryFetcher, HistoryInterval, SimpleHistoryFetcher};
     use crate::errors::YueError;
     use crate::http_client::init_http_client;
     use serde_json::json;
@@ -362,7 +374,7 @@ mod tests {
             .mount(&mock_server)
             .await;
         let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
-        let base_param = KlineParams::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
+        let base_param = CommonParam::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
         let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher.get_all_kline_data(base_param, None).await;
         assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
         let (kline, _) = kline_res.unwrap();
@@ -413,7 +425,7 @@ mod tests {
             .mount(&mock_server)
             .await;
         let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
-        let base_param = KlineParams::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
+        let base_param = CommonParam::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
         let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher.get_all_kline_data(base_param, Some(1609459200000)).await;
         assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
         let (kline, _) = kline_res.unwrap();
@@ -432,7 +444,7 @@ mod tests {
             .mount(&mock_server)
             .await;
         let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
-        let base_param = KlineParams::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
+        let base_param = CommonParam::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
         let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher.get_all_kline_data(base_param, Some(1609459200000)).await;
         assert!(kline_res.is_err());
     }
@@ -459,7 +471,7 @@ mod tests {
             .mount(&mock_server)
             .await;
         let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
-        let base_param = KlineParams::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
+        let base_param = CommonParam::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
         let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher.get_all_kline_data(base_param, Some(1609459200000)).await;
         assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
         let (kline, _) = kline_res.unwrap();
@@ -490,7 +502,7 @@ mod tests {
             .mount(&mock_server)
             .await;
         let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
-        let base_param = KlineParams::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
+        let base_param = CommonParam::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
         let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher.get_all_kline_data(base_param, Some(1609459200000)).await;
         assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
         let (kline, _) = kline_res.unwrap();

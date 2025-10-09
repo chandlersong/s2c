@@ -9,7 +9,7 @@ use yu::errors::YuError;
 use yu::exchange::{CloneHistoryFetcherFactory, HistoryFetcherFactory};
 use yue::binance::bn_models::BinanceKline;
 use yue::binance::bn_restful_commands::SWAP_KLINE_HISTORY_COMMAND;
-use yue::binance::history_data::{HistoryInterval, KlineParams, MuteHistoryParam, SimpleHistoryFetcher};
+use yue::binance::history_data::{CommonParam, HistoryInterval, MuteHistoryParam, SimpleHistoryFetcher};
 use yue::errors::YueError;
 use yue::http_client::init_http_client;
 
@@ -30,16 +30,16 @@ async fn main() -> Result<(), YuError> {
     setup_logger(Some(LevelFilter::Warn), special_log).unwrap();
 
     let base_swap_kline_fetcher = SimpleHistoryFetcher::new(&SWAP_KLINE_HISTORY_COMMAND);
-    let swap_kline_fetcher: CloneHistoryFetcherFactory<SimpleHistoryFetcher, KlineParams, BinanceKline> =
+    let swap_kline_fetcher: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonParam, BinanceKline> =
         CloneHistoryFetcherFactory::new(base_swap_kline_fetcher);
 
-    let param = KlineParams::initial("GRASSUSDT".to_string(), 1000, HistoryInterval::OneHour);
+    let param = CommonParam::initial("GRASSUSDT".to_string(), 1000, HistoryInterval::OneHour);
     let (tx, mut rx) = mpsc::channel::<Result<Vec<KlinePo>, YueError>>(100);
 
     let fetch_handle = tokio::spawn(async move {
         InitialHistoryTask::<
-            CloneHistoryFetcherFactory<SimpleHistoryFetcher, KlineParams, BinanceKline>,
-            KlineParams,
+            CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonParam, BinanceKline>,
+            CommonParam,
             KlinePo, // 修正为 KlinePo，满足 HistoryPO 约束
             BinanceKline,
             BinanceDashboard,

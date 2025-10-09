@@ -849,3 +849,70 @@ impl ExchangeInfoTrait for SwapExchangeInfo {
         &self.symbols
     }
 }
+
+/// 币安 /api/v3/ticker/24hr 24小时行情响应对象
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct Ticker24hr {
+    #[serde(rename = "symbol")]
+    pub symbol: String, // 交易对，如 BTCUSDT
+
+    #[serde(rename = "priceChange", with = "string_to_float")]
+    pub price_change: f64, // 24小时价格变动
+
+    #[serde(rename = "priceChangePercent", with = "string_to_float")]
+    pub price_change_percent: f64, // 24小时价格变动百分比
+
+    #[serde(rename = "weightedAvgPrice", with = "string_to_float")]
+    pub weighted_avg_price: f64, // 24小时加权平均价
+
+    #[serde(rename = "prevClosePrice", with = "string_to_float")]
+    pub prev_close_price: f64, // 前一日收盘价
+
+    #[serde(rename = "lastPrice", with = "string_to_float")]
+    pub last_price: f64, // 最新成交价
+
+    #[serde(rename = "lastQty", with = "string_to_float")]
+    pub last_qty: f64, // 最新成交量
+
+    #[serde(rename = "bidPrice", with = "string_to_float")]
+    pub bid_price: f64, // 当前买一价
+
+    #[serde(rename = "bidQty", with = "string_to_float")]
+    pub bid_qty: f64, // 当前买一量
+
+    #[serde(rename = "askPrice", with = "string_to_float")]
+    pub ask_price: f64, // 当前卖一价
+
+    #[serde(rename = "askQty", with = "string_to_float")]
+    pub ask_qty: f64, // 当前卖一量
+
+    #[serde(rename = "openPrice", with = "string_to_float")]
+    pub open_price: f64, // 今日开盘价
+
+    #[serde(rename = "highPrice", with = "string_to_float")]
+    pub high_price: f64, // 24小时最高价
+
+    #[serde(rename = "lowPrice", with = "string_to_float")]
+    pub low_price: f64, // 24小时最低价
+
+    #[serde(rename = "volume", with = "string_to_float")]
+    pub volume: f64, // 24小时成交量
+
+    #[serde(rename = "quoteVolume", with = "string_to_float")]
+    pub quote_volume: f64, // 24小时成交额
+
+    #[serde(rename = "openTime")]
+    pub open_time: u64, // 统计开始时间（毫秒）
+
+    #[serde(rename = "closeTime")]
+    pub close_time: u64, // 统计结束时间（毫秒）
+
+    #[serde(rename = "firstId")]
+    pub first_id: u64, // 首笔成交ID
+
+    #[serde(rename = "lastId")]
+    pub last_id: u64, // 末笔成交ID
+
+    #[serde(rename = "count")]
+    pub count: u64, // 成交笔数
+}

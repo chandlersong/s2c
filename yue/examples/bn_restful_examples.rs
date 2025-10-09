@@ -1,10 +1,10 @@
 use li::tools::time::unix_2_readable;
 use std::collections::BTreeMap;
-use yue::binance::bn_models::BinanceKline;
+use yue::binance::bn_models::{BinanceKline, Ticker24hr};
 use yue::binance::bn_models::{EmptyQueryParams, ServerTime};
 use yue::binance::bn_restful_commands::SPOT_KLINE_HISTORY_COMMAND;
 use yue::binance::bn_restful_commands::{SERVER_TIME_COMMAND, execute_bn_get};
-use yue::binance::history_data::execute_ping;
+use yue::binance::history_data::{CommonParam, execute_ping};
 use yue::http_client::{NonAuthRequestBuilder, init_http_client};
 
 ///
@@ -68,5 +68,26 @@ async fn main() {
             }
         }
         Err(e) => println!("获取K线失败: {}", e),
+    }
+
+    let ticker_24h_param = CommonParam::only_symbol("BTCUSDT".to_string());
+    match execute_bn_get::<CommonParam, NonAuthRequestBuilder, Ticker24hr>(
+        &yue::binance::bn_restful_commands::SPOT_TICKER_24HR_ONE_SYMBOL_COMMAND,
+        Some(&ticker_24h_param),
+        request_builder.clone(),
+    )
+    .execute()
+    .await
+    {
+        Ok(ticker) => {
+            println!("BTCUSDT 24小时价格变动:");
+            println!(
+                "开盘价: {}, 现在价格: {}, 最高价: {}, 最低价: {}, 成交量: {}",
+                ticker.open_price, ticker.last_price, ticker.high_price, ticker.low_price, ticker.volume
+            );
+        }
+        Err(e) => {
+            println!("获取24小时的价格失败: {}", e)
+        }
     }
 }

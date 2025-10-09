@@ -57,6 +57,7 @@ pub const SPOT_SERVER_TIME_PATH: &str = "/api/v3/time";
 pub const SPOT_KLINE_PATH: &str = "/api/v3/klines";
 pub const SPOT_TICKER_API_PATH: &str = "/api/v3/ticker/price";
 pub const SPOT_AVERAGE_PATH: &str = "/api/v3/avgPrice";
+pub const SPOT_TICKER_24HR_PATH: &str = "/api/v3/ticker/24hr";
 
 pub const SWAP_PATH: &str = "/fapi/v1/ping";
 pub const SWAP_EXCHANGE_INFO_PATH: &str = "/fapi/v1/exchangeInfo";
@@ -213,6 +214,10 @@ pub static SPOT_KLINE_HISTORY_COMMAND: LazyLock<RequestInfo> =
 
 pub static SPOT_AVERAGE_PRICE_COMMAND: LazyLock<RequestInfo> =
     LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_AVERAGE_PATH, false, 2, get_bn_spot_limit(), None, Some(2)).unwrap());
+
+pub static SPOT_TICKER_24HR_ONE_SYMBOL_COMMAND: LazyLock<RequestInfo> =
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_TICKER_24HR_PATH, false, 2, get_bn_spot_limit(), None, Some(2)).unwrap());
+
 /// SWAP API
 
 pub static SWAP_EXCHANGE_COMMAND: LazyLock<RequestInfo> =

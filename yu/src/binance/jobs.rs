@@ -11,7 +11,7 @@ use duckdb::Connection;
 use std::sync::Arc;
 use yue::binance::bn_models::{BinanceKline, FundingRate, SymbolType};
 use yue::binance::bn_restful_commands::{SPOT_KLINE_HISTORY_COMMAND, SWAP_FUNDING_RATE_COMMAND, SWAP_KLINE_HISTORY_COMMAND};
-use yue::binance::history_data::{KlineParams, SimpleHistoryFetcher};
+use yue::binance::history_data::{CommonParam, SimpleHistoryFetcher};
 ///
 /// NEXT: 加入的功能
 /// 1. 检测数据完整性的进程。
@@ -28,7 +28,7 @@ pub async fn start_bn_jobs() -> Result<(), YuError> {
     let dash_board = Arc::new(dashboard);
     initial_table()?;
     let base_spot_kline_fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
-    let spot_kline_fetcher: CloneHistoryFetcherFactory<SimpleHistoryFetcher, KlineParams, BinanceKline> =
+    let spot_kline_fetcher: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonParam, BinanceKline> =
         CloneHistoryFetcherFactory::new(base_spot_kline_fetcher);
 
     let spot_data_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SpotKline, SymbolType::Spot));
@@ -42,7 +42,7 @@ pub async fn start_bn_jobs() -> Result<(), YuError> {
     spot_kline_task.execute().await?;
 
     let base_swap_kline_fetcher = SimpleHistoryFetcher::new(&SWAP_KLINE_HISTORY_COMMAND);
-    let swap_kline_fetcher: CloneHistoryFetcherFactory<SimpleHistoryFetcher, KlineParams, BinanceKline> =
+    let swap_kline_fetcher: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonParam, BinanceKline> =
         CloneHistoryFetcherFactory::new(base_swap_kline_fetcher);
     let swap_kline_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SwapKline, SymbolType::Swap));
     let swap_kline_task = InitialHistoryTask::<_, _, KlinePo, BinanceKline, BinanceDashboard>::new(
@@ -55,7 +55,7 @@ pub async fn start_bn_jobs() -> Result<(), YuError> {
 
     //NEXT: 写一个资金费率的专用的param
     let base_swap_funding_rate_fetcher = SimpleHistoryFetcher::new(&SWAP_FUNDING_RATE_COMMAND);
-    let swap_funding_rate_fetcher: CloneHistoryFetcherFactory<SimpleHistoryFetcher, KlineParams, FundingRate> =
+    let swap_funding_rate_fetcher: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonParam, FundingRate> =
         CloneHistoryFetcherFactory::new(base_swap_funding_rate_fetcher);
     let swap_funding_rate_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SwapFundingRate, SymbolType::Swap));
     let swap_funding_rate_task = InitialHistoryTask::<_, _, FundingRatePo, FundingRate, BinanceDashboard>::new(

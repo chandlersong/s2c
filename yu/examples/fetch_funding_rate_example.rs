@@ -9,7 +9,7 @@ use yu::errors::YuError;
 use yu::exchange::{CloneHistoryFetcherFactory, HistoryFetcherFactory};
 use yue::binance::bn_models::FundingRate;
 use yue::binance::bn_restful_commands::SWAP_FUNDING_RATE_COMMAND;
-use yue::binance::history_data::{KlineParams, MuteHistoryParam, SimpleHistoryFetcher};
+use yue::binance::history_data::{CommonParam, MuteHistoryParam, SimpleHistoryFetcher};
 use yue::errors::YueError;
 use yue::http_client::init_http_client;
 
@@ -32,17 +32,17 @@ async fn main() -> Result<(), YuError> {
     setup_logger(Some(LevelFilter::Warn), special_log).unwrap();
 
     let base_swap_funding_rate_fetcher = SimpleHistoryFetcher::new(&SWAP_FUNDING_RATE_COMMAND);
-    let swap_funding_rate_fetcher: CloneHistoryFetcherFactory<SimpleHistoryFetcher, KlineParams, FundingRate> =
+    let swap_funding_rate_fetcher: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonParam, FundingRate> =
         CloneHistoryFetcherFactory::new(base_swap_funding_rate_fetcher);
 
-    let param = KlineParams::initial("1000SHIBUSDT".to_string(), 1000, yue::binance::history_data::HistoryInterval::OneHour);
+    let param = CommonParam::initial("1000SHIBUSDT".to_string(), 1000, yue::binance::history_data::HistoryInterval::OneHour);
     let (tx, mut rx) = mpsc::channel::<Result<Vec<FundingRatePo>, YueError>>(100);
 
     // 用tokio::spawn在后台异步任务中运行fetch_symbol_data
     let fetch_handle = tokio::spawn(async move {
         InitialHistoryTask::<
-            CloneHistoryFetcherFactory<SimpleHistoryFetcher, KlineParams, FundingRate>,
-            KlineParams,
+            CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonParam, FundingRate>,
+            CommonParam,
             FundingRatePo,
             FundingRate,
             BinanceDashboard,
