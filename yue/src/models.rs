@@ -53,7 +53,7 @@ pub struct RequestInfo {
     pub has_security: bool,
     pub weight: u32,
     pub rate_limit: Option<&'static DefaultRateLimiter>,
-    request_timeout_mill_secs: u32,
+    pub request_timeout_mill_secs: u32,
     rate_limit_timeout_secs: u64,
 }
 
