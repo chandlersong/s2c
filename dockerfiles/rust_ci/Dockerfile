@@ -1,5 +1,5 @@
 FROM chandlersong/rocksdb:bookworm-slim-9.9.3 AS rocksdb
-FROM rust:1.89-slim-bookworm AS rust
+FROM rust:1.90-slim-bookworm AS rust
 ARG LIBDIR
 ARG TARGETARCH
 ENV LIBDIR=${LIBDIR}

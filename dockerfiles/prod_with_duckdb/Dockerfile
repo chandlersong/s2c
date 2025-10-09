@@ -1,5 +1,5 @@
 # Dockerfile
-FROM chandlersong/rust_ci:1.89-slim-bookworm AS builder
+FROM chandlersong/rust_ci:1.90-slim-bookworm AS builder
 WORKDIR /app
 COPY ../.. .
 ARG LIBDIR
@@ -12,7 +12,7 @@ ENV LD_LIBRARY_PATH=$DUCKDB_LIB_DIR
 ENV VCPKGRS_DYNAMIC=1
 RUN cargo build --release
 
-FROM chandlersong/rust_runtime:1.89-slim-bookworm AS runtime
+FROM chandlersong/rust_runtime:1.90-slim-bookworm AS runtime
 ARG APP_NAME=test
 ENV LIBDIR=${LIBDIR}
 ENV OPENSSL_LIB_DIR=/usr/lib/${LIBDIR}
