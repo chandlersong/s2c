@@ -1,15 +1,14 @@
+use actix::System;
 use li::tools::logs::setup_logger;
-use log::{info, LevelFilter};
-use rmcp::transport::sse_server::SseServer;
+use log::{error, info, LevelFilter};
 use std::collections::HashMap;
-use yu::binance::bn_mcp::BinanceSpot;
+use yu::binance::jobs::start_bn_jobs;
 use yu::config::get_config;
+use yu::errors::YuError;
 use yue::http_client::init_http_client;
 
-const BIND_ADDRESS: &str = "127.0.0.1:8000";
-
-#[tokio::main]
-async fn main() {
+#[actix::main]
+async fn main() -> Result<(), YuError> {
     let app_config = get_config();
 
     let mut special_log = HashMap::new();
@@ -25,11 +24,15 @@ async fn main() {
         init_http_client(None);
     }
 
-    let ct = SseServer::serve(BIND_ADDRESS.parse().unwrap())
-        .await
-        .unwrap()
-        .with_service_directly(BinanceSpot::new);
-
-    tokio::signal::ctrl_c().await.unwrap();
-    ct.cancel();
+    match start_bn_jobs().await {
+        Ok(_) => info!("Binance jobs started successfully"),
+        Err(e) => {
+            error!("Failed to start Binance jobs: {}", e);
+            panic!("stop process");
+        }
+    }
+    actix_rt::signal::ctrl_c().await?;
+    println!("Received Ctrl+C, shutting down...");
+    System::current().stop(); // 优雅停止
+    Ok(())
 }
