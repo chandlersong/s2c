@@ -7,5 +7,6 @@ pub mod test_utils;
 pub mod utils;
 
 pub mod actix_jobs;
+pub mod arrow_flight_server;
 pub mod binance;
 pub mod config;

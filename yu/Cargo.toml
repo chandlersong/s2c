@@ -16,6 +16,7 @@ log = { workspace = true }
 config = { workspace = true }
 actix = { workspace = true }
 actix-rt = { workspace = true }
+prost = { workspace = true }
 rmcp = { version = "0.8.1", features = ["transport-sse-server"] }  # 根据最新版本调整，从 GitHub crate 获取
 rmcp-macros = "0.8.1"
 
@@ -23,3 +24,9 @@ r2d2 = "0.8.10"
 cron = "0.15.0"
 chrono = "0.4.38"
 serde = { version = "1.0.225", features = ["derive"] }
+arrow = { version = "56.2.0", features = ["prettyprint"] }
+arrow-flight = { version = "56.2.0", features = ['flight-sql'] }
+tonic = { version = "0.13", default-features = false, features = ["transport", "codegen", "prost", "router"] }
+tokio-stream = "0.1.17"
+arrow-ipc = "56.2.0"
+arrow-schema = "56.2.0"

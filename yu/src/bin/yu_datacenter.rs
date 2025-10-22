@@ -24,13 +24,13 @@ async fn main() -> Result<(), YuError> {
         init_http_client(None);
     }
 
-    match start_bn_jobs().await {
-        Ok(_) => info!("Binance jobs started successfully"),
-        Err(e) => {
-            error!("Failed to start Binance jobs: {}", e);
-            panic!("stop process");
-        }
-    }
+    // match start_bn_jobs().await {
+    //     Ok(_) => info!("Binance jobs started successfully"),
+    //     Err(e) => {
+    //         error!("Failed to start Binance jobs: {}", e);
+    //         panic!("stop process");
+    //     }
+    // }
     actix_rt::signal::ctrl_c().await?;
     println!("Received Ctrl+C, shutting down...");
     System::current().stop(); // 优雅停止

@@ -71,7 +71,7 @@ impl ServerHandler for BinanceSpot {
         }
     }
 
-    async fn initialize(&self, _request: InitializeRequestParam, context: RequestContext<RoleServer>) -> Result<InitializeResult, McpError> {
+    async fn initialize(&self, _request: InitializeRequestParam, _: RequestContext<RoleServer>) -> Result<InitializeResult, McpError> {
         Ok(self.get_info())
     }
 }
