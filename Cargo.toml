@@ -28,7 +28,7 @@ rocksdb = "0.23.0"
 prost = "0.14.1"
 prost-build = "0.12"
 backon = "1.5.2"
-duckdb = { version = "1.3.2", features = ["r2d2", "bundled"] }
+duckdb = { version = "1.3.2", features = ["r2d2"] }
 thiserror = "2.0.16"
 rs-snowflake = "0.6.0"
 config = { version = "0.15.16", features = ["yaml"] }

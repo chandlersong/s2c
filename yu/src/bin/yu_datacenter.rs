@@ -1,5 +1,4 @@
 use actix::System;
-use arrow_flight::flight_service_server::FlightServiceServer;
 use li::tools::logs::setup_logger;
 use log::{error, info, LevelFilter};
 use std::collections::HashMap;
