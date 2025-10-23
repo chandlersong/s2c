@@ -1,19 +1,22 @@
 use crate::duck_db::DBProvider;
-use arrow_flight::flight_service_server::FlightService;
+use crate::errors::YuError;
+use arrow_flight::flight_service_server::{FlightService, FlightServiceServer};
 use arrow_flight::utils as flight_utils;
 use arrow_flight::{
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo, HandshakeRequest, HandshakeResponse, PollInfo, PutResult,
     SchemaResult, Ticket,
 };
 use duckdb::params;
-use log::info;
+use log::{debug, error, info};
 use prost::bytes::Bytes;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
+use tonic::transport::Server;
 use tonic::{Request, Response, Status, Streaming};
 
 ///
-/// 想要作为数据中心
+/// 想要作为数据中心，以后会支持很多方法
+/// 现在只是支持SQL查询
 #[derive(Clone)]
 pub struct DuckDBFlightServer {
     db_provider: DBProvider,
@@ -42,7 +45,7 @@ impl FlightService for DuckDBFlightServer {
     async fn get_flight_info(&self, request: Request<FlightDescriptor>) -> Result<Response<FlightInfo>, Status> {
         // 解析请求，获取 FlightDescriptor
         let descriptor = request.into_inner();
-        info!("Got flight info: {:?}", descriptor);
+        debug!("Got flight info: {:?}", descriptor);
 
         // 构造一个简单的 schema（如 int32 字段）
         // 构造一个 FlightEndpoint，包含一个 Ticket 和地址
@@ -164,6 +167,31 @@ impl FlightService for DuckDBFlightServer {
         // Flight 查询支持的自定义操作接口，未实现
         Err(Status::unimplemented("Implement list_actions"))
     }
+}
+
+pub async fn start_flight_server(addr: &str) -> Result<tokio::sync::oneshot::Sender<()>, YuError> {
+    let addr = addr.parse().map_err(|e| YuError::new(&format!("Bad address {}: {}", addr, e)))?;
+
+    // Create a shutdown channel; return the sender to the caller so they can trigger shutdown
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+
+    // Spawn the tonic server on the current runtime. This avoids creating a new runtime/thread.
+    tokio::spawn(async move {
+        let service = DuckDBFlightServer::new();
+        let svc = FlightServiceServer::new(service);
+
+        let shutdown_future = async {
+            // Wait for shutdown signal from the caller
+            let _ = shutdown_rx.await;
+            info!("Shutdown signal received for flight server");
+        };
+
+        if let Err(e) = Server::builder().add_service(svc).serve_with_shutdown(addr, shutdown_future).await {
+            error!("Flight server error: {}", e);
+        }
+    });
+
+    Ok(shutdown_tx)
 }
 
 #[cfg(test)]
