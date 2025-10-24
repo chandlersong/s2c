@@ -17,7 +17,7 @@ pub fn parse_level(level: Option<&str>) -> LevelFilter {
         Some(ref s) if s == "info" => LevelFilter::Info,
         Some(ref s) if s == "debug" => LevelFilter::Debug,
         Some(ref s) if s == "trace" => LevelFilter::Trace,
-        _ => LevelFilter::Warn,
+        _ => LevelFilter::Info,
     }
 }
 
