@@ -1,5 +1,5 @@
 use actix::System;
-use li::tools::logs::setup_logger;
+use li::tools::logs::{parse_level, setup_logger};
 use log::{error, info, LevelFilter};
 use std::collections::HashMap;
 use yu::binance::jobs::start_bn_jobs;
@@ -10,11 +10,14 @@ use yue::http_client::init_http_client;
 #[actix::main]
 async fn main() -> Result<(), YuError> {
     let app_config = get_config();
-
+    let configured_level = parse_level(app_config.log_level.as_deref());
     let mut special_log = HashMap::new();
-    special_log.insert("mingluan".to_string(), LevelFilter::Debug);
-    special_log.insert("yue".to_string(), LevelFilter::Debug);
-    special_log.insert("li".to_string(), LevelFilter::Debug);
+    special_log.insert("mingluan".to_string(), configured_level);
+    special_log.insert("yue".to_string(), configured_level);
+    special_log.insert("li".to_string(), configured_level);
+
+    // Read global log level from config (logLevel). Fallback to Warn if missing/invalid.
+
     setup_logger(Some(LevelFilter::Warn), special_log).unwrap();
     let proxy = app_config.proxy_url.clone();
     if let Some(url_proxy) = proxy {

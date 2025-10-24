@@ -9,6 +9,9 @@ pub struct AppConfig {
     #[serde(rename = "proxyUrl")]
     pub proxy_url: Option<String>,
     pub database: Option<DuckDBConfig>,
+    // Optional log level for the application. Example values: "off", "error", "warn", "info", "debug", "trace"
+    #[serde(rename = "logLevel")]
+    pub log_level: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
