@@ -1,3 +1,4 @@
 proxyUrl: "http://localhost:7891"
+log_level: "info"
 database:
   path: "test.db"
