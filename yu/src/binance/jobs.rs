@@ -8,6 +8,7 @@ use crate::errors::YuError;
 use crate::exchange::CloneHistoryFetcherFactory;
 use actix::Actor;
 use duckdb::Connection;
+use log::info;
 use std::sync::Arc;
 use yue::binance::bn_models::{BinanceKline, FundingRate, SymbolType};
 use yue::binance::bn_restful_commands::{SPOT_KLINE_HISTORY_COMMAND, SWAP_FUNDING_RATE_COMMAND, SWAP_KLINE_HISTORY_COMMAND};
@@ -97,5 +98,6 @@ fn initial_table() -> Result<(), YuError> {
             }
         }
     }
+    info!("initial binance tables done");
     Ok(())
 }

@@ -1,6 +1,6 @@
 use actix::System;
 use li::tools::logs::{parse_level, setup_logger};
-use log::{error, info, LevelFilter};
+use log::{error, info, warn, LevelFilter};
 use std::collections::HashMap;
 use yu::binance::jobs::start_bn_jobs;
 use yu::config::get_config;
@@ -12,6 +12,7 @@ async fn main() -> Result<(), YuError> {
     let app_config = get_config();
     let configured_level = parse_level(app_config.log_level.as_deref());
     let mut special_log = HashMap::new();
+    error!("Setting app log level  to {:?}", configured_level);
     special_log.insert("mingluan".to_string(), configured_level);
     special_log.insert("yue".to_string(), configured_level);
     special_log.insert("li".to_string(), configured_level);
@@ -24,6 +25,7 @@ async fn main() -> Result<(), YuError> {
         info!("Using proxy: {}", url_proxy);
         init_http_client(Some(&url_proxy));
     } else {
+        info!("don't use proxy");
         init_http_client(None);
     }
 
