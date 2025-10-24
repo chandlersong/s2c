@@ -1,6 +1,6 @@
 use actix::System;
 use li::tools::logs::{parse_level, setup_logger};
-use log::{error, info, warn, LevelFilter};
+use log::{error, info, LevelFilter};
 use std::collections::HashMap;
 use yu::binance::jobs::start_bn_jobs;
 use yu::config::get_config;
@@ -10,13 +10,12 @@ use yue::http_client::init_http_client;
 #[actix::main]
 async fn main() -> Result<(), YuError> {
     let app_config = get_config();
-    let configured_level = parse_level(app_config.log_level.as_deref());
     let mut special_log = HashMap::new();
-    error!("Setting app log level to {:?}", configured_level);
-    special_log.insert("mingluan".to_string(), configured_level);
-    special_log.insert("yue".to_string(), configured_level);
-    special_log.insert("li".to_string(), configured_level);
 
+    let log_in_config = app_config.log_level.as_deref();
+    special_log.insert("yu_datacenter".to_string(), parse_level(log_in_config));
+    special_log.insert("yue".to_string(), parse_level(log_in_config));
+    special_log.insert("li".to_string(), parse_level(log_in_config));
     // Read global log level from config (logLevel). Fallback to Warn if missing/invalid.
 
     setup_logger(Some(LevelFilter::Warn), special_log).unwrap();
@@ -28,7 +27,11 @@ async fn main() -> Result<(), YuError> {
         info!("don't use proxy");
         init_http_client(None);
     }
-
+    error!(
+        "Setting log in config: {:?} ,set to :{:?}",
+        log_in_config,
+        parse_level(app_config.log_level.as_deref())
+    );
     match start_bn_jobs().await {
         Ok(_) => info!("Binance jobs started successfully"),
         Err(e) => {
