@@ -14,6 +14,7 @@ async fn main() -> Result<(), YuError> {
 
     let log_in_config = app_config.log_level.as_deref();
     special_log.insert("yu_datacenter".to_string(), parse_level(log_in_config));
+    special_log.insert("yu".to_string(), parse_level(log_in_config));
     special_log.insert("yue".to_string(), parse_level(log_in_config));
     special_log.insert("li".to_string(), parse_level(log_in_config));
     // Read global log level from config (logLevel). Fallback to Warn if missing/invalid.
