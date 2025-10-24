@@ -12,7 +12,7 @@ async fn main() -> Result<(), YuError> {
     let app_config = get_config();
     let configured_level = parse_level(app_config.log_level.as_deref());
     let mut special_log = HashMap::new();
-    error!("Setting app log level  to {:?}", configured_level);
+    error!("Setting app log level to {:?}", configured_level);
     special_log.insert("mingluan".to_string(), configured_level);
     special_log.insert("yue".to_string(), configured_level);
     special_log.insert("li".to_string(), configured_level);
