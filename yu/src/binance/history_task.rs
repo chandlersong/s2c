@@ -305,7 +305,7 @@ where
         T: HistoryFetcher<P, V> + Send + Sync + 'static,
         R: HistoryPO<Source = V> + Clone,
     {
-        info!(
+        debug!(
             "update {} -> symbol: {}, latest: {}",
             task_name,
             param.get_symbol(),
