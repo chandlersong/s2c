@@ -1,11 +1,49 @@
 use crate::errors::YueError;
 use futures_util::{SinkExt, StreamExt};
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use std::time::Duration;
+use tokio::sync::mpsc;
 use tokio::time::sleep;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::Uri;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
+
+/// WebSocket 消息发送器
+///
+/// 用于向 WebSocket 服务器发送消息
+#[derive(Clone)]
+pub struct WebSocketSender {
+    tx: mpsc::UnboundedSender<Message>,
+}
+
+impl WebSocketSender {
+    /// 发送文本消息
+    pub fn send_text(&self, text: impl Into<String>) -> Result<(), YueError> {
+        let text_string: String = text.into();
+        self.tx
+            .send(Message::Text(text_string.into()))
+            .map_err(|e| YueError::CustomError(format!("发送文本消息失败: {}", e)))
+    }
+
+    /// 发送二进制消息
+    pub fn send_binary(&self, data: Vec<u8>) -> Result<(), YueError> {
+        self.tx
+            .send(Message::Binary(data.into()))
+            .map_err(|e| YueError::CustomError(format!("发送二进制消息失败: {}", e)))
+    }
+
+    /// 发送 Ping
+    pub fn send_ping(&self, data: Vec<u8>) -> Result<(), YueError> {
+        self.tx
+            .send(Message::Ping(data.into()))
+            .map_err(|e| YueError::CustomError(format!("发送 Ping 失败: {}", e)))
+    }
+
+    /// 发送原始消息
+    pub fn send(&self, msg: Message) -> Result<(), YueError> {
+        self.tx.send(msg).map_err(|e| YueError::CustomError(format!("发送消息失败: {}", e)))
+    }
+}
 
 /// WebSocket 客户端
 ///
@@ -14,6 +52,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 /// 2. 自动重连机制
 /// 3. 打印所有接收到的消息
 /// 4. 代理支持
+/// 5. 运行时发送消息
 pub struct WebSocketClient {
     url: String,
     reconnect_interval: Duration,
@@ -161,12 +200,35 @@ impl WebSocketClient {
         }
     }
 
-    /// 连接并持续运行
+    /// 连接并持续运行（在后台任务中）
     ///
+    /// 返回一个 WebSocketSender，可以用来发送消息
     /// 自动处理断线重连，打印所有接收到的消息
-    pub async fn connect_and_run(&self) -> Result<(), YueError> {
+    pub fn connect_and_run(&self) -> WebSocketSender {
+        let (tx, rx) = mpsc::unbounded_channel();
+
+        let url = self.url.clone();
+        let reconnect_interval = self.reconnect_interval;
+        let proxy = self.proxy.clone();
+
+        // 在独立的任务中运行连接循环
+        tokio::spawn(async move {
+            let client = WebSocketClient {
+                url,
+                reconnect_interval,
+                proxy,
+            };
+
+            let _ = client.run_with_sender(rx).await;
+        });
+
+        WebSocketSender { tx }
+    }
+
+    /// 内部运行方法，带有消息接收器
+    async fn run_with_sender(&self, mut rx: mpsc::UnboundedReceiver<Message>) -> Result<(), YueError> {
         loop {
-            match self.try_connect().await {
+            match self.try_connect_with_sender(&mut rx).await {
                 Ok(_) => {
                     info!("WebSocket连接正常关闭");
                 }
@@ -180,8 +242,8 @@ impl WebSocketClient {
         }
     }
 
-    /// 尝试建立连接并处理消息
-    async fn try_connect(&self) -> Result<(), YueError> {
+    /// 尝试建立连接并处理消息（支持发送）
+    async fn try_connect_with_sender(&self, rx: &mut mpsc::UnboundedReceiver<Message>) -> Result<(), YueError> {
         info!("正在连接到 WebSocket: {}", self.url);
 
         let (ws_stream, _) = if let Some(ref proxy_url) = self.proxy {
@@ -198,128 +260,68 @@ impl WebSocketClient {
 
         let (mut write, mut read) = ws_stream.split();
 
-        // 处理接收到的消息
-        while let Some(message) = read.next().await {
-            match message {
-                Ok(msg) => {
-                    match msg {
-                        Message::Text(text) => {
-                            info!("收到文本消息: {}", text);
-                        }
-                        Message::Binary(data) => {
-                            info!("收到二进制消息: {} 字节", data.len());
-                        }
-                        Message::Ping(data) => {
-                            info!("收到 Ping");
-                            // 自动回复 Pong
-                            if let Err(e) = write.send(Message::Pong(data)).await {
-                                error!("发送 Pong 失败: {}", e);
-                                return Err(YueError::CustomError(format!("发送 Pong 失败: {}", e)));
-                            }
-                        }
-                        Message::Pong(_) => {
-                            info!("收到 Pong");
-                        }
-                        Message::Close(frame) => {
-                            info!("收到关闭帧: {:?}", frame);
-                            return Ok(());
-                        }
-                        Message::Frame(_) => {
-                            // 原始帧，通常不需要处理
-                        }
-                    }
-                }
-                Err(e) => {
-                    error!("接收消息错误: {}", e);
-                    return Err(YueError::CustomError(format!("接收消息错���: {}", e)));
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// 连接并发送订阅消息
-    ///
-    /// 适用于需要发送订阅请求的场景（如币安、OKX等交易所）
-    pub async fn connect_and_subscribe(&self, subscribe_message: String) -> Result<(), YueError> {
+        // 处理接收和发送消息
         loop {
-            match self.try_connect_and_subscribe(&subscribe_message).await {
-                Ok(_) => {
-                    info!("WebSocket连接正常关闭");
-                }
-                Err(e) => {
-                    error!("WebSocket连接错误: {}", e);
-                }
-            }
-
-            warn!("将在 {} 秒后重新连接...", self.reconnect_interval.as_secs());
-            sleep(self.reconnect_interval).await;
-        }
-    }
-
-    /// 尝试连接并发送订阅消息
-    async fn try_connect_and_subscribe(&self, subscribe_message: &str) -> Result<(), YueError> {
-        info!("正在连接到 WebSocket: {}", self.url);
-
-        let (ws_stream, _) = if let Some(ref proxy_url) = self.proxy {
-            info!("使用代理连接: {}", proxy_url);
-            self.connect_with_proxy(proxy_url).await?
-        } else {
-            info!("直接连接（无代理）");
-            connect_async(&self.url)
-                .await
-                .map_err(|e| YueError::CustomError(format!("连接失败: {}", e)))?
-        };
-
-        info!("WebSocket 连接成功!");
-
-        let (mut write, mut read) = ws_stream.split();
-
-        // 发送订阅消息
-        info!("发送订阅消息: {}", subscribe_message);
-        write
-            .send(Message::Text(subscribe_message.into()))
-            .await
-            .map_err(|e| YueError::CustomError(format!("发送订阅消息失败: {}", e)))?;
-
-        // 处理接收到的消息
-        while let Some(message) = read.next().await {
-            match message {
-                Ok(msg) => {
-                    match msg {
-                        Message::Text(text) => {
-                            info!("收到文本消息: {}", text);
-                        }
-                        Message::Binary(data) => {
-                            info!("收到二进制消息: {} 字节", data.len());
-                        }
-                        Message::Ping(data) => {
-                            info!("收到 Ping");
-                            if let Err(e) = write.send(Message::Pong(data)).await {
-                                error!("发送 Pong 失败: {}", e);
-                                return Err(YueError::CustomError(format!("发送 Pong 失败: {}", e)));
+            tokio::select! {
+                // 处理接收到的消息
+                message = read.next() => {
+                    match message {
+                        Some(Ok(msg)) => {
+                            match msg {
+                                Message::Text(text) => {
+                                    info!("收到文本消息: {}", text);
+                                }
+                                Message::Binary(data) => {
+                                    info!("收到二进制消息: {} 字节", data.len());
+                                }
+                                Message::Ping(data) => {
+                                    info!("收到 Ping");
+                                    // 自动回复 Pong
+                                    if let Err(e) = write.send(Message::Pong(data)).await {
+                                        error!("发送 Pong 失败: {}", e);
+                                        return Err(YueError::CustomError(format!("发送 Pong 失败: {}", e)));
+                                    }
+                                }
+                                Message::Pong(_) => {
+                                    info!("收到 Pong");
+                                }
+                                Message::Close(frame) => {
+                                    info!("收到关闭帧: {:?}", frame);
+                                    return Ok(());
+                                }
+                                Message::Frame(_) => {
+                                    // 原始帧，通常不需要处理
+                                }
                             }
                         }
-                        Message::Pong(_) => {
-                            info!("收到 Pong");
+                        Some(Err(e)) => {
+                            error!("接收消息错误: {}", e);
+                            return Err(YueError::CustomError(format!("接收消息错误: {}", e)));
                         }
-                        Message::Close(frame) => {
-                            info!("收到关闭帧: {:?}", frame);
+                        None => {
+                            warn!("WebSocket 流已关闭");
                             return Ok(());
-                        }
-                        Message::Frame(_) => {
-                            // 原始帧
                         }
                     }
                 }
-                Err(e) => {
-                    error!("接收消息错误: {}", e);
-                    return Err(YueError::CustomError(format!("接收消息错误: {}", e)));
+                // 处理要发送的消息
+                Some(msg) = rx.recv() => {
+                    info!("发送消息: {:?}", msg);
+                    if let Err(e) = write.send(msg).await {
+                        error!("发送消息失败: {}", e);
+                        return Err(YueError::CustomError(format!("发送消息失败: {}", e)));
+                    }
+                }
+                //长时间闲置，则主动发送
+                 _ = sleep(Duration::from_secs(60)) => {
+                    let ping = Message::Ping(vec![1u8, 2u8, 3u8].into());
+                    if let Err(e) = write.send(ping).await {
+                        error!("发送心跳 Ping 失败: {}", e);
+                        return Err(YueError::CustomError(format!("发送心跳 Ping 失败: {}", e)));
+                    }
+                    debug!("Sent Ping");
                 }
             }
         }
-
-        Ok(())
     }
 }

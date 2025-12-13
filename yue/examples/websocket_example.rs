@@ -4,6 +4,7 @@ use std::time::Duration;
 use yue::websockets::WebSocketClient;
 
 /// 这个示例演示如何使用 WebSocketClient 连接到币安的公开 WebSocket 流
+/// 并在运行时发送消息
 ///
 /// 运行方式：
 /// ```bash
@@ -15,15 +16,39 @@ async fn main() {
     let _ = setup_logger_all(Some(LevelFilter::Debug));
 
     // 示例1: 连接到币安的交易流
-    let client =
-        WebSocketClient::new_with_env_proxy("wss://stream.binance.com:9443/ws/btcusdt@trade").with_reconnect_interval(Duration::from_secs(5));
+    let client = WebSocketClient::new_with_env_proxy("wss://stream.binance.com:9443/ws/btcusdt@trade")
+        .with_proxy("http://127.0.0.1:7891")
+        .with_reconnect_interval(Duration::from_secs(5));
 
     println!("开始连接到币安 WebSocket...");
     println!("订阅 BTCUSDT 交易流");
     println!("按 Ctrl+C 停止");
 
-    // 连接并持续运行，自动处理重连
-    if let Err(e) = client.connect_and_run().await {
-        eprintln!("WebSocket 错误: {}", e);
+    // 连接并持续运行（在后台任务），返回 sender
+    let sender = client.connect_and_run();
+
+    // 等待连接建立
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // 示例：发送订阅消息（如果需要的话）
+    // let subscribe_msg = r#"{"method":"SUBSCRIBE","params":["btcusdt@depth"],"id":1}"#;
+    // if let Err(e) = sender.send_text(subscribe_msg) {
+    //     eprintln!("发送订阅消息失败: {}", e);
+    // }
+
+    // 示例：定期发送心跳 Ping
+    let sender_clone = sender.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            if let Err(e) = sender_clone.send_ping(vec![]) {
+                eprintln!("发送 Ping 失败: {}", e);
+            }
+        }
+    });
+
+    // 保持主线程运行
+    loop {
+        tokio::time::sleep(Duration::from_secs(60)).await;
     }
 }

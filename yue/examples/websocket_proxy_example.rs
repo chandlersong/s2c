@@ -21,7 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // client1.connect_and_run().await?;
     // client2.connect_and_run().await?;
-    client3.connect_and_run().await?;
+    // client3.connect_and_run(;
 
     Ok(())
 }
