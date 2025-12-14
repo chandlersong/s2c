@@ -1,51 +1,140 @@
+use actix::{Actor, Context, Handler};
 use li::tools::logs::setup_logger_all;
-use log::LevelFilter;
+use log::{LevelFilter, info};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use yue::websockets::WebSocketClient;
+use yue::websocket::client::{SendTextMessage, SubscribeToEvents, WebSocketClient, WebSocketEvent};
 
-/// 这个示例演示如何使用 WebSocketClient 连接到币安的公开 WebSocket 流
-/// 并在运行时发送消息
+/// 事件处理器 Actor，带连接状态追踪
+struct EventHandler {}
+
+impl Actor for EventHandler {
+    type Context = Context<Self>;
+
+    fn started(&mut self, _ctx: &mut Self::Context) {
+        info!("🚀 EventHandler 已启动");
+    }
+}
+
+/// WebSocketEvent 消息处理
+impl Handler<WebSocketEvent> for EventHandler {
+    type Result = ();
+
+    fn handle(&mut self, event: WebSocketEvent, _ctx: &mut Context<Self>) -> Self::Result {
+        match event {
+            WebSocketEvent::Connected => {
+                println!("✓ [事件] WebSocket 已连接");
+                info!("✓ WebSocket 连接成功");
+            }
+            WebSocketEvent::Disconnected => {
+                println!("✗ [事件] WebSocket 已断开");
+                info!("✗ WebSocket 连接断开");
+            }
+            WebSocketEvent::TextMessage(text) => {
+                // 只打印消息的前 200 个字符，避免输出过长
+                let preview = if text.len() > 200 {
+                    format!("{}...", &text[..200])
+                } else {
+                    text.clone()
+                };
+                println!("📨 [文本消息]\n{}\n", preview);
+                info!("收到文本消息: {} 字符", text.len());
+            }
+            WebSocketEvent::BinaryMessage(data) => {
+                println!("📦 [二进制消息] {} 字节", data.len());
+                info!("收到二进制消息: {} 字节", data.len());
+            }
+            WebSocketEvent::Reconnecting => {
+                println!("🔄 [事件] 正在重新连接...");
+                info!("🔄 正在重新连接...");
+            }
+            WebSocketEvent::Error(err) => {
+                println!("❌ [错误] {}", err);
+                info!("❌ WebSocket 错误: {}", err);
+            }
+        }
+    }
+}
+
+/// 这个示例演示如何使用 WebSocketClient Actor 连接到币安的公开 WebSocket 流
+/// 并通过 Actor 的 Recipient 机制订阅消息
 ///
 /// 运行方式：
 /// ```bash
 /// RUST_LOG=info cargo run --example websocket_example
 /// ```
-#[tokio::main]
+#[actix::main]
 async fn main() {
-    // 初始化日志 (需要设置 RUST_LOG 环境变量)
-    let _ = setup_logger_all(Some(LevelFilter::Debug));
+    // 初始化日志
+    let _ = setup_logger_all(Some(LevelFilter::Info));
 
-    // 示例1: 连接到币安的交易流
-    let client = WebSocketClient::new_with_env_proxy("wss://stream.binance.com:9443/ws/btcusdt@trade")
+    println!("╔══════════════════════════════════════════╗");
+    println!("║   WebSocket + Actix 消息订阅示例          ║");
+    println!("╚══════════════════════════════════════════╝\n");
+
+    info!("开始初始化 WebSocket 客户端...");
+    println!("📝 创建 WebSocket 客户端...");
+
+    // 创建 WebSocket Actor
+    // 使用环境变量读取代理（WS_PROXY > HTTPS_PROXY > HTTP_PROXY）
+    // 如果没有代理，会自动直连
+    let ws_actor = WebSocketClient::new("wss://stream.binance.com:9443/ws/btcusdt@depth")
         .with_proxy("http://127.0.0.1:7891")
-        .with_reconnect_interval(Duration::from_secs(5));
+        .with_reconnect_interval(Duration::from_secs(5))
+        .start();
 
-    println!("开始连接到币安 WebSocket...");
-    println!("订阅 BTCUSDT 交易流");
-    println!("按 Ctrl+C 停止");
+    println!("✓ WebSocket Actor 已启动\n");
+    info!("✓ WebSocket Actor 启动成功");
 
-    // 连接并持续运行（在后台任务），返回 sender
-    let sender = client.connect_and_run();
+    // 创建连接状态标志
+    let is_connected = Arc::new(AtomicBool::new(false));
 
-    // 等待连接建立
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    // 创建事件处理器 Actor
+    let event_handler = EventHandler {}.start();
 
-    // 示例：发送订阅消息（如果需要的话）
-    // let subscribe_msg = r#"{"method":"SUBSCRIBE","params":["btcusdt@depth"],"id":1}"#;
-    // if let Err(e) = sender.send_text(subscribe_msg) {
-    //     eprintln!("发送订阅消息失败: {}", e);
-    // }
-
-    // 示例：定期发送心跳 Ping
-    let sender_clone = sender.clone();
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(Duration::from_secs(30)).await;
-            if let Err(e) = sender_clone.send_ping(vec![]) {
-                eprintln!("发送 Ping 失败: {}", e);
-            }
+    // 订阅 WebSocket 事件
+    println!("📨 订阅 WebSocket 事件...");
+    match ws_actor
+        .send(SubscribeToEvents {
+            recipient: event_handler.recipient(),
+        })
+        .await
+    {
+        Ok(Ok(())) => {
+            println!("✓ 已成功订阅事件\n");
+            info!("✓ 已订阅 WebSocket 事件");
         }
-    });
+        Ok(Err(e)) => {
+            eprintln!("❌ 订阅失败: {}", e);
+            return;
+        }
+        Err(e) => {
+            eprintln!("❌ Actor 邮箱错误: {}", e);
+            return;
+        }
+    }
+
+    // 等待 WebSocket 连接建立（最多等待 5 秒）
+    println!("⏳ 等待 WebSocket 连接建立...");
+    let mut wait_count = 0;
+    while !is_connected.load(Ordering::Relaxed) && wait_count < 50 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        wait_count += 1;
+    }
+
+    println!("✓ WebSocket 已连接！\n");
+    info!("✓ WebSocket 已连接，开始接收消息");
+
+    println!("📡 订阅信息：");
+    println!("  • Stream: btcusdt@depth");
+    println!("  • 每 100ms 更新深度数据\n");
+
+    println!("═══════════════════════════════════════════");
+    println!("开始接收消息（按 Ctrl+C 停止）:\n");
+    println!("═══════════════════════════════════════════\n");
+
+    info!("开始接收消息循环");
 
     // 保持主线程运行
     loop {

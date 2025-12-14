@@ -7,4 +7,4 @@ pub mod cache;
 pub mod tools;
 
 pub mod http_client;
-pub mod websockets;
+pub mod websocket;
