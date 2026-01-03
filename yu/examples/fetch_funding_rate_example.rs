@@ -7,7 +7,7 @@ use yu::binance::history_task::{FundingRatePo, InitialHistoryTask};
 use yu::config::get_config;
 use yu::errors::YuError;
 use yu::exchange::{CloneHistoryFetcherFactory, HistoryFetcherFactory};
-use yue::binance::bn_models::FundingRate;
+use yue::binance::bn_models::swap_restful::FundingRate;
 use yue::binance::bn_restful_commands::SWAP_FUNDING_RATE_COMMAND;
 use yue::binance::history_data::{CommonParam, MuteHistoryParam, SimpleHistoryFetcher};
 use yue::errors::YueError;

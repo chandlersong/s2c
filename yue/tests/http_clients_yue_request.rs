@@ -6,7 +6,7 @@ mod http_clients_yue_request_tests {
     use std::collections::BTreeMap;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
-    use yue::binance::bn_models::ToQueryParams;
+    use yue::binance::bn_models::common::ToQueryParams;
     use yue::binance::bn_restful_commands::BNSecurityRequestBuilder;
     use yue::errors::YueError;
     use yue::http_client::{ClonableResponseCache, NonAuthRequestBuilder, ResponseHandler, YueRequest};

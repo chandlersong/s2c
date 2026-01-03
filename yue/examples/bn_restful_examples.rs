@@ -1,7 +1,7 @@
 use li::tools::time::unix_2_readable;
 use std::collections::BTreeMap;
-use yue::binance::bn_models::{BinanceKline, Ticker24hr};
-use yue::binance::bn_models::{EmptyQueryParams, ServerTime};
+use yue::binance::bn_models::common::{EmptyQueryParams, ServerTime};
+use yue::binance::bn_models::spot_restful::{BinanceKline, Ticker24hr};
 use yue::binance::bn_restful_commands::SPOT_KLINE_HISTORY_COMMAND;
 use yue::binance::bn_restful_commands::{SERVER_TIME_COMMAND, execute_bn_get};
 use yue::binance::history_data::{CommonParam, execute_ping};

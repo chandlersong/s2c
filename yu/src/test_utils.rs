@@ -2,7 +2,7 @@ use crate::errors::YuError;
 use duckdb::{Connection, Result};
 use std::path::Path;
 use std::vec::Vec;
-use yue::binance::bn_models::BinanceKline;
+use yue::binance::bn_models::spot_restful::BinanceKline;
 
 /// 用于测试的起始时间戳（2021-01-01 00:00:00 UTC）
 pub const TEST_BEGIN_TIMESTAMP: u64 = 1609459200000;

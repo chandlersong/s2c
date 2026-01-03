@@ -8,7 +8,7 @@ use rmcp::{schemars, serde_json, RoleServer};
 use rmcp::{ErrorData as McpError, ServerHandler};
 use rmcp_macros::{tool, tool_handler, tool_router};
 use serde::{Deserialize, Serialize};
-use yue::binance::bn_models::Ticker24hr;
+use yue::binance::bn_models::spot_restful::Ticker24hr;
 use yue::binance::bn_restful_commands::execute_bn_get;
 use yue::binance::history_data::CommonParam;
 use yue::http_client::NonAuthRequestBuilder;

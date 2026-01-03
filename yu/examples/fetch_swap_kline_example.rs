@@ -7,7 +7,7 @@ use yu::binance::history_task::{InitialHistoryTask, KlinePo};
 use yu::config::get_config;
 use yu::errors::YuError;
 use yu::exchange::{CloneHistoryFetcherFactory, HistoryFetcherFactory};
-use yue::binance::bn_models::BinanceKline;
+use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_restful_commands::SWAP_KLINE_HISTORY_COMMAND;
 use yue::binance::history_data::{CommonParam, HistoryInterval, MuteHistoryParam, SimpleHistoryFetcher};
 use yue::errors::YueError;

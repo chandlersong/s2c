@@ -1,6 +1,6 @@
-pub use crate::binance::bn_models::HistoryVo;
-pub use crate::binance::bn_models::{BinanceKline, EmptyQueryParams, ExchangeInfo, ToQueryParams};
-use crate::binance::bn_models::{ExchangeInfoTrait, SwapExchangeInfo, SymbolInfoTrait};
+use crate::binance::bn_models::common::{EmptyQueryParams, ExchangeInfoTrait, HistoryVo, SymbolInfoTrait, ToQueryParams};
+use crate::binance::bn_models::spot_restful::ExchangeInfo;
+use crate::binance::bn_models::swap_restful::SwapExchangeInfo;
 use crate::binance::bn_restful_commands::{PING_COMMAND, SPOT_EXCHANGE_COMMAND, SWAP_EXCHANGE_COMMAND, execute_bn_get};
 use crate::errors::YueError;
 use crate::http_client::NonAuthRequestBuilder;
@@ -317,7 +317,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::binance::bn_models::BinanceKline;
+    use crate::binance::bn_models::spot_restful::BinanceKline;
     use crate::binance::bn_restful_commands::SPOT_KLINE_HISTORY_COMMAND;
     use crate::binance::history_data::{CommonParam, HistoryFetcher, HistoryInterval, SimpleHistoryFetcher};
     use crate::errors::YueError;

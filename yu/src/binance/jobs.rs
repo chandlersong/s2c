@@ -10,7 +10,9 @@ use actix::Actor;
 use duckdb::Connection;
 use log::info;
 use std::sync::Arc;
-use yue::binance::bn_models::{BinanceKline, FundingRate, SymbolType};
+use yue::binance::bn_models::common::SymbolType;
+use yue::binance::bn_models::spot_restful::BinanceKline;
+use yue::binance::bn_models::swap_restful::FundingRate;
 use yue::binance::bn_restful_commands::{SPOT_KLINE_HISTORY_COMMAND, SWAP_FUNDING_RATE_COMMAND, SWAP_KLINE_HISTORY_COMMAND};
 use yue::binance::history_data::{CommonParam, SimpleHistoryFetcher};
 ///

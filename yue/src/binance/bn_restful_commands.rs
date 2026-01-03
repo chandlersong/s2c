@@ -1,4 +1,4 @@
-use crate::binance::bn_models::ToQueryParams;
+use crate::binance::bn_models::common::ToQueryParams;
 use crate::errors::YueError;
 use crate::http_client::{ClonableResponseCache, DefaultRateLimiter, ResponseHandler, YueRequest, YueRequestBuilder};
 use crate::models::RequestInfo;
@@ -37,20 +37,6 @@ pub const BINANCE_SWAP_API: &str = "https://testnet.binance.vision/";
 #[cfg(not(any(feature = "binance-testnet", test)))]
 pub const BINANCE_SWAP_API: &str = "https://fapi.binance.com/";
 
-// WebSocket URL
-#[cfg(test)]
-pub const WS_SWAP_STREAM_URL_BASE: &str = "ws://127.0.0.1:8080"; // Mock WS
-#[cfg(all(feature = "binance-testnet", not(test)))]
-pub const WS_SWAP_STREAM_URL_BASE: &str = "wss://stream.binancefuture.com/";
-#[cfg(not(any(feature = "binance-testnet", test)))]
-pub const WS_SWAP_STREAM_URL_BASE: &str = "wss://fstream.binance.com/";
-
-// Portfolio Margin URL
-#[cfg(test)]
-pub const PORTFOLIO_MARGIN_BASE: &str = "http://127.0.0.1:8080"; // Mock PM
-#[cfg(not(test))]
-pub const PORTFOLIO_MARGIN_BASE: &str = "https://papi.binance.com/";
-
 pub const PING_PATH: &str = "/api/v3/ping";
 pub const SPOT_EXCHANGE_INFO_PATH: &str = "/api/v3/exchangeInfo";
 pub const SPOT_SERVER_TIME_PATH: &str = "/api/v3/time";
@@ -69,13 +55,6 @@ pub const SWAP_FUNDING_INFO_PATH: &str = "/fapi/v1/fundingInfo";
 
 pub const BALANCE_PATH: &str = "/papi/v1/balance";
 pub const SWAP_POSITION_PATH: &str = "/papi/v1/um/positionRisk";
-pub const LISTEN_KEY_PATH: &str = "/papi/v1/listenKey";
-
-pub const WS_PING_COMMAND: &str = "ping";
-pub const WS_TIME_COMMAND: &str = "time";
-pub const WS_SUBSCRIBE_COMMAND: &str = "SUBSCRIBE";
-pub const WS_SET_PROPERTY_COMMAND: &str = "SET_PROPERTY";
-pub const WS_GET_PROPERTY_COMMAND: &str = "GET_PROPERTY";
 
 /// 用于自动生成币安相关限流器静态变量和获取函数的宏
 macro_rules! define_rate_limiter {
@@ -314,7 +293,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::{BNSecurityRequestBuilder, BinanceResponseHandler, execute_bn_get, get_bn_spot_limit};
-    use crate::binance::bn_models::EmptyQueryParams;
+    use crate::binance::bn_models::common::EmptyQueryParams;
     use crate::http_client::{ClonableResponseCache, NonAuthRequestBuilder, ResponseHandler, YueRequestBuilder, init_http_client};
     use crate::models::RequestInfo;
     use reqwest::{Client, Method};

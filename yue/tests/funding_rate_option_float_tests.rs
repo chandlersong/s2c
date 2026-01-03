@@ -1,4 +1,4 @@
-use yue::binance::bn_models::FundingRate;
+use yue::binance::bn_models::swap_restful::FundingRate;
 
 #[test]
 fn test_funding_rate_mark_price_some() {

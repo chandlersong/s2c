@@ -1,9 +1,11 @@
 use li::tools::logs::setup_logger_all;
 use li::tools::time::{unix_2_readable, unix_time_now_u64_utc};
 use log::{LevelFilter, debug, error, info};
-use yue::binance::bn_models::{BinanceKline, FundingRate};
+use yue::binance::bn_models::common::HistoryVo;
+use yue::binance::bn_models::spot_restful::BinanceKline;
+use yue::binance::bn_models::swap_restful::FundingRate;
 use yue::binance::bn_restful_commands::{SPOT_KLINE_HISTORY_COMMAND, SWAP_FUNDING_RATE_COMMAND, SWAP_KLINE_HISTORY_COMMAND};
-use yue::binance::history_data::{CommonParam, HistoryFetcher, HistoryInterval, HistoryVo, SimpleHistoryFetcher};
+use yue::binance::history_data::{CommonParam, HistoryFetcher, HistoryInterval, SimpleHistoryFetcher};
 use yue::errors::YueError;
 use yue::http_client::init_http_client;
 

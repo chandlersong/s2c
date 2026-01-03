@@ -13,8 +13,10 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use yue::binance::bn_models::{BinanceKline, FundingRate, SymbolType, ToQueryParams};
-use yue::binance::history_data::{HistoryFetcher, HistoryVo, MuteHistoryParam};
+use yue::binance::bn_models::common::{HistoryVo, SymbolType, ToQueryParams};
+use yue::binance::bn_models::spot_restful::BinanceKline;
+use yue::binance::bn_models::swap_restful::FundingRate;
+use yue::binance::history_data::{HistoryFetcher, MuteHistoryParam};
 
 pub trait HistoryPO: Debug {
     type Source: HistoryVo;
@@ -413,7 +415,8 @@ mod tests {
     use mockall::{mock, predicate};
     use std::path::Path;
     use std::sync::Arc;
-    use yue::binance::bn_models::{BinanceKline, SymbolType};
+    use yue::binance::bn_models::common::SymbolType;
+    use yue::binance::bn_models::spot_restful::BinanceKline;
     use yue::binance::history_data::{CommonParam, HistoryFetcher, HistoryInterval, MuteHistoryParam};
     use yue::errors::YueError;
 

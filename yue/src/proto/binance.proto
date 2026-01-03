@@ -1,5 +1,5 @@
 syntax = "proto3";
-package binance;
+package binance.bn_models.prototype;
 
 //spot 逐笔交易
 message Trade {
