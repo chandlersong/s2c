@@ -1,2 +1,7 @@
+proxyUrl: "http://localhost:7891"
+logLevel: "info"
+database:
+  path: "test.db"
 
+# binance_websocket 不定义，则不启动 WebSocket 收集
 

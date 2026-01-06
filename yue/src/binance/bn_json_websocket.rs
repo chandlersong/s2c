@@ -3,7 +3,7 @@
 //! - [行情的推送借口](https://developers.binance.com/docs/zh-CN/binance-spot-api-docs/web-socket-streams#websocket-%E8%BF%9E%E6%8E%A5%E9%99%90%E5%88%B6)
 //!
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::HashMap;
 
 #[cfg(all(feature = "binance-testnet", not(test)))]

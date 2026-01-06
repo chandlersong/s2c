@@ -2,3 +2,24 @@ proxyUrl: "http://localhost:7891"
 logLevel: "info"
 database:
   path: "test.db"
+
+binance_websocket:
+  spot:
+    trade:
+      enabled: true
+      symbols:
+        - BTCUSDT
+        - ETHUSDT
+        - BNBUSDT
+      batch_size: 100
+      flush_interval_ms: 5000
+      retention_days: 7
+    depth_update:
+      enabled: true
+      symbols:
+        - BTCUSDT
+        - ETHUSDT
+      batch_size: 50
+      flush_interval_ms: 3000
+      retention_days: 3
+
