@@ -8,7 +8,7 @@
 
 | 优先级 | 完成情况 | 进度 |
 |--------|---------|------|
-| 1（核心基础） | 完成 1.1，进行中 1.2-1.3 | 1/3 ✅ |
+| 1（核心基础） | 完成 1.1-1.2，进行中 1.3 | 2/3 ✅ |
 | 2（事件处理） | 未开始 | 0/3 |
 | 3（存储） | 未开始 | 0/2 |
 | 4（维护） | 未开始 | 0/3 |
@@ -46,19 +46,19 @@
 - ✅ `test_binance_websocket_config_empty_spot` - 空配置验证
 
 ### 任务 1.2: 存储记录结构定义（PO 命名规范）
-- [ ] 创建文件 `yu/src/binance/models/ws_db_po.rs`
-- [ ] 定义 `TradeRecordPo` 结构体（包含所有字段）
-- [ ] 定义 `DepthRecordPo` 结构体（包含所有字段）
-- [ ] 为两个结构体实现必要 trait（Debug, Clone, Serialize, Deserialize）
-- [ ] 在 `yu/src/binance/models/mod.rs` 中导出这两个结构体
+- [x] 创建文件 `yu/src/binance/models/ws_db_po.rs`
+- [x] 定义 `TradeRecordPo` 结构体（包含所有字段）
+- [x] 定义 `DepthRecordPo` 结构体（包含所有字段）
+- [x] 为两个结构体实现必要 trait（Debug, Clone, Serialize, Deserialize）
+- [x] 在 `yu/src/binance/models/mod.rs` 中导出这两个结构体
 - 完成标准：结构体定义完整，能被其他模块引入（例如 `yu::binance::models::TradeRecordPo`）
 
 ### 任务 1.3: DuckDB 表初始化
-- [ ] 创建文件 `yu/src/websocket/binance_spot/init_tables.rs`
-- [ ] 实现 `create_tables()` 函数，创建 `bn_spot_trade` 表
-- [ ] 实现 `create_tables()` 函数，创建 `bn_spot_depth` 表
-- [ ] 使用 `CREATE TABLE IF NOT EXISTS` 防止冲突
-- [ ] 为 symbol 和 created_at 创建索引（优化查询）
+- [x] 创建文件 `yu/src/websocket/binance_spot/init_tables.rs`
+- [x] 实现 `create_tables()` 函数，创建 `bn_spot_trade` 表
+- [x] 实现 `create_tables()` 函数，创建 `bn_spot_depth` 表
+- [x] 使用 `CREATE TABLE IF NOT EXISTS` 防止冲突
+- [x] 为 symbol 和 created_at 创建索引（优化查询）
 - [ ] 添加单元测试，验证表创建成功
 - 完成标准：运行 `create_tables()` 后表结构正确，可以插入数据
 
@@ -195,7 +195,7 @@
 - 完成标准：能定时清理过期数据
 
 ### 任务 4.2: 模块导出和集成
-- [ ] 创建文件 `yu/src/websocket/mod.rs`
+- [x] 创建文件 `yu/src/websocket/mod.rs`
 - [ ] 导出所有公共通用模块和类型：
   ```rust
   pub mod handler;
@@ -213,8 +213,8 @@
   pub use buffer::StorageBuffer;
   pub use retention::RetentionPolicy;
   ```
-- [ ] 在 `yu/src/lib.rs` 中导出 `websocket` 模块
-- [ ] 创建文件 `yu/src/websocket/binance_spot/mod.rs`
+- [x] 在 `yu/src/lib.rs` 中导出 `websocket` 模块
+- [x] 创建文件 `yu/src/websocket/binance_spot/mod.rs`
 - [ ] 导出 Spot 特定模块：
   ```rust
   pub mod config;

@@ -30,3 +30,6 @@ tonic = { version = "0.13", default-features = false, features = ["transport", "
 tokio-stream = "0.1.17"
 arrow-ipc = "56.2.0"
 arrow-schema = "56.2.0"
+
+[dev-dependencies]
+serde_json = "1.0"

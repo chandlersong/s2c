@@ -6,3 +6,4 @@ pub mod bn_dashboard;
 
 pub mod bn_mcp;
 pub mod jobs;
+pub mod models;
