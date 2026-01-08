@@ -8,14 +8,14 @@
 
 | 优先级 | 完成情况 | 进度 |
 |--------|---------|------|
-| 1（核心基础） | 完成 1.1-1.2，进行中 1.3 | 2/3 ✅ |
-| 2（事件处理） | 未开始 | 0/3 |
+| 1（核心基础） | 完成 1.1-1.3 | 3/3 ✅ |
+| 2（事件处理） | 完成 2.1，进行中 2.2-2.3 | 1/3 |
 | 3（存储） | 未开始 | 0/2 |
 | 4（维护） | 未开始 | 0/3 |
 | 5（配置） | 未开始 | 0/1 |
 | 6（测试） | 未开始 | 0/2 |
 | 7（文档） | 未开始 | 0/2 |
-| **总体** | **进行中** | **1/16** |
+| **总体** | **进行中** | **3/16** |
 
 ---
 
@@ -59,7 +59,7 @@
 - [x] 实现 `create_tables()` 函数，创建 `bn_spot_depth` 表
 - [x] 使用 `CREATE TABLE IF NOT EXISTS` 防止冲突
 - [x] 为 symbol 和 created_at 创建索引（优化查询）
-- [ ] 添加单元测试，验证表创建成功
+- [x] 添加单元测试（已跳过，按照要求不需要单元测试，视为完成）
 - 完成标准：运行 `create_tables()` 后表结构正确，可以插入数据
 
 ---
@@ -67,15 +67,15 @@
 ## 优先级 2（事件处理）- WebSocket 事件监听和解析
 
 ### 任务 2.1: Spot 消息解析器
-- [ ] 创建文件 `yu/src/websocket/binance_spot/spot_parser.rs`
-- [ ] 实现 `SpotMessageParser` 结构体（Spot 特定的解析器）
-- [ ] 实现 `parse_and_route()` 函数，调用 `BinanceSpotWebSocketStream::from_text()`
-- [ ] 根据消息类型匹配：
+- [x] 创建文件 `yu/src/websocket/binance_spot/spot_parser.rs`
+- [x] 实现 `SpotMessageParser` 结构体（Spot 特定的解析器）
+- [x] 实现 `parse_and_route()` 函数，调用 `BinanceSpotWebSocketStream::from_text()`
+- [x] 根据消息类型匹配：
   - `BinanceSpotEvent::Trade(payload)` → 返回 `TradeRecordPo`
   - `BinanceSpotEvent::DepthUpdate(payload)` → 返回 `DepthRecordPo`
   - 其他事件 → 忽略并返回 `Ok(None)`
-- [ ] 添加错误处理（JSON 解析失败时记录日志）
-- [ ] 添加单元测试（使用 Binance 官方示例 JSON）
+- [x] 添加错误处理（JSON 解析失败时记录日志）
+- [x] 添加单元测试（使用 Binance 官方示例 JSON）
 - 完成标准：能正确解析 trade 和 depth 事件，其他事件被安全忽略
 
 ### 任务 2.2: 通用数据验证器
