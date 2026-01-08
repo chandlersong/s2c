@@ -373,7 +373,7 @@ yu/src/
 └── websocket/
     ├── mod.rs                              # 新增：导出通用模块
     ├── handler.rs                          # 新增：通用的 WebSocketDataCollector Actor
-    ├── validator.rs                        # 新增：通用的数据验证器
+    ├── validator.rs                        # 新增：通用的数据验证器（已在需求中保留，当前迭代跳过实现）
     ├── storage.rs                          # 新增：通用的 StorageService trait
     ├── storage_impl.rs                     # 新增：DuckDB 实现（通用）
     ├── buffer.rs                           # 新增：通用的 StorageBuffer
