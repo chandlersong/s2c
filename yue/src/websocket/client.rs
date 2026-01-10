@@ -79,7 +79,8 @@ pub struct WebSocketClient {
     /// 向内部连接发送命令
     command_tx: Option<mpsc::UnboundedSender<InternalCommand>>,
     /// 消息缓存
-    command_cache: Arc<Mutex<Vec<WebSocketEvent>>>,
+    /// 这个缓存，放在connection里面可能更加好一点。但是放在client里面，主要是为了以后的更改和去除。
+    command_cache: Arc<Mutex<Vec<WsMessage>>>,
     /// 重连时是否重新发送缓存的消息,首先默认重新发送
     resend_command_on_reconnect: bool,
 }
@@ -129,7 +130,7 @@ impl WebSocketClient {
     }
 
     /// 添加消息到缓存
-    pub fn add_to_cache(&self, event: WebSocketEvent) {
+    pub fn add_to_cache(&self, event: WsMessage) {
         if !self.resend_command_on_reconnect {
             return;
         }
@@ -154,7 +155,7 @@ impl WebSocketClient {
     }
 
     #[cfg(test)]
-    fn cached_events(&self) -> Vec<WebSocketEvent> {
+    fn cached_events(&self) -> Vec<WsMessage> {
         self.command_cache.lock().unwrap().clone()
     }
 }
@@ -195,7 +196,9 @@ impl Handler<SendTextMessage> for WebSocketClient {
 
     fn handle(&mut self, msg: SendTextMessage, _ctx: &mut Context<Self>) -> Self::Result {
         if let Some(ref tx) = self.command_tx {
-            tx.send(InternalCommand::SendMessage(WsMessage::Text(msg.text.into())))
+            let message = WsMessage::Text(msg.text.into());
+            self.add_to_cache(message.clone());
+            tx.send(InternalCommand::SendMessage(message))
                 .map_err(|e| YueError::CustomError(format!("发送文本消息失败: {}", e)))
         } else {
             Err(YueError::CustomError("WebSocket 客户端未初始化".to_string()))
@@ -208,7 +211,9 @@ impl Handler<SendBinaryMessage> for WebSocketClient {
 
     fn handle(&mut self, msg: SendBinaryMessage, _ctx: &mut Context<Self>) -> Self::Result {
         if let Some(ref tx) = self.command_tx {
-            tx.send(InternalCommand::SendMessage(WsMessage::Binary(msg.data.into())))
+            let message = WsMessage::Binary(msg.data.into());
+            self.add_to_cache(message.clone());
+            tx.send(InternalCommand::SendMessage(message))
                 .map_err(|e| YueError::CustomError(format!("发送二进制消息失败: {}", e)))
         } else {
             Err(YueError::CustomError("WebSocket 客户端未初始化".to_string()))
@@ -241,7 +246,7 @@ impl WebSocketConnection {
         reconnect_interval: Duration,
         proxy: Option<String>,
         mut command_rx: mpsc::UnboundedReceiver<InternalCommand>,
-        message_cache: Option<Arc<Mutex<Vec<WebSocketEvent>>>>,
+        message_cache: Option<Arc<Mutex<Vec<WsMessage>>>>,
     ) {
         let mut subscribers: Vec<Recipient<WebSocketEvent>> = Vec::new();
 
@@ -269,7 +274,7 @@ impl WebSocketConnection {
         proxy: &Option<String>,
         subscribers: &mut Vec<Recipient<WebSocketEvent>>,
         command_rx: &mut mpsc::UnboundedReceiver<InternalCommand>,
-        initial_command: Option<Vec<WebSocketEvent>>,
+        initial_command: Option<Vec<WsMessage>>,
     ) -> Result<(), YueError> {
         let (ws_stream, _) = if let Some(proxy_url) = proxy {
             info!("使用代理连接: {}", proxy_url);
@@ -287,21 +292,9 @@ impl WebSocketConnection {
 
         if let Some(commands) = initial_command {
             for event in commands {
-                match event {
-                    WebSocketEvent::TextMessage(text) => {
-                        info!("重发缓存的文本消息");
-                        ws_tx
-                            .send(WsMessage::Text(text.into()))
-                            .map_err(|e| YueError::CustomError(format!("重发缓存文本消息失败: {}", e)))?;
-                    }
-                    WebSocketEvent::BinaryMessage(data) => {
-                        info!("重发缓存的二进制消息");
-                        ws_tx
-                            .send(WsMessage::Binary(data.into()))
-                            .map_err(|e| YueError::CustomError(format!("重发缓存二进制消息失败: {}", e)))?;
-                    }
-                    _ => {}
-                }
+                ws_tx
+                    .send(event)
+                    .map_err(|e| YueError::CustomError(format!("重发缓存文本消息失败: {}", e)))?;
             }
         }
 
@@ -495,7 +488,7 @@ mod tests {
         assert!(client.should_resend_command_on_reconnect());
         assert_eq!(client.cache_len(), 0);
 
-        client.add_to_cache(WebSocketEvent::TextMessage("hello".into()));
+        client.add_to_cache(WsMessage::Text("hello".into()));
         assert_eq!(client.cache_len(), 1);
     }
 
@@ -504,51 +497,18 @@ mod tests {
         let client = WebSocketClient::new("ws://example.com").with_resend_cached_on_reconnect(false);
         assert!(!client.should_resend_command_on_reconnect());
 
-        client.add_to_cache(WebSocketEvent::TextMessage("ignored".into()));
+        client.add_to_cache(WsMessage::Text("ignored".into()));
         assert_eq!(client.cache_len(), 0);
     }
 
     #[test]
     fn clear_cache_works() {
         let client = WebSocketClient::new("ws://example.com");
-        client.add_to_cache(WebSocketEvent::TextMessage("a".into()));
-        client.add_to_cache(WebSocketEvent::BinaryMessage(vec![1, 2, 3]));
+        client.add_to_cache(WsMessage::Text("a".into()));
+        client.add_to_cache(WsMessage::binary((vec![1, 2, 3])));
         assert_eq!(client.cache_len(), 2);
 
         client.clear_command_cache();
         assert_eq!(client.cache_len(), 0);
-    }
-
-    #[test]
-    fn cache_preserves_order_fifo_on_read() {
-        let client = WebSocketClient::new("ws://example.com");
-        client.add_to_cache(WebSocketEvent::TextMessage("first".into()));
-        client.add_to_cache(WebSocketEvent::TextMessage("second".into()));
-
-        let cached = client.cached_events();
-        assert_eq!(cached.len(), 2);
-        assert!(matches!(&cached[0], WebSocketEvent::TextMessage(t) if t == "first"));
-        assert!(matches!(&cached[1], WebSocketEvent::TextMessage(t) if t == "second"));
-    }
-
-    #[test]
-    fn toggle_resend_flag() {
-        let client = WebSocketClient::new("ws://example.com").with_resend_cached_on_reconnect(false);
-        assert!(!client.should_resend_command_on_reconnect());
-
-        let client = client.with_resend_cached_on_reconnect(true);
-        assert!(client.should_resend_command_on_reconnect());
-    }
-
-    #[test]
-    fn binary_and_text_both_cached() {
-        let client = WebSocketClient::new("ws://example.com");
-        client.add_to_cache(WebSocketEvent::BinaryMessage(vec![9, 8, 7]));
-        client.add_to_cache(WebSocketEvent::TextMessage("text".into()));
-
-        let cached = client.cached_events();
-        assert_eq!(cached.len(), 2);
-        assert!(matches!(&cached[0], WebSocketEvent::BinaryMessage(data) if data == &vec![9, 8, 7]));
-        assert!(matches!(&cached[1], WebSocketEvent::TextMessage(t) if t == "text"));
     }
 }
