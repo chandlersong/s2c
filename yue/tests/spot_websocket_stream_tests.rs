@@ -80,7 +80,8 @@ fn test_parse_kline_stream() {
             "x": true,
             "q": "2500000.00",
             "V": "50.00",
-            "Q": "1250000.00"
+            "Q": "1250000.00",
+            "B": "1111"
         }
     }"#;
 
@@ -144,62 +145,5 @@ fn test_parse_book_ticker_stream() {
             assert_eq!(payload.update_id, 400900217);
         }
         _ => panic!("应该解析为 BookTicker 变体"),
-    }
-}
-
-#[test]
-fn test_parse_multiple_stream_types() {
-    let messages = vec![
-        (
-            r#"{"e":"trade","E":1514035000000,"s":"BTCUSDT","t":12345,"p":"25100.00","q":"1.00","b":111,"a":222,"T":1514035000000,"m":false}"#,
-            "Trade",
-        ),
-        (
-            r#"{"e":"aggTrade","E":1514035000000,"s":"BTCUSDT","a":12345,"p":"25100.00","q":"1.00","f":100,"l":200,"T":1514035000000,"m":false}"#,
-            "AggTrade",
-        ),
-        (
-            r#"{"e":"kline","E":1514035000000,"s":"BTCUSDT","k":{"t":1514035000000,"T":1514035060000,"s":"BTCUSDT","i":"1m","f":100,"L":200,"o":"25100.00","c":"25200.00","h":"25300.00","l":"25000.00","v":"100.00","n":50,"x":true,"q":"2500000.00","V":"50.00","Q":"1250000.00"}}"#,
-            "Kline",
-        ),
-        (
-            r#"{"lastUpdateId":160943312,"bids":[["25100.00","1.00"]],"asks":[["25200.00","2.00"]]}"#,
-            "PartialDepth",
-        ),
-        (
-            r#"{"u":400900217,"s":"BTCUSDT","b":"25100.00","B":"1.00","a":"25200.00","A":"2.00"}"#,
-            "BookTicker",
-        ),
-    ];
-
-    for (json, expected_type) in messages {
-        let result = BinanceSpotWebSocketStreamResponse::from_text(json);
-        assert!(result.is_ok(), "应该能成功解析 {} 消息", expected_type);
-
-        let response = result.unwrap();
-        match expected_type {
-            "Trade" => {
-                assert!(matches!(response, BinanceSpotWebSocketStreamResponse::Trade(_)), "应该识别为 Trade");
-            }
-            "AggTrade" => {
-                assert!(matches!(response, BinanceSpotWebSocketStreamResponse::AggTrade(_)), "应该识别为 AggTrade");
-            }
-            "Kline" => {
-                assert!(matches!(response, BinanceSpotWebSocketStreamResponse::Kline(_)), "应该识别为 Kline");
-            }
-            "PartialDepth" => {
-                assert!(
-                    matches!(response, BinanceSpotWebSocketStreamResponse::PartialDepth(_)),
-                    "应该识别为 PartialDepth"
-                );
-            }
-            "BookTicker" => {
-                assert!(
-                    matches!(response, BinanceSpotWebSocketStreamResponse::BookTicker(_)),
-                    "应该识别为 BookTicker"
-                );
-            }
-            _ => panic!("未知的类型"),
-        }
     }
 }

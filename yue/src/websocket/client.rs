@@ -153,11 +153,6 @@ impl WebSocketClient {
     fn cache_len(&self) -> usize {
         self.command_cache.lock().unwrap().len()
     }
-
-    #[cfg(test)]
-    fn cached_events(&self) -> Vec<WsMessage> {
-        self.command_cache.lock().unwrap().clone()
-    }
 }
 
 impl Actor for WebSocketClient {
@@ -505,7 +500,7 @@ mod tests {
     fn clear_cache_works() {
         let client = WebSocketClient::new("ws://example.com");
         client.add_to_cache(WsMessage::Text("a".into()));
-        client.add_to_cache(WsMessage::binary((vec![1, 2, 3])));
+        client.add_to_cache(WsMessage::binary(vec![1, 2, 3]));
         assert_eq!(client.cache_len(), 2);
 
         client.clear_command_cache();

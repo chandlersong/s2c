@@ -47,11 +47,21 @@ mod tests {
             "p":"40000.00",
             "q":"1.0",
             "T":1234567890,
-            "m":false
+            "m":false,
+            "M":false
         }"#;
 
         let result = parser.parse_text(trade_json);
         assert!(result.is_ok(), "Failed to parse trade message: {:?}", result);
+
+        match result.unwrap() {
+            BinanceSpotWebSocketStreamResponse::Trade(trade) => {
+                assert_eq!(trade.symbol, "BTCUSDT");
+                assert_eq!(trade.trade_id, 123456);
+                assert!((trade.price - 40000.00).abs() < 0.01);
+            }
+            _ => panic!("Expected Trade variant"),
+        }
     }
 
     #[test]

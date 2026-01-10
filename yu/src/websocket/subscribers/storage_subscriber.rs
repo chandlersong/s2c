@@ -1,8 +1,7 @@
-use crate::binance::models::{SpotStreamPartialBookDepthPo, SpotStreamTradeRecordPo};
+use crate::binance::models::SpotStreamTradeRecordPo;
 use crate::config::SpotWebSocketStreamConfig;
 use crate::duck_db::DBProvider;
 use actix::{Actor, AsyncContext, Context, Handler};
-use chrono::Utc;
 use duckdb::params;
 use log::{debug, error, info};
 use std::time::Duration;
@@ -14,7 +13,6 @@ pub struct StorageSubscriberActor {
     config: SpotWebSocketStreamConfig,
     db: DBProvider,
     trade_buffer: Vec<SpotStreamTradeRecordPo>,
-    depth_buffer: Vec<SpotStreamPartialBookDepthPo>,
     received_count: u64,
     flushed_trades: u64,
     flushed_depths: u64,
@@ -26,7 +24,6 @@ impl StorageSubscriberActor {
             config,
             db,
             trade_buffer: Vec::new(),
-            depth_buffer: Vec::new(),
             received_count: 0,
             flushed_trades: 0,
             flushed_depths: 0,
@@ -35,10 +32,6 @@ impl StorageSubscriberActor {
 
     fn get_trade_batch_size(&self) -> usize {
         self.config.trade.as_ref().and_then(|c| c.batch_size).unwrap_or(100)
-    }
-
-    fn get_depth_batch_size(&self) -> usize {
-        self.config.depth_update.as_ref().and_then(|c| c.batch_size).unwrap_or(50)
     }
 
     fn get_flush_interval_ms(&self) -> u64 {

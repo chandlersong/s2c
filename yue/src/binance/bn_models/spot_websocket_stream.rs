@@ -213,8 +213,8 @@ pub struct KlineData {
 /// 归集成交事件，对应 `aggTrade`。
 pub struct AggTradeStreamPayload {
     #[serde(rename = "e")]
-    /// 事件时间 (ms)。
-    pub event: u64,
+    /// 事件类型（"aggTrade"）。
+    pub event: String,
     #[serde(rename = "E")]
     /// 事件时间 (ms)。
     pub event_time: u64,
