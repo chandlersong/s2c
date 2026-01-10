@@ -24,12 +24,22 @@ use yue::binance::history_data::{CommonParam, SimpleHistoryFetcher};
 ///
 ///
 pub async fn start_bn_jobs() -> Result<(), YuError> {
-    let dashboard = BinanceDashboard::new();
-    //每六个小时更新一次。因为这样频率不要那么高
-    dashboard.execute().await?;
-    let update_dashboard_task = dashboard.clone();
-    let dash_board = Arc::new(dashboard);
-    initial_table()?;
+    let dash_board = BinanceDashboard::new();
+    dash_board.execute().await?;
+
+    start_refresh_history_data(dash_board.clone()).await?;
+    start_websocket_job().await?;
+    Ok(())
+}
+
+async fn start_websocket_job() -> Result<(), YuError> {
+    todo!()
+}
+
+async fn start_refresh_history_data(origin_dash_board: BinanceDashboard) -> Result<(), YuError> {
+    let update_dashboard_task = origin_dash_board.clone();
+    let dash_board = Arc::new(origin_dash_board);
+    initial_history_table()?;
     let base_spot_kline_fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
     let spot_kline_fetcher: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonParam, BinanceKline> =
         CloneHistoryFetcherFactory::new(base_spot_kline_fetcher);
@@ -73,7 +83,6 @@ pub async fn start_bn_jobs() -> Result<(), YuError> {
     let _ = CronActor::new("10 0 * * * * *", spot_kline_task).start();
     let _ = CronActor::new("10 0 * * * * *", swap_funding_rate_task).start();
     let _ = CronActor::new("10 1 * * * * *", swap_kline_task).start();
-
     Ok(())
 }
 
@@ -84,7 +93,7 @@ fn table_exists(conn: &Connection, table_name: &str) -> Result<bool, YuError> {
     Ok(rows.next()?.is_some())
 }
 
-fn initial_table() -> Result<(), YuError> {
+fn initial_history_table() -> Result<(), YuError> {
     let conn = DBProvider::default().acquire()?;
     for table in ALL_BINANCE_TABLES.iter() {
         let table_name = table.table_name();

@@ -13,6 +13,10 @@ pub enum YueError {
     IoError(#[from] std::io::Error),
     #[error("Invalid key length for HMAC: {0}")]
     InvalidKeyLength(#[from] InvalidLength),
+    #[error("parse data error: {0}")]
+    ParseError(String),
+    #[error("{0}")]
+    NotImplemented(String),
     #[error("Custom error: {0}")]
     CustomError(String),
 }

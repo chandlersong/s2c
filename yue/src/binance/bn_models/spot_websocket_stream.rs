@@ -1,54 +1,42 @@
+use crate::tools::string_to_float;
+use actix::Message as ActixMessage;
 use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(untagged)]
-/// 现货公共流的顶层反序列化入口，兼容事件单条和数组推送。
-pub enum BinanceSpotWebSocketStream {
-    /// ���带事件类型字段 `e` 的常规事件流。
-    Event(BinanceSpotEvent),
-    /// 单个最优挂单推送（无事件类型 tag，只有价格量字段）。
-    BookTicker(BookTickerStreamPayload),
-    /// 有限档深度快照（partial book depth）。
+/// 现货公共流的顶层反序列化入口，兼容单条事件和数组推送。
+/// 支持的流类型：逐笔交易、归集交易、K线、有限档深度、按Symbol的最优挂单
+///
+/// 注意：枚举变体的顺序很重要，应该按照消息特征的唯一性从高到低排列，
+/// 以确保 #[serde(untagged)] 能正确识别每种类型。
+pub enum BinanceSpotWebSocketStreamResponse {
+    /// K线流 - 最具特征性（包含 `k` 嵌套对象）
+    Kline(KlineStreamPayload),
+    /// 有限档深度快照 - 包含唯一的 `lastUpdateId` 字段
     PartialDepth(PartialBookDepthStream),
-    /// 全市场精简 mini ticker 数组推送。
-    MiniTickerArray(Vec<MiniTickerStreamPayload>),
-    /// 全市场最优挂单数组推送。
-    BookTickerArray(Vec<BookTickerStreamPayload>),
+    /// 归集交易流 - 包含唯一的 `f` 和 `l` 字段
+    AggTrade(AggTradeStreamPayload),
+    /// 逐笔交易流 - 包含 `t` (trade_id) 字段
+    Trade(TradeStreamPayload),
+    /// 按Symbol的最优挂单 - 包含 `B` 和 `A` (大写) 字段
+    BookTicker(BookTickerStreamPayload),
 }
 
-impl BinanceSpotWebSocketStream {
+impl ActixMessage for BinanceSpotWebSocketStreamResponse {
+    type Result = ();
+}
+
+impl BinanceSpotWebSocketStreamResponse {
     pub fn from_text(text: &str) -> Result<Self, serde_json::Error> {
         serde_json::from_str(text)
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(tag = "e")]
-/// 带事件类型 `e` 的现货公共流事件���举。
-pub enum BinanceSpotEvent {
-    #[serde(rename = "trade")]
-    /// 逐笔成交（标的符号级）。
-    Trade(TradeStreamPayload),
-    #[serde(rename = "depthUpdate")]
-    /// 增量深度（diff. depth）。
-    DepthUpdate(DiffDepthStreamPayload),
-    #[serde(rename = "kline")]
-    /// K 线闭合/变更事件。
-    Kline(KlineStreamPayload),
-    #[serde(rename = "aggTrade")]
-    /// 归集成交（多笔合并）。
-    AggTrade(AggTradeStreamPayload),
-    #[serde(rename = "24hrMiniTicker")]
-    /// 24h 精简 Ticker。
-    MiniTicker(MiniTickerStreamPayload),
-    #[serde(rename = "24hrTicker")]
-    /// 24h 完整 Ticker。
-    Ticker(TickerStreamPayload),
-}
-
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 /// 逐笔成交事件字段，对应 `trade`。
 pub struct TradeStreamPayload {
+    #[serde(rename = "e")]
+    /// 事件时间 (ms)。
+    pub event: String,
     #[serde(rename = "E")]
     /// 事件时间 (ms)。
     pub event_time: u64,
@@ -60,39 +48,40 @@ pub struct TradeStreamPayload {
     pub trade_id: u64,
     #[serde(rename = "p")]
     /// 成交价格。
-    pub price: String,
+    #[serde(with = "string_to_float")]
+    pub price: f64,
     #[serde(rename = "q")]
+    #[serde(with = "string_to_float")]
     /// 成交数量。
-    pub qty: String,
-    #[serde(rename = "b")]
-    /// 买方订单 ID。
-    pub buyer_order_id: u64,
-    #[serde(rename = "a")]
-    /// 卖方订单 ID。
-    pub seller_order_id: u64,
+    pub qty: f64,
+
     #[serde(rename = "T")]
     /// 成交时间戳 (ms)。
     pub trade_time: u64,
     #[serde(rename = "m")]
     /// 是否买方为挂单方（true 表示卖方主动成交）。
     pub is_buyer_maker: bool,
+
+    #[serde(rename = "M")]
+    /// 是否买方为挂单方（true 表示卖方主动成交）。
+    pub ignore: bool,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 /// 有限档深度快照（5/10/20 档）。
 pub struct PartialBookDepthStream {
     #[serde(rename = "lastUpdateId")]
     /// 快照对应的 lastUpdateId。
     pub last_update_id: u64,
-    #[serde(rename = "bids")]
+    #[serde(rename = "bids", deserialize_with = "de::levels")]
     /// 买盘 [price, qty] 列表。
-    pub bids: Vec<(String, String)>,
-    #[serde(rename = "asks")]
+    pub bids: Vec<(f64, f64)>,
+    #[serde(rename = "asks", deserialize_with = "de::levels")]
     /// 卖盘 [price, qty] 列表。
-    pub asks: Vec<(String, String)>,
+    pub asks: Vec<(f64, f64)>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 /// 增量深度事件，对应 `depthUpdate`。
 pub struct DiffDepthStreamPayload {
     #[serde(rename = "E")]
@@ -105,22 +94,44 @@ pub struct DiffDepthStreamPayload {
     /// 首个更新 ID。
     pub first_update_id: u64,
     #[serde(rename = "u")]
-    /// 最��更新 ID。
+    /// 最终更新 ID。
     pub final_update_id: u64,
-    #[serde(rename = "pu")]
-    /// 上一条深度事件的最终更新 ID（可能缺失）。
-    pub prev_final_update_id: Option<u64>,
-    #[serde(rename = "b")]
+
+    #[serde(rename = "b", deserialize_with = "de::levels")]
     /// 买盘增量 [price, qty]。
-    pub bids: Vec<(String, String)>,
-    #[serde(rename = "a")]
+    pub bids: Vec<(f64, f64)>,
+    #[serde(rename = "a", deserialize_with = "de::levels")]
     /// 卖盘增量 [price, qty]。
-    pub asks: Vec<(String, String)>,
+    pub asks: Vec<(f64, f64)>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+// 本地反序列化工具：将 [["price","qty"], ...] 转换为 Vec<(f64, f64)>
+mod de {
+    use serde::de::Error as DeError;
+    use serde::{Deserialize, Deserializer};
+
+    pub fn levels<'de, D>(deserializer: D) -> Result<Vec<(f64, f64)>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // 先按字符串解析
+        let raw: Vec<(String, String)> = Vec::<(String, String)>::deserialize(deserializer)?;
+        let mut out = Vec::with_capacity(raw.len());
+        for (p, q) in raw.into_iter() {
+            let price = p.parse::<f64>().map_err(|e| D::Error::custom(format!("price parse error: {}", e)))?;
+            let qty = q.parse::<f64>().map_err(|e| D::Error::custom(format!("qty parse error: {}", e)))?;
+            out.push((price, qty));
+        }
+        Ok(out)
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
 /// K 线事件载体，对应 `kline`。
 pub struct KlineStreamPayload {
+    #[serde(rename = "e")]
+    /// 事件时间 (ms)。
+    pub event: String,
     #[serde(rename = "E")]
     /// 事件时间 (ms)。
     pub event_time: u64,
@@ -132,7 +143,7 @@ pub struct KlineStreamPayload {
     pub kline: KlineData,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 /// K 线细节字段，含开收高低与量。
 pub struct KlineData {
     #[serde(rename = "t")]
@@ -154,20 +165,27 @@ pub struct KlineData {
     /// 最后一笔成交 ID。
     pub last_trade_id: u64,
     #[serde(rename = "o")]
+    #[serde(with = "string_to_float")]
     /// 开盘价。
-    pub open: String,
+    pub open: f64,
+
     #[serde(rename = "c")]
+    #[serde(with = "string_to_float")]
     /// 收盘价。
-    pub close: String,
+    pub close: f64,
+
     #[serde(rename = "h")]
+    #[serde(with = "string_to_float")]
     /// 最高价。
-    pub high: String,
+    pub high: f64,
     #[serde(rename = "l")]
+    #[serde(with = "string_to_float")]
     /// 最低价。
-    pub low: String,
+    pub low: f64,
     #[serde(rename = "v")]
+    #[serde(with = "string_to_float")]
     /// 成交量（基准资产）。
-    pub volume: String,
+    pub volume: f64,
     #[serde(rename = "n")]
     /// 成交笔数。
     pub trade_count: u64,
@@ -175,19 +193,28 @@ pub struct KlineData {
     /// 本根 K 线是否已闭合。
     pub is_closed: bool,
     #[serde(rename = "q")]
+    #[serde(with = "string_to_float")]
     /// 成交量（按报价资产）。
-    pub quote_volume: String,
+    pub quote_volume: f64,
     #[serde(rename = "V")]
+    #[serde(with = "string_to_float")]
     /// 主动买入成交量（基准资产）。
-    pub taker_buy_base_volume: String,
+    pub taker_buy_base_volume: f64,
     #[serde(rename = "Q")]
+    #[serde(with = "string_to_float")]
     /// 主动买入成交量（报价资产）。
-    pub taker_buy_quote_volume: String,
+    pub taker_buy_quote_volume: f64,
+    #[serde(rename = "B")]
+    /// 主动买入成交量（报价资产）。
+    pub ignore: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 /// 归集成交事件，对应 `aggTrade`。
 pub struct AggTradeStreamPayload {
+    #[serde(rename = "e")]
+    /// 事件时间 (ms)。
+    pub event: u64,
     #[serde(rename = "E")]
     /// 事件时间 (ms)。
     pub event_time: u64,
@@ -198,11 +225,13 @@ pub struct AggTradeStreamPayload {
     /// 归集成交 ID。
     pub agg_id: u64,
     #[serde(rename = "p")]
+    #[serde(with = "string_to_float")]
     /// 成交价格。
-    pub price: String,
+    pub price: f64,
     #[serde(rename = "q")]
+    #[serde(with = "string_to_float")]
     /// 成交数量。
-    pub qty: String,
+    pub qty: f64,
     #[serde(rename = "f")]
     /// 首笔成交 ID。
     pub first_trade_id: u64,
@@ -217,7 +246,7 @@ pub struct AggTradeStreamPayload {
     pub is_buyer_maker: bool,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 /// 最优挂单事件或数组元素，对应 `bookTicker`。
 pub struct BookTickerStreamPayload {
     #[serde(rename = "u")]
@@ -227,20 +256,24 @@ pub struct BookTickerStreamPayload {
     /// 交易对符号。
     pub symbol: String,
     #[serde(rename = "b")]
+    #[serde(with = "string_to_float")]
     /// 最优买价。
-    pub best_bid_price: String,
+    pub best_bid_price: f64,
     #[serde(rename = "B")]
+    #[serde(with = "string_to_float")]
     /// 最优买量。
-    pub best_bid_qty: String,
+    pub best_bid_qty: f64,
     #[serde(rename = "a")]
+    #[serde(with = "string_to_float")]
     /// 最优卖价。
-    pub best_ask_price: String,
+    pub best_ask_price: f64,
     #[serde(rename = "A")]
+    #[serde(with = "string_to_float")]
     /// 最优卖量。
-    pub best_ask_qty: String,
+    pub best_ask_qty: f64,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 /// 24h 精简 Ticker，对应 `24hrMiniTicker` 或全市场数组。
 pub struct MiniTickerStreamPayload {
     #[serde(rename = "E")]
@@ -269,7 +302,7 @@ pub struct MiniTickerStreamPayload {
     pub quote_volume: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 /// 24h 完整 Ticker，对应 `24hrTicker`。
 pub struct TickerStreamPayload {
     #[serde(rename = "E")]
