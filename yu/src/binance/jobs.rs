@@ -33,10 +33,10 @@ use yue::websocket::event_bus::{Subscribe, WsMessageBus};
 ///
 ///
 pub async fn start_bn_jobs() -> Result<(), YuError> {
-    // let dash_board = BinanceDashboard::new();
-    // dash_board.execute().await?;
+    let dash_board = BinanceDashboard::new();
+    dash_board.execute().await?;
 
-    // start_refresh_history_data(dash_board.clone()).await?;
+    start_refresh_history_data(dash_board.clone()).await?;
     start_websocket_job().await?;
     Ok(())
 }
