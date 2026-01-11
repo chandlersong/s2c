@@ -111,6 +111,16 @@ impl CommonParam {
             limit: None,
         }
     }
+
+    pub fn symbol_and_limit(symbol: String, limit: u32) -> Self {
+        Self {
+            symbol,
+            interval: None,
+            start_time: None,
+            end_time: None,
+            limit: Some(limit),
+        }
+    }
 }
 
 impl MuteHistoryParam for CommonParam {

@@ -35,6 +35,7 @@ impl WebSocketParser for BinanceSpotStreamParser {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rust_decimal::prelude::ToPrimitive;
 
     #[test]
     fn test_parse_trade_message() {
@@ -58,7 +59,7 @@ mod tests {
             BinanceSpotWebSocketStreamResponse::Trade(trade) => {
                 assert_eq!(trade.symbol, "BTCUSDT");
                 assert_eq!(trade.trade_id, 123456);
-                assert!((trade.price - 40000.00).abs() < 0.01);
+                assert!((trade.price.to_f64().unwrap() - 40000.00).abs() < 0.01);
             }
             _ => panic!("Expected Trade variant"),
         }

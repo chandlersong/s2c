@@ -1,4 +1,5 @@
 use crate::utils::get_snowflake_generator;
+use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use yue::binance::bn_models::spot_websocket_stream::TradeStreamPayload;
 
@@ -22,8 +23,8 @@ impl From<TradeStreamPayload> for SpotStreamTradeRecordPo {
             event_time: payload.event_time as i64,
             symbol: payload.symbol,
             trade_id: payload.trade_id as i64,
-            price: payload.price,
-            qty: payload.qty,
+            price: payload.price.to_f64().unwrap(),
+            qty: payload.qty.to_f64().unwrap(),
             trade_time: Some(payload.trade_time as i64),
             is_buyer_maker: Some(payload.is_buyer_maker),
             created_at: 0,
@@ -35,7 +36,6 @@ impl From<TradeStreamPayload> for SpotStreamTradeRecordPo {
 mod tests {
     use super::*;
     use serde_json;
-
     #[test]
     fn test_price_qty_f64_precision_trade() {
         let orig = SpotStreamTradeRecordPo {
@@ -43,8 +43,8 @@ mod tests {
             event_time: 1_641_000_000,
             symbol: "BTCUSDT".to_string(),
             trade_id: 12345,
-            price: 34123.12345678_f64,
-            qty: 0.00012345_f64,
+            price: 34123.12345678,
+            qty: 0.00012345,
             trade_time: Some(1_641_000_001),
             is_buyer_maker: Some(false),
             created_at: 1_641_000_002,
@@ -56,7 +56,7 @@ mod tests {
         let price_diff = (orig.price - parsed.price).abs();
         let qty_diff = (orig.qty - parsed.qty).abs();
 
-        assert!(price_diff < 1e-8, "price diff too large: {}", price_diff);
-        assert!(qty_diff < 1e-12, "qty diff too large: {}", qty_diff);
+        assert!(price_diff.to_f64().unwrap() < 1e-8, "price diff too large: {}", price_diff);
+        assert!(qty_diff.to_f64().unwrap() < 1e-12, "qty diff too large: {}", qty_diff);
     }
 }

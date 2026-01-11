@@ -1,5 +1,7 @@
+use crate::binance::bn_models::common::map_depth_levels_decimal;
 use crate::binance::bn_models::common::{ExchangeInfoTrait, HistoryVo, SymbolInfoTrait};
-use crate::tools::string_to_float;
+use crate::models::Decimal;
+use crate::tools::string_to_decimal;
 use serde::{Deserialize, Serialize};
 /// 交易所信息结构体
 /// 包含交易所的时区、服务器时间、速率限制规则、交易所过滤器和所有交易对的详细信息
@@ -185,42 +187,42 @@ pub struct BinanceKline {
     pub open_time: u64, // 开盘时间戳 (毫秒)
 
     #[serde(rename = "open")]
-    #[serde(with = "string_to_float")]
-    pub open: f64, // 开盘价
+    #[serde(with = "string_to_decimal")]
+    pub open: Decimal, // 开盘价
 
     #[serde(rename = "high")]
-    #[serde(with = "string_to_float")]
-    pub high: f64, // 最高价
+    #[serde(with = "string_to_decimal")]
+    pub high: Decimal, // 最高价
 
     #[serde(rename = "low")]
-    #[serde(with = "string_to_float")]
-    pub low: f64, // 最低价
+    #[serde(with = "string_to_decimal")]
+    pub low: Decimal, // 最低价
 
     #[serde(rename = "close")]
-    #[serde(with = "string_to_float")]
-    pub close: f64, // 收盘价
+    #[serde(with = "string_to_decimal")]
+    pub close: Decimal, // 收盘价
 
     #[serde(rename = "volume")]
-    #[serde(with = "string_to_float")]
-    pub volume: f64, // 成交量
+    #[serde(with = "string_to_decimal")]
+    pub volume: Decimal, // 成交量
 
     #[serde(rename = "close_time")]
     pub close_time: u64, // 收盘时间戳 (毫秒)
 
     #[serde(rename = "quote_asset_volume")]
-    #[serde(with = "string_to_float")]
-    pub quote_asset_volume: f64, // 成交额
+    #[serde(with = "string_to_decimal")]
+    pub quote_asset_volume: Decimal, // 成交额
 
     #[serde(rename = "number_of_trades")]
     pub number_of_trades: u64, // 成交笔数
 
     #[serde(rename = "taker_buy_base_asset_volume")]
-    #[serde(with = "string_to_float")]
-    pub taker_buy_base_asset_volume: f64, // 主动买入成交量
+    #[serde(with = "string_to_decimal")]
+    pub taker_buy_base_asset_volume: Decimal, // 主动买入成交量
 
     #[serde(rename = "taker_buy_quote_asset_volume")]
-    #[serde(with = "string_to_float")]
-    pub taker_buy_quote_asset_volume: f64, // 主动买入成交额
+    #[serde(with = "string_to_decimal")]
+    pub taker_buy_quote_asset_volume: Decimal, // 主动买入成交额
 
     #[serde(rename = "ignore")]
     pub ignore: String, // 忽略字段
@@ -236,56 +238,67 @@ impl HistoryVo for BinanceKline {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+/// 深度快照响应
+pub struct Depth {
+    #[serde(rename = "lastUpdateId")]
+    pub last_update_id: u64,
+    #[serde(rename = "bids", deserialize_with = "map_depth_levels_decimal")]
+    pub bids: Vec<(Decimal, Decimal)>,
+    #[serde(rename = "asks", deserialize_with = "map_depth_levels_decimal")]
+    pub asks: Vec<(Decimal, Decimal)>,
+}
+
 /// 币安 /api/v3/ticker/24hr 24小时行情响应对象
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Ticker24hr {
     #[serde(rename = "symbol")]
     pub symbol: String, // 交易对，如 BTCUSDT
 
-    #[serde(rename = "priceChange", with = "string_to_float")]
-    pub price_change: f64, // 24小时价格变动
+    #[serde(rename = "priceChange", with = "string_to_decimal")]
+    pub price_change: Decimal, // 24小时价格变动
 
-    #[serde(rename = "priceChangePercent", with = "string_to_float")]
-    pub price_change_percent: f64, // 24小时价格变动百分比
+    #[serde(rename = "priceChangePercent", with = "string_to_decimal")]
+    pub price_change_percent: Decimal, // 24小时价格变动百分比
 
-    #[serde(rename = "weightedAvgPrice", with = "string_to_float")]
-    pub weighted_avg_price: f64, // 24小时加权平均价
+    #[serde(rename = "weightedAvgPrice", with = "string_to_decimal")]
+    pub weighted_avg_price: Decimal, // 24小时加权平均价
 
-    #[serde(rename = "prevClosePrice", with = "string_to_float")]
-    pub prev_close_price: f64, // 前一日收盘价
+    #[serde(rename = "prevClosePrice", with = "string_to_decimal")]
+    pub prev_close_price: Decimal, // 前一日收盘价
 
-    #[serde(rename = "lastPrice", with = "string_to_float")]
-    pub last_price: f64, // 最新成交价
+    #[serde(rename = "lastPrice", with = "string_to_decimal")]
+    pub last_price: Decimal, // 最新成交价
 
-    #[serde(rename = "lastQty", with = "string_to_float")]
-    pub last_qty: f64, // 最新成交量
+    #[serde(rename = "lastQty", with = "string_to_decimal")]
+    pub last_qty: Decimal, // 最新成交量
 
-    #[serde(rename = "bidPrice", with = "string_to_float")]
-    pub bid_price: f64, // 当前买一价
+    #[serde(rename = "bidPrice", with = "string_to_decimal")]
+    pub bid_price: Decimal, // 当前买一价
 
-    #[serde(rename = "bidQty", with = "string_to_float")]
-    pub bid_qty: f64, // 当前买一量
+    #[serde(rename = "bidQty", with = "string_to_decimal")]
+    pub bid_qty: Decimal, // 当前买一量
 
-    #[serde(rename = "askPrice", with = "string_to_float")]
-    pub ask_price: f64, // 当前卖一价
+    #[serde(rename = "askPrice", with = "string_to_decimal")]
+    pub ask_price: Decimal, // 当前卖一价
 
-    #[serde(rename = "askQty", with = "string_to_float")]
-    pub ask_qty: f64, // 当前卖一量
+    #[serde(rename = "askQty", with = "string_to_decimal")]
+    pub ask_qty: Decimal, // 当前卖一量
 
-    #[serde(rename = "openPrice", with = "string_to_float")]
-    pub open_price: f64, // 今日开盘价
+    #[serde(rename = "openPrice", with = "string_to_decimal")]
+    pub open_price: Decimal, // 今日开盘价
 
-    #[serde(rename = "highPrice", with = "string_to_float")]
-    pub high_price: f64, // 24小时最高价
+    #[serde(rename = "highPrice", with = "string_to_decimal")]
+    pub high_price: Decimal, // 24小时最高价
 
-    #[serde(rename = "lowPrice", with = "string_to_float")]
-    pub low_price: f64, // 24小时最低价
+    #[serde(rename = "lowPrice", with = "string_to_decimal")]
+    pub low_price: Decimal, // 24小时最低价
 
-    #[serde(rename = "volume", with = "string_to_float")]
-    pub volume: f64, // 24小时成交量
+    #[serde(rename = "volume", with = "string_to_decimal")]
+    pub volume: Decimal, // 24小时成交量
 
-    #[serde(rename = "quoteVolume", with = "string_to_float")]
-    pub quote_volume: f64, // 24小时成交额
+    #[serde(rename = "quoteVolume", with = "string_to_decimal")]
+    pub quote_volume: Decimal, // 24小时成交额
 
     #[serde(rename = "openTime")]
     pub open_time: u64, // 统计开始时间（毫秒）

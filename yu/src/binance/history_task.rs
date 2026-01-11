@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use duckdb::{appender_params_from_iter, DropBehavior};
 use li::tools::time::{unix_2_readable, unix_time_now_u64_utc, GENESIS_2020_MS, ONE_HOUR_MS};
 use log::{debug, error, info};
+use rust_decimal::prelude::ToPrimitive;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -163,15 +164,15 @@ impl HistoryPO for KlinePo {
             id,
             symbol: symbol.expect("Symbol must be provided").to_string(),
             candle_begin_time: source.open_time,
-            open: source.open,
-            high: source.high,
-            low: source.low,
-            close: source.close,
-            volume: source.volume,
-            quote_volume: source.quote_asset_volume,
+            open: source.open.to_f64().unwrap(),
+            high: source.high.to_f64().unwrap(),
+            low: source.low.to_f64().unwrap(),
+            close: source.close.to_f64().unwrap(),
+            volume: source.volume.to_f64().unwrap(),
+            quote_volume: source.quote_asset_volume.to_f64().unwrap(),
             number_of_trades: source.number_of_trades,
-            taker_buy_base_asset_volume: source.taker_buy_base_asset_volume,
-            taker_buy_quote_asset_volume: source.taker_buy_quote_asset_volume,
+            taker_buy_base_asset_volume: source.taker_buy_base_asset_volume.to_f64().unwrap(),
+            taker_buy_quote_asset_volume: source.taker_buy_quote_asset_volume.to_f64().unwrap(),
             close_time: source.close_time,
         }
     }

@@ -1,7 +1,7 @@
 use li::tools::time::unix_2_readable;
 use std::collections::BTreeMap;
 use yue::binance::bn_models::common::{EmptyQueryParams, ServerTime};
-use yue::binance::bn_models::spot_restful::{BinanceKline, Ticker24hr};
+use yue::binance::bn_models::spot_restful::{BinanceKline, Depth, Ticker24hr};
 use yue::binance::bn_restful_commands::SPOT_KLINE_HISTORY_COMMAND;
 use yue::binance::bn_restful_commands::{SERVER_TIME_COMMAND, execute_bn_get};
 use yue::binance::history_data::{CommonParam, execute_ping};
@@ -85,6 +85,33 @@ async fn main() {
                 "开盘价: {}, 现在价格: {}, 最高价: {}, 最低价: {}, 成交量: {}",
                 ticker.open_price, ticker.last_price, ticker.high_price, ticker.low_price, ticker.volume
             );
+        }
+        Err(e) => {
+            println!("获取24小时的价格失败: {}", e)
+        }
+    }
+
+    let depth_param = CommonParam::symbol_and_limit("BTCUSDT".to_string(), 1000);
+    match execute_bn_get::<CommonParam, NonAuthRequestBuilder, Depth>(
+        &yue::binance::bn_restful_commands::SPOT_DEPTH_1000_COMMAND,
+        Some(&depth_param),
+        request_builder.clone(),
+    )
+    .execute()
+    .await
+    {
+        Ok(depth) => {
+            println!("BTCUSDT 24小时价格变动:");
+            println!(
+                "last_update_id: {}, bids len: {}, ask len: {}",
+                depth.last_update_id,
+                depth.bids.len(),
+                depth.asks.len()
+            );
+            let first_bid = depth.bids.first().unwrap();
+            println!("first bid price: {}, qty:{}", first_bid.0, first_bid.1);
+            let first_asks = depth.asks.first().unwrap();
+            println!("first asks price: {}, qty:{}", first_asks.0, first_asks.1);
         }
         Err(e) => {
             println!("获取24小时的价格失败: {}", e)

@@ -1,7 +1,9 @@
+use crate::models::Decimal;
 use li::tools::time::{UnixTimeStamp, unix_time_now_u64_utc};
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use serde::de::{DeserializeOwned, Error};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
+use std::str::FromStr;
 
 // 查询参数trait定义
 pub trait ToQueryParams {
@@ -89,4 +91,33 @@ pub trait ExchangeInfoTrait {
     fn timezone(&self) -> &str;
     fn server_time(&self) -> u64;
     fn symbols(&self) -> &Vec<Self::SymbolInfo>;
+}
+
+pub fn map_depth_levels<'de, D>(deserializer: D) -> Result<Vec<(f64, f64)>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    // 先按字符串解析
+    let raw: Vec<(String, String)> = Vec::<(String, String)>::deserialize(deserializer)?;
+    let mut out = Vec::with_capacity(raw.len());
+    for (p, q) in raw.into_iter() {
+        let price = p.parse::<f64>().map_err(|e| D::Error::custom(format!("price parse error: {}", e)))?;
+        let qty = q.parse::<f64>().map_err(|e| D::Error::custom(format!("qty parse error: {}", e)))?;
+        out.push((price, qty));
+    }
+    Ok(out)
+}
+
+pub fn map_depth_levels_decimal<'de, D>(deserializer: D) -> Result<Vec<(Decimal, Decimal)>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw: Vec<(String, String)> = Vec::<(String, String)>::deserialize(deserializer)?;
+    let mut out = Vec::with_capacity(raw.len());
+    for (p, q) in raw.into_iter() {
+        let price = Decimal::from_str(&p).map_err(|e| D::Error::custom(format!("price parse error: {}", e)))?;
+        let qty = Decimal::from_str(&q).map_err(|e| D::Error::custom(format!("qty parse error: {}", e)))?;
+        out.push((price, qty));
+    }
+    Ok(out)
 }

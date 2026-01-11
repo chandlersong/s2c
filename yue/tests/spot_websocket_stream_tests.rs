@@ -1,3 +1,4 @@
+use rust_decimal::prelude::ToPrimitive;
 use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamResponse;
 
 #[test]
@@ -21,8 +22,8 @@ fn test_parse_trade_stream() {
         BinanceSpotWebSocketStreamResponse::Trade(payload) => {
             assert_eq!(payload.symbol, "BTCUSDT");
             assert_eq!(payload.trade_id, 12345);
-            assert_eq!(payload.price, 25100.00);
-            assert_eq!(payload.qty, 1.00);
+            assert_eq!(payload.price.to_f64().unwrap(), 25100.00);
+            assert_eq!(payload.qty.to_f64().unwrap(), 1.00);
         }
         _ => panic!("应该解析为 Trade 变体"),
     }
@@ -50,7 +51,7 @@ fn test_parse_agg_trade_stream() {
         BinanceSpotWebSocketStreamResponse::AggTrade(payload) => {
             assert_eq!(payload.symbol, "BTCUSDT");
             assert_eq!(payload.agg_id, 12345);
-            assert_eq!(payload.price, 25100.00);
+            assert_eq!(payload.price.to_f64().unwrap(), 25100.00);
             assert_eq!(payload.first_trade_id, 100);
             assert_eq!(payload.last_trade_id, 200);
         }
@@ -92,8 +93,8 @@ fn test_parse_kline_stream() {
         BinanceSpotWebSocketStreamResponse::Kline(payload) => {
             assert_eq!(payload.symbol, "BTCUSDT");
             assert_eq!(payload.kline.interval, "1m");
-            assert_eq!(payload.kline.open, 25100.00);
-            assert_eq!(payload.kline.close, 25200.00);
+            assert_eq!(payload.kline.open.to_f64().unwrap(), 25100.00);
+            assert_eq!(payload.kline.close.to_f64().unwrap(), 25200.00);
             assert!(payload.kline.is_closed);
         }
         _ => panic!("应该解析为 Kline 变体"),
@@ -140,8 +141,8 @@ fn test_parse_book_ticker_stream() {
     match result.unwrap() {
         BinanceSpotWebSocketStreamResponse::BookTicker(payload) => {
             assert_eq!(payload.symbol, "BTCUSDT");
-            assert_eq!(payload.best_bid_price, 25100.00);
-            assert_eq!(payload.best_ask_price, 25200.00);
+            assert_eq!(payload.best_bid_price.to_f64().unwrap(), 25100.00);
+            assert_eq!(payload.best_ask_price.to_f64().unwrap(), 25200.00);
             assert_eq!(payload.update_id, 400900217);
         }
         _ => panic!("应该解析为 BookTicker 变体"),

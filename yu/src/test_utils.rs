@@ -1,5 +1,7 @@
 use crate::errors::YuError;
 use duckdb::{Connection, Result};
+use rust_decimal::dec;
+use rust_decimal::prelude::FromPrimitive;
 use std::path::Path;
 use std::vec::Vec;
 use yue::binance::bn_models::spot_restful::BinanceKline;
@@ -35,16 +37,16 @@ pub fn generate_test_kline_vec(start_time: u64, interval_ms: u64, close: f64, co
             let close_time = open_time + interval_ms - 1;
             BinanceKline {
                 open_time,
-                open: 10000.0,
-                high: 10100.0,
-                low: 9900.0,
-                close,
-                volume: 10.0,
+                open: dec!(10000.0),
+                high: dec!(10100.0),
+                low: dec!(9900.0),
+                close: rust_decimal::Decimal::from_f64(close).unwrap(),
+                volume: dec!(10.0),
                 close_time,
-                quote_asset_volume: 100500.0,
+                quote_asset_volume: dec!(100500.0),
                 number_of_trades: 100,
-                taker_buy_base_asset_volume: 5.0,
-                taker_buy_quote_asset_volume: 50000.0,
+                taker_buy_base_asset_volume: dec!(5.0),
+                taker_buy_quote_asset_volume: dec!(50000.0),
                 ignore: "0".to_string(),
             }
         })

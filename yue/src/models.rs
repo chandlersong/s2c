@@ -8,6 +8,12 @@ use url::Url;
 
 //不太确定哪个好，就先用这个用于高精度计算
 pub type Decimal = rust_decimal::Decimal;
+#[macro_export]
+macro_rules! dec_from_opt_f64 {
+    ($e:expr) => {
+        crate::models::Decimal::from_f64($e).unwrap_or_default()
+    };
+}
 
 pub fn create_empty_param() -> Option<EmptyObject> {
     Option::from(EmptyObject {})

@@ -114,6 +114,55 @@ pub mod string_to_option_float {
     }
 }
 
+pub mod string_to_decimal {
+    use rust_decimal::Decimal;
+    use serde::{Deserialize, Deserializer, Serializer};
+    use std::str::FromStr;
+
+    pub fn serialize<S>(value: &Decimal, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&value.to_string())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Decimal, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Decimal::from_str(&s).map_err(serde::de::Error::custom)
+    }
+}
+
+pub mod string_to_option_decimal {
+    use rust_decimal::Decimal;
+    use serde::{Deserialize, Deserializer, Serializer};
+    use std::str::FromStr;
+
+    pub fn serialize<S>(value: &Option<Decimal>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match value {
+            Some(v) => serializer.serialize_str(&v.to_string()),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Decimal>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let opt = Option::<String>::deserialize(deserializer)?;
+        match opt {
+            Some(s) if s.trim().is_empty() => Ok(None),
+            Some(s) => Decimal::from_str(&s).map(Some).map_err(serde::de::Error::custom),
+            None => Ok(None),
+        }
+    }
+}
+
 #[cfg(test)]
 pub fn parse_test_json<T: for<'a> de::Deserialize<'a>>(path: &str) -> T {
     let json = fs::read_to_string(path).unwrap();

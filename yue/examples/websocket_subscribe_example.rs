@@ -46,7 +46,10 @@ impl Handler<BinanceSpotWebSocketStreamResponse> for PrintSubscriberActor {
                 info!("PrintSubscriber received agg trade: {:?}", agg_trade);
             }
             BinanceSpotWebSocketStreamResponse::BookTicker(book_ticker) => {
-                info!("PrintSubscriber received trade: {:?}", book_ticker);
+                info!("PrintSubscriber received book ticker: {:?}", book_ticker);
+            }
+            BinanceSpotWebSocketStreamResponse::DepthUpdate(depth) => {
+                info!("PrintSubscriber received update depth: {:?}", depth);
             }
         }
     }
@@ -103,9 +106,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let command_request = StreamCommandRequest {
         method: WS_SUBSCRIBE_COMMAND.to_string(),
         params: vec![
-            "btcusdt@trade".to_string(),
-            "btcusdt@bookTicker".to_string(),
-            "btcusdt@depth20@100ms".to_string(),
+            // "btcusdt@trade".to_string(),
+            // "btcusdt@bookTicker".to_string(),
+            // "btcusdt@depth20@100ms".to_string(),
+            "ethusdt@depth@100ms".to_string(),
         ],
         id: 0,
     };

@@ -1,6 +1,9 @@
-use crate::tools::string_to_float;
+use crate::binance::bn_models::common::map_depth_levels;
+use crate::models::Decimal;
+use crate::tools::string_to_decimal;
 use actix::Message as ActixMessage;
 use serde::{Deserialize, Serialize};
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(untagged)]
 /// 现货公共流的顶层反序列化入口，兼容单条事件和数组推送。
@@ -19,6 +22,8 @@ pub enum BinanceSpotWebSocketStreamResponse {
     Trade(TradeStreamPayload),
     /// 按Symbol的最优挂单 - 包含 `B` 和 `A` (大写) 字段
     BookTicker(BookTickerStreamPayload),
+    /// book depth增量
+    DepthUpdate(DepthUpdateStreamPayload),
 }
 
 impl ActixMessage for BinanceSpotWebSocketStreamResponse {
@@ -48,12 +53,12 @@ pub struct TradeStreamPayload {
     pub trade_id: u64,
     #[serde(rename = "p")]
     /// 成交价格。
-    #[serde(with = "string_to_float")]
-    pub price: f64,
+    #[serde(with = "string_to_decimal")]
+    pub price: Decimal,
     #[serde(rename = "q")]
-    #[serde(with = "string_to_float")]
+    #[serde(with = "string_to_decimal")]
     /// 成交数量。
-    pub qty: f64,
+    pub qty: Decimal,
 
     #[serde(rename = "T")]
     /// 成交时间戳 (ms)。
@@ -73,17 +78,20 @@ pub struct PartialBookDepthStream {
     #[serde(rename = "lastUpdateId")]
     /// 快照对应的 lastUpdateId。
     pub last_update_id: u64,
-    #[serde(rename = "bids", deserialize_with = "de::levels")]
+    #[serde(rename = "bids", deserialize_with = "map_depth_levels")]
     /// 买盘 [price, qty] 列表。
     pub bids: Vec<(f64, f64)>,
-    #[serde(rename = "asks", deserialize_with = "de::levels")]
+    #[serde(rename = "asks", deserialize_with = "map_depth_levels")]
     /// 卖盘 [price, qty] 列表。
     pub asks: Vec<(f64, f64)>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 /// 增量深度事件，对应 `depthUpdate`。
-pub struct DiffDepthStreamPayload {
+pub struct DepthUpdateStreamPayload {
+    #[serde(rename = "e")]
+    /// 事件时间 (ms)。
+    pub event: String,
     #[serde(rename = "E")]
     /// 事件时间 (ms)。
     pub event_time: u64,
@@ -97,35 +105,15 @@ pub struct DiffDepthStreamPayload {
     /// 最终更新 ID。
     pub final_update_id: u64,
 
-    #[serde(rename = "b", deserialize_with = "de::levels")]
+    #[serde(rename = "b", deserialize_with = "map_depth_levels")]
     /// 买盘增量 [price, qty]。
     pub bids: Vec<(f64, f64)>,
-    #[serde(rename = "a", deserialize_with = "de::levels")]
+    #[serde(rename = "a", deserialize_with = "map_depth_levels")]
     /// 卖盘增量 [price, qty]。
     pub asks: Vec<(f64, f64)>,
 }
 
 // 本地反序列化工具：将 [["price","qty"], ...] 转换为 Vec<(f64, f64)>
-mod de {
-    use serde::de::Error as DeError;
-    use serde::{Deserialize, Deserializer};
-
-    pub fn levels<'de, D>(deserializer: D) -> Result<Vec<(f64, f64)>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        // 先按字符串解析
-        let raw: Vec<(String, String)> = Vec::<(String, String)>::deserialize(deserializer)?;
-        let mut out = Vec::with_capacity(raw.len());
-        for (p, q) in raw.into_iter() {
-            let price = p.parse::<f64>().map_err(|e| D::Error::custom(format!("price parse error: {}", e)))?;
-            let qty = q.parse::<f64>().map_err(|e| D::Error::custom(format!("qty parse error: {}", e)))?;
-            out.push((price, qty));
-        }
-        Ok(out)
-    }
-}
-
 #[derive(Debug, Deserialize, Serialize, Clone)]
 /// K 线事件载体，对应 `kline`。
 pub struct KlineStreamPayload {
@@ -165,27 +153,27 @@ pub struct KlineData {
     /// 最后一笔成交 ID。
     pub last_trade_id: u64,
     #[serde(rename = "o")]
-    #[serde(with = "string_to_float")]
+    #[serde(with = "string_to_decimal")]
     /// 开盘价。
-    pub open: f64,
+    pub open: Decimal,
 
     #[serde(rename = "c")]
-    #[serde(with = "string_to_float")]
+    #[serde(with = "string_to_decimal")]
     /// 收盘价。
-    pub close: f64,
+    pub close: Decimal,
 
     #[serde(rename = "h")]
-    #[serde(with = "string_to_float")]
+    #[serde(with = "string_to_decimal")]
     /// 最高价。
-    pub high: f64,
+    pub high: Decimal,
     #[serde(rename = "l")]
-    #[serde(with = "string_to_float")]
+    #[serde(with = "string_to_decimal")]
     /// 最低价。
-    pub low: f64,
+    pub low: Decimal,
     #[serde(rename = "v")]
-    #[serde(with = "string_to_float")]
+    #[serde(with = "string_to_decimal")]
     /// 成交量（基准资产）。
-    pub volume: f64,
+    pub volume: Decimal,
     #[serde(rename = "n")]
     /// 成交笔数。
     pub trade_count: u64,
@@ -193,17 +181,17 @@ pub struct KlineData {
     /// 本根 K 线是否已闭合。
     pub is_closed: bool,
     #[serde(rename = "q")]
-    #[serde(with = "string_to_float")]
+    #[serde(with = "string_to_decimal")]
     /// 成交量（按报价资产）。
-    pub quote_volume: f64,
+    pub quote_volume: Decimal,
     #[serde(rename = "V")]
-    #[serde(with = "string_to_float")]
+    #[serde(with = "string_to_decimal")]
     /// 主动买入成交量（基准资产）。
-    pub taker_buy_base_volume: f64,
+    pub taker_buy_base_volume: Decimal,
     #[serde(rename = "Q")]
-    #[serde(with = "string_to_float")]
+    #[serde(with = "string_to_decimal")]
     /// 主动买入成交量（报价资产）。
-    pub taker_buy_quote_volume: f64,
+    pub taker_buy_quote_volume: Decimal,
     #[serde(rename = "B")]
     /// 主动买入成交量（报价资产）。
     pub ignore: String,
@@ -225,13 +213,13 @@ pub struct AggTradeStreamPayload {
     /// 归集成交 ID。
     pub agg_id: u64,
     #[serde(rename = "p")]
-    #[serde(with = "string_to_float")]
+    #[serde(with = "string_to_decimal")]
     /// 成交价格。
-    pub price: f64,
+    pub price: Decimal,
     #[serde(rename = "q")]
-    #[serde(with = "string_to_float")]
+    #[serde(with = "string_to_decimal")]
     /// 成交数量。
-    pub qty: f64,
+    pub qty: Decimal,
     #[serde(rename = "f")]
     /// 首笔成交 ID。
     pub first_trade_id: u64,
@@ -256,21 +244,21 @@ pub struct BookTickerStreamPayload {
     /// 交易对符号。
     pub symbol: String,
     #[serde(rename = "b")]
-    #[serde(with = "string_to_float")]
+    #[serde(with = "string_to_decimal")]
     /// 最优买价。
-    pub best_bid_price: f64,
+    pub best_bid_price: Decimal,
     #[serde(rename = "B")]
-    #[serde(with = "string_to_float")]
+    #[serde(with = "string_to_decimal")]
     /// 最优买量。
-    pub best_bid_qty: f64,
+    pub best_bid_qty: Decimal,
     #[serde(rename = "a")]
-    #[serde(with = "string_to_float")]
+    #[serde(with = "string_to_decimal")]
     /// 最优卖价。
-    pub best_ask_price: f64,
+    pub best_ask_price: Decimal,
     #[serde(rename = "A")]
-    #[serde(with = "string_to_float")]
+    #[serde(with = "string_to_decimal")]
     /// 最优卖量。
-    pub best_ask_qty: f64,
+    pub best_ask_qty: Decimal,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
