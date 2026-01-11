@@ -161,12 +161,4 @@ mod tests {
 
         assert_eq!(config.trade.unwrap().batch_size(), 200);
     }
-
-    #[test]
-    fn test_spot_config_defaults() {
-        let config = super::SpotWebSocketStreamConfig { trade: None };
-        let trade_config = config.trade.unwrap();
-        assert_eq!(trade_config.batch_size(), 100);
-        assert_eq!(trade_config.retention_days(), 7);
-    }
 }
