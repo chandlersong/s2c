@@ -9,6 +9,8 @@ use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamRe
 
 /// 存储订阅者 Actor
 /// 接收 Trade 和 Depth 事件，缓冲并批量写入 DuckDB
+/// TODO:
+/// 定时删除旧信息
 pub struct SpotStreamStorageActor {
     config: SpotWebSocketStreamConfig,
     db: DBProvider,
