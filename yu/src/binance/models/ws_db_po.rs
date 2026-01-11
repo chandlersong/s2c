@@ -1,3 +1,4 @@
+use crate::utils::get_snowflake_generator;
 use serde::{Deserialize, Serialize};
 use yue::binance::bn_models::spot_websocket_stream::TradeStreamPayload;
 
@@ -17,7 +18,7 @@ pub struct SpotStreamTradeRecordPo {
 impl From<TradeStreamPayload> for SpotStreamTradeRecordPo {
     fn from(payload: TradeStreamPayload) -> Self {
         SpotStreamTradeRecordPo {
-            id: 0,
+            id: get_snowflake_generator().lock().unwrap().real_time_generate(),
             event_time: payload.event_time as i64,
             symbol: payload.symbol,
             trade_id: payload.trade_id as i64,

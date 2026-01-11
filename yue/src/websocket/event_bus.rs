@@ -40,6 +40,10 @@ pub struct WsMessageBus<P: WebSocketParser> {
     binary_messages_received: u64,
     parse_failed: u64,
     broadcast_count: u64,
+    // 发送失败统计
+    send_failed_count: u64,
+    // 上次警告时间（用于限流日志）
+    last_warning_time: std::time::Instant,
 }
 
 impl<P: WebSocketParser> WsMessageBus<P> {
@@ -51,13 +55,36 @@ impl<P: WebSocketParser> WsMessageBus<P> {
             binary_messages_received: 0,
             parse_failed: 0,
             broadcast_count: 0,
+            send_failed_count: 0,
+            last_warning_time: std::time::Instant::now(),
         }
     }
 
-    fn broadcast(&self, output: P::Output) {
+    /// 广播消息到所有订阅者
+    ///
+    /// 策略：
+    /// 1. 优先使用 try_send（非阻塞，快速失败）
+    /// 2. 如果失败，使用 do_send（会自动扩展邮箱，保证送达）
+    /// 3. 统计失败次数，定期输出警告日志
+    fn broadcast(&mut self, output: P::Output) {
         for subscriber in &self.subscribers {
             if let Err(e) = subscriber.try_send(output.clone()) {
-                warn!("Failed to send to subscriber: {}", e);
+                // try_send 失败，降级使用 do_send
+                self.send_failed_count += 1;
+
+                // 使用 do_send 保证消息送达（会自动扩展邮箱）
+                subscriber.do_send(output.clone());
+
+                // 限流警告日志：每10秒最多输出一次
+                let now = std::time::Instant::now();
+                if now.duration_since(self.last_warning_time).as_secs() >= 10 {
+                    warn!(
+                        "⚠️ 订阅者邮箱满，已使用 do_send 保证送达。累计失败 {} 次。错误: {}",
+                        self.send_failed_count, e
+                    );
+                    warn!("💡 建议：1) 增加订阅者处理速度 2) 增加邮箱容量 3) 减少批量大小");
+                    self.last_warning_time = now;
+                }
             }
         }
     }
@@ -139,8 +166,8 @@ impl<P: WebSocketParser> Handler<WebSocketEvent> for WsMessageBus<P> {
             }
             WebSocketEvent::Disconnected => {
                 info!(
-                    "✗ WebSocket 已断开 - 统计: 文本消息 {}, 二进制消息 {}, 广播 {}, 解析失败 {}",
-                    self.text_messages_received, self.binary_messages_received, self.broadcast_count, self.parse_failed
+                    "✗ WebSocket 已断开 - 统计: 文本 {}, 二进制 {}, 广播 {}, 解析失败 {}, 发送失败 {}",
+                    self.text_messages_received, self.binary_messages_received, self.broadcast_count, self.parse_failed, self.send_failed_count
                 );
             }
             WebSocketEvent::Error(err) => {
@@ -278,7 +305,7 @@ mod tests {
     #[test]
     fn test_ws_message_bus_broadcast() {
         let parser = TestParser;
-        let bus = WsMessageBus::new(parser);
+        let mut bus = WsMessageBus::new(parser);
 
         let output = TestOutput { content: "test".to_string() };
 

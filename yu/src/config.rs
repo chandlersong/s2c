@@ -12,71 +12,34 @@ pub struct BinanceWebSocketConfig {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct SpotWebSocketStreamConfig {
-    pub trade: Option<StreamConfig>,
-    pub depth_update: Option<StreamConfig>,
-}
-
-impl SpotWebSocketStreamConfig {
-    /// 获取所有需要订阅的交易对（大写，去重）
-    pub fn get_all_symbols(&self) -> Vec<String> {
-        let mut symbols = std::collections::HashSet::new();
-
-        if let Some(ref trade) = self.trade {
-            if trade.enabled.unwrap_or(true) {
-                for symbol in &trade.symbols {
-                    symbols.insert(symbol.to_uppercase());
-                }
-            }
-        }
-
-        if let Some(ref depth) = self.depth_update {
-            if depth.enabled.unwrap_or(true) {
-                for symbol in &depth.symbols {
-                    symbols.insert(symbol.to_uppercase());
-                }
-            }
-        }
-
-        symbols.into_iter().collect()
-    }
-
-    /// 获取 trade 批量大小（默认 100）
-    pub fn trade_batch_size(&self) -> usize {
-        self.trade.as_ref().and_then(|c| c.batch_size).unwrap_or(100)
-    }
-
-    /// 获取 depth 批量大小（默认 50）
-    pub fn depth_batch_size(&self) -> usize {
-        self.depth_update.as_ref().and_then(|c| c.batch_size).unwrap_or(50)
-    }
-
-    /// 获取刷新间隔（毫秒，默认 5000）
-    pub fn flush_interval_ms(&self) -> u64 {
-        self.trade
-            .as_ref()
-            .and_then(|c| c.flush_interval_ms)
-            .or_else(|| self.depth_update.as_ref().and_then(|c| c.flush_interval_ms))
-            .unwrap_or(5000)
-    }
-
-    /// 获取 trade 数据保留天数（默认 7）
-    pub fn trade_retention_days(&self) -> u32 {
-        self.trade.as_ref().and_then(|c| c.retention_days).unwrap_or(7)
-    }
-
-    /// 获取 depth 数据保留天数（默认 3）
-    pub fn depth_retention_days(&self) -> u32 {
-        self.depth_update.as_ref().and_then(|c| c.retention_days).unwrap_or(3)
-    }
+    pub trade: Option<SpotTradeStreamConfig>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
-pub struct StreamConfig {
+pub struct SpotTradeStreamConfig {
     pub enabled: Option<bool>,
     pub symbols: Vec<String>,
     pub batch_size: Option<usize>,
     pub flush_interval_ms: Option<u64>,
     pub retention_days: Option<u32>,
+}
+
+impl SpotTradeStreamConfig {
+    /// 获取所有需要订阅的交易对（大写，去重）
+
+    /// 获取 trade 批量大小（默认 100）
+    pub fn batch_size(&self) -> usize {
+        self.batch_size.unwrap_or(100)
+    }
+
+    pub fn flush_interval_ms(&self) -> u64 {
+        self.flush_interval_ms.unwrap_or(1000)
+    }
+
+    /// 获取 trade 数据保留天数（默认 7）
+    pub fn retention_days(&self) -> u32 {
+        self.retention_days.unwrap_or(7)
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -106,7 +69,7 @@ pub fn get_config() -> &'static AppConfig {
         }
         Config::builder()
             .add_source(config::File::with_name(&config_path))
-            .add_source(config::Environment::with_prefix("MINGLUAN").try_parsing(true).separator("_"))
+            .add_source(config::Environment::with_prefix("YU").try_parsing(true).separator("_"))
             .build()
             .expect("Failed to build config")
             .try_deserialize::<AppConfig>()
@@ -146,16 +109,6 @@ mod tests {
         assert_eq!(trade_config.batch_size, Some(100), "trade batch_size 应该是 100");
         assert_eq!(trade_config.flush_interval_ms, Some(5000), "trade flush_interval_ms 应该是 5000");
         assert_eq!(trade_config.retention_days, Some(7), "trade retention_days 应该是 7");
-
-        // 验证 depth_update 配置
-        assert!(spot_config.depth_update.is_some(), "depth_update 配置应该存在");
-        let depth_config = spot_config.depth_update.as_ref().unwrap();
-        assert_eq!(depth_config.symbols.len(), 2, "depth_update symbols 应该有 2 个");
-        assert!(depth_config.symbols.contains(&"BTCUSDT".to_string()), "应该包含 BTCUSDT");
-        assert!(depth_config.symbols.contains(&"ETHUSDT".to_string()), "应该包含 ETHUSDT");
-        assert_eq!(depth_config.batch_size, Some(50), "depth batch_size 应该是 50");
-        assert_eq!(depth_config.flush_interval_ms, Some(3000), "depth flush_interval_ms 应该是 3000");
-        assert_eq!(depth_config.retention_days, Some(3), "depth retention_days 应该是 3");
     }
 
     #[test]
@@ -179,64 +132,41 @@ mod tests {
     #[test]
     fn test_spot_config_get_all_symbols() {
         let config = super::SpotWebSocketStreamConfig {
-            trade: Some(super::StreamConfig {
+            trade: Some(super::SpotTradeStreamConfig {
                 enabled: Some(true),
-                symbols: vec!["btcusdt".to_string(), "ETHUSDT".to_string()],
+                symbols: vec!["BTCUSDT".to_string(), "ETHUSDT".to_string()],
                 batch_size: Some(100),
                 flush_interval_ms: Some(5000),
                 retention_days: Some(7),
             }),
-            depth_update: Some(super::StreamConfig {
-                enabled: Some(true),
-                symbols: vec!["ethusdt".to_string(), "BNBUSDT".to_string()],
-                batch_size: Some(50),
-                flush_interval_ms: Some(3000),
-                retention_days: Some(3),
-            }),
         };
 
-        let symbols = config.get_all_symbols();
-        assert_eq!(symbols.len(), 3); // BTCUSDT, ETHUSDT, BNBUSDT (去重)
+        let symbols = config.trade.unwrap().symbols;
+        assert_eq!(symbols.len(), 2); // BTCUSDT, ETHUSDT, BNBUSDT (去重)
         assert!(symbols.contains(&"BTCUSDT".to_string()));
         assert!(symbols.contains(&"ETHUSDT".to_string()));
-        assert!(symbols.contains(&"BNBUSDT".to_string()));
     }
 
     #[test]
     fn test_spot_config_batch_sizes() {
         let config = super::SpotWebSocketStreamConfig {
-            trade: Some(super::StreamConfig {
+            trade: Some(super::SpotTradeStreamConfig {
                 enabled: Some(true),
                 symbols: vec!["BTCUSDT".to_string()],
                 batch_size: Some(200),
                 flush_interval_ms: Some(5000),
                 retention_days: Some(7),
             }),
-            depth_update: Some(super::StreamConfig {
-                enabled: Some(true),
-                symbols: vec!["ETHUSDT".to_string()],
-                batch_size: Some(150),
-                flush_interval_ms: Some(3000),
-                retention_days: Some(3),
-            }),
         };
 
-        assert_eq!(config.trade_batch_size(), 200);
-        assert_eq!(config.depth_batch_size(), 150);
-        assert_eq!(config.flush_interval_ms(), 5000);
+        assert_eq!(config.trade.unwrap().batch_size(), 200);
     }
 
     #[test]
     fn test_spot_config_defaults() {
-        let config = super::SpotWebSocketStreamConfig {
-            trade: None,
-            depth_update: None,
-        };
-
-        assert_eq!(config.trade_batch_size(), 100);
-        assert_eq!(config.depth_batch_size(), 50);
-        assert_eq!(config.flush_interval_ms(), 5000);
-        assert_eq!(config.trade_retention_days(), 7);
-        assert_eq!(config.depth_retention_days(), 3);
+        let config = super::SpotWebSocketStreamConfig { trade: None };
+        let trade_config = config.trade.unwrap();
+        assert_eq!(trade_config.batch_size(), 100);
+        assert_eq!(trade_config.retention_days(), 7);
     }
 }

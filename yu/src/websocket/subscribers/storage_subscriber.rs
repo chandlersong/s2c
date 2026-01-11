@@ -9,7 +9,7 @@ use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamRe
 
 /// 存储订阅者 Actor
 /// 接收 Trade 和 Depth 事件，缓冲并批量写入 DuckDB
-pub struct StorageSubscriberActor {
+pub struct SpotStreamStorageActor {
     config: SpotWebSocketStreamConfig,
     db: DBProvider,
     trade_buffer: Vec<SpotStreamTradeRecordPo>,
@@ -18,9 +18,9 @@ pub struct StorageSubscriberActor {
     flushed_depths: u64,
 }
 
-impl StorageSubscriberActor {
+impl SpotStreamStorageActor {
     pub fn new(config: SpotWebSocketStreamConfig, db: DBProvider) -> Self {
-        StorageSubscriberActor {
+        SpotStreamStorageActor {
             config,
             db,
             trade_buffer: Vec::new(),
@@ -49,7 +49,7 @@ impl StorageSubscriberActor {
         match self.write_trades_to_db() {
             Ok(count) => {
                 self.flushed_trades += count as u64;
-                info!("Successfully flushed {} trade records. Total flushed: {}", count, self.flushed_trades);
+                debug!("Successfully flushed {} trade records. Total flushed: {}", count, self.flushed_trades);
                 self.trade_buffer.clear();
             }
             Err(e) => {
@@ -66,6 +66,7 @@ impl StorageSubscriberActor {
 
         for record in &self.trade_buffer {
             appender.append_row(params![
+                record.id,
                 record.event_time,
                 &record.symbol,
                 record.trade_id,
@@ -82,11 +83,15 @@ impl StorageSubscriberActor {
     }
 }
 
-impl Actor for StorageSubscriberActor {
+impl Actor for SpotStreamStorageActor {
     type Context = Context<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
-        info!("StorageSubscriberActor started");
+        // 设置更大的邮箱容量以处理高频消息
+        // 默认容量是 16，我们增加到 10000 以应对突发流量
+        // TODO: capacity变成可以配置
+        ctx.set_mailbox_capacity(1000);
+        info!("StorageSubscriberActor started with mailbox capacity: 10000");
 
         // 定时刷新缓冲区
         let flush_interval = Duration::from_millis(self.get_flush_interval_ms());
@@ -108,9 +113,9 @@ impl Actor for StorageSubscriberActor {
 }
 
 /// 实现 Supervised trait 支持 Supervisor 启动
-impl actix::Supervised for StorageSubscriberActor {}
+impl actix::Supervised for SpotStreamStorageActor {}
 
-impl Handler<BinanceSpotWebSocketStreamResponse> for StorageSubscriberActor {
+impl Handler<BinanceSpotWebSocketStreamResponse> for SpotStreamStorageActor {
     type Result = ();
 
     fn handle(&mut self, msg: BinanceSpotWebSocketStreamResponse, _ctx: &mut Context<Self>) -> Self::Result {
@@ -132,54 +137,5 @@ impl Handler<BinanceSpotWebSocketStreamResponse> for StorageSubscriberActor {
                 // 目前只处理 Trade 消息，其他类型忽略
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::StreamConfig;
-
-    #[test]
-    fn test_get_trade_batch_size() {
-        let config = SpotWebSocketStreamConfig {
-            trade: Some(StreamConfig {
-                enabled: Some(true),
-                symbols: vec!["BTCUSDT".to_string()],
-                batch_size: Some(200),
-                flush_interval_ms: Some(5000),
-                retention_days: Some(7),
-            }),
-            depth_update: None,
-        };
-
-        assert_eq!(config.trade_batch_size(), 200);
-    }
-
-    #[test]
-    fn test_get_depth_batch_size() {
-        let config = SpotWebSocketStreamConfig {
-            trade: None,
-            depth_update: Some(StreamConfig {
-                enabled: Some(true),
-                symbols: vec!["BTCUSDT".to_string()],
-                batch_size: Some(150),
-                flush_interval_ms: Some(3000),
-                retention_days: Some(3),
-            }),
-        };
-
-        assert_eq!(config.depth_batch_size(), 150);
-    }
-
-    #[test]
-    fn test_default_batch_sizes() {
-        let config = SpotWebSocketStreamConfig {
-            trade: None,
-            depth_update: None,
-        };
-
-        assert_eq!(config.trade_batch_size(), 100);
-        assert_eq!(config.depth_batch_size(), 50);
     }
 }
