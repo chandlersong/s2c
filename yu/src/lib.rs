@@ -10,4 +10,5 @@ pub mod actix_jobs;
 pub mod arrow_flight_server;
 pub mod binance;
 pub mod config;
+pub mod order_book;
 pub mod websocket;

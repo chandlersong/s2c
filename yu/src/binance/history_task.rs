@@ -97,6 +97,9 @@ impl<O: HistoryPO, D: ExchangeDashBoard<TradingSymbol = TradingSymbol>> HistoryD
         let symbols = match self.symbol_type {
             SymbolType::Spot => dashboard.spot_symbols().read().unwrap().clone(),
             SymbolType::Swap => dashboard.swap_symbols().read().unwrap().clone(),
+            _ => {
+                panic!("Not support symbol type");
+            }
         };
 
         let filtered: Vec<(String, u64)> = symbols

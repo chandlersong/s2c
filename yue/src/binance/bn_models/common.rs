@@ -18,8 +18,10 @@ impl ToQueryParams for std::collections::BTreeMap<&str, String> {
 }
 
 pub enum SymbolType {
-    Spot,
-    Swap,
+    Spot,   //现货
+    Swap,   //永续
+    Future, //交割合约
+    Option, //期权
 }
 
 pub struct EmptyQueryParams;
