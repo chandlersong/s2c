@@ -103,6 +103,7 @@ impl Actor for InitActor {
 
     fn started(&mut self, _ctx: &mut Self::Context) {
         info!("InitActor 启动");
+        _ctx.set_mailbox_capacity(1000)
     }
 
     fn stopped(&mut self, _ctx: &mut Self::Context) {
@@ -200,16 +201,20 @@ impl Handler<BufferedDepthUpdate> for InitActor {
     type Result = ();
 
     fn handle(&mut self, msg: BufferedDepthUpdate, _ctx: &mut Context<Self>) -> Self::Result {
-        println!(
+        trace!(
             "[InitActor] 收到BufferedDepthUpdate: symbol={}, first_update_id={}",
             msg.symbol, msg.update.first_update_id
         );
         // 只有正在初始化的symbol才缓存更新
         if let Some(buffer) = self.pending_inits.get_mut(&msg.symbol) {
-            println!("[InitActor] 缓存更新到buffer，当前buffer大小={}", buffer.len());
+            let buff_size = buffer.len();
+            if buff_size > 100 {
+                warn!("[InitActor] 缓存buffer过大，可能失败，当前buffer大小={}", buff_size);
+            }
+
             buffer.push_back(msg.update);
         } else {
-            println!("[InitActor] 没有找到pending_inits的entry，无法缓存");
+            trace!("[InitActor] 没有找到pending_inits的entry，无法缓存");
         }
     }
 }
