@@ -1,5 +1,8 @@
 use crate::duck_db::DBProvider;
 use crate::errors::YuError;
+use arrow::array::{ArrayRef, Float64Array, Int64Array, StringArray, UInt32Array};
+use arrow::datatypes::{DataType, Field, Schema};
+use arrow::record_batch::RecordBatch;
 use arrow_flight::flight_service_server::{FlightService, FlightServiceServer};
 use arrow_flight::utils as flight_utils;
 use arrow_flight::{
@@ -9,6 +12,7 @@ use arrow_flight::{
 use duckdb::params;
 use log::{debug, error, info};
 use prost::bytes::Bytes;
+use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Server;
@@ -20,6 +24,102 @@ use tonic::{Request, Response, Status, Streaming};
 #[derive(Clone)]
 pub struct DuckDBFlightServer {
     db_provider: DBProvider,
+}
+
+// 命令类型枚举
+#[derive(Debug)]
+enum CommandType {
+    Sql(String),
+    Depth(String), // symbol
+}
+
+// 解析 ticket 字符串，区分 SQL 和 Depth 命令
+fn parse_command(ticket_str: &str) -> Result<CommandType, String> {
+    let trimmed = ticket_str.trim();
+
+    if trimmed.starts_with("depth:") {
+        // 提取 symbol 参数：depth:symbol=BTCUSDT
+        let params_str = &trimmed[6..]; // 去掉 "depth:" 前缀
+        if let Some(start) = params_str.find("symbol=") {
+            let symbol_part = &params_str[start + 7..]; // 去掉 "symbol="
+            let symbol = symbol_part.split('&').next().unwrap_or(symbol_part).to_uppercase();
+            if symbol.is_empty() {
+                return Err("Empty symbol in depth command".to_string());
+            }
+            Ok(CommandType::Depth(symbol))
+        } else {
+            Err("Missing symbol parameter in depth command".to_string())
+        }
+    } else {
+        // 默认作为 SQL 命令
+        Ok(CommandType::Sql(trimmed.to_string()))
+    }
+}
+
+// 生成模拟深度数据的 RecordBatch
+fn generate_mock_depth_data(symbol: &str) -> Result<RecordBatch, String> {
+    // Schema: [symbol, market_type, side, price, qty, level, update_id, ts]
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("symbol", DataType::Utf8, false),
+        Field::new("market_type", DataType::Utf8, false),
+        Field::new("side", DataType::Utf8, false),
+        Field::new("price", DataType::Float64, false),
+        Field::new("qty", DataType::Float64, false),
+        Field::new("level", DataType::UInt32, false),
+        Field::new("update_id", DataType::Int64, false),
+        Field::new("ts", DataType::Int64, false),
+    ]));
+
+    // 生成模拟数据：5档 bids + 5档 asks
+    let mut symbols = vec![];
+    let mut market_types = vec![];
+    let mut sides = vec![];
+    let mut prices = vec![];
+    let mut qtys = vec![];
+    let mut levels = vec![];
+    let mut update_ids = vec![];
+    let mut tss = vec![];
+
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+
+    let base_price = 42000.0; // 模拟比特币价格
+
+    // 生成 5 档 bids（降序）
+    for i in 1..=5 {
+        symbols.push(symbol.to_string());
+        market_types.push("spot".to_string());
+        sides.push("bid".to_string());
+        prices.push(base_price - (i as f64) * 100.0);
+        qtys.push(0.5 + (i as f64) * 0.1);
+        levels.push(i as u32);
+        update_ids.push(1000000 + i as i64);
+        tss.push(now);
+    }
+
+    // 生成 5 档 asks（升序）
+    for i in 1..=5 {
+        symbols.push(symbol.to_string());
+        market_types.push("spot".to_string());
+        sides.push("ask".to_string());
+        prices.push(base_price + (i as f64) * 100.0);
+        qtys.push(0.5 + (i as f64) * 0.1);
+        levels.push(i as u32);
+        update_ids.push(1000000 + 10 + i as i64);
+        tss.push(now);
+    }
+
+    let columns: Vec<ArrayRef> = vec![
+        Arc::new(StringArray::from(symbols)),
+        Arc::new(StringArray::from(market_types)),
+        Arc::new(StringArray::from(sides)),
+        Arc::new(Float64Array::from(prices)),
+        Arc::new(Float64Array::from(qtys)),
+        Arc::new(UInt32Array::from(levels)),
+        Arc::new(Int64Array::from(update_ids)),
+        Arc::new(Int64Array::from(tss)),
+    ];
+
+    RecordBatch::try_new(schema, columns).map_err(|e| format!("Failed to create RecordBatch: {}", e))
 }
 
 impl DuckDBFlightServer {
@@ -47,12 +147,27 @@ impl FlightService for DuckDBFlightServer {
         let descriptor = request.into_inner();
         debug!("Got flight info: {:?}", descriptor);
 
-        // 构造一个简单的 schema（如 int32 字段）
+        // 从 descriptor 中提取命令字符串（通常在 cmd 字段或 path 中）
+        let command_str = if !descriptor.path.is_empty() {
+            descriptor.path.join("/")
+        } else {
+            String::new()
+        };
+
+        info!(
+            "get_flight_info command: {}",
+            if command_str.is_empty() { "default" } else { &command_str }
+        );
+
         // 构造一个 FlightEndpoint，包含一个 Ticket 和地址
+        let ticket_bytes = if command_str.is_empty() {
+            Bytes::from("simple_ticket")
+        } else {
+            Bytes::from(command_str.clone())
+        };
+
         let endpoint = arrow_flight::FlightEndpoint {
-            ticket: Some(Ticket {
-                ticket: Bytes::from("simple_ticket"),
-            }),
+            ticket: Some(Ticket { ticket: ticket_bytes }),
             // 构造 Location 直接通过字段（generated code 中通常为 `uri: String`）
             location: vec![arrow_flight::Location {
                 uri: "grpc+tcp://localhost:50051".to_string(),
@@ -62,9 +177,23 @@ impl FlightService for DuckDBFlightServer {
             // app_metadata 在生成的类型是 Bytes（非 Option），使用空 Bytes
             app_metadata: Bytes::new(),
         };
-        // 构造 FlightInfo，填充 schema、descriptor、endpoint 等字段（将 Vec<u8> 转为 Bytes）
+
+        // 根据命令类型判断并记录日志
+        match parse_command(&command_str) {
+            Ok(CommandType::Depth(_)) => {
+                info!("Depth query detected, schema will be returned in do_get");
+            }
+            Ok(CommandType::Sql(_)) => {
+                info!("SQL query detected, schema will be returned in do_get");
+            }
+            Err(e) => {
+                info!("Command parse error: {}", e);
+            }
+        }
+
+        // 构造 FlightInfo，schema 在 do_get 中动态生成
         let flight_info = FlightInfo {
-            schema: Bytes::from(Vec::new()),
+            schema: Bytes::new(), // schema 在 do_get 中返回
             flight_descriptor: Some(descriptor),
             endpoint: vec![endpoint],
             total_records: -1,
@@ -97,53 +226,77 @@ impl FlightService for DuckDBFlightServer {
         let (tx, rx) = mpsc::channel::<Result<FlightData, Status>>(32);
         let tx_clone = tx.clone();
 
-        let db_provider = self.db_provider.clone();
+        // 解析命令
+        match parse_command(&ticket_str) {
+            Ok(CommandType::Depth(symbol)) => {
+                // 处理 Depth 命令（模拟数据）
+                info!("Processing depth command for symbol: {}", symbol);
+                tokio::task::spawn_blocking(move || {
+                    let result: Result<(), String> = (|| {
+                        let batch = generate_mock_depth_data(&symbol)?;
+                        let schema = batch.schema();
+                        let flight_data_vec = flight_utils::batches_to_flight_data(&schema, vec![batch])
+                            .map_err(|e| format!("Failed to convert batches to FlightData: {}", e))?;
 
-        // 在阻塞线程池中执行同步的 DB/Arrow 操作，避免把非-Send 的连接移入 async future
-        tokio::task::spawn_blocking(move || {
-            // 将所有内部错误映射为字符串，最后统一发送到 channel
-            let result: Result<(), String> = (|| {
-                // 在这里再 acquire，连接只在阻塞线程里使用
-                let conn = db_provider.acquire().map_err(|e| format!("DB acquire error: {}", e))?;
+                        for d in flight_data_vec {
+                            if let Err(send_err) = tx_clone.blocking_send(Ok(d)) {
+                                return Err(format!("Failed to send FlightData: {}", send_err));
+                            }
+                        }
+                        Ok(())
+                    })();
 
-                // 使用 ticket_str 作为 SQL（注意：这里假设 ticket 是一条 SQL；如果你的协议不同，请在外面解析再传入）
-                let mut stmt = conn.prepare(&ticket_str).map_err(|e| format!("Prepare error: {}", e))?;
-                let mut arrow_result = stmt.query_arrow(params![]).map_err(|e| format!("Query arrow error: {}", e))?;
-
-                // 将 Arrow 结果收集为 RecordBatch
-                let mut batches = Vec::new();
-                while let Some(batch) = arrow_result.next() {
-                    batches.push(batch);
-                }
-
-                // 从结果里获取 schema
-                let schema = arrow_result.get_schema();
-
-                // 将 RecordBatch 转为 FlightData（可能返回错误）
-                let flight_data_vec =
-                    flight_utils::batches_to_flight_data(&schema, batches).map_err(|e| format!("Failed to convert batches to FlightData: {}", e))?;
-
-                // 发送每一条 FlightData 到异步接收端；如果发送失败，说明接收端已关闭（或出现其他问题），直接停止
-                for d in flight_data_vec {
-                    if let Err(send_err) = tx_clone.blocking_send(Ok(d)) {
-                        return Err(format!("Failed to send FlightData to receiver: {}", send_err));
+                    if let Err(err_msg) = result {
+                        let status = Status::internal(err_msg.clone());
+                        let _ = tx_clone.blocking_send(Err(status));
+                        error!("Depth command failed: {}", err_msg);
                     }
-                }
-
-                Ok(())
-            })();
-
-            // 如果有错误，尝试把错误作为 Status 发送给接收端，然后记录日志
-            if let Err(err_msg) = result {
-                let status = Status::internal(err_msg.clone());
-                // best-effort: 不要让发送错误导致 panic
-                let _ = tx_clone.blocking_send(Err(status));
-                log::error!("do_get failed: {}", err_msg);
+                    drop(tx_clone);
+                });
             }
+            Ok(CommandType::Sql(sql)) => {
+                // 处理 SQL 命令
+                let db_provider = self.db_provider.clone();
+                info!("Processing SQL command");
+                tokio::task::spawn_blocking(move || {
+                    let result: Result<(), String> = (|| {
+                        let conn = db_provider.acquire().map_err(|e| format!("DB acquire error: {}", e))?;
 
-            // 确保关闭发送端，这会让 ReceiverStream 终止
-            drop(tx_clone);
-        });
+                        let mut stmt = conn.prepare(&sql).map_err(|e| format!("Prepare error: {}", e))?;
+                        let mut arrow_result = stmt.query_arrow(params![]).map_err(|e| format!("Query arrow error: {}", e))?;
+
+                        let mut batches = Vec::new();
+                        while let Some(batch) = arrow_result.next() {
+                            batches.push(batch);
+                        }
+
+                        let schema = arrow_result.get_schema();
+
+                        let flight_data_vec = flight_utils::batches_to_flight_data(&schema, batches)
+                            .map_err(|e| format!("Failed to convert batches to FlightData: {}", e))?;
+
+                        for d in flight_data_vec {
+                            if let Err(send_err) = tx_clone.blocking_send(Ok(d)) {
+                                return Err(format!("Failed to send FlightData to receiver: {}", send_err));
+                            }
+                        }
+
+                        Ok(())
+                    })();
+
+                    if let Err(err_msg) = result {
+                        let status = Status::internal(err_msg.clone());
+                        let _ = tx_clone.blocking_send(Err(status));
+                        error!("SQL command failed: {}", err_msg);
+                    }
+
+                    drop(tx_clone);
+                });
+            }
+            Err(err_msg) => {
+                return Err(Status::invalid_argument(format!("Command parsing failed: {}", err_msg)));
+            }
+        }
 
         Ok(Response::new(ReceiverStream::new(rx)))
     }
@@ -196,11 +349,94 @@ pub async fn start_flight_server(addr: &str) -> Result<tokio::sync::oneshot::Sen
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::duck_db::DBProvider;
     use crate::errors::YuError;
     use crate::utils::initial_memory_db;
     use arrow_flight::utils as flight_utils;
     use duckdb::params;
+
+    #[test]
+    fn test_parse_depth_command() {
+        // 测试深度命令解析
+        let cmd = "depth:symbol=BTCUSDT&market_type=spot&side=both&levels=20";
+        match parse_command(cmd) {
+            Ok(CommandType::Depth(symbol)) => {
+                assert_eq!(symbol, "BTCUSDT");
+                println!("✓ 深度命令解析成功: {}", symbol);
+            }
+            _ => panic!("深度命令解析失败"),
+        }
+    }
+
+    #[test]
+    fn test_parse_depth_command_lowercase_symbol() {
+        // 测试小写 symbol 转大写
+        let cmd = "depth:symbol=ethusdt";
+        match parse_command(cmd) {
+            Ok(CommandType::Depth(symbol)) => {
+                assert_eq!(symbol, "ETHUSDT");
+                println!("✓ 小写 symbol 正确转大写: {}", symbol);
+            }
+            _ => panic!("深度命令解析失败"),
+        }
+    }
+
+    #[test]
+    fn test_parse_sql_command() {
+        // 测试 SQL 命令解析
+        let cmd = "SELECT * FROM users";
+        match parse_command(cmd) {
+            Ok(CommandType::Sql(sql)) => {
+                assert_eq!(sql, "SELECT * FROM users");
+                println!("✓ SQL 命令解析成功: {}", sql);
+            }
+            _ => panic!("SQL 命令解析失败"),
+        }
+    }
+
+    #[test]
+    fn test_parse_depth_missing_symbol() {
+        // 测试缺失 symbol 参数
+        let cmd = "depth:market_type=spot";
+        match parse_command(cmd) {
+            Err(msg) => {
+                assert!(msg.contains("Missing symbol"));
+                println!("✓ 正确捕获缺失 symbol 的错误: {}", msg);
+            }
+            _ => panic!("应该返回缺失参数错误"),
+        }
+    }
+
+    #[test]
+    fn test_generate_mock_depth_data() {
+        // 测试模拟深度数据生成
+        match generate_mock_depth_data("BTCUSDT") {
+            Ok(batch) => {
+                let schema = batch.schema();
+                let num_fields = schema.fields().len();
+                let num_rows = batch.num_rows();
+
+                assert_eq!(num_fields, 8, "Schema 应该有 8 个字段");
+                assert_eq!(num_rows, 10, "应该生成 10 行数据（5 档 bids + 5 档 asks）");
+
+                // 验证字段名称
+                let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+                assert_eq!(field_names[0], "symbol");
+                assert_eq!(field_names[1], "market_type");
+                assert_eq!(field_names[2], "side");
+                assert_eq!(field_names[3], "price");
+                assert_eq!(field_names[4], "qty");
+                assert_eq!(field_names[5], "level");
+                assert_eq!(field_names[6], "update_id");
+                assert_eq!(field_names[7], "ts");
+
+                println!("✓ 模拟深度数据生成成功: {} 行, {} 列", num_rows, num_fields);
+                println!("  Schema: {:?}", field_names);
+            }
+            Err(e) => panic!("生成模拟数据失败: {}", e),
+        }
+    }
 
     #[tokio::test]
     async fn test_initial_flight_server() -> Result<(), YuError> {
