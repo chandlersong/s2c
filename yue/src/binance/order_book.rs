@@ -591,6 +591,7 @@ mod tests {
     use li::tools::logs::setup_logger_all;
     use rust_decimal::Decimal;
     use serde_json::json;
+    use serial_test::serial;
     use std::sync::mpsc;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -1100,6 +1101,7 @@ mod tests {
     /// - OrderBook包含正确的symbol和last_update_id
     /// - service收到了InitComplete消息
     #[actix::test]
+    #[serial]
     async fn test_init_actor_handler_normal_flow() {
         let _ = setup_logger_all(None);
         // 1. 初始化http client和mockserver
@@ -1196,6 +1198,7 @@ mod tests {
     /// - 只发起一次API请求
     /// - 只收到一次InitComplete消息
     #[actix::test]
+    #[serial]
     async fn test_init_actor_handler_duplicate_request() {
         let _ = setup_logger_all(None);
         init_http_client(None);
@@ -1266,6 +1269,7 @@ mod tests {
     /// - 不会收到InitComplete消息
     /// - 超时后测试正常结束
     #[actix::test]
+    #[serial]
     async fn test_init_actor_handler_api_failure() {
         let _ = setup_logger_all(None);
         init_http_client(None);
@@ -1311,6 +1315,7 @@ mod tests {
     /// 预期结果：
     /// - 不会收到InitComplete消息
     #[actix::test]
+    #[serial]
     async fn test_init_actor_handler_invalid_depth_data() {
         let _ = setup_logger_all(None);
         init_http_client(None);
@@ -1361,6 +1366,7 @@ mod tests {
     /// - OrderBook应用了缓存的更新
     /// - local_update_id被更新为最新的update id
     #[actix::test]
+    #[serial]
     async fn test_init_actor_handler_with_buffered_updates() {
         let _ = setup_logger_all(None);
         init_http_client(None);
@@ -1448,6 +1454,7 @@ mod tests {
     /// - 每个symbol的OrderBook都正确
     /// - 互不干扰
     #[actix::test]
+    #[serial]
     async fn test_init_actor_handler_multiple_symbols() {
         let _ = setup_logger_all(None);
         init_http_client(None);

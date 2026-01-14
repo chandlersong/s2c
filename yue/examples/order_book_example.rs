@@ -18,6 +18,7 @@ use yue::websocket::client::{SendTextMessage, SubscribeToEvents, WebSocketClient
 use yue::websocket::event_bus::WsMessageBus;
 
 /// 打印订单簿快照的订阅者 Actor
+#[derive(Debug)]
 pub struct OrderBookPrinterActor {
     print_count: usize,
 }
@@ -32,7 +33,7 @@ impl Actor for OrderBookPrinterActor {
     type Context = Context<Self>;
 
     fn started(&mut self, _ctx: &mut Self::Context) {
-        info!("OrderBookPrinterActor 已启动");
+        info!("OrderBookPrinterActor 已启动: {:?}", self);
     }
 }
 
@@ -78,7 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut special_log = HashMap::new();
     special_log.insert("yue".to_string(), LevelFilter::Info);
     special_log.insert("li".to_string(), LevelFilter::Info);
-    special_log.insert("order_book_example".to_string(), LevelFilter::Info);
+    special_log.insert("actix".to_string(), LevelFilter::Info);
     setup_logger(Some(LevelFilter::Warn), special_log)?;
 
     info!("========== OrderBookService 示例 ==========");
