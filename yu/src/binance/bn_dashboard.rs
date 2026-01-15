@@ -1,11 +1,11 @@
 use crate::actix_jobs::AsyncRepeatTask;
 use crate::errors::YuError;
 use crate::exchange::ExchangeDashBoard;
-use actix::{Actor, Context, Handler, Message};
+use actix::{Actor, Addr, Context, Handler, Message};
 use async_trait::async_trait;
 use log::error;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use yue::binance::history_data::{get_trading_spot_symbols, get_trading_swap_symbols, CONTRACT_TYPE_PERPETUAL};
 use yue::binance::order_book::{OrderBook, OrderBookSnapshotMsg};
 
@@ -114,6 +114,39 @@ pub struct QueryBatchDepths {
     pub symbols: Vec<String>,
 }
 
+/// 全局MarketDepthDashBoard单例存储
+static MARKET_DEPTH_DASHBOARD: OnceLock<Addr<MarketDepthDashBoard>> = OnceLock::new();
+
+/// 初始化全局MarketDepthDashBoard单例
+/// 应该在应用启动时调用一次
+pub fn init_market_depth_dashboard(addr: Addr<MarketDepthDashBoard>) -> Result<(), Addr<MarketDepthDashBoard>> {
+    MARKET_DEPTH_DASHBOARD.set(addr)
+}
+
+/// 获取全局MarketDepthDashBoard单例
+/// 如果未初始化，返回错误
+pub fn get_market_depth_dashboard() -> Result<Addr<MarketDepthDashBoard>, YuError> {
+    MARKET_DEPTH_DASHBOARD
+        .get()
+        .cloned()
+        .ok_or_else(|| YuError::CustomError("MarketDepthDashBoard未初始化，请先调用init_market_depth_dashboard".to_string()))
+}
+
+/// 市场深度仪表盘，负责存储和查询订单簿快照。
+///
+/// 这个Actor接收来自OrderBookService的订单簿快照，并提供同步查询接口。
+///
+/// 性能设计说明：
+/// - 与OrderBookService保持分离的Actor线程，避免互相阻塞
+/// - OrderBookService处理高频深度更新（websocket实时推送）
+/// - MarketDepthDashBoard处理查询请求（纯读操作）
+/// - 通过Arc<OrderBook>共享数据，无复制成本
+///
+/// 不推荐合并的原因：
+/// 1. 深度更新是高频消息（每秒数千条），查询是阻塞操作
+/// 2. 如果合并，查询请求会阻塞深度更新处理，导致订单簿更新延迟
+/// 3. 在高交易量场景下，这个延迟会积累，最坏情况下从毫秒级增加到秒级
+/// 4. 分离设计允许独立优化：OrderBookService专注写操作，MarketDepthDashBoard专注读操作
 pub struct MarketDepthDashBoard {
     depths: HashMap<String, Arc<OrderBook>>,
 }

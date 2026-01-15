@@ -1,7 +1,7 @@
 use crate::actix_jobs::{AsyncRepeatTask, CronActor};
 use crate::binance::binance_consts::BinanceTables::{SpotKline, SwapFundingRate, SwapKline};
 use crate::binance::binance_consts::ALL_BINANCE_TABLES;
-use crate::binance::bn_dashboard::BinanceDashboard;
+use crate::binance::bn_dashboard::{init_market_depth_dashboard, BinanceDashboard, MarketDepthDashBoard};
 use crate::binance::history_task::{DuckDBHistoryDataWriter, FundingRatePo, InitialHistoryTask, KlinePo};
 use crate::config::get_config;
 use crate::duck_db::DBProvider;
@@ -20,6 +20,7 @@ use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_models::swap_restful::FundingRate;
 use yue::binance::bn_restful_commands::{SPOT_KLINE_HISTORY_COMMAND, SWAP_FUNDING_RATE_COMMAND, SWAP_KLINE_HISTORY_COMMAND};
 use yue::binance::history_data::{CommonParam, SimpleHistoryFetcher};
+use yue::binance::order_book::{OrderBookService, Subscribe as OrderBookSubscribe};
 use yue::binance::parsers::BinanceSpotStreamParser;
 use yue::websocket::client::{SendTextMessage, SubscribeToEvents, WebSocketClient, WebSocketEvent};
 use yue::websocket::event_bus::{Subscribe, WsMessageBus};
@@ -45,6 +46,7 @@ pub async fn start_bn_jobs() -> Result<(), YuError> {
 ///    - spot stream
 /// 2. 启动WsMessageBus，订阅websocket客户端的事件，分发给不同的订阅者
 /// 3. SpotStreamStorageActor，订阅启动WsMessageBus信息
+/// 4，根据配置信息，启动一个专门管理spot的OrderBookService
 async fn start_websocket_job() -> Result<(), YuError> {
     let config = get_config();
 
@@ -97,6 +99,25 @@ async fn start_websocket_job() -> Result<(), YuError> {
     let bus = WsMessageBus::new(BinanceSpotStreamParser).start();
     info!("✓ WsMessageBus 已启动");
 
+    // 步骤2.5: 启动 OrderBookService 和 MarketDepthDashBoard
+    let order_book_service = OrderBookService::new().with_market_depth(20).start();
+    info!("✓ OrderBookService 已启动 (market_depth=20)");
+
+    let market_depth_dashboard = MarketDepthDashBoard::new().start();
+    info!("✓ MarketDepthDashBoard 已启动");
+
+    // 初始化全局MarketDepthDashBoard单例
+    if let Err(_) = init_market_depth_dashboard(market_depth_dashboard.clone()) {
+        info!("⚠ MarketDepthDashBoard已初始化过，跳过重复初始化");
+    }
+    info!("✓ 全局MarketDepthDashBoard单例已初始化");
+
+    // MarketDepthDashBoard 订阅 OrderBookService 的订单簿快照
+    order_book_service.do_send(OrderBookSubscribe {
+        recipient: market_depth_dashboard.recipient(),
+    });
+    info!("✓ MarketDepthDashBoard 已订阅 OrderBookService");
+
     // 步骤3: 启动 SpotStreamStorageActor
     let storage_actor = SpotStreamStorageActor::new(spot_config.clone(), DBProvider::default()).start();
     info!("✓ SpotStreamStorageActor 已启动");
@@ -106,6 +127,12 @@ async fn start_websocket_job() -> Result<(), YuError> {
         subscriber: storage_actor.recipient(),
     });
     info!("✓ SpotStreamStorageActor 已订阅 WsMessageBus");
+
+    // OrderBookService 订阅 WsMessageBus 的深度更新
+    bus.do_send(Subscribe {
+        subscriber: order_book_service.recipient(),
+    });
+    info!("✓ OrderBookService 已订阅 WsMessageBus");
 
     // 订阅 WebSocketClient 事件到 WsMessageBus
     client_addr
@@ -142,6 +169,52 @@ async fn start_websocket_job() -> Result<(), YuError> {
             .await
             .map_err(|e| YuError::CustomError(format!("发送订阅消息失败: {}", e)))??;
         info!("✓ 交易流订阅请求已发送");
+    }
+
+    // 根据配置订阅深度流
+    if let Some(depth_config) = &spot_config.depth {
+        if depth_config.enabled() && !depth_config.symbols.is_empty() {
+            let mut depth_params = Vec::new();
+            let update_speed = depth_config.update_speed();
+            let levels = depth_config.levels();
+
+            for symbol in &depth_config.symbols {
+                // 转换为小写并添加深度流后缀
+                // 格式: btcusdt@depth20@100ms 或 btcusdt@depth@100ms
+                let stream = if levels > 0 && levels <= 20 {
+                    format!("{}@depth{}@{}", symbol.to_lowercase(), levels, update_speed)
+                } else {
+                    format!("{}@depth@{}", symbol.to_lowercase(), update_speed)
+                };
+                depth_params.push(stream);
+            }
+
+            if !depth_params.is_empty() {
+                info!(
+                    "📤 订阅深度流: {:?} (update_speed={}, levels={})",
+                    depth_params,
+                    depth_config.update_speed(),
+                    depth_config.levels()
+                );
+                let depth_subscribe_request = StreamCommandRequest {
+                    method: WS_SUBSCRIBE_COMMAND.to_string(),
+                    params: depth_params,
+                    id: 2,
+                };
+
+                client_addr
+                    .send(SendTextMessage {
+                        text: to_string(&depth_subscribe_request).map_err(|e| YuError::CustomError(format!("序列化深度订阅请求失败: {}", e)))?,
+                    })
+                    .await
+                    .map_err(|e| YuError::CustomError(format!("发送深度订阅消息失败: {}", e)))??;
+                info!("✓ 深度流订阅请求已发送");
+            }
+        } else {
+            info!("binance_websocket.spot.depth 未启用或没有配置symbols，跳过深度流订阅");
+        }
+    } else {
+        info!("binance_websocket.spot.depth 配置未启用，跳过深度流订阅");
     }
 
     Ok(())
