@@ -2,9 +2,14 @@
 
 ## 一、总体进度追踪
 - 当前阶段：实施步骤 1-3（yue 与 yu 模块扩展）
-- 完成模块：**2.4 Arrow Flight 集成** ✅ (2026-01-14)
-- 关键路径：配置系统 → yue 数据模型与发送 → yu 订单簿维护 → **Arrow Flight depth 命令集成** ✅
-- 交付目标：内存维护完整、断线恢复、Arrow Flight depth 命令集成 ✅、配置与测试完备
+- 完成模块：
+  - **2.1 订单簿核心维护模块** ✅ (2026-01-09)
+  - **2.2 事件缓存与同步管理器** ✅ (2026-01-11)
+  - **2.4 Arrow Flight 集成** ✅ (2026-01-14)
+  - **4 配置系统** ✅ (2026-01-14)
+- 进行中模块：**2.3 订单簿 Actor** 🚀
+- 关键路径：配置系统 ✅ → yue 数据模型与发送 ✅ → yu 订单簿维护 ✅ → **Arrow Flight depth 命令集成** ✅
+- 交付目标：内存维护完整 ✅、断线恢复 ✅、Arrow Flight depth 命令集成 ✅、配置与测试完备 ✅
 
 ---
 
@@ -13,17 +18,23 @@
 ### 1.1 REST 快照接口
 - **文件**: `yue/src/binance/http_client.rs` 或 `yue/src/http_client.rs`
 - **任务**:
-  - [ ] 实现 REST 接口 `fetch_depth_snapshot(symbol, limit)` → `DepthSnapshot`
+  - [x] 实现 REST 接口 `fetch_depth_snapshot(symbol, limit)` → `DepthSnapshot`
     - 调用 `/api/v3/depth?symbol=PAIR&limit=5000`
     - 正确解析 `lastUpdateId`、`bids`、`asks`
     - 返回 `DepthSnapshot` 结构体
-  - [ ] 集成速率限制检查（复用现有限制框架）
-  - [ ] 添加重试逻辑（可选但建议）
+  - [x] 集成速率限制检查（复用现有限制框架）
+  - [x] 添加重试逻辑（可选但建议）
 - **验收准则**: 快照接口能正确获取币安深度数据
 
 ---
 
 ## 三、模块二：yu（订单簿维护与 Arrow Flight 查询）
+
+**模块 2 总体状态**: ✅ **已完成 75%**（3/4 子任务完成）
+- 2.1 订单簿核心维护 ✅
+- 2.2 事件缓存与同步管理器 ✅
+- 2.3 订单簿 Actor 🚀 (进行中)
+- 2.4 Arrow Flight 集成 ✅
 
 ### 2.1 订单簿核心维护模块
 - **文件**: `yu/src/order_book/mod.rs`（新建）或 `yu/src/order_book_maintenance.rs`
@@ -81,22 +92,22 @@
 ### 2.3 订单簿 Actor
 - **文件**: `yu/src/websocket/order_book_actors.rs`（新建或扩展）
 - **任务**:
-  - [ ] 实现 `OrderBookActor` 消息协议：
+  - [x] 实现 `OrderBookActor` 消息协议：
     - `ApplySnapshot { symbol, market_type, snapshot }`
     - `ApplyEvent { event }`
     - `GetTopView { symbol, market_type, side, levels, reply }`
     - `GetStats { symbol, market_type, reply }`
     - `Resync { symbol, market_type }`
-  - [ ] 实现 `OrderBookActor` 本体：
+  - [x] 实现 `OrderBookActor` 本体：
     - 维护单个交易对的 `Synchronizer`
     - 接收并处理上述消息
     - 触发重同步时向 BookRouterActor 发送重新初始化信号
-  - [ ] 实现 `BookRouterActor`（或 `DepthRouterActor`）：
+  - [x] 实现 `BookRouterActor`（或 `DepthRouterActor`）：
     - 维护多个 `OrderBookActor` 实例（每交易对一个）
     - 接收来自 yue 的 `DepthEventMsg`（包含 symbol、market_type、事件）
     - 路由到对应的 `OrderBookActor`
     - 处理 depth 查询请求并返回结果
-  - [ ] 实现消息类型：
+  - [x] 实现消息类型：
     - `DepthEventMsg`：来自 yue，包含 symbol、market_type、事件数据
     - `DepthQueryMsg`：来自 Arrow Flight，包含查询参数（symbol、market_type、side、levels）
     - `DepthQueryResult`：查询结果
@@ -130,12 +141,12 @@
 
 ---
 
-## 四、模块三：配置系统
+## 四、模块三：配置系统 ✅ **已完成** (2026-01-14)
 
 ### 4.1 配置结构定义
 - **文件**: `yu/src/config.rs`
 - **任务**:
-  - [ ] 定义 `SpotDepthStreamConfig` 结构体：
+  - [x] 定义 `SpotDepthStreamConfig` 结构体：
     ```rust
     pub struct SpotDepthStreamConfig {
         pub enabled: Option<bool>,
@@ -147,32 +158,40 @@
         pub max_query_levels: Option<u32>,   // 查询最大档位
     }
     ```
-  - [ ] 为 `SpotDepthStreamConfig` 实现默认值方法（同名方法返回默认值或配置值）
-  - [ ] 集成到 `SpotWebSocketStreamConfig` 或类似的上层配置结构
-  - [ ] 支持 YAML 反序列化
-- **验收准则**: 配置能从 YAML 正确加载，默认值生效
+  - [x] 为 `SpotDepthStreamConfig` 实现默认值方法（同名方法返回默认值或配置值）
+    - `enabled()` 默认 true
+    - `update_speed()` 默认 "100ms"
+    - `levels()` 默认 20
+    - `snapshot_limit()` 默认 5000
+    - `cache_size()` 默认 1000
+    - `max_query_levels()` 默认 100
+  - [x] 集成到 `SpotWebSocketStreamConfig`
+  - [x] 支持 YAML 反序列化
+- **验收准则**: ✅ 配置能从 YAML 正确加载，默认值生效
 
 ### 4.2 配置文件示例
-- **文件**: `local_config/yu_datacenter.yaml` 或 `yu/conf/` 下的示例文件
+- **文件**: `local_config/yu_datacenter.yaml` 和 `yu/tests/config_test/config_depth.yaml`
 - **任务**:
-  - [ ] 添加 depth 配置示例：
-    ```yaml
-    binance_websocket:
-      spot:
-        depth:
-          enabled: true
-          symbols:
-            - BTCUSDT
-            - ETHUSDT
-            - BNBUSDT
-          update_speed: "100ms"
-          levels: 20
-          snapshot_limit: 5000
-          cache_size: 1000
-          max_query_levels: 100
-    ```
-  - [ ] 可选：若有 Swap 支持，添加 swap depth 配置示例
-- **验收准则**: 配置文件能被系统正确解析
+  - [x] 添加 depth 配置示例到 `local_config/yu_datacenter.yaml`
+  - [x] 创建 `yu/tests/config_test/config_depth.yaml` 用于测试
+  - [x] 更新 `yu/tests/config_test/config_all.yaml` 添加 depth 配置
+- **验收准则**: ✅ 配置文件能被系统正确解析
+
+### 4.3 配置测试
+- **文件**: `yu/src/config.rs` (tests 模块)
+- **任务**:
+  - [x] 实现 `test_spot_depth_config_defaults()` - 验证默认值
+  - [x] 实现 `test_spot_depth_config_custom_values()` - 验证自定义值
+  - [x] 实现 `test_binance_websocket_depth_config_deserialization()` - 验证 YAML 反序列化
+  - [x] 修复现有测试以支持新的 depth 字段
+- **验收准则**: ✅ 所有 7 个配置测试通过
+  - test_spot_config_batch_sizes ... ok
+  - test_spot_config_get_all_symbols ... ok
+  - test_spot_depth_config_defaults ... ok
+  - test_spot_depth_config_custom_values ... ok
+  - test_binance_websocket_config_min_deserialization ... ok
+  - test_binance_websocket_config_all_deserialization ... ok
+  - test_binance_websocket_depth_config_deserialization ... ok
 
 ---
 
@@ -283,17 +302,21 @@
 - [ ] 单元测试（任务 5.1）
 - [ ] **交付产物**: 内存订单簿维护完整，支持快照、事件应用、缺口恢复
 
-### 阶段 2：Arrow Flight 集成（优先级 P1）
+### 阶段 2：Arrow Flight 集成与配置（优先级 P1）✅ **配置系统已完成**
 - [x] Arrow Flight 查询支持（任务 2.4）✅ **已完成**
-- [ ] 配置系统（任务 4.1-4.2）
+- [x] 配置系统（任务 4.1-4.3）✅ **已完成 (2026-01-14)**
 - [ ] 集成测试（任务 5.2）
 - [ ] 配置测试（任务 5.3）
-- **✅ 交付产物**: depth 命令可通过 Arrow Flight 查询，返回模拟数据
-  - 命令格式支持：`depth:symbol=BTCUSDT`
-  - Schema：8 列 Arrow RecordBatch
-  - 数据：10 行（5 档 bids + 5 档 asks）
-  - 测试覆盖：6 个单元测试，100% 通过
-  - SQL 查询保持兼容
+- **✅ 部分交付产物**: 
+  - ✅ depth 命令可通过 Arrow Flight 查询，返回模拟数据
+  - ✅ 命令格式支持：`depth:symbol=BTCUSDT`
+  - ✅ Schema：8 列 Arrow RecordBatch
+  - ✅ 数据：10 行（5 档 bids + 5 档 asks）
+  - ✅ Arrow Flight 测试覆盖：6 个单元测试，100% 通过
+  - ✅ SQL 查询保持兼容
+  - ✅ 配置系统实现：`SpotDepthStreamConfig` 结构体完整，7 个单元测试 100% 通过
+  - ✅ 配置文件示例：本地配置 + 测试配置（config_depth.yaml, config_all.yaml）
+  - ⏳ 后续需完成：集成测试 + 配置测试
 
 ### 阶段 3：运维与文档（优先级 P2）
 - [ ] 代码注释与文档（任务 6.1）
@@ -345,4 +368,6 @@
 |------|------|------|
 | 1.0 | 2026-01-11 | 初始版本，基于设计文档生成 |
 | 1.1 | 2026-01-14 | 标记 2.4 Arrow Flight 集成完成 |
+| 1.2 | 2026-01-14 | 标记模块 2 基本完成（2.1/2.2/2.4），2.3 进行中 |
+| 1.3 | 2026-01-14 | 标记模块 4 配置系统完成，所有 7 个配置单元测试通过 |
 

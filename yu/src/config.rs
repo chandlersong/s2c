@@ -13,6 +13,50 @@ pub struct BinanceWebSocketConfig {
 #[derive(Deserialize, Debug, Clone)]
 pub struct SpotWebSocketStreamConfig {
     pub trade: Option<SpotTradeStreamConfig>,
+    pub depth: Option<SpotDepthStreamConfig>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct SpotDepthStreamConfig {
+    pub enabled: Option<bool>,
+    pub symbols: Vec<String>,
+    pub update_speed: Option<String>,  // "100ms" 或 "1000ms"
+    pub levels: Option<u32>,           // 5/10/20/none
+    pub snapshot_limit: Option<u32>,   // 1000/5000
+    pub cache_size: Option<usize>,     // 事件缓存上限
+    pub max_query_levels: Option<u32>, // 查询最大档位
+}
+
+impl SpotDepthStreamConfig {
+    /// 是否启用深度行情流（默认 true）
+    pub fn enabled(&self) -> bool {
+        self.enabled.unwrap_or(true)
+    }
+
+    /// 获取更新速度，支持 "100ms" 或 "1000ms"（默认 "100ms"）
+    pub fn update_speed(&self) -> String {
+        self.update_speed.clone().unwrap_or_else(|| "100ms".to_string())
+    }
+
+    /// 获取订单簿档位数（默认 20）
+    pub fn levels(&self) -> u32 {
+        self.levels.unwrap_or(20)
+    }
+
+    /// 获取快照限制（默认 5000）
+    pub fn snapshot_limit(&self) -> u32 {
+        self.snapshot_limit.unwrap_or(5000)
+    }
+
+    /// 获取事件缓存上限（默认 1000）
+    pub fn cache_size(&self) -> usize {
+        self.cache_size.unwrap_or(1000)
+    }
+
+    /// 获取查询最大档位（默认 100）
+    pub fn max_query_levels(&self) -> u32 {
+        self.max_query_levels.unwrap_or(100)
+    }
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -109,6 +153,20 @@ mod tests {
         assert_eq!(trade_config.batch_size, Some(100), "trade batch_size 应该是 100");
         assert_eq!(trade_config.flush_interval_ms, Some(5000), "trade flush_interval_ms 应该是 5000");
         assert_eq!(trade_config.retention_days, Some(7), "trade retention_days 应该是 7");
+
+        // 验证 depth 配置
+        assert!(spot_config.depth.is_some(), "depth 配置应该存在");
+        let depth_config = spot_config.depth.as_ref().unwrap();
+        assert_eq!(depth_config.symbols.len(), 3, "depth symbols 应该有 3 个");
+        assert!(depth_config.symbols.contains(&"BTCUSDT".to_string()), "应该包含 BTCUSDT");
+        assert!(depth_config.symbols.contains(&"ETHUSDT".to_string()), "应该包含 ETHUSDT");
+        assert!(depth_config.symbols.contains(&"BNBUSDT".to_string()), "应该包含 BNBUSDT");
+        assert_eq!(depth_config.enabled, Some(true), "depth enabled 应该是 true");
+        assert_eq!(depth_config.update_speed, Some("100ms".to_string()), "update_speed 应该是 100ms");
+        assert_eq!(depth_config.levels, Some(20), "levels 应该是 20");
+        assert_eq!(depth_config.snapshot_limit, Some(5000), "snapshot_limit 应该是 5000");
+        assert_eq!(depth_config.cache_size, Some(1000), "cache_size 应该是 1000");
+        assert_eq!(depth_config.max_query_levels, Some(100), "max_query_levels 应该是 100");
     }
 
     #[test]
@@ -139,6 +197,7 @@ mod tests {
                 flush_interval_ms: Some(5000),
                 retention_days: Some(7),
             }),
+            depth: None,
         };
 
         let symbols = config.trade.unwrap().symbols;
@@ -157,6 +216,7 @@ mod tests {
                 flush_interval_ms: Some(5000),
                 retention_days: Some(7),
             }),
+            depth: None,
         };
 
         assert_eq!(config.trade.unwrap().batch_size(), 200);

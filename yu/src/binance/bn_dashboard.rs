@@ -1,10 +1,13 @@
 use crate::actix_jobs::AsyncRepeatTask;
 use crate::errors::YuError;
 use crate::exchange::ExchangeDashBoard;
+use actix::{Actor, Context, Handler, Message};
 use async_trait::async_trait;
 use log::error;
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use yue::binance::history_data::{get_trading_spot_symbols, get_trading_swap_symbols, CONTRACT_TYPE_PERPETUAL};
+use yue::binance::order_book::{OrderBook, OrderBookSnapshotMsg};
 
 #[derive(Debug, Clone)]
 pub struct TradingSymbol {
@@ -92,5 +95,68 @@ impl AsyncRepeatTask for BinanceDashboard {
 
     fn task_name(&self) -> &str {
         "binance dashboard"
+    }
+}
+
+#[derive(Message)]
+#[rtype(result = "Option<Arc<OrderBook>>")]
+pub struct QueryDepth {
+    pub symbol: String,
+}
+
+#[derive(Message)]
+#[rtype(result = "Vec<String>")]
+pub struct QueryAllSymbols;
+
+#[derive(Message)]
+#[rtype(result = "Vec<Arc<OrderBook>>")]
+pub struct QueryBatchDepths {
+    pub symbols: Vec<String>,
+}
+
+pub struct MarketDepthDashBoard {
+    depths: HashMap<String, Arc<OrderBook>>,
+}
+
+impl MarketDepthDashBoard {
+    pub fn new() -> Self {
+        MarketDepthDashBoard { depths: HashMap::new() }
+    }
+}
+
+impl Actor for MarketDepthDashBoard {
+    type Context = Context<Self>;
+}
+
+impl Handler<OrderBookSnapshotMsg> for MarketDepthDashBoard {
+    type Result = ();
+
+    fn handle(&mut self, msg: OrderBookSnapshotMsg, _ctx: &mut Context<Self>) -> Self::Result {
+        let order_book = msg.0;
+        self.depths.insert(order_book.symbol.clone(), order_book);
+    }
+}
+
+impl Handler<QueryDepth> for MarketDepthDashBoard {
+    type Result = Option<Arc<OrderBook>>;
+
+    fn handle(&mut self, msg: QueryDepth, _ctx: &mut Context<Self>) -> Self::Result {
+        self.depths.get(&msg.symbol).cloned()
+    }
+}
+
+impl Handler<QueryAllSymbols> for MarketDepthDashBoard {
+    type Result = Vec<String>;
+
+    fn handle(&mut self, _msg: QueryAllSymbols, _ctx: &mut Context<Self>) -> Self::Result {
+        self.depths.keys().cloned().collect()
+    }
+}
+
+impl Handler<QueryBatchDepths> for MarketDepthDashBoard {
+    type Result = Vec<Arc<OrderBook>>;
+
+    fn handle(&mut self, msg: QueryBatchDepths, _ctx: &mut Context<Self>) -> Self::Result {
+        msg.symbols.iter().filter_map(|symbol| self.depths.get(symbol).cloned()).collect()
     }
 }

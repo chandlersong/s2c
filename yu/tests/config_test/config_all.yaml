@@ -13,3 +13,14 @@ binance_websocket:
       batch_size: 100
       flush_interval_ms: 5000
       retention_days: 7
+    depth:
+      enabled: true
+      symbols:
+        - BTCUSDT
+        - ETHUSDT
+        - BNBUSDT
+      update_speed: "100ms"
+      levels: 20
+      snapshot_limit: 5000
+      cache_size: 1000
+      max_query_levels: 100

@@ -79,7 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut special_log = HashMap::new();
     special_log.insert("yue".to_string(), LevelFilter::Info);
     special_log.insert("li".to_string(), LevelFilter::Info);
-    special_log.insert("actix".to_string(), LevelFilter::Info);
+    special_log.insert("order_book_example".to_string(), LevelFilter::Info);
     setup_logger(Some(LevelFilter::Warn), special_log)?;
 
     info!("========== OrderBookService 示例 ==========");
