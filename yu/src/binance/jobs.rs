@@ -7,11 +7,13 @@ use crate::config::get_config;
 use crate::duck_db::DBProvider;
 use crate::errors::YuError;
 use crate::exchange::CloneHistoryFetcherFactory;
+use crate::utils::get_snowflake_generator;
 use crate::websocket::binance_spot::create_spot_stream_tables;
 use crate::websocket::subscribers::SpotStreamStorageActor;
 use actix::Actor;
 use duckdb::Connection;
 use log::info;
+use rust_decimal::prelude::ToPrimitive;
 use serde_json::to_string;
 use std::sync::Arc;
 use yue::binance::bn_json_websocket::{StreamCommandRequest, SPOT_STREAM_WEBSOCKET, WS_SUBSCRIBE_COMMAND};
@@ -99,25 +101,6 @@ async fn start_websocket_job() -> Result<(), YuError> {
     let bus = WsMessageBus::new(BinanceSpotStreamParser).start();
     info!("✓ WsMessageBus 已启动");
 
-    // 步骤2.5: 启动 OrderBookService 和 MarketDepthDashBoard
-    let order_book_service = OrderBookService::new().with_market_depth(20).start();
-    info!("✓ OrderBookService 已启动 (market_depth=20)");
-
-    let market_depth_dashboard = MarketDepthDashBoard::new().start();
-    info!("✓ MarketDepthDashBoard 已启动");
-
-    // 初始化全局MarketDepthDashBoard单例
-    if let Err(_) = init_market_depth_dashboard(market_depth_dashboard.clone()) {
-        info!("⚠ MarketDepthDashBoard已初始化过，跳过重复初始化");
-    }
-    info!("✓ 全局MarketDepthDashBoard单例已初始化");
-
-    // MarketDepthDashBoard 订阅 OrderBookService 的订单簿快照
-    order_book_service.do_send(OrderBookSubscribe {
-        recipient: market_depth_dashboard.recipient(),
-    });
-    info!("✓ MarketDepthDashBoard 已订阅 OrderBookService");
-
     // 步骤3: 启动 SpotStreamStorageActor
     let storage_actor = SpotStreamStorageActor::new(spot_config.clone(), DBProvider::default()).start();
     info!("✓ SpotStreamStorageActor 已启动");
@@ -128,11 +111,42 @@ async fn start_websocket_job() -> Result<(), YuError> {
     });
     info!("✓ SpotStreamStorageActor 已订阅 WsMessageBus");
 
-    // OrderBookService 订阅 WsMessageBus 的深度更新
-    bus.do_send(Subscribe {
-        subscriber: order_book_service.recipient(),
-    });
-    info!("✓ OrderBookService 已订阅 WsMessageBus");
+    // 步骤2.5: 只有开启 depth 时，才初始化 OrderBookService 和 MarketDepthDashBoard
+    if let Some(depth_config) = &spot_config.depth {
+        if depth_config.enabled() && !depth_config.symbols.is_empty() {
+            let depth = match depth_config.levels.unwrap_or(20).to_u16() {
+                None => 20,
+                Some(v) => v,
+            };
+            let order_book_service = OrderBookService::new().with_market_depth(depth).start();
+            info!("✓ OrderBookService 已启动 (market_depth=20)");
+
+            let market_depth_dashboard = MarketDepthDashBoard::new().start();
+            info!("✓ MarketDepthDashBoard 已启动");
+
+            // 初始化全局MarketDepthDashBoard单例
+            if let Err(_) = init_market_depth_dashboard(market_depth_dashboard.clone()) {
+                info!("⚠ MarketDepthDashBoard已初始化过，跳过重复初始化");
+            }
+            info!("✓ 全局MarketDepthDashBoard单例已初始化");
+
+            // MarketDepthDashBoard 订阅 OrderBookService 的订单簿快照
+            order_book_service.do_send(OrderBookSubscribe {
+                recipient: market_depth_dashboard.recipient(),
+            });
+            info!("✓ MarketDepthDashBoard 已订阅 OrderBookService");
+
+            // OrderBookService 订阅 WsMessageBus 的深度更新
+            bus.do_send(Subscribe {
+                subscriber: order_book_service.recipient(),
+            });
+            info!("✓ OrderBookService 已订阅 WsMessageBus");
+        } else {
+            info!("binance_websocket.spot.depth 未启用或没有配置symbols，跳过OrderBookService初始化");
+        }
+    } else {
+        info!("binance_websocket.spot.depth 配置未启用，跳过OrderBookService初始化");
+    }
 
     // 订阅 WebSocketClient 事件到 WsMessageBus
     client_addr
@@ -159,7 +173,7 @@ async fn start_websocket_job() -> Result<(), YuError> {
         let subscribe_request = StreamCommandRequest {
             method: WS_SUBSCRIBE_COMMAND.to_string(),
             params,
-            id: 1,
+            id: get_snowflake_generator().lock().unwrap().real_time_generate().to_u64().unwrap(),
         };
 
         client_addr
@@ -176,17 +190,11 @@ async fn start_websocket_job() -> Result<(), YuError> {
         if depth_config.enabled() && !depth_config.symbols.is_empty() {
             let mut depth_params = Vec::new();
             let update_speed = depth_config.update_speed();
-            let levels = depth_config.levels();
 
             for symbol in &depth_config.symbols {
                 // 转换为小写并添加深度流后缀
                 // 格式: btcusdt@depth20@100ms 或 btcusdt@depth@100ms
-                let stream = if levels > 0 && levels <= 20 {
-                    format!("{}@depth{}@{}", symbol.to_lowercase(), levels, update_speed)
-                } else {
-                    format!("{}@depth@{}", symbol.to_lowercase(), update_speed)
-                };
-                depth_params.push(stream);
+                depth_params.push(format!("{}@depth@{}", symbol.to_lowercase(), update_speed));
             }
 
             if !depth_params.is_empty() {
@@ -199,7 +207,7 @@ async fn start_websocket_job() -> Result<(), YuError> {
                 let depth_subscribe_request = StreamCommandRequest {
                     method: WS_SUBSCRIBE_COMMAND.to_string(),
                     params: depth_params,
-                    id: 2,
+                    id: get_snowflake_generator().lock().unwrap().real_time_generate().to_u64().unwrap(),
                 };
 
                 client_addr

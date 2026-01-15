@@ -20,11 +20,8 @@ pub struct SpotWebSocketStreamConfig {
 pub struct SpotDepthStreamConfig {
     pub enabled: Option<bool>,
     pub symbols: Vec<String>,
-    pub update_speed: Option<String>,  // "100ms" 或 "1000ms"
-    pub levels: Option<u32>,           // 5/10/20/none
-    pub snapshot_limit: Option<u32>,   // 1000/5000
-    pub cache_size: Option<usize>,     // 事件缓存上限
-    pub max_query_levels: Option<u32>, // 查询最大档位
+    pub update_speed: Option<String>, // "100ms" 或 "1000ms"
+    pub levels: Option<u32>,          // 5/10/20/none
 }
 
 impl SpotDepthStreamConfig {
@@ -41,21 +38,6 @@ impl SpotDepthStreamConfig {
     /// 获取订单簿档位数（默认 20）
     pub fn levels(&self) -> u32 {
         self.levels.unwrap_or(20)
-    }
-
-    /// 获取快照限制（默认 5000）
-    pub fn snapshot_limit(&self) -> u32 {
-        self.snapshot_limit.unwrap_or(5000)
-    }
-
-    /// 获取事件缓存上限（默认 1000）
-    pub fn cache_size(&self) -> usize {
-        self.cache_size.unwrap_or(1000)
-    }
-
-    /// 获取查询最大档位（默认 100）
-    pub fn max_query_levels(&self) -> u32 {
-        self.max_query_levels.unwrap_or(100)
     }
 }
 
@@ -164,9 +146,6 @@ mod tests {
         assert_eq!(depth_config.enabled, Some(true), "depth enabled 应该是 true");
         assert_eq!(depth_config.update_speed, Some("100ms".to_string()), "update_speed 应该是 100ms");
         assert_eq!(depth_config.levels, Some(20), "levels 应该是 20");
-        assert_eq!(depth_config.snapshot_limit, Some(5000), "snapshot_limit 应该是 5000");
-        assert_eq!(depth_config.cache_size, Some(1000), "cache_size 应该是 1000");
-        assert_eq!(depth_config.max_query_levels, Some(100), "max_query_levels 应该是 100");
     }
 
     #[test]

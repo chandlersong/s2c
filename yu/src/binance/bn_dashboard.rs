@@ -3,7 +3,7 @@ use crate::errors::YuError;
 use crate::exchange::ExchangeDashBoard;
 use actix::{Actor, Addr, Context, Handler, Message};
 use async_trait::async_trait;
-use log::error;
+use log::{error, info};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
 use yue::binance::history_data::{get_trading_spot_symbols, get_trading_swap_symbols, CONTRACT_TYPE_PERPETUAL};
@@ -159,6 +159,13 @@ impl MarketDepthDashBoard {
 
 impl Actor for MarketDepthDashBoard {
     type Context = Context<Self>;
+    fn started(&mut self, ctx: &mut Self::Context) {
+        info!("OrderBookService 启动");
+
+        // 启动初始化Actor
+
+        ctx.set_mailbox_capacity(1000);
+    }
 }
 
 impl Handler<OrderBookSnapshotMsg> for MarketDepthDashBoard {
