@@ -267,6 +267,7 @@ impl Actor for OrderBookService {
 
         // 启动初始化Actor
 
+        ctx.set_mailbox_capacity(1000);
         let service_addr = ctx.address().recipient();
         let init_actor = InitActor::new(service_addr);
         let init_addr = init_actor.start();
