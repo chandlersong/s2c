@@ -1,3 +1,4 @@
+use crate::binance::bn_dashboard::{get_market_depth_dashboard, QueryDepth};
 use crate::duck_db::DBProvider;
 use crate::errors::YuError;
 use arrow::array::{ArrayRef, Float64Array, Int64Array, StringArray, UInt32Array};
@@ -12,11 +13,13 @@ use arrow_flight::{
 use duckdb::params;
 use log::{debug, error, info};
 use prost::bytes::Bytes;
+use rust_decimal::prelude::ToPrimitive;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status, Streaming};
+use yue::binance::order_book::OrderBook;
 
 ///
 /// 想要作为数据中心，以后会支持很多方法
@@ -56,9 +59,7 @@ fn parse_command(ticket_str: &str) -> Result<CommandType, String> {
     }
 }
 
-// 生成模拟深度数据的 RecordBatch
-fn generate_mock_depth_data(symbol: &str) -> Result<RecordBatch, String> {
-    // Schema: [symbol, market_type, side, price, qty, level, update_id, ts]
+fn convert_order_book_to_record_batch(order_book: &OrderBook, levels: Option<u16>) -> Result<RecordBatch, String> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("symbol", DataType::Utf8, false),
         Field::new("market_type", DataType::Utf8, false),
@@ -70,42 +71,47 @@ fn generate_mock_depth_data(symbol: &str) -> Result<RecordBatch, String> {
         Field::new("ts", DataType::Int64, false),
     ]));
 
-    // 生成模拟数据：5档 bids + 5档 asks
+    let order_book_to_use = if let Some(lvls) = levels {
+        order_book
+            .get_sub_order_book(lvls)
+            .map_err(|e| format!("Failed to get sub order book: {}", e))?
+    } else {
+        order_book.clone()
+    };
+
     let mut symbols = vec![];
     let mut market_types = vec![];
     let mut sides = vec![];
     let mut prices = vec![];
     let mut qtys = vec![];
-    let mut levels = vec![];
+    let mut level_nums = vec![];
     let mut update_ids = vec![];
     let mut tss = vec![];
 
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
-
-    let base_price = 42000.0; // 模拟比特币价格
-
-    // 生成 5 档 bids（降序）
-    for i in 1..=5 {
-        symbols.push(symbol.to_string());
+    let mut level = 1u32;
+    for (price, qty) in order_book_to_use.bids().iter().rev() {
+        symbols.push(order_book_to_use.symbol.clone());
         market_types.push("spot".to_string());
         sides.push("bid".to_string());
-        prices.push(base_price - (i as f64) * 100.0);
-        qtys.push(0.5 + (i as f64) * 0.1);
-        levels.push(i as u32);
-        update_ids.push(1000000 + i as i64);
-        tss.push(now);
+        prices.push(price.to_f64().ok_or_else(|| "Failed to convert bid price to f64".to_string())?);
+        qtys.push(qty.to_f64().ok_or_else(|| "Failed to convert bid qty to f64".to_string())?);
+        level_nums.push(level);
+        update_ids.push(order_book_to_use.local_update_id as i64);
+        tss.push(order_book_to_use.last_update_time as i64);
+        level += 1;
     }
 
-    // 生成 5 档 asks（升序）
-    for i in 1..=5 {
-        symbols.push(symbol.to_string());
+    level = 1u32;
+    for (price, qty) in order_book_to_use.asks().iter() {
+        symbols.push(order_book_to_use.symbol.clone());
         market_types.push("spot".to_string());
         sides.push("ask".to_string());
-        prices.push(base_price + (i as f64) * 100.0);
-        qtys.push(0.5 + (i as f64) * 0.1);
-        levels.push(i as u32);
-        update_ids.push(1000000 + 10 + i as i64);
-        tss.push(now);
+        prices.push(price.to_f64().ok_or_else(|| "Failed to convert ask price to f64".to_string())?);
+        qtys.push(qty.to_f64().ok_or_else(|| "Failed to convert ask qty to f64".to_string())?);
+        level_nums.push(level);
+        update_ids.push(order_book_to_use.local_update_id as i64);
+        tss.push(order_book_to_use.last_update_time as i64);
+        level += 1;
     }
 
     let columns: Vec<ArrayRef> = vec![
@@ -114,7 +120,7 @@ fn generate_mock_depth_data(symbol: &str) -> Result<RecordBatch, String> {
         Arc::new(StringArray::from(sides)),
         Arc::new(Float64Array::from(prices)),
         Arc::new(Float64Array::from(qtys)),
-        Arc::new(UInt32Array::from(levels)),
+        Arc::new(UInt32Array::from(level_nums)),
         Arc::new(Int64Array::from(update_ids)),
         Arc::new(Int64Array::from(tss)),
     ];
@@ -229,26 +235,35 @@ impl FlightService for DuckDBFlightServer {
         // 解析命令
         match parse_command(&ticket_str) {
             Ok(CommandType::Depth(symbol)) => {
-                // 处理 Depth 命令（模拟数据）
                 info!("Processing depth command for symbol: {}", symbol);
-                tokio::task::spawn_blocking(move || {
-                    let result: Result<(), String> = (|| {
-                        let batch = generate_mock_depth_data(&symbol)?;
+                tokio::task::spawn(async move {
+                    let result: Result<(), String> = async {
+                        let dashboard = get_market_depth_dashboard().map_err(|e| format!("Failed to get MarketDepthDashBoard: {}", e))?;
+
+                        let order_book_arc = dashboard
+                            .send(QueryDepth { symbol: symbol.clone() })
+                            .await
+                            .map_err(|e| format!("Failed to send query to dashboard: {}", e))?;
+
+                        let order_book = order_book_arc.ok_or_else(|| format!("OrderBook not found for symbol: {}", symbol))?;
+
+                        let batch = convert_order_book_to_record_batch(&order_book, Some(20))?;
                         let schema = batch.schema();
                         let flight_data_vec = flight_utils::batches_to_flight_data(&schema, vec![batch])
                             .map_err(|e| format!("Failed to convert batches to FlightData: {}", e))?;
 
                         for d in flight_data_vec {
-                            if let Err(send_err) = tx_clone.blocking_send(Ok(d)) {
+                            if let Err(send_err) = tx_clone.send(Ok(d)).await {
                                 return Err(format!("Failed to send FlightData: {}", send_err));
                             }
                         }
                         Ok(())
-                    })();
+                    }
+                    .await;
 
                     if let Err(err_msg) = result {
                         let status = Status::internal(err_msg.clone());
-                        let _ = tx_clone.blocking_send(Err(status));
+                        let _ = tx_clone.send(Err(status)).await;
                         error!("Depth command failed: {}", err_msg);
                     }
                     drop(tx_clone);
@@ -322,7 +337,7 @@ impl FlightService for DuckDBFlightServer {
     }
 }
 
-pub async fn start_flight_server(addr: &str) -> Result<tokio::sync::oneshot::Sender<()>, YuError> {
+pub async fn start_flight_server(addr: &str) -> Result<oneshot::Sender<()>, YuError> {
     let addr = addr.parse().map_err(|e| YuError::new(&format!("Bad address {}: {}", addr, e)))?;
 
     // Create a shutdown channel; return the sender to the caller so they can trigger shutdown
@@ -405,36 +420,6 @@ mod tests {
                 println!("✓ 正确捕获缺失 symbol 的错误: {}", msg);
             }
             _ => panic!("应该返回缺失参数错误"),
-        }
-    }
-
-    #[test]
-    fn test_generate_mock_depth_data() {
-        // 测试模拟深度数据生成
-        match generate_mock_depth_data("BTCUSDT") {
-            Ok(batch) => {
-                let schema = batch.schema();
-                let num_fields = schema.fields().len();
-                let num_rows = batch.num_rows();
-
-                assert_eq!(num_fields, 8, "Schema 应该有 8 个字段");
-                assert_eq!(num_rows, 10, "应该生成 10 行数据（5 档 bids + 5 档 asks）");
-
-                // 验证字段名称
-                let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
-                assert_eq!(field_names[0], "symbol");
-                assert_eq!(field_names[1], "market_type");
-                assert_eq!(field_names[2], "side");
-                assert_eq!(field_names[3], "price");
-                assert_eq!(field_names[4], "qty");
-                assert_eq!(field_names[5], "level");
-                assert_eq!(field_names[6], "update_id");
-                assert_eq!(field_names[7], "ts");
-
-                println!("✓ 模拟深度数据生成成功: {} 行, {} 列", num_rows, num_fields);
-                println!("  Schema: {:?}", field_names);
-            }
-            Err(e) => panic!("生成模拟数据失败: {}", e),
         }
     }
 
