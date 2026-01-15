@@ -582,6 +582,14 @@ impl OrderBook {
     pub fn asks_count(&self) -> usize {
         self.asks.len()
     }
+
+    pub fn bids(&self) -> &BTreeMap<Decimal, Decimal> {
+        &self.bids
+    }
+
+    pub fn asks(&self) -> &BTreeMap<Decimal, Decimal> {
+        &self.asks
+    }
 }
 
 #[cfg(test)]
