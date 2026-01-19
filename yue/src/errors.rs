@@ -7,6 +7,8 @@ pub enum YueError {
     ExchangeRequestError { code: u16, body: String },
     #[error("Serialization/Deserialization error: {0}")]
     SerdeError(#[from] serde_json::Error),
+    #[error("error encode: {0}")]
+    Ed25519DalekError(#[from] ed25519_dalek::pkcs8::Error),
     #[error("Reqwest error: {0}")]
     RequestError(#[from] reqwest::Error),
     #[error("IO error: {0}")]

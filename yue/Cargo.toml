@@ -29,8 +29,9 @@ csv = "1.3.0"
 nonzero = "0.2.0"
 url = { version = "2.5.4" }
 actix = { workspace = true }
-actix-rt = { workspace = true }
-
+ed25519-dalek = { version = "2", features = ["pkcs8", "pem", "std"] }  # pem feature 自动带上 pkcs8 和 alloc
+# 如果需要 base64 解码或其他辅助
+base64 = "0.22.1"
 
 [dev-dependencies]
 mockall = "0.13.0"

@@ -286,6 +286,7 @@ impl WebSocketConnection {
         let (ws_tx, mut ws_rx) = mpsc::unbounded_channel::<WsMessage>();
 
         if let Some(commands) = initial_command {
+            info!("开始发初始化消息! 数量: {}", commands.len());
             for event in commands {
                 ws_tx
                     .send(event)

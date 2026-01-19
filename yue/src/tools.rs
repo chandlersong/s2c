@@ -1,3 +1,7 @@
+use crate::errors::YueError;
+use ed25519_dalek::{SigningKey};
+use ed25519_dalek::pkcs8::DecodePrivateKey; // 带 pem 支持
+use std::fs;
 use hmac::digest::InvalidLength;
 use hmac::{Hmac, Mac};
 use log::error;
@@ -6,8 +10,6 @@ use serde::de;
 use serde::{Deserialize, Deserializer};
 use sha2::Sha256;
 use sonyflake::Sonyflake;
-#[cfg(test)]
-use std::fs;
 use std::sync::Mutex;
 use std::time::Duration;
 use tokio::sync::{broadcast, watch};
@@ -29,6 +31,15 @@ pub fn sign_hmac(payload: &str, key: &str) -> Result<String, InvalidLength> {
     mac.update(payload.to_string().as_bytes());
     let result = mac.finalize();
     Ok(format!("{:x}", result.into_bytes()))
+}
+
+pub fn load_ed25519_signing_key(path: &str) -> Result<SigningKey, YueError> {
+    // 方式1：直接从 PEM 文件读取（最推荐）
+    let pem_content = fs::read_to_string(path)?;
+
+    let signing_key = SigningKey::from_pkcs8_pem(&pem_content)?;
+
+    Ok(signing_key)
 }
 
 pub struct SnowyFlakeWrapper {

@@ -168,6 +168,12 @@
 - [币安交易数据格式](https://binance-docs.github.io/apidocs/spot/en/#trade-streams)
 - [币安深度数据格式](https://binance-docs.github.io/apidocs/spot/en/#partial-book-depth-streams)
 
+# 相关设计文件
+
+- [spot websocket基础](binance_websocket_data_collection.design.md)
+- [order book维护设计](binance_order_book_maintenance.design.md)
+- [spot account设计](account_sync_spot_design.md)
+
 ---
 
 **文档版本**：v1.0  
