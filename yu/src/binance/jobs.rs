@@ -61,7 +61,7 @@ async fn start_websocket_job() -> Result<(), YuError> {
         }
     };
 
-    let spot_config = match &ws_config.spot {
+    let spot_config = match &ws_config.spot_stream {
         Some(spot) => spot,
         None => {
             info!("binance_websocket.spot 配置未启用，跳过 Spot WebSocket 任务");

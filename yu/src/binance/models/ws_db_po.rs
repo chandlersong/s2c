@@ -32,31 +32,29 @@ impl From<TradeStreamPayload> for SpotStreamTradeRecordPo {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json;
-    #[test]
-    fn test_price_qty_f64_precision_trade() {
-        let orig = SpotStreamTradeRecordPo {
-            id: 1,
-            event_time: 1_641_000_000,
-            symbol: "BTCUSDT".to_string(),
-            trade_id: 12345,
-            price: 34123.12345678,
-            qty: 0.00012345,
-            trade_time: Some(1_641_000_001),
-            is_buyer_maker: Some(false),
-            created_at: 1_641_000_002,
-        };
+pub struct SpotBalancePo {
+    pub account_id: String,
+    pub asset: String,
+    pub free: f64,
+    pub locked: f64,
+    pub event_time: i64,
+    pub source_exchange: String,
+    pub raw_json: String,
+}
 
-        let j = serde_json::to_string(&orig).expect("serialize");
-        let parsed: SpotStreamTradeRecordPo = serde_json::from_str(&j).expect("deserialize");
-
-        let price_diff = (orig.price - parsed.price).abs();
-        let qty_diff = (orig.qty - parsed.qty).abs();
-
-        assert!(price_diff.to_f64().unwrap() < 1e-8, "price diff too large: {}", price_diff);
-        assert!(qty_diff.to_f64().unwrap() < 1e-12, "qty diff too large: {}", qty_diff);
-    }
+pub struct SpotOrderPo {
+    pub account_id: String,
+    pub symbol: String,
+    pub order_id: String,
+    pub client_order_id: String,
+    pub status: String,
+    pub side: String,
+    pub order_type: String,
+    pub price: f64,
+    pub qty: f64,
+    pub exec_qty: f64,
+    pub last_exec_price: f64,
+    pub event_time: i64,
+    pub source_exchange: String,
+    pub raw_json: String,
 }

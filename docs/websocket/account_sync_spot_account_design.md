@@ -105,16 +105,6 @@
     - 复合唯一键 `(account_id, order_id, event_time)`
     - 业务查询索引 `symbol, event_time`
 
-- `account_meta_spot`
-  - 字段：
-    - `account_id TEXT`
-    - `listen_key TEXT`
-    - `created_at TIMESTAMP`
-    - `expired_at TIMESTAMP`
-    - `last_heartbeat TIMESTAMP`
-    - `source_exchange TEXT`   -- 固定为 "BINANCE"
-  - 索引与主键建议：
-    - 主键 `account_id`
 
 说明：
 - 保留 `raw_json` 以便审计与回放。
@@ -123,10 +113,15 @@
 
 ## 5. 多账户订阅与配置
 
-- 配置项：
+- 账户配置项（配置文件）：
   - `account_name`
   - `api_key`
   - `secret_key`
+- 运行参数（不写入配置文件，通过启动参数/环境变量/全局配置覆盖）：
+  - `batch_size`（默认100）
+  - `flush_interval_ms`（默认1000）
+  - `reconnect_interval_secs`（默认5）
+  - `max_reconnect_attempts`（默认10）
 - 行为：
   - `AccountSyncManager` 读取配置，按账户启动独立 `AccountSyncWorker`。
   - 每个 worker 独立维护 listenKey，定时刷新与过期重订阅，错误隔离。
@@ -145,6 +140,9 @@
 - 适配层：`ext::binance::user_stream_spot`/`usdtm`/`coinm`/`option`。
 - 存储：不同市场有独立表，复用通用字段，扩展专有字段（杠杆、资金费、希腊值）。
 - 管理：`AccountSyncManager` 面向多市场 worker 队列，按配置开关初始化。
+- 实施策略：
+  - 当前（Spot）：完整实现所有组件。
+  - 后续（Swap/Future/Option）：复用现有架构，新增对应市场的模型、表和适配层，无需修改核心逻辑。
 
 ## 8. 非功能需求与权衡
 

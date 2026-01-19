@@ -41,6 +41,8 @@ applyTo: "**/*.rs"
 2. restful的调用方式，参考：yue/examples/bn_restful_examples.rs
     - restful的单元测试，参考：yue/src/binance/history_data.rs中的单元测试代码，使用mockserver进行测试。
 3. 线程间的通信，尽量用actix的订阅机制和消息机制。
+4. 数据库的表的创建和测试代码，参考：yu/src/websocket/binance_spot/init_tables.rs中的代码。
+5. 数据库对象的处理和操作方式，参考：yu/src/binance/models/ws_db_po.rs中的代码
 
 # 单元测试
 1. 单元测试，必须对应具体的方法方法，而不是整个流程。

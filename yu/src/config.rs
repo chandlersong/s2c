@@ -4,10 +4,23 @@ use std::env;
 use std::path::Path;
 use std::sync::OnceLock;
 
+#[derive(Deserialize, Debug, Clone)]
+pub struct SpotWebSocketConfig {
+    pub accounts: Vec<AccountConfig>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct AccountConfig {
+    pub account_name: String,
+    pub api_key: String,
+    pub secret_key: String,
+}
+
 // Binance WebSocket 配置结构体
 #[derive(Deserialize, Debug, Clone)]
 pub struct BinanceWebSocketConfig {
-    pub spot: Option<SpotWebSocketStreamConfig>,
+    pub spot_stream: Option<SpotWebSocketStreamConfig>,
+    pub spot: Option<SpotWebSocketConfig>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -117,17 +130,19 @@ mod tests {
 
         let app_config: super::AppConfig = config_builder.try_deserialize().expect("Failed to deserialize config");
 
+        // 验证 spot_websocket 配置
+
         // 验证 binance_websocket 配置存在
         assert!(app_config.binance_websocket.is_some(), "binance_websocket 配置应该存在");
 
         let ws_config = app_config.binance_websocket.as_ref().unwrap();
-        assert!(ws_config.spot.is_some(), "spot 配置应该存在");
+        assert!(ws_config.spot_stream.is_some(), "spot_stream 配置应该存在");
 
-        let spot_config = ws_config.spot.as_ref().unwrap();
+        let spot_stream_config = ws_config.spot_stream.as_ref().unwrap();
 
         // 验证 trade 配置
-        assert!(spot_config.trade.is_some(), "trade 配置应该存在");
-        let trade_config = spot_config.trade.as_ref().unwrap();
+        assert!(spot_stream_config.trade.is_some(), "trade 配置应该存在");
+        let trade_config = spot_stream_config.trade.as_ref().unwrap();
         assert_eq!(trade_config.symbols.len(), 3, "trade symbols 应该有 3 个");
         assert!(trade_config.symbols.contains(&"BTCUSDT".to_string()), "应该包含 BTCUSDT");
         assert!(trade_config.symbols.contains(&"ETHUSDT".to_string()), "应该包含 ETHUSDT");
@@ -137,8 +152,8 @@ mod tests {
         assert_eq!(trade_config.retention_days, Some(7), "trade retention_days 应该是 7");
 
         // 验证 depth 配置
-        assert!(spot_config.depth.is_some(), "depth 配置应该存在");
-        let depth_config = spot_config.depth.as_ref().unwrap();
+        assert!(spot_stream_config.depth.is_some(), "depth 配置应该存在");
+        let depth_config = spot_stream_config.depth.as_ref().unwrap();
         assert_eq!(depth_config.symbols.len(), 3, "depth symbols 应该有 3 个");
         assert!(depth_config.symbols.contains(&"BTCUSDT".to_string()), "应该包含 BTCUSDT");
         assert!(depth_config.symbols.contains(&"ETHUSDT".to_string()), "应该包含 ETHUSDT");
@@ -146,6 +161,26 @@ mod tests {
         assert_eq!(depth_config.enabled, Some(true), "depth enabled 应该是 true");
         assert_eq!(depth_config.update_speed, Some("100ms".to_string()), "update_speed 应该是 100ms");
         assert_eq!(depth_config.levels, Some(20), "levels 应该是 20");
+
+        let spot_ws_config = ws_config.spot.as_ref().unwrap();
+
+        assert_eq!(spot_ws_config.accounts.len(), 2, "accounts 应该有 2 个");
+
+        // 验证第一个账户
+        assert_eq!(spot_ws_config.accounts[0].account_name, "account1", "第一个账户名称应该是 account1");
+        assert_eq!(spot_ws_config.accounts[0].api_key, "test_api_key_1", "第一个账户 API Key 应该匹配");
+        assert_eq!(
+            spot_ws_config.accounts[0].secret_key, "test_secret_key_1",
+            "第一个账户 Secret Key 应该匹配"
+        );
+
+        // 验证第二个账户
+        assert_eq!(spot_ws_config.accounts[1].account_name, "account2", "第二个账户名称应该是 account2");
+        assert_eq!(spot_ws_config.accounts[1].api_key, "test_api_key_2", "第二个账户 API Key 应该匹配");
+        assert_eq!(
+            spot_ws_config.accounts[1].secret_key, "test_secret_key_2",
+            "第二个账户 Secret Key 应该匹配"
+        );
     }
 
     #[test]
