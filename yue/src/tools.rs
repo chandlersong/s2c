@@ -1,7 +1,8 @@
 use crate::errors::YueError;
-use ed25519_dalek::{SigningKey};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
+use ed25519_dalek::SigningKey;
+use ed25519_dalek::ed25519::signature::SignerMut;
 use ed25519_dalek::pkcs8::DecodePrivateKey; // 带 pem 支持
-use std::fs;
 use hmac::digest::InvalidLength;
 use hmac::{Hmac, Mac};
 use log::error;
@@ -10,6 +11,7 @@ use serde::de;
 use serde::{Deserialize, Deserializer};
 use sha2::Sha256;
 use sonyflake::Sonyflake;
+use std::fs;
 use std::sync::Mutex;
 use std::time::Duration;
 use tokio::sync::{broadcast, watch};
@@ -31,6 +33,29 @@ pub fn sign_hmac(payload: &str, key: &str) -> Result<String, InvalidLength> {
     mac.update(payload.to_string().as_bytes());
     let result = mac.finalize();
     Ok(format!("{:x}", result.into_bytes()))
+}
+
+pub trait SignatureContext {
+    fn context_for_signature(&self) -> String;
+}
+
+impl SignatureContext for &str {
+    fn context_for_signature(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl SignatureContext for String {
+    fn context_for_signature(&self) -> String {
+        self.clone()
+    }
+}
+
+/// 使用 Ed25519 对 payload 做签名，返回 BASE64 编码字符串。
+pub fn sign_ed25519<T: SignatureContext>(payload: T, signing_key: &mut SigningKey) -> Result<String, YueError> {
+    let payload_str = payload.context_for_signature();
+    let signature = signing_key.sign(payload_str.as_bytes());
+    Ok(BASE64_STD.encode(signature.to_bytes()))
 }
 
 pub fn load_ed25519_signing_key(path: &str) -> Result<SigningKey, YueError> {
@@ -231,7 +256,8 @@ async fn frequency_reducer_output<V: Send + Clone + Sync>(
 
 #[cfg(test)]
 mod tests {
-    use crate::tools::FrequencyReducer;
+    use crate::tools::{FrequencyReducer, sign_ed25519};
+    use ed25519_dalek::SigningKey;
     use std::time::Duration;
     use tokio::sync::broadcast;
     use tokio::time;
@@ -288,6 +314,27 @@ mod tests {
                 assert!(false, "channel timeout");
             }
         }
+    }
+
+    #[test]
+    fn test_sign_ed25519_fixture() {
+        let mut signing_key = SigningKey::from_bytes(&[0u8; 32]);
+        let payload = "apiKey=TEST&timestamp=123";
+        let signature = sign_ed25519(payload, &mut signing_key).unwrap();
+        assert_eq!(
+            signature, "umh1gRymXHNSoDMHnRoNA2bDjc+lKf76K7azVXj6hNRzahxw0XDjUWMGuNlY+gi6NzL1YdJGY1susAd057iVCw==",
+            "unexpected signature",
+        );
+    }
+
+    #[test]
+    fn test_sign_ed25519_empty_payload() {
+        let mut signing_key = SigningKey::from_bytes(&[0u8; 32]);
+        let signature = sign_ed25519("", &mut signing_key).unwrap();
+        assert_eq!(
+            signature, "j4lbPK/iyVBgOdDipmOCVoAEZ0/o0jd4UJLkDWqvSD5PxgFocF8x8QFZYTjOIao1fA0yoGT0I9w+5Ko6v1P4Aw==",
+            "unexpected signature for empty payload",
+        );
     }
 
     #[test]
