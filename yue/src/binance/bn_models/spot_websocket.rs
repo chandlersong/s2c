@@ -41,7 +41,7 @@ pub struct AccountWebSocketPayLoad<T> {
 /// 账户余额更新事件载荷，对应 outboundAccountPosition。
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct OutboundAccountPositionPayload {
-    #[serde(rename = "a")]
+    #[serde(rename = "e")]
     pub event: String,
     #[serde(rename = "E")]
     pub event_time: u64,
@@ -310,7 +310,7 @@ mod tests {
         let json = r#"{
             "subscriptionId": 123,
             "event": {
-                "a":"outboundAccountPosition",
+                "e":"outboundAccountPosition",
                 "E":1690000000000,
                 "u":1690000000000,
                 "B":[

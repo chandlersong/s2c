@@ -81,6 +81,11 @@ impl SnowyFlakeWrapper {
         let value = self.sf.lock().unwrap();
         value.next_id().unwrap().to_string()
     }
+
+    pub fn next_id_u64(&self) -> u64 {
+        let value = self.sf.lock().unwrap();
+        value.next_id().unwrap()
+    }
 }
 
 pub mod string_to_float {

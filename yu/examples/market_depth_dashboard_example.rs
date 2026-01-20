@@ -13,6 +13,7 @@ use yue::binance::order_book::{OrderBook, OrderBookSnapshotMsg};
 async fn main() {
     let mut special_log = HashMap::new();
     special_log.insert("yue".to_string(), LevelFilter::Info);
+    special_log.insert("yu".to_string(), LevelFilter::Info);
     special_log.insert("li".to_string(), LevelFilter::Info);
     setup_logger(Some(LevelFilter::Warn), special_log).expect("日志初始化失败");
 

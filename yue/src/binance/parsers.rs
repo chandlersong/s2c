@@ -65,6 +65,7 @@ impl SpotAccountStreamParser {
     }
 }
 
+///TODO 这里要加入重连逻辑
 impl Default for SpotAccountStreamParser {
     fn default() -> Self {
         Self::new(HashMap::new())
