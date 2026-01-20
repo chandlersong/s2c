@@ -1,0 +1,174 @@
+# AccountSync Spot 开发任务
+
+# 背景与目标
+- 在 yue 实现 AccountSync（Spot），多账户订阅 Binance userDataStream.signature，标准化账户/余额/订单事件并批量写入 DuckDB（复用 yu 能力）。
+- 范围限定 Spot，同步与落库，不改现有 yu duck_db，暂不做账户计算。
+
+## 里程碑与任务
+- ✅ 任务1：需求与接口对齐
+  - 结论：配置按设计走文件加载，直接读取配置文件（仿照现有方式）；duck_db 接口复用 yu 现有实现（照现有用法调用，不新增接口）；监控/日志沿用当前模式，不做额外复杂化。
+  - ✅ 任务1.1：多账户配置设计
+    - 配置项包含：account_name, api_key, secret_key
+    - 配置加载：仿照 yu::config，使用 config crate + serde，支持 YAML/TOML
+    - 加密方式：暂不加密，明文存储在本地配置文件（后续可扩展）
+    - 在 yu/src/config.rs：
+  - ✅ 任务1.2：DuckDB接口对齐与表设计
+    - 复用 yu::duck_db::get_connection_pool() 获取连接
+    - 两张表：account_balance_spot、order_events_spot
+    - 表创建策略：启动时执行 CREATE TABLE IF NOT EXISTS
+    - 幂等策略：使用 INSERT OR REPLACE 或 ON CONFLICT 子句
+    - 监控/日志：使用 log crate（info/warn/error），关键指标输出到日志
+    - 创建的文件
+      - yu/src/binance/models/ws_db_po.rs: 新建对象
+      - yu/src/websocket/binance_spot/init_tables.rs: 数据库初始化
+- 任务2：模型定义与解析器实现
+  - 任务2.1：定义 Spot 账户数据流模型
+    - 在 yue/src/binance/bn_models/spot_websocket.rs 中新增：
+      - BinanceSpotWebSocketResponse 枚举：仿造 BinanceSpotWebSocketStreamResponse
+      - OutboundAccountPositionPayload：账户余额更新事件（event=outboundAccountPosition）
+      - BalanceItem：单个资产余额信息（asset, free, locked）
+      - ExecutionReportPayload：订单执行报告事件（event=executionReport）
+      - SubscribeResponesePayload: 订阅账户变更的接口返回（没有event字段，userdataStream.subscribe.signatured的返回值）
+    - 实现 BinanceSpotAccountStreamResponse::from_text() 方法
+  - 任务2.2：实现 Spot 账户数据流解析器
+    - 在 yue/src/binance/parsers.rs 中新增 SpotAccountStreamParser
+    - 实现 WebSocketParser trait，输出类型为 BinanceSpotWebSocketResponse
+    - 处理 JSON 反序列化与错误捕获
+  - 任务2.3：存入数据库
+    - 仿照 yu/src/websocket/subscribers/spot_stream_storage_subscriber.rs 中的 SpotStreamStorageActor
+    - 支持多个账户的并行处理
+    - 实现批量缓冲和定时刷新机制
+- 任务3：Binance 适配与事件处理
+  - 任务3.1：实现 Binance listenKey 管理
+    - 封装 POST /api/v3/userDataStream 获取 listenKey（使用 X-MBX-APIKEY 认证）
+    - subscriptionId 管理：通过返回的 subscriptionId 确定订阅状态，建立 subscriptionId 与 listenKey 的映射关系
+    - 实现 PUT /api/v3/userDataStream 刷新 listenKey（每30分钟心跳一次）
+    - 实现 DELETE /api/v3/userDataStream 关闭连接
+    - 过期检测：监听 websocket 断开/错误，自动重新获取 listenKey
+    - 订阅 wss://stream.binance.com:9443/ws/{listenKey}
+  - 任务3.2：事件标准化与幂等处理
+    - 使用 SpotAccountStreamParser 解析 WebSocket 消息
+    - OutboundAccountPosition 事件 -> AccountBalanceEvent
+    - ExecutionReport 事件 -> OrderEvent（Symbol 转大写）
+    - Symbol 统一转大写处理
+    - 错误分类：网络错误（重连）、认证错误（告警停止）、解析错误（记录日志继续）
+    - 指数退避重连：初始1秒，最大60秒，最多重试10次（可配置）
+- 任务4：处理流水线与批量入库
+  - 任务4.1：实现事件处理流水线
+    - 接收原始 WebSocket 消息 -> 使用 SpotAccountStreamParser 解析
+    - 事件映射：将 Binance 原始事件映射到统一模型（AccountBalanceEvent/OrderEvent）
+    - 幂等键生成：account_id+asset+event_time 或 account_id+order_id+event_time
+    - 批量收集：达到 batch_size 或 flush_interval_ms 触发写入
+    - 异常处理：解析失败保留 raw_json 到错误日志
+  - 任务4.2：DuckDB 表管理与写入
+    - 表创建 SQL：
+      - account_balance_spot: PRIMARY KEY(account_id, asset, event_time)
+      - order_events_spot: PRIMARY KEY(account_id, order_id, event_time), INDEX(symbol, event_time)
+    - 批量插入：使用 prepared statement + transaction
+    - 幂等保证：INSERT OR REPLACE（DuckDB 支持）或事先去重
+    - 错误处理：写入失败记录到日志，告警并跳过该批次（可选重试）
+    - 连接管理：通过 yu::duck_db::get_connection_pool() 获取连接
+- 任务5：多账户并发与可靠性
+  - 任务5.1：AccountSyncManager 实现
+    - 从配置加载多个账户信息
+    - 为每个账户启动独立的 AccountSyncWorker（tokio task）
+    - 通过 AccountStorageActor 实现账户数据的批量入库
+    - 错误隔离：单个账户失败不影响其他账户
+    - 重连管理：每个 worker 独立维护重连状态和退避策略
+    - 生命周期管理：支持优雅关闭（关闭所有 worker，删除 listenKey）
+    - 健康检查接口：查询各账户订阅状态、最后心跳时间、重连次数
+  - 任务5.2：监控与日志
+    - 连接状态日志：
+      - info: 账户连接成功、listenKey 获取成功、心跳刷新成功
+      - warn: 重连尝试、listenKey 过期、批量写入部分失败
+      - error: 认证失败、达到最大重连次数、数据库连接失败
+    - 性能指标日志（每分钟输出）：
+      - 各账户接收事件数、入库成功/失败数
+      - 批量写入延迟（P50/P95/P99）
+      - 队列积压水位
+    - 审计日志（可配置开关）：
+      - raw_json 完整保存到日志或单独文件
+      - 用于问题排查和数据回放
+- 任务6：测试与验收
+  - 任务6.1：单元测试
+    - 配置模块测试：
+      - 测试配置反序列化（完整配置、最小配置、默认值）
+      - 测试配置验证（必需字段缺失）
+    - 事件模型测试：
+      - 测试 Symbol 大写转换
+      - 测试模型序列化/反序列化
+      - 测试幂等键生成（balance/order）
+      - 测试 Binance 原始事件映射到统一模型
+    - listenKey 生命周期测试：
+      - Mock HTTP 测试获取/刷新/删除 listenKey
+      - 测试过期检测和自动重新获取
+    - 批量处理测试：
+      - 测试达到 batch_size 触发写入
+      - 测试达到 flush_interval_ms 触发写入
+      - 测试幂等键去重
+  - 任务6.2：集成测试与压测
+    - 端到端订阅测试：
+      - 使用测试账户（testnet 或真实账户）
+      - 订阅 userDataStream，手动触发订单/余额变化
+      - 验证事件正确入库到 DuckDB
+      - 验证 Symbol 大写、时间戳、raw_json 完整性
+    - 多账户并发测试：
+      - 启动 3-5 个账户同时订阅
+      - 验证错误隔离（停止一个账户，其他继续工作）
+      - 验证各账户数据独立入库
+    - 批量写入吞吐测试：
+      - 模拟高频事件流（100-1000 事件/秒）
+      - 测量入库延迟和吞吐量
+      - 验证批量写入的性能提升
+    - 重连与恢复测试：
+      - 模拟网络断开（关闭 WebSocket）
+      - 验证指数退避重连
+      - 验证重连后继续接收事件
+    - 数据库故障测试：
+      - 模拟 DuckDB 连接失败
+      - 验证错误日志和告警
+      - 验证恢复后继续写入
+- 任务7：交付与运行
+  - 任务7.1：配置示例与运行说明
+    - 提供完整配置示例（YAML格式）
+    - 最小运行示例：
+      - 配置单个账户
+      - 启动程序
+      - 验证连接和数据入库
+    - 配置说明文档：
+      - 各配置项说明和默认值
+      - API 权限要求（仅需 READ 权限）
+      - 数据库路径配置
+    - Example 程序：
+      - account_sync_example.rs - 演示完整流程
+      - 包含配置加载、管理器启动、健康检查、优雅关闭
+  - 任务7.2：测试结果与风险评估
+    - 测试结果汇总：
+      - 单元测试覆盖率
+      - 集成测试通过情况
+      - 性能测试数据（吞吐量、延迟）
+    - 已知限制：
+      - userDataStream 不提供历史数据，断流期间事件丢失
+      - 依赖网络稳定性，极端情况下可能丢失事件
+      - 明文存储 API 密钥（后续可加密）
+    - 告警方案：
+      - 重连次数超过阈值告警
+      - 入库失败率超过阈值告警
+      - listenKey 获取失败告警
+      - 数据库连接失败告警
+    - 运维建议：
+      - 定期检查日志中的 WARN/ERROR
+      - 监控各账户最后心跳时间
+      - 定期备份 DuckDB 数据库
+      - 配置文件权限控制（600）
+- 任务8：后续扩展（Future/Swap/Option）
+  - 任务8.1：架构复用与扩展规划
+    - 复用现有的 AccountSyncManager、AccountSyncWorker、pipeline 等核心组件
+    - 为每个市场（Spot/Swap/Future/Option）创建独立的事件模型 `models::swap`、`models::future`、`models::option`
+    - 为每个市场创建独立的 Binance 适配实现 `ext::binance::user_stream_swap`、`ext::binance::user_stream_future`、`ext::binance::user_stream_option`
+    - 创建对应的 DuckDB 表（account_balance_swap、order_events_swap 等）
+  - 任务8.2：扩展实施步骤
+    - 一次性实施一个市场（建议顺序：Swap -> Future -> Option）
+    - 复用 Spot 的测试框架与集成流程
+    - 独立验证新市场的数据一致性与性能
+    - 统一监控面板，覆盖所有市场的指标展示

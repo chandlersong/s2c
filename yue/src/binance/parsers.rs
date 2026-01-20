@@ -1,10 +1,10 @@
+use crate::binance::bn_models::spot_websocket::BinanceSpotWebSocketResponse;
 use crate::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamResponse;
 use crate::errors::YueError;
 use crate::websocket::event_bus::WebSocketParser;
 use log::trace;
 
-/// Binance Spot WebSocket 消息解析器
-/// 解析 Binance 现货 WebSocket 流消息，输出 BinanceSpotWebSocketStreamResponse
+/// Binance 现货公共行情解析器
 pub struct BinanceSpotStreamParser;
 
 impl WebSocketParser for BinanceSpotStreamParser {
@@ -13,7 +13,7 @@ impl WebSocketParser for BinanceSpotStreamParser {
     fn parse_text(&self, text: &str) -> Result<Self::Output, YueError> {
         match BinanceSpotWebSocketStreamResponse::from_text(text) {
             Ok(response) => {
-                trace!("✓ 成功解析币安现货消息: {:?}", response);
+                trace!("✓ 成功解析币安现货行情: {:?}", response);
                 Ok(response)
             }
             Err(e) => {
@@ -22,7 +22,35 @@ impl WebSocketParser for BinanceSpotStreamParser {
                 } else {
                     text.to_string()
                 };
-                Err(YueError::ParseError(format!("解析币安现货消息失败: {}\n消息预览: {}", e, preview)))
+                Err(YueError::ParseError(format!("解析币安现货行情失败: {}\n消息预览: {}", e, preview)))
+            }
+        }
+    }
+
+    fn parse_binary(&self, _data: &[u8]) -> Result<Self::Output, YueError> {
+        Err(YueError::NotImplemented("binary parsing not implemented".to_string()))
+    }
+}
+
+/// Binance 账户流解析器（余额/订单事件）
+pub struct SpotAccountStreamParser;
+
+impl WebSocketParser for SpotAccountStreamParser {
+    type Output = BinanceSpotWebSocketResponse;
+
+    fn parse_text(&self, text: &str) -> Result<Self::Output, YueError> {
+        match BinanceSpotWebSocketResponse::from_text(text) {
+            Ok(response) => {
+                trace!("✓ 成功解析币安账户流: {:?}", response);
+                Ok(response)
+            }
+            Err(e) => {
+                let preview = if text.len() > 200 {
+                    format!("{}...", &text[..200])
+                } else {
+                    text.to_string()
+                };
+                Err(YueError::ParseError(format!("解析币安账户流失败: {}\n消息预览: {}", e, preview)))
             }
         }
     }
@@ -79,5 +107,64 @@ mod tests {
         let parser = BinanceSpotStreamParser;
         let result = parser.parse_text("");
         assert!(result.is_err(), "Should fail on empty string");
+    }
+
+    #[test]
+    fn test_parse_outbound_account_position() {
+        let parser = SpotAccountStreamParser;
+        let json = r#"{
+            "subscriptionId": 123,
+            "event": {
+                "a":"outboundAccountPosition",
+                "E":1690000000000,
+                "u":1690000000000,
+                "B":[
+                    {
+                        "a":"BTC",
+                        "f":"1.5",
+                        "l":"0.5"
+                    },
+                    {
+                        "a":"USDT",
+                        "f":"50000.0",
+                        "l":"0.0"
+                    }
+                ]
+            }
+        }"#;
+
+        let result = parser.parse_text(json);
+        assert!(result.is_ok(), "Failed to parse account position: {:?}", result);
+        match result.unwrap() {
+            BinanceSpotWebSocketResponse::OutboundAccountPosition(payload) => {
+                assert_eq!(payload.subscription_id, 123);
+                assert_eq!(payload.event.event, "outboundAccountPosition");
+                assert_eq!(payload.event.balances.len(), 2);
+            }
+            _ => panic!("Expected OutboundAccountPosition variant"),
+        }
+    }
+
+    #[test]
+    fn test_parse_subscribe_response() {
+        let parser = SpotAccountStreamParser;
+        let json = r#"{"id":1,"status":200,"result":{"subscriptionId":12345}}"#;
+        let result = parser.parse_text(json);
+        assert!(result.is_ok(), "Failed to parse subscribe response: {:?}", result);
+        match result.unwrap() {
+            BinanceSpotWebSocketResponse::SubscribeResponse(resp) => {
+                assert_eq!(resp.status, Some(200));
+                assert_eq!(resp.result.unwrap().subscription_id, 12345);
+            }
+            _ => panic!("Expected SubscribeResponse variant"),
+        }
+    }
+
+    #[test]
+    fn test_account_parser_invalid_json() {
+        let parser = SpotAccountStreamParser;
+        let invalid = "{";
+        let result = parser.parse_text(invalid);
+        assert!(result.is_err(), "Account parser should fail on invalid json");
     }
 }
