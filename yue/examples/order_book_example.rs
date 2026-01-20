@@ -141,11 +141,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         params: vec!["btcusdt@depth@100ms".to_string()],
         id: 1,
     };
-    client_addr
-        .send(SendTextMessage {
-            text: to_string(&subscribe_request)?,
-        })
-        .await??;
+    client_addr.send(SendTextMessage::new(to_string(&subscribe_request)?)).await??;
     info!("✓ 订阅请求已发送");
 
     info!("\n等待订单簿数据...");
@@ -165,11 +161,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         params: vec!["ethusdt@depth@100ms".to_string()],
         id: 2,
     };
-    client_addr
-        .send(SendTextMessage {
-            text: to_string(&subscribe_eth)?,
-        })
-        .await??;
+    client_addr.send(SendTextMessage::new(to_string(&subscribe_eth)?)).await??;
     info!("✓ ETHUSDT 订阅请求已发送");
 
     // 再运行 30 秒

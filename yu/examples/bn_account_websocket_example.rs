@@ -86,9 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     id,
                 };
                 client_addr
-                    .send(yue::websocket::client::SendTextMessage {
-                        text: serde_json::to_string(&command)?,
-                    })
+                    .send(yue::websocket::client::SendTextMessage::new(serde_json::to_string(&command)?))
                     .await??;
             }
         }

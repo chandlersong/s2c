@@ -159,9 +159,7 @@ async fn run_example_direct() -> Result<(), Box<dyn std::error::Error>> {
 
     // 发送一条文本消息（演示）
     if let Ok(result) = client_addr
-        .send(SendTextMessage {
-            text: r#"{"method":"SUBSCRIBE","params":["btcusdt@ticker"],"id":1}"#.to_string(),
-        })
+        .send(SendTextMessage::new(r#"{"method":"SUBSCRIBE","params":["btcusdt@ticker"],"id":1}"#))
         .await
     {
         match result {

@@ -113,11 +113,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ],
         id: 0,
     };
-    client_addr
-        .send(SendTextMessage {
-            text: to_string(&command_request).unwrap(),
-        })
-        .await??;
+    client_addr.send(SendTextMessage::new(to_string(&command_request).unwrap())).await??;
 
     info!("✓ 请求 #2 已发送");
 

@@ -36,6 +36,21 @@ impl ActixMessage for WebSocketEvent {
 #[derive(Clone, Debug)]
 pub struct SendTextMessage {
     pub text: String,
+    pub resend_on_reconnect: bool,
+}
+
+impl SendTextMessage {
+    pub fn new(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            resend_on_reconnect: true,
+        }
+    }
+
+    pub fn with_resend(mut self, resend: bool) -> Self {
+        self.resend_on_reconnect = resend;
+        self
+    }
 }
 
 impl ActixMessage for SendTextMessage {
@@ -46,6 +61,21 @@ impl ActixMessage for SendTextMessage {
 #[derive(Clone, Debug)]
 pub struct SendBinaryMessage {
     pub data: Vec<u8>,
+    pub resend_on_reconnect: bool,
+}
+
+impl SendBinaryMessage {
+    pub fn new(data: Vec<u8>) -> Self {
+        Self {
+            data,
+            resend_on_reconnect: true,
+        }
+    }
+
+    pub fn with_resend(mut self, resend: bool) -> Self {
+        self.resend_on_reconnect = resend;
+        self
+    }
 }
 
 impl ActixMessage for SendBinaryMessage {
@@ -82,8 +112,6 @@ pub struct WebSocketClient {
     /// 消息缓存
     /// 这个缓存，放在connection里面可能更加好一点。但是放在client里面，主要是为了以后的更改和去除。
     command_cache: Arc<Mutex<Vec<WsMessage>>>,
-    /// 重连时是否重新发送缓存的消息,首先默认重新发送
-    resend_command_on_reconnect: bool,
 }
 
 impl WebSocketClient {
@@ -94,7 +122,6 @@ impl WebSocketClient {
             proxy: None,
             command_tx: None,
             command_cache: Arc::new(Mutex::new(Vec::new())),
-            resend_command_on_reconnect: true,
         }
     }
 
@@ -124,18 +151,8 @@ impl WebSocketClient {
         self
     }
 
-    /// 设置重连时是否重新发送缓存消息
-    pub fn with_resend_cached_on_reconnect(mut self, resend: bool) -> Self {
-        self.resend_command_on_reconnect = resend;
-        self
-    }
-
     /// 添加消息到缓存
     pub fn add_to_cache(&self, event: WsMessage) {
-        if !self.resend_command_on_reconnect {
-            return;
-        }
-
         let mut cache = self.command_cache.lock().unwrap();
         cache.push(event);
     }
@@ -143,11 +160,6 @@ impl WebSocketClient {
     /// 清空缓存
     pub fn clear_command_cache(&self) {
         self.command_cache.lock().unwrap().clear();
-    }
-
-    /// 检查是否应该在重连时重新发送缓存消息
-    pub fn should_resend_command_on_reconnect(&self) -> bool {
-        self.resend_command_on_reconnect
     }
 
     #[cfg(test)]
@@ -164,21 +176,12 @@ impl Actor for WebSocketClient {
         let reconnect_interval = self.reconnect_interval;
         let proxy = self.proxy.clone();
 
-        let resend_cached_on_reconnect = self.resend_command_on_reconnect;
-
         // 创建命令通道
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         self.command_tx = Some(command_tx.clone());
-        info!(
-            "WebSocketClient started, connecting to {},send command at initial: {}",
-            url, resend_cached_on_reconnect
-        );
+        info!("WebSocketClient started, connecting to {}", url);
 
-        let message_cache = if self.resend_command_on_reconnect {
-            Some(self.command_cache.clone())
-        } else {
-            None
-        };
+        let message_cache = self.command_cache.clone();
 
         // 获取当前 Actor 地址
         let client_addr = ctx.address();
@@ -199,7 +202,9 @@ impl Handler<SendTextMessage> for WebSocketClient {
     fn handle(&mut self, msg: SendTextMessage, _ctx: &mut Context<Self>) -> Self::Result {
         if let Some(ref tx) = self.command_tx {
             let message = WsMessage::Text(msg.text.into());
-            self.add_to_cache(message.clone());
+            if msg.resend_on_reconnect {
+                self.add_to_cache(message.clone());
+            }
             tx.send(InternalCommand::SendMessage(message))
                 .map_err(|e| YueError::CustomError(format!("发送文本消息失败: {}", e)))
         } else {
@@ -214,7 +219,9 @@ impl Handler<SendBinaryMessage> for WebSocketClient {
     fn handle(&mut self, msg: SendBinaryMessage, _ctx: &mut Context<Self>) -> Self::Result {
         if let Some(ref tx) = self.command_tx {
             let message = WsMessage::Binary(msg.data.into());
-            self.add_to_cache(message.clone());
+            if msg.resend_on_reconnect {
+                self.add_to_cache(message.clone());
+            }
             tx.send(InternalCommand::SendMessage(message))
                 .map_err(|e| YueError::CustomError(format!("发送二进制消息失败: {}", e)))
         } else {
@@ -248,7 +255,7 @@ impl WebSocketConnection {
         reconnect_interval: Duration,
         proxy: Option<String>,
         mut command_rx: mpsc::UnboundedReceiver<InternalCommand>,
-        message_cache: Option<Arc<Mutex<Vec<WsMessage>>>>,
+        message_cache: Arc<Mutex<Vec<WsMessage>>>,
     ) {
         let mut subscribers: Vec<Recipient<WebSocketEvent>> = Vec::new();
         let mut client_addr: Option<Addr<WebSocketClient>> = None;
@@ -256,12 +263,9 @@ impl WebSocketConnection {
         loop {
             info!("正在连接到 WebSocket: {}", url);
             Self::notify_subscribers(&subscribers, WebSocketEvent::Reconnecting).await;
-            let initial_command = if let Some(cache) = &message_cache {
-                let cached_commands = cache.lock().unwrap().clone();
-                Some(cached_commands)
-            } else {
-                None
-            };
+
+            let initial_command = message_cache.lock().ok().map(|cache| cache.clone());
+
             match Self::connect_and_run(&url, &proxy, &mut subscribers, &mut command_rx, initial_command, &mut client_addr).await {
                 Ok(_) => info!("连接正常关闭"),
                 Err(e) => error!("连接错误: {}", e),
@@ -506,20 +510,10 @@ mod tests {
     #[test]
     fn cache_enabled_by_default() {
         let client = WebSocketClient::new("ws://example.com");
-        assert!(client.should_resend_command_on_reconnect());
         assert_eq!(client.cache_len(), 0);
 
         client.add_to_cache(WsMessage::Text("hello".into()));
         assert_eq!(client.cache_len(), 1);
-    }
-
-    #[test]
-    fn disable_cache_stops_storing() {
-        let client = WebSocketClient::new("ws://example.com").with_resend_cached_on_reconnect(false);
-        assert!(!client.should_resend_command_on_reconnect());
-
-        client.add_to_cache(WsMessage::Text("ignored".into()));
-        assert_eq!(client.cache_len(), 0);
     }
 
     #[test]

@@ -177,9 +177,9 @@ async fn start_websocket_job() -> Result<(), YuError> {
         };
 
         client_addr
-            .send(SendTextMessage {
-                text: to_string(&subscribe_request).map_err(|e| YuError::CustomError(format!("序列化订阅请求失败: {}", e)))?,
-            })
+            .send(SendTextMessage::new(
+                to_string(&subscribe_request).map_err(|e| YuError::CustomError(format!("序列化订阅请求失败: {}", e)))?,
+            ))
             .await
             .map_err(|e| YuError::CustomError(format!("发送订阅消息失败: {}", e)))??;
         info!("✓ 交易流订阅请求已发送");
@@ -211,9 +211,9 @@ async fn start_websocket_job() -> Result<(), YuError> {
                 };
 
                 client_addr
-                    .send(SendTextMessage {
-                        text: to_string(&depth_subscribe_request).map_err(|e| YuError::CustomError(format!("序列化深度订阅请求失败: {}", e)))?,
-                    })
+                    .send(SendTextMessage::new(
+                        to_string(&depth_subscribe_request).map_err(|e| YuError::CustomError(format!("序列化深度订阅请求失败: {}", e)))?,
+                    ))
                     .await
                     .map_err(|e| YuError::CustomError(format!("发送深度订阅消息失败: {}", e)))??;
                 info!("✓ 深度流订阅请求已发送");
