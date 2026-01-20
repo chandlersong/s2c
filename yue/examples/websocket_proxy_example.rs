@@ -20,7 +20,7 @@ impl Handler<WebSocketEvent> for EventHandler {
 
     fn handle(&mut self, event: WebSocketEvent, _ctx: &mut Self::Context) {
         match event {
-            WebSocketEvent::Connected => {
+            WebSocketEvent::Connected(_addr) => {
                 info!("[{}] WebSocket 已连接", self.name);
             }
             WebSocketEvent::Disconnected => {

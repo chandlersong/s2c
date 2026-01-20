@@ -119,7 +119,7 @@ impl<P: WebSocketParser> Handler<WebSocketEvent> for WsMessageBus<P> {
 
     fn handle(&mut self, event: WebSocketEvent, _ctx: &mut Context<Self>) {
         match event {
-            WebSocketEvent::Connected => {
+            WebSocketEvent::Connected(_addr) => {
                 info!("✓ WebSocket 已连接");
             }
             WebSocketEvent::TextMessage(text) => {

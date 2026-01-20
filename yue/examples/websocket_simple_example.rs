@@ -20,7 +20,7 @@ impl Handler<WebSocketEvent> for SimpleHandler {
 
     fn handle(&mut self, event: WebSocketEvent, _ctx: &mut Self::Context) {
         match event {
-            WebSocketEvent::Connected => {
+            WebSocketEvent::Connected(_addr) => {
                 info!("✓ WebSocket 已连接");
             }
             WebSocketEvent::TextMessage(text) => {

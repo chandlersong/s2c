@@ -1,9 +1,8 @@
 use crate::errors::YueError;
 use actix::Message as ActixMessage;
-use actix::{Actor, Context, Handler, Recipient};
+use actix::{Actor, Addr, AsyncContext, Context, Handler, Recipient};
 use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, info, trace, warn};
-use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -13,10 +12,10 @@ use tokio_tungstenite::tungstenite::http::Uri;
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 
 /// WebSocket 事件，发送给订阅者
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub enum WebSocketEvent {
-    /// 连接成功
-    Connected,
+    /// 连接成功，携带 WebSocketClient 的地址
+    Connected(Addr<WebSocketClient>),
     /// 连接断开
     Disconnected,
     /// 收到文本消息
@@ -68,6 +67,8 @@ enum InternalCommand {
     AddSubscriber(Recipient<WebSocketEvent>),
     /// 发送 WebSocket 消息
     SendMessage(WsMessage),
+    /// 设置 Client 地址（用于传递给订阅者）
+    SetClientAddr(Addr<WebSocketClient>),
 }
 
 /// WebSocket 客户端 Actor
@@ -158,7 +159,7 @@ impl WebSocketClient {
 impl Actor for WebSocketClient {
     type Context = Context<Self>;
 
-    fn started(&mut self, _ctx: &mut Self::Context) {
+    fn started(&mut self, ctx: &mut Self::Context) {
         let url = self.url.clone();
         let reconnect_interval = self.reconnect_interval;
         let proxy = self.proxy.clone();
@@ -167,7 +168,7 @@ impl Actor for WebSocketClient {
 
         // 创建命令通道
         let (command_tx, command_rx) = mpsc::unbounded_channel();
-        self.command_tx = Some(command_tx);
+        self.command_tx = Some(command_tx.clone());
         info!(
             "WebSocketClient started, connecting to {},send command at initial: {}",
             url, resend_cached_on_reconnect
@@ -178,6 +179,12 @@ impl Actor for WebSocketClient {
         } else {
             None
         };
+
+        // 获取当前 Actor 地址
+        let client_addr = ctx.address();
+
+        // 将地址发送到连接管理器
+        let _ = command_tx.send(InternalCommand::SetClientAddr(client_addr));
 
         // 启动内部连接管理
         tokio::spawn(async move {
@@ -244,6 +251,7 @@ impl WebSocketConnection {
         message_cache: Option<Arc<Mutex<Vec<WsMessage>>>>,
     ) {
         let mut subscribers: Vec<Recipient<WebSocketEvent>> = Vec::new();
+        let mut client_addr: Option<Addr<WebSocketClient>> = None;
 
         loop {
             info!("正在连接到 WebSocket: {}", url);
@@ -254,7 +262,7 @@ impl WebSocketConnection {
             } else {
                 None
             };
-            match Self::connect_and_run(&url, &proxy, &mut subscribers, &mut command_rx, initial_command).await {
+            match Self::connect_and_run(&url, &proxy, &mut subscribers, &mut command_rx, initial_command, &mut client_addr).await {
                 Ok(_) => info!("连接正常关闭"),
                 Err(e) => error!("连接错误: {}", e),
             }
@@ -270,6 +278,7 @@ impl WebSocketConnection {
         subscribers: &mut Vec<Recipient<WebSocketEvent>>,
         command_rx: &mut mpsc::UnboundedReceiver<InternalCommand>,
         initial_command: Option<Vec<WsMessage>>,
+        client_addr: &mut Option<Addr<WebSocketClient>>,
     ) -> Result<(), YueError> {
         let (ws_stream, _) = if let Some(proxy_url) = proxy {
             info!("使用代理连接: {}", proxy_url);
@@ -280,7 +289,13 @@ impl WebSocketConnection {
         };
 
         info!("WebSocket 连接成功!");
-        Self::notify_subscribers(subscribers, WebSocketEvent::Connected).await;
+
+        // 如果有 client_addr，则发送带地址的 Connected 事件
+        if let Some(addr) = client_addr.as_ref() {
+            Self::notify_subscribers(subscribers, WebSocketEvent::Connected(addr.clone())).await;
+        } else {
+            warn!("client_addr 未设置，等待地址设置后再通知");
+        }
 
         let (mut write, mut read) = ws_stream.split();
         let (ws_tx, mut ws_rx) = mpsc::unbounded_channel::<WsMessage>();
@@ -307,6 +322,16 @@ impl WebSocketConnection {
                             info!("发送消息到 WebSocket");
                             if let Err(e) = ws_tx.send(msg) {
                                 error!("消息入队失败: {}", e);
+                            }
+                        }
+                        InternalCommand::SetClientAddr(addr) => {
+                            info!("WebSocketClient 地址已设置");
+                            let was_none = client_addr.is_none();
+                            *client_addr = Some(addr.clone());
+
+                            // 如果之前地址为空且现在已连接，发送 Connected 事件
+                            if was_none {
+                                Self::notify_subscribers(subscribers, WebSocketEvent::Connected(addr)).await;
                             }
                         }
                     }

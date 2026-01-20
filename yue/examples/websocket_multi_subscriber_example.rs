@@ -32,7 +32,7 @@ impl Handler<WebSocketEvent> for CounterHandler {
 
     fn handle(&mut self, event: WebSocketEvent, _ctx: &mut Self::Context) {
         match event {
-            WebSocketEvent::Connected => {
+            WebSocketEvent::Connected(_addr) => {
                 info!("[{}] ✓ WebSocket 已连接", self.name);
             }
             WebSocketEvent::TextMessage(_) => {
@@ -76,7 +76,7 @@ impl Handler<WebSocketEvent> for ContentHandler {
 
     fn handle(&mut self, event: WebSocketEvent, _ctx: &mut Self::Context) {
         match event {
-            WebSocketEvent::Connected => {
+            WebSocketEvent::Connected(_addr) => {
                 info!("[{}] 🟢 连接建立", self.name);
             }
             WebSocketEvent::TextMessage(text) => {
