@@ -212,7 +212,7 @@ mod tests {
         let json = r#"{
             "subscriptionId": 123,
             "event": {
-                "a":"outboundAccountPosition",
+                "e":"outboundAccountPosition",
                 "E":1690000000000,
                 "u":1690000000000,
                 "B":[
@@ -278,7 +278,7 @@ mod tests {
         let account_event = r#"{
             "subscriptionId": 999,
             "event": {
-                "a":"outboundAccountPosition",
+                "e":"outboundAccountPosition",
                 "E":1690000000000,
                 "u":1690000000000,
                 "B":[{"a":"BTC","f":"1.5","l":"0.5"}]
@@ -300,7 +300,7 @@ mod tests {
         let account_event = r#"{
             "subscriptionId": 321,
             "event": {
-                "a":"outboundAccountPosition",
+                "e":"outboundAccountPosition",
                 "E":1690000000000,
                 "u":1690000000000,
                 "B":[{"a":"BTC","f":"1.5","l":"0.5"}]
