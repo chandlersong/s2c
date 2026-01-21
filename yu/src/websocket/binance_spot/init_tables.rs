@@ -140,7 +140,7 @@ mod tests {
 
         let count: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'account_balance_spot'",
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'bn_order_events_spot'",
                 [],
                 |row| row.get(0),
             )
@@ -149,7 +149,7 @@ mod tests {
 
         let count: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'order_events_spot'",
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'bn_order_events_spot'",
                 [],
                 |row| row.get(0),
             )
