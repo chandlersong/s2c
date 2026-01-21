@@ -3,11 +3,13 @@ use li::tools::logs::setup_logger;
 use log::{info, LevelFilter};
 use std::collections::HashMap;
 use yu::config::get_config;
+use yu::websocket::binance_spot::init_tables::create_spot_websocket_tables;
+use yu::websocket::subscribers::AccountSyncActor;
 use yue::binance::bn_json_websocket::SPOT_WEBSOCKET;
 use yue::binance::bn_models::spot_websocket::BinanceSpotWebSocketResponse;
 use yue::binance::websocket_handler::SpotAccountStreamHandler;
 use yue::websocket::client::{SubscribeToEvents, WebSocketClient, WebSocketEvent};
-use yue::websocket::event_bus::WsMessageBus;
+use yue::websocket::event_bus::{Subscribe, WsMessageBus};
 
 struct PrintActor {
     name: String,
@@ -61,6 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_reconnect_interval(std::time::Duration::from_secs(10))
         .start();
 
+    let _ = create_spot_websocket_tables(None);
     info!("WebSocket 客户端已启动（环境变量代理）");
 
     let acc_infos = get_config()
@@ -73,9 +76,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let handler = SpotAccountStreamHandler::new(acc_infos);
     let bus = WsMessageBus::new(handler).start();
     let printer = PrintActor::new("MainPrinter").start();
+    let account_sync_add = AccountSyncActor::new(None).start();
 
-    bus.do_send(yue::websocket::event_bus::Subscribe {
+    bus.do_send(Subscribe {
         subscriber: printer.recipient(),
+    });
+    bus.do_send(Subscribe {
+        subscriber: account_sync_add.recipient(),
     });
 
     info!("✓ WsMessageBus started");

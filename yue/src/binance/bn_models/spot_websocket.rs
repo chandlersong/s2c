@@ -87,6 +87,8 @@ pub struct BalanceUpdatePayload {
     #[serde(rename = "T")]
     pub clear_time: u64,
 }
+/// 订单执行报告载荷，对应 executionReport。
+/// [现货术语表](https://developers.binance.com/docs/zh-CN/binance-spot-api-docs/faqs/spot_glossary)
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ExecutionReportPayload {
     // === 按示例顺序排列（必填或常见字段在前） ===

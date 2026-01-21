@@ -9,21 +9,22 @@ use crate::errors::YuError;
 use crate::exchange::CloneHistoryFetcherFactory;
 use crate::utils::get_snowflake_generator;
 use crate::websocket::binance_spot::create_spot_stream_tables;
-use crate::websocket::subscribers::SpotStreamStorageActor;
+use crate::websocket::binance_spot::init_tables::create_spot_websocket_tables;
+use crate::websocket::subscribers::{AccountSyncActor, SpotStreamStorageActor};
 use actix::Actor;
 use duckdb::Connection;
 use log::info;
 use rust_decimal::prelude::ToPrimitive;
 use serde_json::to_string;
 use std::sync::Arc;
-use yue::binance::bn_json_websocket::{StreamCommandRequest, SPOT_STREAM_WEBSOCKET, WS_SUBSCRIBE_COMMAND};
+use yue::binance::bn_json_websocket::{StreamCommandRequest, SPOT_STREAM_WEBSOCKET, SPOT_WEBSOCKET, WS_SUBSCRIBE_COMMAND};
 use yue::binance::bn_models::common::SymbolType;
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_models::swap_restful::FundingRate;
 use yue::binance::bn_restful_commands::{SPOT_KLINE_HISTORY_COMMAND, SWAP_FUNDING_RATE_COMMAND, SWAP_KLINE_HISTORY_COMMAND};
 use yue::binance::history_data::{CommonParam, SimpleHistoryFetcher};
 use yue::binance::order_book::{OrderBookService, Subscribe as OrderBookSubscribe};
-use yue::binance::websocket_handler::BinanceSpotStreamHandler;
+use yue::binance::websocket_handler::{BinanceSpotStreamHandler, SpotAccountStreamHandler};
 use yue::websocket::client::{SendTextMessage, SubscribeToEvents, WebSocketClient, WebSocketEvent};
 use yue::websocket::event_bus::{Subscribe, WsMessageBus};
 
@@ -43,6 +44,48 @@ pub async fn start_bn_jobs() -> Result<(), YuError> {
     start_websocket_job().await?;
     Ok(())
 }
+
+pub async fn start_spot_jobs() -> Result<(), YuError> {
+    let config = get_config();
+    let mut client_builder = WebSocketClient::new(SPOT_WEBSOCKET);
+
+    if let Some(proxy) = &config.proxy_url {
+        client_builder = client_builder.with_proxy(proxy);
+        info!("✓ WebSocket 使用代理: {}", proxy);
+    }
+    let client_addr = client_builder.with_reconnect_interval(std::time::Duration::from_secs(5)).start();
+    info!("✓ WebSocket 客户端已启动: {}", SPOT_WEBSOCKET);
+
+    let _ = create_spot_websocket_tables(None);
+    info!("数据库创建表完成");
+
+    let acc_infos = config
+        .binance_websocket
+        .as_ref()
+        .and_then(|ws| ws.spot.as_ref())
+        .map(|spot| spot.accounts.iter().map(|acc| acc.clone().into()).collect())
+        .unwrap_or_default();
+
+    let handler = SpotAccountStreamHandler::new(acc_infos);
+    let bus = WsMessageBus::new(handler).start();
+    let account_sync_add = AccountSyncActor::new(None).start();
+
+    bus.do_send(Subscribe {
+        subscriber: account_sync_add.recipient(),
+    });
+
+    info!("✓ WsMessageBus started");
+
+    client_addr
+        .send(SubscribeToEvents {
+            recipient: bus.recipient::<WebSocketEvent>(),
+        })
+        .await
+        .map_err(|e| YuError::CustomError(format!("发送订阅事件失败: {}", e)))??;
+    info!("✓ WsMessageBus 订阅 WebSocketClient 事件");
+    Ok(())
+}
+
 /// 启动后台的websocket任务，然后根据配置来配置需要的内容
 /// 1. 启动websocket客户端。监听以下内容
 ///    - spot stream
@@ -114,10 +157,7 @@ async fn start_websocket_job() -> Result<(), YuError> {
     // 步骤2.5: 只有开启 depth 时，才初始化 OrderBookService 和 MarketDepthDashBoard
     if let Some(depth_config) = &spot_config.depth {
         if depth_config.enabled() && !depth_config.symbols.is_empty() {
-            let depth = match depth_config.levels.unwrap_or(20).to_u16() {
-                None => 20,
-                Some(v) => v,
-            };
+            let depth = depth_config.levels.unwrap_or(20).to_u16().unwrap_or_else(|| 20);
             let order_book_service = OrderBookService::new().with_market_depth(depth).start();
             info!("✓ OrderBookService 已启动 (market_depth=20)");
 

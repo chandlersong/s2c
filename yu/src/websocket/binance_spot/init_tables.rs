@@ -7,42 +7,70 @@ use log::info;
 // AccountSync 表管理
 // ============================================================================
 
-const CREATE_ACCOUNT_BALANCE_SPOT_TABLE: &str = r#"
-CREATE TABLE IF NOT EXISTS account_balance_spot (
-    account_id TEXT NOT NULL,
-    asset TEXT NOT NULL,
-    free DOUBLE NOT NULL,
-    locked DOUBLE NOT NULL,
-    event_time TIMESTAMP NOT NULL,
-    source_exchange TEXT NOT NULL,
-    raw_json TEXT NOT NULL,
-    PRIMARY KEY (account_id, asset, event_time)
-)
-"#;
-
-const CREATE_ORDER_EVENTS_SPOT_TABLE: &str = r#"
-CREATE TABLE IF NOT EXISTS order_events_spot (
-    account_id TEXT NOT NULL,
+const CREATE_BN_ORDER_EVENTS_SPOT_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS bn_order_events_spot (
+    event TEXT NOT NULL,
+    event_time BIGINT NOT NULL,
     symbol TEXT NOT NULL,
-    order_id TEXT NOT NULL,
     client_order_id TEXT NOT NULL,
-    status TEXT NOT NULL,
     side TEXT NOT NULL,
-    type TEXT NOT NULL,
-    price DOUBLE NOT NULL,
-    qty DOUBLE NOT NULL,
-    exec_qty DOUBLE NOT NULL,
-    last_exec_price DOUBLE NOT NULL,
-    event_time TIMESTAMP NOT NULL,
-    source_exchange TEXT NOT NULL,
-    raw_json TEXT NOT NULL,
-    PRIMARY KEY (account_id, order_id, event_time)
+    order_type TEXT NOT NULL,
+    time_in_force TEXT NOT NULL,
+    order_qty DOUBLE NOT NULL,
+    order_price DOUBLE NOT NULL,
+    stop_price DOUBLE NOT NULL,
+    iceberg_qty DOUBLE NOT NULL,
+    order_list_id BIGINT NOT NULL,
+    original_client_order_id TEXT NOT NULL,
+    execution_type TEXT NOT NULL,
+    order_status TEXT NOT NULL,
+    reject_reason TEXT NOT NULL,
+    order_id BIGINT NOT NULL,
+    last_executed_qty DOUBLE NOT NULL,
+    cumulative_filled_qty DOUBLE NOT NULL,
+    last_executed_price DOUBLE NOT NULL,
+    commission_amount DOUBLE NOT NULL,
+    commission_asset TEXT,
+    trade_time BIGINT NOT NULL,
+    trade_id BIGINT,
+    stp BIGINT,
+    order_creation_time BIGINT NOT NULL,
+    is_working BOOLEAN NOT NULL,
+    is_maker BOOLEAN NOT NULL,
+    is_best_match BOOLEAN NOT NULL,
+    order_create_time BIGINT NOT NULL,
+    cumulative_quote_qty DOUBLE NOT NULL,
+    last_quote_qty DOUBLE NOT NULL,
+    quote_order_quantity DOUBLE NOT NULL,
+    working_time BIGINT NOT NULL,
+    self_trade_prevention_mode TEXT NOT NULL,
+    trailing_delta DOUBLE,
+    trailing_time BIGINT,
+    strategy_id BIGINT,
+    strategy_type BIGINT,
+    prevented_quantity DOUBLE,
+    last_prevented_quantity DOUBLE,
+    trade_group_id BIGINT,
+    counter_order_id BOOLEAN,
+    counter_symbol TEXT,
+    prevented_execution_quantity DOUBLE,
+    prevented_execution_price DOUBLE,
+    prevented_execution_quote_qty DOUBLE,
+    match_type TEXT,
+    allocation_id BIGINT,
+    working_floor TEXT,
+    used_sor BOOLEAN,
+    pegged_price_type TEXT,
+    pegged_offset_type TEXT,
+    pegged_offset_value BIGINT,
+    pegged_price DOUBLE,
+    PRIMARY KEY (order_id, event_time)
 )
 "#;
 
 const CREATE_ORDER_EVENTS_INDEX: &str = r#"
 CREATE INDEX IF NOT EXISTS idx_order_events_symbol_time
-ON order_events_spot (symbol, event_time)
+ON bn_order_events_spot (symbol, event_time DESC)
 "#;
 
 pub fn create_spot_stream_tables() -> Result<(), YuError> {
@@ -84,11 +112,7 @@ pub fn create_spot_websocket_tables(conn_out: Option<&Connection>) -> Result<(),
         }
     };
 
-    for stmt in [
-        CREATE_ACCOUNT_BALANCE_SPOT_TABLE,
-        CREATE_ORDER_EVENTS_SPOT_TABLE,
-        CREATE_ORDER_EVENTS_INDEX,
-    ] {
+    for stmt in [CREATE_BN_ORDER_EVENTS_SPOT_TABLE, CREATE_ORDER_EVENTS_INDEX] {
         let sql = stmt.trim();
         if !sql.is_empty() {
             conn.execute(sql, [])?;
