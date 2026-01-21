@@ -7,10 +7,10 @@ binance_websocket:
     accounts:
       - account_name: "account1"
         api_key: "test_api_key_1"
-        secret_key: "test_secret_key_1"
+        key_path: "test_secret_key_1"
       - account_name: "account2"
         api_key: "test_api_key_2"
-        secret_key: "test_secret_key_2"
+        key_path: "test_secret_key_2"
   spot_stream:
     trade:
       enabled: true

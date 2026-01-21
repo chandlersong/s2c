@@ -3,6 +3,8 @@ use serde::Deserialize;
 use std::env;
 use std::path::Path;
 use std::sync::OnceLock;
+use yue::binance::websocket_handler::AccountWebsocketInfo;
+use yue::tools::load_ed25519_signing_key;
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct SpotWebSocketConfig {
@@ -13,7 +15,18 @@ pub struct SpotWebSocketConfig {
 pub struct AccountConfig {
     pub account_name: String,
     pub api_key: String,
-    pub secret_key: String,
+    pub key_path: String,
+}
+
+impl Into<AccountWebsocketInfo> for AccountConfig {
+    fn into(self) -> AccountWebsocketInfo {
+        let private_key = load_ed25519_signing_key(self.key_path.as_ref()).expect("加载私钥失败");
+        AccountWebsocketInfo {
+            account_name: self.account_name.clone(),
+            api_key: self.api_key.clone(),
+            private_key: private_key,
+        }
+    }
 }
 
 // Binance WebSocket 配置结构体
@@ -169,18 +182,12 @@ mod tests {
         // 验证第一个账户
         assert_eq!(spot_ws_config.accounts[0].account_name, "account1", "第一个账户名称应该是 account1");
         assert_eq!(spot_ws_config.accounts[0].api_key, "test_api_key_1", "第一个账户 API Key 应该匹配");
-        assert_eq!(
-            spot_ws_config.accounts[0].secret_key, "test_secret_key_1",
-            "第一个账户 Secret Key 应该匹配"
-        );
+        assert_eq!(spot_ws_config.accounts[0].key_path, "test_secret_key_1", "第一个账户 Secret Key 应该匹配");
 
         // 验证第二个账户
         assert_eq!(spot_ws_config.accounts[1].account_name, "account2", "第二个账户名称应该是 account2");
         assert_eq!(spot_ws_config.accounts[1].api_key, "test_api_key_2", "第二个账户 API Key 应该匹配");
-        assert_eq!(
-            spot_ws_config.accounts[1].secret_key, "test_secret_key_2",
-            "第二个账户 Secret Key 应该匹配"
-        );
+        assert_eq!(spot_ws_config.accounts[1].key_path, "test_secret_key_2", "第二个账户 Secret Key 应该匹配");
     }
 
     #[test]

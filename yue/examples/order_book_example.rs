@@ -12,7 +12,7 @@ use serde_json::to_string;
 use std::collections::HashMap;
 use yue::binance::bn_json_websocket::{SPOT_STREAM_WEBSOCKET, StreamCommandRequest, WS_SUBSCRIBE_COMMAND};
 use yue::binance::order_book::{OrderBookService, OrderBookSnapshotMsg, Subscribe};
-use yue::binance::parsers::BinanceSpotStreamParser;
+use yue::binance::websocket_handler::BinanceSpotStreamHandler;
 use yue::http_client::init_http_client;
 use yue::websocket::client::{SendTextMessage, SubscribeToEvents, WebSocketClient, WebSocketEvent};
 use yue::websocket::event_bus::WsMessageBus;
@@ -113,7 +113,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("✓ WebSocket 客户端已启动");
 
     // 步骤 5: 创建消息总线，将 WebSocket 消息解析并分发
-    let bus = WsMessageBus::new(BinanceSpotStreamParser).start();
+    let bus = WsMessageBus::new(BinanceSpotStreamHandler).start();
     info!("✓ WsMessageBus 已启动");
 
     // 步骤 6: 将 OrderBookService 注册为 bus 的订阅者

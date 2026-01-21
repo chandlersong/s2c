@@ -1,15 +1,21 @@
+use crate::binance::bn_json_websocket::{CommandRequest, USER_DATA_STREAM_SUBSCRIBE_SIGNATURE};
 use crate::binance::bn_models::spot_websocket::BinanceSpotWebSocketResponse;
 use crate::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamResponse;
 use crate::errors::YueError;
-use crate::websocket::event_bus::WebSocketParser;
-use log::trace;
+use crate::tools::{SnowyFlakeWrapper, sign_ed25519};
+use crate::websocket::client::{SendTextMessage, WebSocketClient};
+use crate::websocket::event_bus::WebSocketHandler;
+use actix::Addr;
+use ed25519_dalek::SigningKey;
+use li::tools::time::unix_time_now_u64_utc;
+use log::{error, info, trace};
 use std::collections::HashMap;
 use std::sync::RwLock;
 
 /// Binance 现货公共行情解析器
-pub struct BinanceSpotStreamParser;
+pub struct BinanceSpotStreamHandler;
 
-impl WebSocketParser for BinanceSpotStreamParser {
+impl WebSocketHandler for BinanceSpotStreamHandler {
     type Output = BinanceSpotWebSocketStreamResponse;
 
     fn parse_text(&self, text: &str) -> Result<Self::Output, YueError> {
@@ -28,30 +34,47 @@ impl WebSocketParser for BinanceSpotStreamParser {
             }
         }
     }
+}
 
-    fn parse_binary(&self, _data: &[u8]) -> Result<Self::Output, YueError> {
-        Err(YueError::NotImplemented("binary parsing not implemented".to_string()))
-    }
+pub struct AccountWebsocketInfo {
+    pub account_name: String,
+    pub api_key: String,
+    pub private_key: SigningKey,
 }
 
 /// Binance 账户流解析器（余额/订单事件）
-pub struct SpotAccountStreamParser {
-    id_to_account: HashMap<u64, String>,
+///
+/// ## 设计思路和目的
+/// - 订阅 Binance 现货账户数据流（userDataStream），接收余额更新、订单执行报告等事件
+/// - 支持多账户并行订阅，每个账户独立维护 listenKey 和订阅 ID
+/// - 通过 subscription_id 映射到具体账户，便于后续事件处理和数据入库
+///
+/// ## 核心职责
+/// 1. 在连接建立时（on_connect），为每个账户生成唯一的订阅请求 ID，发送 WebSocket 订阅
+/// 2. 维护请求 ID 与账户名的映射（id_to_account）
+/// 3. 接收 SubscribeResponse 后，维护 subscription_id 与账户名的映射（subscription_to_account）
+/// 4. 解析后续收到的账户事件（OutboundAccountPosition、BalanceUpdate、ExecutionReport）
+///    并根据 subscription_id 填充对应的账户名
+///
+/// - 映射关系可扩展为多维度映射，例如支持账户别名、优先级等
+/// - listenKey 管理可独立封装为 ListenKeyManager，支持自动刷新和过期处理
+///
+/// ## 业务规范
+/// - account_name 大小写敏感，应保持一致性
+/// - subscription_id 由 Binance 服务器分配，全局唯一
+/// - request_id 由本地生成，用于关联订阅请求和响应
+pub struct SpotAccountStreamHandler {
+    account_info_vec: Vec<AccountWebsocketInfo>,
+    id_to_account: RwLock<HashMap<u64, String>>,
     subscription_to_account: RwLock<HashMap<u64, String>>, // 运行期维护订阅ID与账户名关系，读多写少用RwLock
 }
 
-impl SpotAccountStreamParser {
-    pub fn new(id_to_account: HashMap<u64, String>) -> Self {
+impl SpotAccountStreamHandler {
+    pub fn new(account_info_vec: Vec<AccountWebsocketInfo>) -> Self {
         Self {
-            id_to_account,
+            account_info_vec,
+            id_to_account: RwLock::new(HashMap::new()),
             subscription_to_account: RwLock::new(HashMap::new()),
-        }
-    }
-
-    pub fn with_capacity(id_to_account: HashMap<u64, String>, capacity: usize) -> Self {
-        Self {
-            id_to_account,
-            subscription_to_account: RwLock::new(HashMap::with_capacity(capacity)),
         }
     }
 
@@ -65,16 +88,19 @@ impl SpotAccountStreamParser {
     }
 }
 
-///TODO 这里要加入重连逻辑
-impl Default for SpotAccountStreamParser {
-    fn default() -> Self {
-        Self::new(HashMap::new())
-    }
-}
-
-impl WebSocketParser for SpotAccountStreamParser {
+impl WebSocketHandler for SpotAccountStreamHandler {
     type Output = BinanceSpotWebSocketResponse;
 
+    ///对于和账户相关的流，各个消息的处理逻辑
+    /// 对于账户相关的信息。
+    /// OutboundAccountPosition
+    /// BalanceUpdate
+    /// ExecutionReport
+    /// 通过subscription_id找到对应的账户名，并填充到消息中
+    ///
+    /// SubscribeResponse:
+    /// 更新subscription_id和account_name的关系
+    ///
     fn parse_text(&self, text: &str) -> Result<Self::Output, YueError> {
         let parsed = match BinanceSpotWebSocketResponse::from_text(text) {
             Ok(response) => response,
@@ -91,12 +117,14 @@ impl WebSocketParser for SpotAccountStreamParser {
         match parsed {
             BinanceSpotWebSocketResponse::SubscribeResponse(resp) => {
                 if let (Some(id), Some(result)) = (resp.id, resp.result.clone()) {
-                    if let Some(account_name) = self.id_to_account.get(&id) {
+                    let map = self.id_to_account.read().map_err(|_| YueError::new("获得id_to_account锁失败"))?;
+                    if let Some(account_name) = map.get(&id) {
                         let mut guard = self
                             .subscription_to_account
                             .write()
                             .map_err(|_| YueError::ParseError("解析账户流失败: subscription 映射写锁获取失败".to_string()))?;
                         guard.insert(result.subscription_id, account_name.clone());
+                        info!("{} 账户订阅成功，subscription_id={}", account_name, result.subscription_id);
                     }
                 }
                 trace!("✓ 成功解析币安账户订阅响应: {:?}", resp);
@@ -147,8 +175,63 @@ impl WebSocketParser for SpotAccountStreamParser {
         }
     }
 
-    fn parse_binary(&self, _data: &[u8]) -> Result<Self::Output, YueError> {
-        Err(YueError::NotImplemented("binary parsing not implemented".to_string()))
+    /// 这里通过account_info_vec，给websocket client发送信息。订阅账户信息。
+    /// 然后把id和account_name的映射关系存储起来，方便后续消息处理时使用。
+    ///
+    fn on_connect(&self, addr: &Addr<WebSocketClient>) -> Result<(), YueError> {
+        {
+            // 每次重连前清空旧的请求ID映射
+            let mut map = self
+                .id_to_account
+                .write()
+                .map_err(|e| YueError::new(&format!("获取id_to_account写锁失败: {}", e)))?;
+            map.clear();
+        }
+
+        let snow_flake = SnowyFlakeWrapper::new();
+        for account_info in &self.account_info_vec {
+            // 1. 生成唯一的 request ID
+            let request_id = snow_flake.next_id_u64();
+            let now = unix_time_now_u64_utc();
+            let payload = format!("apiKey={}&timestamp={}", account_info.api_key, now);
+            let mut key = account_info.private_key.clone();
+            let signature = sign_ed25519(payload, &mut key)?;
+            let param = HashMap::from([
+                ("signature".to_string(), signature),
+                ("apiKey".to_string(), account_info.api_key.clone()),
+                ("timestamp".to_string(), now.to_string()),
+            ]);
+
+            // 3. 构建 WebSocket 订阅请求
+            let command = CommandRequest {
+                method: USER_DATA_STREAM_SUBSCRIBE_SIGNATURE.to_string(),
+                params: param,
+                id: request_id.clone(),
+            };
+
+            // 5. 发送 WebSocket 消息
+            let message = SendTextMessage::new(serde_json::to_string(&command)?);
+            match addr.try_send(message) {
+                Ok(_) => {
+                    info!("✓ 已发送账户 {} 的订阅请求 (id={})", account_info.account_name, request_id);
+                }
+                Err(e) => {
+                    error!("❌ 无法发送账户 {} 的订阅请求: {}", account_info.account_name, e);
+                    continue;
+                }
+            }
+            {
+                let mut map = match self.id_to_account.write() {
+                    Ok(m) => m,
+                    Err(e) => {
+                        error!("无法获得 id_to_account 写锁: {}", e);
+                        continue;
+                    }
+                };
+                map.insert(request_id, account_info.account_name.clone());
+            }
+        }
+        Ok(())
     }
 }
 
@@ -159,7 +242,7 @@ mod tests {
 
     #[test]
     fn test_parse_trade_message() {
-        let parser = BinanceSpotStreamParser;
+        let parser = BinanceSpotStreamHandler;
         let trade_json = r#"{
             "e":"trade",
             "E":1234567890,
@@ -187,7 +270,7 @@ mod tests {
 
     #[test]
     fn test_parse_invalid_json() {
-        let parser = BinanceSpotStreamParser;
+        let parser = BinanceSpotStreamHandler;
         let invalid_json = r#"{"invalid": json}"#;
 
         let result = parser.parse_text(invalid_json);
@@ -196,16 +279,20 @@ mod tests {
 
     #[test]
     fn test_parse_empty_string() {
-        let parser = BinanceSpotStreamParser;
+        let parser = BinanceSpotStreamHandler;
         let result = parser.parse_text("");
         assert!(result.is_err(), "Should fail on empty string");
     }
 
     #[test]
     fn test_parse_outbound_account_position() {
-        let mut id_map = HashMap::new();
-        id_map.insert(42, "acc_test".to_string());
-        let parser = SpotAccountStreamParser::new(id_map);
+        let parser = SpotAccountStreamHandler::new(vec![]);
+
+        // 手动插入 id -> account_name 映射
+        {
+            let mut map = parser.id_to_account.write().unwrap();
+            map.insert(42, "acc_test".to_string());
+        }
 
         let subscribe_json = r#"{"id":42,"status":200,"result":{"subscriptionId":123}}"#;
         parser.parse_text(subscribe_json).expect("subscribe should build mapping");
@@ -245,7 +332,7 @@ mod tests {
 
     #[test]
     fn test_parse_subscribe_response() {
-        let parser = SpotAccountStreamParser::default();
+        let parser = SpotAccountStreamHandler::new(vec![]);
         let json = r#"{"id":1,"status":200,"result":{"subscriptionId":12345}}"#;
         let result = parser.parse_text(json);
         assert!(result.is_ok(), "Failed to parse subscribe response: {:?}", result);
@@ -260,7 +347,7 @@ mod tests {
 
     #[test]
     fn test_account_parser_invalid_json() {
-        let parser = SpotAccountStreamParser::default();
+        let parser = SpotAccountStreamHandler::new(vec![]);
         let invalid = "{";
         let result = parser.parse_text(invalid);
         assert!(result.is_err(), "Account parser should fail on invalid json");
@@ -268,9 +355,13 @@ mod tests {
 
     #[test]
     fn test_account_event_with_account_mapping() {
-        let mut id_map = HashMap::new();
-        id_map.insert(1, "acc_a".to_string());
-        let parser = SpotAccountStreamParser::new(id_map);
+        let parser = SpotAccountStreamHandler::new(vec![]);
+
+        // 手动插入 id -> account_name 映射
+        {
+            let mut map = parser.id_to_account.write().unwrap();
+            map.insert(1, "acc_a".to_string());
+        }
 
         let subscribe_json = r#"{"id":1,"status":200,"result":{"subscriptionId":999}}"#;
         parser.parse_text(subscribe_json).expect("subscribe response should parse");
@@ -296,7 +387,7 @@ mod tests {
 
     #[test]
     fn test_account_event_missing_subscription_mapping() {
-        let parser = SpotAccountStreamParser::default();
+        let parser = SpotAccountStreamHandler::new(vec![]);
         let account_event = r#"{
             "subscriptionId": 321,
             "event": {
@@ -309,5 +400,32 @@ mod tests {
 
         let parsed = parser.parse_text(account_event);
         assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn test_on_connect_builds_id_mapping() {
+        // 创建带有账户信息的处理器
+        // 使用固定的签名密钥用于测试
+        let signing_key_bytes = [0u8; 32];
+        let account_infos = vec![
+            AccountWebsocketInfo {
+                account_name: "acc_test_1".to_string(),
+                api_key: "key1".to_string(),
+                private_key: ed25519_dalek::SigningKey::from_bytes(&signing_key_bytes),
+            },
+            AccountWebsocketInfo {
+                account_name: "acc_test_2".to_string(),
+                api_key: "key2".to_string(),
+                private_key: ed25519_dalek::SigningKey::from_bytes(&signing_key_bytes),
+            },
+        ];
+
+        let handler = SpotAccountStreamHandler::new(account_infos);
+
+        // 验证初始状态：id_to_account 为空
+        {
+            let map = handler.id_to_account.read().unwrap();
+            assert_eq!(map.len(), 0, "初始状态下 id_to_account 应为空");
+        }
     }
 }

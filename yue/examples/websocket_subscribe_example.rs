@@ -12,7 +12,7 @@ use serde_json::to_string;
 use std::collections::HashMap;
 use yue::binance::bn_json_websocket::{SPOT_STREAM_WEBSOCKET, StreamCommandRequest, WS_SUBSCRIBE_COMMAND};
 use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamResponse;
-use yue::binance::parsers::BinanceSpotStreamParser;
+use yue::binance::websocket_handler::BinanceSpotStreamHandler;
 use yue::websocket::client::{SendTextMessage, SubscribeToEvents, WebSocketClient, WebSocketEvent};
 use yue::websocket::event_bus::{Subscribe, WsMessageBus};
 
@@ -78,7 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("✓ WebSocket 客户端已启动");
 
     // 步骤 2: 创建事件处理器
-    let bus = WsMessageBus::new(BinanceSpotStreamParser).start();
+    let bus = WsMessageBus::new(BinanceSpotStreamHandler).start();
     info!("✓ WsMessageBus started");
     let printer = PrintSubscriberActor.start();
     // let storage = StorageSubscriberActor::new(100, 5000).start();

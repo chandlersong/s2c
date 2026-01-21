@@ -23,7 +23,7 @@ use yue::binance::bn_models::swap_restful::FundingRate;
 use yue::binance::bn_restful_commands::{SPOT_KLINE_HISTORY_COMMAND, SWAP_FUNDING_RATE_COMMAND, SWAP_KLINE_HISTORY_COMMAND};
 use yue::binance::history_data::{CommonParam, SimpleHistoryFetcher};
 use yue::binance::order_book::{OrderBookService, Subscribe as OrderBookSubscribe};
-use yue::binance::parsers::BinanceSpotStreamParser;
+use yue::binance::websocket_handler::BinanceSpotStreamHandler;
 use yue::websocket::client::{SendTextMessage, SubscribeToEvents, WebSocketClient, WebSocketEvent};
 use yue::websocket::event_bus::{Subscribe, WsMessageBus};
 
@@ -98,7 +98,7 @@ async fn start_websocket_job() -> Result<(), YuError> {
     info!("✓ WebSocket 客户端已启动: {}", SPOT_STREAM_WEBSOCKET);
 
     // 步骤2: 启动 WsMessageBus
-    let bus = WsMessageBus::new(BinanceSpotStreamParser).start();
+    let bus = WsMessageBus::new(BinanceSpotStreamHandler).start();
     info!("✓ WsMessageBus 已启动");
 
     // 步骤3: 启动 SpotStreamStorageActor

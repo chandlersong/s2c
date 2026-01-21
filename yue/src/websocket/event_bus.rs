@@ -1,11 +1,11 @@
 use crate::errors::YueError;
-use crate::websocket::client::WebSocketEvent;
-use actix::{Actor, Context, Handler, Message as ActixMessage, Recipient, Supervised};
+use crate::websocket::client::{WebSocketClient, WebSocketEvent};
+use actix::{Actor, Addr, Context, Handler, Message as ActixMessage, Recipient, Supervised};
 use log::{error, info, trace, warn};
 use std::fmt::Debug;
 
 /// Parser trait 定义（内置于 WsMessageBus 的泛型）
-pub trait WebSocketParser: Send + Sync + Unpin + 'static {
+pub trait WebSocketHandler: Send + Sync + Unpin + 'static {
     /// 解析输出类型
     type Output: ActixMessage<Result = ()> + Clone + Send + Debug + 'static;
 
@@ -18,22 +18,28 @@ pub trait WebSocketParser: Send + Sync + Unpin + 'static {
     fn parse_binary(&self, _data: &[u8]) -> Result<Self::Output, YueError> {
         Err(YueError::NotImplemented("binary parsing not implemented".to_string()))
     }
+
+    /// 连接建立时的回调（可选实现）
+    /// 这里传入一个addr用来发消息，我觉得有点简单。想要包装一个类。但是觉得也太复杂。就先这样吧。
+    fn on_connect(&self, _addr: &Addr<WebSocketClient>) -> Result<(), YueError> {
+        Ok(())
+    }
 }
 
 /// 订阅消息
 #[derive(Debug, Clone)]
-pub struct Subscribe<P: WebSocketParser> {
+pub struct Subscribe<P: WebSocketHandler> {
     pub subscriber: Recipient<P::Output>,
 }
 
-impl<P: WebSocketParser> ActixMessage for Subscribe<P> {
+impl<P: WebSocketHandler> ActixMessage for Subscribe<P> {
     type Result = Result<(), YueError>;
 }
 
 /// WebSocket 消息总线
 /// 订阅 WebSocketClient 的 WebSocketEvent，解析后广播到多个订阅者
-pub struct WsMessageBus<P: WebSocketParser> {
-    parser: P,
+pub struct WsMessageBus<P: WebSocketHandler> {
+    handler: P,
     subscribers: Vec<Recipient<P::Output>>,
     // 统计信息（仅用于日志，无需通过消息返回，先统计，不做任何输出
     text_messages_received: u64,
@@ -46,10 +52,10 @@ pub struct WsMessageBus<P: WebSocketParser> {
     last_warning_time: std::time::Instant,
 }
 
-impl<P: WebSocketParser> WsMessageBus<P> {
-    pub fn new(parser: P) -> Self {
+impl<P: WebSocketHandler> WsMessageBus<P> {
+    pub fn new(handler: P) -> Self {
         Self {
-            parser,
+            handler,
             subscribers: Vec::new(),
             text_messages_received: 0,
             binary_messages_received: 0,
@@ -90,7 +96,7 @@ impl<P: WebSocketParser> WsMessageBus<P> {
     }
 }
 
-impl<P: WebSocketParser> Actor for WsMessageBus<P> {
+impl<P: WebSocketHandler> Actor for WsMessageBus<P> {
     type Context = Context<Self>;
 
     fn started(&mut self, _ctx: &mut Self::Context) {
@@ -98,14 +104,14 @@ impl<P: WebSocketParser> Actor for WsMessageBus<P> {
     }
 }
 
-impl<P: WebSocketParser> Supervised for WsMessageBus<P> {
+impl<P: WebSocketHandler> Supervised for WsMessageBus<P> {
     fn restarting(&mut self, _ctx: &mut Context<Self>) {
         info!("WsMessageBus restarting by supervisor");
     }
 }
 
 /// 处理 Subscribe 消息
-impl<P: WebSocketParser> Handler<Subscribe<P>> for WsMessageBus<P> {
+impl<P: WebSocketHandler> Handler<Subscribe<P>> for WsMessageBus<P> {
     type Result = Result<(), YueError>;
 
     fn handle(&mut self, msg: Subscribe<P>, _ctx: &mut Context<Self>) -> Self::Result {
@@ -114,18 +120,21 @@ impl<P: WebSocketParser> Handler<Subscribe<P>> for WsMessageBus<P> {
         Ok(())
     }
 }
-impl<P: WebSocketParser> Handler<WebSocketEvent> for WsMessageBus<P> {
+impl<P: WebSocketHandler> Handler<WebSocketEvent> for WsMessageBus<P> {
     type Result = ();
 
     fn handle(&mut self, event: WebSocketEvent, _ctx: &mut Context<Self>) {
         match event {
             WebSocketEvent::Connected(_addr) => {
                 info!("✓ WebSocket 已连接");
+                if let Err(e) = self.handler.on_connect(&_addr) {
+                    error!("启动的业务逻辑失败。{}", e);
+                }
             }
             WebSocketEvent::TextMessage(text) => {
                 self.text_messages_received += 1;
                 trace!("收到文本消息 #{}: {} 字符", self.text_messages_received, text.len());
-                match self.parser.parse_text(text.as_str()) {
+                match self.handler.parse_text(text.as_str()) {
                     Ok(m) => {
                         self.broadcast(m);
                         self.broadcast_count += 1;
@@ -143,7 +152,7 @@ impl<P: WebSocketParser> Handler<WebSocketEvent> for WsMessageBus<P> {
             WebSocketEvent::BinaryMessage(data) => {
                 self.binary_messages_received += 1;
                 trace!("收到二进制消息 #{}: {} 字节", self.binary_messages_received, data.len());
-                match self.parser.parse_binary(&data) {
+                match self.handler.parse_binary(&data) {
                     Ok(m) => {
                         self.broadcast(m);
                         self.broadcast_count += 1;
@@ -192,7 +201,7 @@ mod tests {
         type Result = ();
     }
 
-    impl WebSocketParser for TestParser {
+    impl WebSocketHandler for TestParser {
         type Output = TestOutput;
 
         fn parse_text(&self, text: &str) -> Result<Self::Output, YueError> {
@@ -216,7 +225,7 @@ mod tests {
         type Result = ();
     }
 
-    impl WebSocketParser for BinaryParser {
+    impl WebSocketHandler for BinaryParser {
         type Output = BinaryOutput;
 
         fn parse_text(&self, text: &str) -> Result<Self::Output, YueError> {

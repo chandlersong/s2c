@@ -47,9 +47,11 @@ impl SendTextMessage {
         }
     }
 
-    pub fn with_resend(mut self, resend: bool) -> Self {
-        self.resend_on_reconnect = resend;
-        self
+    pub fn new_no_resend(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            resend_on_reconnect: false,
+        }
     }
 }
 
@@ -72,9 +74,11 @@ impl SendBinaryMessage {
         }
     }
 
-    pub fn with_resend(mut self, resend: bool) -> Self {
-        self.resend_on_reconnect = resend;
-        self
+    pub fn new_no_resend(data: Vec<u8>) -> Self {
+        Self {
+            data,
+            resend_on_reconnect: false,
+        }
     }
 }
 
@@ -319,7 +323,11 @@ impl WebSocketConnection {
                 Some(command) = command_rx.recv() => {
                     match command {
                         InternalCommand::AddSubscriber(recipient) => {
-                            subscribers.push(recipient);
+                            subscribers.push(recipient.clone());
+                            //添加订阅者的时候，给他发送Connected事件。
+                            if let Some(addr) = client_addr.as_ref() {
+                                   recipient.do_send(WebSocketEvent::Connected(addr.clone()));
+                            }
                             info!("新的订阅者加入，当前订阅者数: {}", subscribers.len());
                         }
                         InternalCommand::SendMessage(msg) => {
