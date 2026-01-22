@@ -82,6 +82,9 @@ CREATE TABLE IF NOT EXISTS bn_swap_kline (
     taker_buy_base_asset_volume DOUBLE,   -- 主动买入成交量
     taker_buy_quote_asset_volume DOUBLE,  -- 主动买入成交额
     close_time                  BIGINT    -- K线结束时间
+    interval                    INT,       -- 周期，1为5m
+    first_trade_id              BIGINT,    -- 第一个trading id
+    last_trade_id               BIGINT    -- 最后一个trading id
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_swap_kline_symbol_candle_begin_time ON bn_swap_kline(symbol, candle_begin_time);
 "#;

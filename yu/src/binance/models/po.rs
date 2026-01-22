@@ -248,8 +248,8 @@ impl HistoryPO for KlinePo {
             taker_buy_quote_asset_volume: source.taker_buy_quote_asset_volume.to_f64().unwrap(),
             close_time: source.close_time,
             interval: 0,
-            first_trade_id: None,
-            last_trade_id: None,
+            first_trade_id: Some(-1),
+            last_trade_id: Some(-1),
         }
     }
 
