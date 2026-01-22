@@ -40,14 +40,14 @@ pub async fn start_bn_jobs() -> Result<(), YuError> {
     if let Err(_e) = initial_tables(None) {
         warn!("币安表创建失败,{}", _e);
     }
+    info!("数据库创建表完成");
     let dash_board_arc = Arc::new(dash_board.clone());
     let spot_kline_subscribe_addr = KlineSubscribe::new(dash_board_arc).start();
     let spot_kline_subscribe: Recipient<WebSocketEvent> = spot_kline_subscribe_addr.clone().recipient();
     let spot_kline_job: Recipient<TaskCompletionEvent> = spot_kline_subscribe_addr.recipient();
-    info!("数据库创建表完成");
+    start_refresh_history_data(dash_board.clone(), spot_kline_job).await?;
     start_spot_websocket_jobs().await?;
     start_spot_websocket_stream_job(spot_kline_subscribe).await?;
-    start_refresh_history_data(dash_board.clone(), spot_kline_job).await?;
     Ok(())
 }
 
