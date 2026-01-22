@@ -16,6 +16,7 @@ pub struct TradingSymbol {
     pub symbol: String,
     pub on_board_time: Option<u64>,
     pub quote_asset: String, //报价资产
+    pub status: String,
 }
 
 //NEXT：把这些存入数据库
@@ -41,13 +42,32 @@ impl BinanceDashboard {
     }
 }
 
+///
+/// 暂时所有的交易对都以USDT报价资产为准
+///
 impl TradingSymbolRefresher for BinanceDashboard {
     fn list_spot(&self) -> Vec<String> {
-        self.spot_symbols.read().unwrap().clone().iter().map(|s| s.symbol.clone()).collect()
+        self.spot_symbols
+            .read()
+            .unwrap()
+            .clone()
+            .iter()
+            .filter(|symbol| symbol.status == "TRADING")
+            .filter(|symbol| symbol.quote_asset == "USDT")
+            .map(|s| s.symbol.clone())
+            .collect()
     }
 
     fn list_swap(&self) -> Vec<String> {
-        self.swap_symbols.read().unwrap().clone().iter().map(|s| s.symbol.clone()).collect()
+        self.swap_symbols
+            .read()
+            .unwrap()
+            .clone()
+            .iter()
+            .filter(|symbol| symbol.status == "TRADING")
+            .filter(|symbol| symbol.quote_asset == "USDT")
+            .map(|s| s.symbol.clone())
+            .collect()
     }
 }
 
@@ -79,6 +99,7 @@ impl AsyncRepeatTask for BinanceDashboard {
                         symbol: sym.symbol.clone(),
                         on_board_time: None,
                         quote_asset: sym.quote_asset.clone(),
+                        status: sym.status.clone(),
                     })
                     .collect();
                 let trading_swap_symbols: Vec<TradingSymbol> = swap_symbols
@@ -87,6 +108,7 @@ impl AsyncRepeatTask for BinanceDashboard {
                         symbol: sym.symbol.clone(),
                         on_board_time: sym.on_board_time,
                         quote_asset: sym.quote_asset.clone(),
+                        status: sym.status.clone(),
                     })
                     .collect();
 

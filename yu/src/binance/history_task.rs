@@ -402,6 +402,7 @@ mod tests {
             symbol: "BTCUSDT".to_string(),
             on_board_time: None,
             quote_asset: "USDT".to_string(),
+            status: "TRADING".to_string(),
         }];
         let dash_board = Arc::new(BinanceDashboard::new_with_data(trading_symbols, vec![]));
         import_local_csv_and_assert(&conn, SpotKline.table_name().as_str(), csv_path.as_path(), 7)?;
