@@ -1,5 +1,4 @@
 use crate::binance::history_task::HistoryPO;
-use crate::utils::get_snowflake_generator;
 use duckdb::appender_params_from_iter;
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
@@ -7,6 +6,7 @@ use std::fmt::Display;
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_models::spot_websocket::ExecutionReportPayload;
 use yue::binance::bn_models::spot_websocket_stream::{KlineData, TradeStreamPayload};
+use yue::tools::get_snow_flake_id_u64;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpotStreamTradeRecordPo {
@@ -24,7 +24,7 @@ pub struct SpotStreamTradeRecordPo {
 impl From<TradeStreamPayload> for SpotStreamTradeRecordPo {
     fn from(payload: TradeStreamPayload) -> Self {
         SpotStreamTradeRecordPo {
-            id: get_snowflake_generator().lock().unwrap().real_time_generate(),
+            id: get_snow_flake_id_u64() as i64,
             event_time: payload.event_time as i64,
             symbol: payload.symbol,
             trade_id: payload.trade_id as i64,
@@ -186,7 +186,7 @@ pub struct KlinePo {
 impl From<KlineData> for KlinePo {
     fn from(value: KlineData) -> Self {
         KlinePo {
-            id: get_snowflake_generator().lock().unwrap().real_time_generate(),
+            id: get_snow_flake_id_u64() as i64,
             symbol: value.symbol,
             candle_begin_time: value.start_time,
             open: value.open.to_f64().unwrap(),
@@ -233,9 +233,8 @@ impl HistoryPO for KlinePo {
     type Source = BinanceKline;
 
     fn from_source(symbol: Option<&str>, source: &Self::Source) -> Self {
-        let id = get_snowflake_generator().lock().unwrap().real_time_generate();
         KlinePo {
-            id,
+            id: get_snow_flake_id_u64() as i64,
             symbol: symbol.expect("Symbol must be provided").to_string(),
             candle_begin_time: source.open_time,
             open: source.open.to_f64().unwrap(),

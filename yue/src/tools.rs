@@ -12,7 +12,7 @@ use serde::{Deserialize, Deserializer};
 use sha2::Sha256;
 use sonyflake::Sonyflake;
 use std::fs;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tokio::sync::{broadcast, watch};
 use tokio::time;
@@ -65,6 +65,15 @@ pub fn load_ed25519_signing_key(path: &str) -> Result<SigningKey, YueError> {
     let signing_key = SigningKey::from_pkcs8_pem(&pem_content)?;
 
     Ok(signing_key)
+}
+static SNOW_FLAKE: OnceLock<SnowyFlakeWrapper> = OnceLock::new();
+
+pub fn get_snow_flake_id_string() -> String {
+    SNOW_FLAKE.get_or_init(|| SnowyFlakeWrapper::new()).next_id_string()
+}
+
+pub fn get_snow_flake_id_u64() -> u64 {
+    SNOW_FLAKE.get_or_init(|| SnowyFlakeWrapper::new()).next_id_u64()
 }
 
 pub struct SnowyFlakeWrapper {

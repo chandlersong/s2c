@@ -3,7 +3,6 @@ use crate::binance::bn_dashboard::TradingSymbol;
 use crate::duck_db::DBProvider;
 use crate::errors::YuError;
 use crate::exchange::{ExchangeDashBoard, HistoryFetcherFactory};
-use crate::utils::get_snowflake_generator;
 use async_trait::async_trait;
 use duckdb::{appender_params_from_iter, DropBehavior};
 use li::actix_jobs::AsyncRepeatTask;
@@ -17,6 +16,7 @@ use tokio::sync::mpsc;
 use yue::binance::bn_models::common::{HistoryVo, SymbolType, ToQueryParams};
 use yue::binance::bn_models::swap_restful::FundingRate;
 use yue::binance::history_data::{HistoryFetcher, MuteHistoryParam};
+use yue::tools::SnowyFlakeWrapper;
 
 pub trait HistoryPO: Debug {
     type Source: HistoryVo;
@@ -145,7 +145,8 @@ impl HistoryPO for FundingRatePo {
     type Source = FundingRate;
 
     fn from_source(symbol: Option<&str>, source: &Self::Source) -> Self {
-        let id = get_snowflake_generator().lock().unwrap().real_time_generate();
+        let snow_flake = SnowyFlakeWrapper::new();
+        let id = snow_flake.next_id_u64() as i64;
         FundingRatePo {
             id,
             symbol: symbol.expect("Symbol must be provided").to_string(),
