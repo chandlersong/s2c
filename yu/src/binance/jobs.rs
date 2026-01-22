@@ -307,6 +307,9 @@ async fn start_spot_websocket_stream_job(kline_subscribe_recipient: Recipient<We
     Ok(())
 }
 
+///
+/// TODO 初始化的K线改成5分钟级别
+///
 async fn start_refresh_history_data(origin_dash_board: BinanceDashboard, spot_kline_job: Recipient<TaskCompletionEvent>) -> Result<(), YuError> {
     let update_dashboard_task = origin_dash_board.clone();
     let dash_board = Arc::new(origin_dash_board);
