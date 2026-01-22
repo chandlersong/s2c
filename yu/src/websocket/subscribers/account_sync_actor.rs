@@ -4,7 +4,7 @@ use actix::{Actor, AsyncContext, Context, Handler, Supervised};
 use log::{debug, error, info};
 use yue::binance::bn_models::spot_websocket::{AccountWebSocketPayLoad, BinanceSpotWebSocketResponse, ExecutionReportPayload};
 
-use crate::binance::models::ws_db_po::SpotOrderPo;
+use crate::binance::models::po::SpotOrderPo;
 use crate::duck_db::DBProvider;
 use crate::errors::YuError;
 use duckdb::params;

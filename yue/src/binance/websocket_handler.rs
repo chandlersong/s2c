@@ -1,3 +1,10 @@
+///
+/// 现在把所有和消息处理的东西放在这里，就是为了简单。不然很多类组合，反而很麻烦。
+/// TODO
+/// 1. 把subscribe和translate给分开。只是基于功能单一原则。但是真实的来说，比较难弄，比如account的转换，需要维护订阅id和账户名的映射关系。
+///
+///
+///
 use crate::binance::bn_json_websocket::{CommandRequest, USER_DATA_STREAM_SUBSCRIBE_SIGNATURE};
 use crate::binance::bn_models::spot_websocket::BinanceSpotWebSocketResponse;
 use crate::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamResponse;
@@ -12,8 +19,41 @@ use log::{error, info, trace};
 use std::collections::HashMap;
 use std::sync::RwLock;
 
-/// Binance 现货公共行情解析器
-pub struct BinanceSpotStreamHandler;
+pub trait TradingSymbolRefresher {
+    fn list_spot(&self) -> Vec<String>;
+
+    fn list_swap(&self) -> Vec<String>;
+}
+
+/// Binance 现货websocket处理
+///
+/// 最新的可交易symbol通过latest_symbol_refresher的list获得
+///
+/// # KlineStreamPayload的订阅逻辑
+/// Kline订阅的主要问题难点是其它交易对的动态变化。有时候会新增，有时会减少。所以为了保证其它交易对的正确性，需要定期刷新订阅。
+/// 但是刷新订阅又是一件非常麻烦的事情。
+/// 1. 所有的symbol信息都是源于BinanceDashboard。而这个是定时刷新的。
+/// 2. 在连接的时候，就要获得所有的symbol信息，进行订阅。
+///
+///
+/// 1. 从传入的TradingSymbolRefresher来获取需要订阅的交易对列表
+///
+/// ## 启动时订阅
+/// 1. 在启动的时候，收到WebSocketEvent::Connected事件时，调用TradingSymbolRefresher的list方法，获取当前需要订阅的交易对列表。
+///
+/// ## 定期刷新订阅
+/// 监听TaskCompletionEvent事件。然后接收到事件后，进行以下操作：
+/// 1. 重新调用TradingSymbolRefresher的list方法，获取最新的交易对列表。。
+/// 2. 和现有的交易对做比较。找出新增的和删除的交易对。
+/// 2. 发送新增的消息和删除的消息。
+///
+pub struct BinanceSpotStreamHandler {}
+
+impl BinanceSpotStreamHandler {
+    pub fn new<L: TradingSymbolRefresher>(latest_symbol_refresher: L) -> Self {
+        Self {}
+    }
+}
 
 impl WebSocketHandler for BinanceSpotStreamHandler {
     type Output = BinanceSpotWebSocketStreamResponse;
@@ -210,7 +250,7 @@ impl WebSocketHandler for SpotAccountStreamHandler {
             };
 
             // 5. 发送 WebSocket 消息
-            let message = SendTextMessage::new(serde_json::to_string(&command)?);
+            let message = SendTextMessage::new_no_resend(serde_json::to_string(&command)?);
             match addr.try_send(message) {
                 Ok(_) => {
                     info!("✓ 已发送账户 {} 的订阅请求 (id={})", account_info.account_name, request_id);
@@ -242,7 +282,7 @@ mod tests {
 
     #[test]
     fn test_parse_trade_message() {
-        let parser = BinanceSpotStreamHandler;
+        let parser = BinanceSpotStreamHandler {};
         let trade_json = r#"{
             "e":"trade",
             "E":1234567890,
@@ -270,7 +310,7 @@ mod tests {
 
     #[test]
     fn test_parse_invalid_json() {
-        let parser = BinanceSpotStreamHandler;
+        let parser = BinanceSpotStreamHandler {};
         let invalid_json = r#"{"invalid": json}"#;
 
         let result = parser.parse_text(invalid_json);
@@ -279,7 +319,7 @@ mod tests {
 
     #[test]
     fn test_parse_empty_string() {
-        let parser = BinanceSpotStreamHandler;
+        let parser = BinanceSpotStreamHandler {};
         let result = parser.parse_text("");
         assert!(result.is_err(), "Should fail on empty string");
     }

@@ -1,13 +1,19 @@
 use crate::actix_jobs::AsyncRepeatTask;
+use crate::binance::binance_db_consts::BinanceTables::SpotKline;
+use crate::binance::history_task::{DuckDBHistoryDataWriter, HistoryDataWriter};
+use crate::binance::models::po::KlinePo;
+use crate::duck_db::DBProvider;
 use crate::errors::YuError;
 use crate::exchange::ExchangeDashBoard;
 use actix::{Actor, Addr, Context, Handler, Message};
 use async_trait::async_trait;
+use li::tools::time::unix_time_now_u64_utc;
 use log::{error, info};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
 use yue::binance::history_data::{get_trading_spot_symbols, get_trading_swap_symbols, CONTRACT_TYPE_PERPETUAL};
 use yue::binance::order_book::{OrderBook, OrderBookSnapshotMsg};
+use yue::binance::websocket_handler::TradingSymbolRefresher;
 
 #[derive(Debug, Clone)]
 pub struct TradingSymbol {
@@ -36,6 +42,16 @@ impl BinanceDashboard {
             spot_symbols: Arc::new(RwLock::new(spot_symbol)),
             swap_symbols: Arc::new(RwLock::new(swap_symbol)),
         }
+    }
+}
+
+impl TradingSymbolRefresher for BinanceDashboard {
+    fn list_spot(&self) -> Vec<String> {
+        self.spot_symbols.read().unwrap().clone().iter().map(|s| s.symbol.clone()).collect()
+    }
+
+    fn list_swap(&self) -> Vec<String> {
+        self.swap_symbols.read().unwrap().clone().iter().map(|s| s.symbol.clone()).collect()
     }
 }
 

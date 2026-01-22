@@ -1,4 +1,4 @@
-pub mod binance_consts;
+pub mod binance_db_consts;
 
 pub mod history_task;
 

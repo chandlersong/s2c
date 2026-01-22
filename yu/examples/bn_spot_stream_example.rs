@@ -7,10 +7,14 @@
 /// 4. 定时发送订阅和取消订阅请求
 use actix::{Actor, Context, Handler};
 use li::tools::logs::setup_logger;
-use log::{LevelFilter, info};
+use log::{info, LevelFilter};
 use serde_json::to_string;
 use std::collections::HashMap;
-use yue::binance::bn_json_websocket::{SPOT_STREAM_WEBSOCKET, StreamCommandRequest, WS_SUBSCRIBE_COMMAND};
+use yu::binance::jobs::initial_tables;
+use yu::config::get_config;
+use yu::duck_db::DBProvider;
+use yu::websocket::subscribers::SpotStreamStorageActor;
+use yue::binance::bn_json_websocket::{StreamCommandRequest, SPOT_STREAM_WEBSOCKET, WS_SUBSCRIBE_COMMAND};
 use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamResponse;
 use yue::binance::websocket_handler::BinanceSpotStreamHandler;
 use yue::websocket::client::{SendTextMessage, SubscribeToEvents, WebSocketClient, WebSocketEvent};
@@ -76,15 +80,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .start();
 
     info!("✓ WebSocket 客户端已启动");
+    if let Err(e) = initial_tables(None) {
+        panic!("初始化数据库表失败: {:?}", e);
+    }
+    let config = get_config();
 
+    // 检查是否启用了 WebSocket 功能
+    let ws_config = match &config.binance_websocket {
+        Some(ws) => ws,
+        None => {
+            info!("binance_websocket 配置未启用，跳过 WebSocket 任务");
+            return Ok(());
+        }
+    };
+    let spot_config = match &ws_config.spot_stream {
+        Some(spot) => spot,
+        None => {
+            info!("binance_websocket.spot 配置未启用，跳过 Spot WebSocket 任务");
+            return Ok(());
+        }
+    };
     // 步骤 2: 创建事件处理器
-    let bus = WsMessageBus::new(BinanceSpotStreamHandler).start();
+    let bus = WsMessageBus::new(BinanceSpotStreamHandler {}).start();
     info!("✓ WsMessageBus started");
     let printer = PrintSubscriberActor.start();
-    // let storage = StorageSubscriberActor::new(100, 5000).start();
+    let storage_actor = SpotStreamStorageActor::new(spot_config.clone(), DBProvider::default()).start();
 
     bus.do_send(Subscribe {
         subscriber: printer.clone().recipient(),
+    });
+    bus.do_send(Subscribe {
+        subscriber: storage_actor.clone().recipient(),
     });
 
     info!("✓ 事件处理器已启动");
@@ -108,8 +134,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         params: vec![
             // "btcusdt@trade".to_string(),
             // "btcusdt@bookTicker".to_string(),
-            // "btcusdt@depth20@100ms".to_string(),
-            "ethusdt@depth@100ms".to_string(),
+            "ethusdt@kline_1m".to_string(),
+            // "ethusdt@depth@100ms".to_string(),
         ],
         id: 0,
     };
@@ -117,7 +143,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("✓ 请求 #2 已发送");
 
-    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+    tokio::time::sleep(tokio::time::Duration::from_secs(90)).await;
 
     info!("\n========== 示例结束 ==========");
     info!("提示: SPOT_WEBSOCKET 支持的方法包括:");

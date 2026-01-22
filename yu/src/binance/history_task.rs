@@ -1,5 +1,5 @@
 use crate::actix_jobs::AsyncRepeatTask;
-use crate::binance::binance_consts::BinanceTables;
+use crate::binance::binance_db_consts::BinanceTables;
 use crate::binance::bn_dashboard::TradingSymbol;
 use crate::duck_db::DBProvider;
 use crate::errors::YuError;
@@ -9,13 +9,11 @@ use async_trait::async_trait;
 use duckdb::{appender_params_from_iter, DropBehavior};
 use li::tools::time::{unix_2_readable, unix_time_now_u64_utc, GENESIS_2020_MS, ONE_HOUR_MS};
 use log::{debug, error, info};
-use rust_decimal::prelude::ToPrimitive;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use yue::binance::bn_models::common::{HistoryVo, SymbolType, ToQueryParams};
-use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_models::swap_restful::FundingRate;
 use yue::binance::history_data::{HistoryFetcher, MuteHistoryParam};
 
@@ -118,106 +116,6 @@ impl<O: HistoryPO, D: ExchangeDashBoard<TradingSymbol = TradingSymbol>> HistoryD
             .collect();
         info!("{}:fetched {} trading symbols", self.table.table_name(), filtered.len());
         Ok(filtered)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct KlinePo {
-    pub id: i64,
-    pub symbol: String,
-    pub candle_begin_time: u64,
-    pub open: f64,
-    pub high: f64,
-    pub low: f64,
-    pub close: f64,
-    pub volume: f64,
-    pub quote_volume: f64,
-    pub number_of_trades: u64,
-    pub taker_buy_base_asset_volume: f64,
-    pub taker_buy_quote_asset_volume: f64,
-    pub close_time: u64,
-}
-
-impl<'a> From<&duckdb::Row<'a>> for KlinePo {
-    fn from(row: &duckdb::Row) -> Self {
-        KlinePo {
-            id: row.get(0).unwrap_or_default(),
-            symbol: row.get(1).unwrap_or_default(),
-            candle_begin_time: row.get(2).unwrap_or_default(),
-            open: row.get(3).unwrap_or_default(),
-            high: row.get(4).unwrap_or_default(),
-            low: row.get(5).unwrap_or_default(),
-            close: row.get(6).unwrap_or_default(),
-            volume: row.get(7).unwrap_or_default(),
-            quote_volume: row.get(8).unwrap_or_default(),
-            number_of_trades: row.get(9).unwrap_or_default(),
-            taker_buy_base_asset_volume: row.get(10).unwrap_or_default(),
-            taker_buy_quote_asset_volume: row.get(11).unwrap_or_default(),
-            close_time: row.get(12).unwrap_or_default(),
-        }
-    }
-}
-
-impl HistoryPO for KlinePo {
-    type Source = BinanceKline;
-
-    fn from_source(symbol: Option<&str>, source: &Self::Source) -> Self {
-        let id = get_snowflake_generator().lock().unwrap().real_time_generate();
-        KlinePo {
-            id,
-            symbol: symbol.expect("Symbol must be provided").to_string(),
-            candle_begin_time: source.open_time,
-            open: source.open.to_f64().unwrap(),
-            high: source.high.to_f64().unwrap(),
-            low: source.low.to_f64().unwrap(),
-            close: source.close.to_f64().unwrap(),
-            volume: source.volume.to_f64().unwrap(),
-            quote_volume: source.quote_asset_volume.to_f64().unwrap(),
-            number_of_trades: source.number_of_trades,
-            taker_buy_base_asset_volume: source.taker_buy_base_asset_volume.to_f64().unwrap(),
-            taker_buy_quote_asset_volume: source.taker_buy_quote_asset_volume.to_f64().unwrap(),
-            close_time: source.close_time,
-        }
-    }
-
-    fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>> {
-        appender_params_from_iter(vec![
-            &self.id as &dyn duckdb::ToSql,
-            &self.symbol as &dyn duckdb::ToSql,
-            &self.candle_begin_time as &dyn duckdb::ToSql,
-            &self.open as &dyn duckdb::ToSql,
-            &self.high as &dyn duckdb::ToSql,
-            &self.low as &dyn duckdb::ToSql,
-            &self.close as &dyn duckdb::ToSql,
-            &self.volume as &dyn duckdb::ToSql,
-            &self.quote_volume as &dyn duckdb::ToSql,
-            &self.number_of_trades as &dyn duckdb::ToSql,
-            &self.taker_buy_base_asset_volume as &dyn duckdb::ToSql,
-            &self.taker_buy_quote_asset_volume as &dyn duckdb::ToSql,
-            &self.close_time as &dyn duckdb::ToSql,
-        ])
-    }
-}
-
-impl std::fmt::Display for KlinePo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "KlineData {{ id: {}, symbol: {}, candle_begin_time: {}, open: {}, high: {}, low: {}, close: {}, volume: {}, quote_volume: {}, number_of_trades: {}, taker_buy_base_asset_volume: {}, taker_buy_quote_asset_volume: {}, close_time: {} }}",
-            self.id,
-            self.symbol,
-            self.candle_begin_time,
-            self.open,
-            self.high,
-            self.low,
-            self.close,
-            self.volume,
-            self.quote_volume,
-            self.number_of_trades,
-            self.taker_buy_base_asset_volume,
-            self.taker_buy_quote_asset_volume,
-            self.close_time
-        )
     }
 }
 
@@ -406,9 +304,10 @@ where
 #[cfg(test)]
 mod tests {
     use crate::actix_jobs::AsyncRepeatTask;
-    use crate::binance::binance_consts::BinanceTables::SpotKline;
+    use crate::binance::binance_db_consts::BinanceTables::SpotKline;
     use crate::binance::bn_dashboard::{BinanceDashboard, TradingSymbol};
-    use crate::binance::history_task::{DuckDBHistoryDataWriter, InitialHistoryTask, KlinePo};
+    use crate::binance::history_task::{DuckDBHistoryDataWriter, InitialHistoryTask};
+    use crate::binance::models::po::KlinePo;
     use crate::duck_db::DBProvider;
     use crate::errors::YuError;
     use crate::exchange::HistoryFetcherFactory;
@@ -506,7 +405,7 @@ mod tests {
         let data_writer = Arc::new(DuckDBHistoryDataWriter::new(db_provider.clone(), SpotKline, SymbolType::Spot));
         let manager: InitialHistoryTask<MockHistoryFetcherFactory, CommonParam, KlinePo, BinanceKline, BinanceDashboard> =
             InitialHistoryTask::new(factory, dash_board, data_writer, "test_refresh_spot_kline_normal".to_string());
-        let res = manager.execute().await;
+        let res: Result<(), YuError> = manager.execute().await;
 
         println!("{:?}", res);
         assert!(res.is_ok());
@@ -560,6 +459,9 @@ mod tests {
             taker_buy_base_asset_volume: 2.0,
             taker_buy_quote_asset_volume: 4.0,
             close_time: 456,
+            interval: 0,
+            first_trade_id: None,
+            last_trade_id: None,
         };
         let s = format!("{}", kline);
         assert!(s.contains("KlineData"));

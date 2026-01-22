@@ -1,19 +1,16 @@
 use crate::actix_jobs::{AsyncRepeatTask, CronActor};
-use crate::binance::binance_consts::BinanceTables::{SpotKline, SwapFundingRate, SwapKline};
-use crate::binance::binance_consts::ALL_BINANCE_TABLES;
+use crate::binance::binance_db_consts::BinanceTables::{SpotKline, SwapFundingRate, SwapKline};
+use crate::binance::binance_db_consts::ALL_BINANCE_TABLES;
 use crate::binance::bn_dashboard::{init_market_depth_dashboard, BinanceDashboard, MarketDepthDashBoard};
-use crate::binance::history_task::{DuckDBHistoryDataWriter, FundingRatePo, InitialHistoryTask, KlinePo};
+use crate::binance::history_task::{DuckDBHistoryDataWriter, FundingRatePo, InitialHistoryTask};
+use crate::binance::models::po::KlinePo;
 use crate::config::get_config;
 use crate::duck_db::DBProvider;
 use crate::errors::YuError;
 use crate::exchange::CloneHistoryFetcherFactory;
-use crate::utils::get_snowflake_generator;
-use crate::websocket::binance_spot::create_spot_stream_tables;
-use crate::websocket::binance_spot::init_tables::create_spot_websocket_tables;
 use crate::websocket::subscribers::{AccountSyncActor, SpotStreamStorageActor};
 use actix::Actor;
-use duckdb::Connection;
-use log::info;
+use log::{info, warn};
 use rust_decimal::prelude::ToPrimitive;
 use serde_json::to_string;
 use std::sync::Arc;
@@ -25,6 +22,7 @@ use yue::binance::bn_restful_commands::{SPOT_KLINE_HISTORY_COMMAND, SWAP_FUNDING
 use yue::binance::history_data::{CommonParam, SimpleHistoryFetcher};
 use yue::binance::order_book::{OrderBookService, Subscribe as OrderBookSubscribe};
 use yue::binance::websocket_handler::{BinanceSpotStreamHandler, SpotAccountStreamHandler};
+use yue::tools::SnowyFlakeWrapper;
 use yue::websocket::client::{SendTextMessage, SubscribeToEvents, WebSocketClient, WebSocketEvent};
 use yue::websocket::event_bus::{Subscribe, WsMessageBus};
 
@@ -39,9 +37,13 @@ use yue::websocket::event_bus::{Subscribe, WsMessageBus};
 pub async fn start_bn_jobs() -> Result<(), YuError> {
     let dash_board = BinanceDashboard::new();
     dash_board.execute().await?;
-
+    if let Err(_e) = initial_tables(None) {
+        warn!("币安表创建失败,{}", _e);
+    }
+    info!("数据库创建表完成");
+    start_spot_jobs().await?;
     start_refresh_history_data(dash_board.clone()).await?;
-    start_websocket_job().await?;
+    start_websocket_job(dash_board.clone()).await?;
     Ok(())
 }
 
@@ -55,9 +57,6 @@ pub async fn start_spot_jobs() -> Result<(), YuError> {
     }
     let client_addr = client_builder.with_reconnect_interval(std::time::Duration::from_secs(5)).start();
     info!("✓ WebSocket 客户端已启动: {}", SPOT_WEBSOCKET);
-
-    let _ = create_spot_websocket_tables(None);
-    info!("数据库创建表完成");
 
     let acc_infos = config
         .binance_websocket
@@ -92,7 +91,7 @@ pub async fn start_spot_jobs() -> Result<(), YuError> {
 /// 2. 启动WsMessageBus，订阅websocket客户端的事件，分发给不同的订阅者
 /// 3. SpotStreamStorageActor，订阅启动WsMessageBus信息
 /// 4，根据配置信息，启动一个专门管理spot的OrderBookService
-async fn start_websocket_job() -> Result<(), YuError> {
+async fn start_websocket_job(dash_board: BinanceDashboard) -> Result<(), YuError> {
     let config = get_config();
 
     // 检查是否启用了 WebSocket 功能
@@ -126,7 +125,6 @@ async fn start_websocket_job() -> Result<(), YuError> {
     }
 
     // 初始化数据库表
-    create_spot_stream_tables()?;
     info!("✓ WebSocket 数据库表初始化完成");
 
     // 步骤1: 启动 WebSocket 客户端
@@ -141,7 +139,7 @@ async fn start_websocket_job() -> Result<(), YuError> {
     info!("✓ WebSocket 客户端已启动: {}", SPOT_STREAM_WEBSOCKET);
 
     // 步骤2: 启动 WsMessageBus
-    let bus = WsMessageBus::new(BinanceSpotStreamHandler).start();
+    let bus = WsMessageBus::new(BinanceSpotStreamHandler::new(dash_board)).start();
     info!("✓ WsMessageBus 已启动");
 
     // 步骤3: 启动 SpotStreamStorageActor
@@ -207,13 +205,13 @@ async fn start_websocket_job() -> Result<(), YuError> {
         let stream = format!("{}@trade", symbol.to_lowercase());
         params.push(stream);
     }
-
+    let snow_flake = SnowyFlakeWrapper::new();
     if !params.is_empty() {
         info!("📤 订阅交易流: {:?}", params);
         let subscribe_request = StreamCommandRequest {
             method: WS_SUBSCRIBE_COMMAND.to_string(),
             params,
-            id: get_snowflake_generator().lock().unwrap().real_time_generate().to_u64().unwrap(),
+            id: snow_flake.next_id_u64(),
         };
 
         client_addr
@@ -223,6 +221,34 @@ async fn start_websocket_job() -> Result<(), YuError> {
             .await
             .map_err(|e| YuError::CustomError(format!("发送订阅消息失败: {}", e)))??;
         info!("✓ 交易流订阅请求已发送");
+    }
+
+    // // 获取所有需要订阅kline的symbol
+    // let spot_data_writer: Arc<dyn HistoryDataWriter<KlinePo, BinanceDashboard>> =
+    //     Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SpotKline, SymbolType::Spot));
+    // let symbols = spot_data_writer.query_latest_symbols(Arc::new(dash_board.clone()), unix_time_now_u64_utc())?;
+    let symbols: Vec<(String, u32)> = vec![];
+    if !symbols.is_empty() {
+        let mut kline_params = Vec::new();
+        for (symbol, _) in &symbols {
+            // 订阅5分钟kline: btcusdt@kline_5m
+            kline_params.push(format!("{}@kline_5m", symbol.to_lowercase()));
+        }
+
+        info!("📤 订阅K线流: {:?}", kline_params);
+        let kline_subscribe_request = StreamCommandRequest {
+            method: WS_SUBSCRIBE_COMMAND.to_string(),
+            params: kline_params,
+            id: snow_flake.next_id_u64(),
+        };
+
+        client_addr
+            .send(SendTextMessage::new(
+                to_string(&kline_subscribe_request).map_err(|e| YuError::CustomError(format!("序列化K线订阅请求失败: {}", e)))?,
+            ))
+            .await
+            .map_err(|e| YuError::CustomError(format!("发送K线订阅消息失败: {}", e)))??;
+        info!("✓ K线流订阅请求已发送");
     }
 
     // 根据配置订阅深度流
@@ -247,7 +273,7 @@ async fn start_websocket_job() -> Result<(), YuError> {
                 let depth_subscribe_request = StreamCommandRequest {
                     method: WS_SUBSCRIBE_COMMAND.to_string(),
                     params: depth_params,
-                    id: get_snowflake_generator().lock().unwrap().real_time_generate().to_u64().unwrap(),
+                    id: snow_flake.next_id_u64(),
                 };
 
                 client_addr
@@ -271,7 +297,7 @@ async fn start_websocket_job() -> Result<(), YuError> {
 async fn start_refresh_history_data(origin_dash_board: BinanceDashboard) -> Result<(), YuError> {
     let update_dashboard_task = origin_dash_board.clone();
     let dash_board = Arc::new(origin_dash_board);
-    initial_history_table()?;
+
     let base_spot_kline_fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
     let spot_kline_fetcher: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonParam, BinanceKline> =
         CloneHistoryFetcherFactory::new(base_spot_kline_fetcher);
@@ -312,32 +338,21 @@ async fn start_refresh_history_data(origin_dash_board: BinanceDashboard) -> Resu
     swap_funding_rate_task.execute().await?;
     //PLAN： 更新交易所时间表达式进入Config
     let _ = CronActor::new("30 59 */6 * * * *", update_dashboard_task).start();
-    let _ = CronActor::new("10 0 * * * * *", spot_kline_task).start();
     let _ = CronActor::new("10 0 * * * * *", swap_funding_rate_task).start();
     let _ = CronActor::new("10 1 * * * * *", swap_kline_task).start();
     Ok(())
 }
 
-fn table_exists(conn: &Connection, table_name: &str) -> Result<bool, YuError> {
-    let check_sql = format!("SELECT name FROM sqlite_master WHERE type='table' AND name='{}'", table_name);
-    let mut stmt = conn.prepare(&check_sql)?;
-    let mut rows = stmt.query([])?;
-    Ok(rows.next()?.is_some())
-}
-
-fn initial_history_table() -> Result<(), YuError> {
-    let conn = DBProvider::default().acquire()?;
+pub fn initial_tables(provider: Option<DBProvider>) -> Result<(), YuError> {
+    let db_provider = provider.unwrap_or_else(|| DBProvider::default());
+    let conn = db_provider.acquire()?;
     for table in ALL_BINANCE_TABLES.iter() {
-        let table_name = table.table_name();
-        if !table_exists(&conn, &table_name)? {
-            // 表不存在，执行建表
-            let create_sql = table.create_table_statement();
-            let table_initial_stmt = create_sql.split(';');
-            for stmt in table_initial_stmt {
-                let sql = stmt.trim();
-                if !sql.is_empty() {
-                    conn.execute(sql, [])?;
-                }
+        let create_sql = table.create_table_statement();
+        let table_initial_stmt = create_sql.split(';');
+        for stmt in table_initial_stmt {
+            let sql = stmt.trim();
+            if !sql.is_empty() {
+                conn.execute(sql, [])?;
             }
         }
     }

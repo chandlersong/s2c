@@ -1,3 +1,3 @@
-pub mod ws_db_po;
+pub mod po;
 
-pub use ws_db_po::SpotStreamTradeRecordPo;
+pub use po::SpotStreamTradeRecordPo;

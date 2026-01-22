@@ -113,7 +113,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("✓ WebSocket 客户端已启动");
 
     // 步骤 5: 创建消息总线，将 WebSocket 消息解析并分发
-    let bus = WsMessageBus::new(BinanceSpotStreamHandler).start();
+    let bus = WsMessageBus::new(BinanceSpotStreamHandler {}).start();
     info!("✓ WsMessageBus 已启动");
 
     // 步骤 6: 将 OrderBookService 注册为 bus 的订阅者

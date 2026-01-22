@@ -2,8 +2,8 @@ use actix::{Actor, Context, Handler};
 use li::tools::logs::setup_logger;
 use log::{info, LevelFilter};
 use std::collections::HashMap;
+use yu::binance::jobs::initial_tables;
 use yu::config::get_config;
-use yu::websocket::binance_spot::init_tables::create_spot_websocket_tables;
 use yu::websocket::subscribers::AccountSyncActor;
 use yue::binance::bn_json_websocket::SPOT_WEBSOCKET;
 use yue::binance::bn_models::spot_websocket::BinanceSpotWebSocketResponse;
@@ -63,7 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_reconnect_interval(std::time::Duration::from_secs(10))
         .start();
 
-    let _ = create_spot_websocket_tables(None);
+    let _ = initial_tables(None);
     info!("WebSocket 客户端已启动（环境变量代理）");
 
     let acc_infos = get_config()

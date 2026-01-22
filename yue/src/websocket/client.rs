@@ -1,3 +1,6 @@
+///
+/// TODO
+/// 1. 把WebSocketEvent中的TextMessage和BinaryMessage单独分出来。因为这两个频率会很高。不过要基于订阅逻辑。
 use crate::errors::YueError;
 use actix::Message as ActixMessage;
 use actix::{Actor, Addr, AsyncContext, Context, Handler, Recipient};
