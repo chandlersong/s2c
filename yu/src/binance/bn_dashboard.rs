@@ -1,13 +1,9 @@
-use crate::actix_jobs::AsyncRepeatTask;
-use crate::binance::binance_db_consts::BinanceTables::SpotKline;
-use crate::binance::history_task::{DuckDBHistoryDataWriter, HistoryDataWriter};
-use crate::binance::models::po::KlinePo;
-use crate::duck_db::DBProvider;
 use crate::errors::YuError;
 use crate::exchange::ExchangeDashBoard;
 use actix::{Actor, Addr, Context, Handler, Message};
 use async_trait::async_trait;
-use li::tools::time::unix_time_now_u64_utc;
+use li::actix_jobs::AsyncRepeatTask;
+use li::errors::LiError;
 use log::{error, info};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
@@ -69,7 +65,7 @@ impl ExchangeDashBoard for BinanceDashboard {
 
 #[async_trait]
 impl AsyncRepeatTask for BinanceDashboard {
-    async fn execute(&self) -> Result<(), YuError> {
+    async fn execute(&self) -> Result<(), LiError> {
         let (spot_res, swap_res) = tokio::join!(
             get_trading_spot_symbols(None),
             get_trading_swap_symbols(None, Some(CONTRACT_TYPE_PERPETUAL))
@@ -100,11 +96,11 @@ impl AsyncRepeatTask for BinanceDashboard {
             }
             (Err(e), _) => {
                 error!("Error fetching trading spot symbols: {:?}", e);
-                Err(e.into())
+                Err(LiError::CustomError(format!("获取现货交易对失败: {}", e)))
             }
             (_, Err(e)) => {
                 error!("Error fetching trading swap symbols: {:?}", e);
-                Err(e.into())
+                Err(LiError::CustomError(format!("获取合约交易对失败: {}", e)))
             }
         }
     }

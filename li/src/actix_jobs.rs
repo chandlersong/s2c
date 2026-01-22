@@ -1,4 +1,4 @@
-use crate::errors::YuError;
+use crate::errors::LiError;
 use actix::{Actor, AsyncContext, Context, Handler, Message as ActixMessage, Recipient};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -31,7 +31,7 @@ impl ActixMessage for SubscribeTask {
 
 #[async_trait]
 pub trait AsyncRepeatTask: Send + Sync + Clone + Unpin + 'static {
-    async fn execute(&self) -> Result<(), YuError>;
+    async fn execute(&self) -> Result<(), LiError>;
 
     fn task_name(&self) -> &str;
 }
@@ -78,7 +78,7 @@ impl<T: AsyncRepeatTask> Actor for CronActor<T> {
 
 impl<T: AsyncRepeatTask> CronActor<T> {
     // 创建 Actor 实例
-    pub(crate) fn new(cron_expr: &str, task: T) -> Self {
+    pub fn new(cron_expr: &str, task: T) -> Self {
         let schedule = Schedule::from_str(cron_expr).expect("Invalid cron expression");
         let next_run = schedule.upcoming(Utc).next().expect("No upcoming schedule");
         CronActor {
@@ -157,7 +157,7 @@ mod tests {
 
     #[async_trait]
     impl AsyncRepeatTask for SuccessTask {
-        async fn execute(&self) -> Result<(), YuError> {
+        async fn execute(&self) -> Result<(), LiError> {
             let mut count = self.called.lock().unwrap();
             *count += 1;
             Ok(())
@@ -173,8 +173,8 @@ mod tests {
 
     #[async_trait]
     impl AsyncRepeatTask for FailTask {
-        async fn execute(&self) -> Result<(), YuError> {
-            Err(YuError::CustomError("fail".to_string()))
+        async fn execute(&self) -> Result<(), LiError> {
+            Err(LiError::CustomError("fail".to_string()))
         }
 
         fn task_name(&self) -> &str {

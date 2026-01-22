@@ -1,3 +1,4 @@
+use li::errors::LiError;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -10,6 +11,8 @@ pub enum YuError {
     DuckDBError(#[from] duckdb::Error),
     #[error("r2d2 error: {0}")]
     R2D2Error(#[from] r2d2::Error),
+    #[error("li error: {0}")]
+    LiError(#[from] LiError),
     #[error("Custom error: {0}")]
     CustomError(String),
 }

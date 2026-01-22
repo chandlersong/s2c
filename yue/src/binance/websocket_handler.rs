@@ -5,19 +5,22 @@
 ///
 ///
 ///
-use crate::binance::bn_json_websocket::{CommandRequest, USER_DATA_STREAM_SUBSCRIBE_SIGNATURE};
+use crate::binance::bn_json_websocket::{
+    CommandRequest, StreamCommandRequest, USER_DATA_STREAM_SUBSCRIBE_SIGNATURE, WS_SUBSCRIBE_COMMAND, WS_UNSUBSCRIBE_COMMAND,
+};
 use crate::binance::bn_models::spot_websocket::BinanceSpotWebSocketResponse;
 use crate::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamResponse;
 use crate::errors::YueError;
 use crate::tools::{SnowyFlakeWrapper, sign_ed25519};
-use crate::websocket::client::{SendTextMessage, WebSocketClient};
+use crate::websocket::client::{SendTextMessage, WebSocketClient, WebSocketEvent};
 use crate::websocket::event_bus::WebSocketHandler;
-use actix::Addr;
+use actix::{Actor, Addr, Handler};
 use ed25519_dalek::SigningKey;
+use li::actix_jobs::TaskCompletionEvent;
 use li::tools::time::unix_time_now_u64_utc;
 use log::{error, info, trace};
-use std::collections::HashMap;
-use std::sync::RwLock;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, RwLock};
 
 pub trait TradingSymbolRefresher {
     fn list_spot(&self) -> Vec<String>;
@@ -46,14 +49,149 @@ pub trait TradingSymbolRefresher {
 /// 1. 重新调用TradingSymbolRefresher的list方法，获取最新的交易对列表。。
 /// 2. 和现有的交易对做比较。找出新增的和删除的交易对。
 /// 2. 发送新增的消息和删除的消息。
-///
-pub struct BinanceSpotStreamHandler {}
+pub struct KlineSubscribe {
+    refresher: Arc<dyn TradingSymbolRefresher + Send + Sync>,
+    kline_interval: String,
+    subscribed: RwLock<HashSet<String>>, // 已订阅的symbol集合，使用大写存储便于比较
+    last_ws_addr: Option<Addr<WebSocketClient>>,
+}
 
-impl BinanceSpotStreamHandler {
-    pub fn new<L: TradingSymbolRefresher>(latest_symbol_refresher: L) -> Self {
-        Self {}
+impl Actor for KlineSubscribe {
+    type Context = actix::Context<Self>;
+}
+
+impl Handler<WebSocketEvent> for KlineSubscribe {
+    type Result = ();
+
+    fn handle(&mut self, msg: WebSocketEvent, _ctx: &mut Self::Context) -> Self::Result {
+        match msg {
+            WebSocketEvent::Connected(addr) => {
+                self.last_ws_addr = Some(addr.clone());
+                if let Some(req) = self.build_initial_subscribe() {
+                    match self.send_request(&addr, req) {
+                        Ok(_) => info!("✓ K线初始订阅已发送"),
+                        Err(e) => error!("❌ 发送K线初始订阅失败: {}", e),
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 }
+
+impl Handler<TaskCompletionEvent> for KlineSubscribe {
+    type Result = ();
+
+    fn handle(&mut self, _: TaskCompletionEvent, _: &mut Self::Context) -> Self::Result {
+        if let Err(e) = self.refresh() {
+            error!("❌ 刷新K线订阅失败: {}", e);
+        }
+    }
+}
+
+impl KlineSubscribe {
+    pub fn new(refresher: Arc<dyn TradingSymbolRefresher + Send + Sync>) -> Self {
+        Self {
+            refresher,
+            kline_interval: "5m".to_string(),
+            subscribed: RwLock::new(HashSet::new()),
+            last_ws_addr: None,
+        }
+    }
+
+    fn normalize_symbols(&self, symbols: Vec<String>) -> Vec<String> {
+        let mut set = HashSet::new();
+        for sym in symbols {
+            let up = sym.trim().to_uppercase();
+            if !up.is_empty() {
+                set.insert(up);
+            }
+        }
+        let mut result: Vec<String> = set.into_iter().collect();
+        result.sort();
+        result
+    }
+
+    fn build_streams(&self, symbols: &[String]) -> Vec<String> {
+        symbols
+            .iter()
+            .map(|s| format!("{}@kline_{}", s.to_lowercase(), self.kline_interval))
+            .collect()
+    }
+
+    fn build_request(&self, method: &str, params: Vec<String>) -> Option<StreamCommandRequest> {
+        if params.is_empty() {
+            return None;
+        }
+        let snow_flake = SnowyFlakeWrapper::new();
+        Some(StreamCommandRequest {
+            method: method.to_string(),
+            params,
+            id: snow_flake.next_id_u64(),
+        })
+    }
+
+    pub fn build_initial_subscribe(&self) -> Option<StreamCommandRequest> {
+        let latest = self.normalize_symbols(self.refresher.list_spot());
+        {
+            let mut guard = self.subscribed.write().unwrap();
+            guard.clear();
+            for sym in &latest {
+                guard.insert(sym.clone());
+            }
+        }
+        info!("✓ K线初始订阅交易对: {:?}", latest.len());
+        let params = self.build_streams(&latest);
+        self.build_request(WS_SUBSCRIBE_COMMAND, params)
+    }
+
+    pub fn build_refresh_commands(&self) -> (Option<StreamCommandRequest>, Option<StreamCommandRequest>) {
+        let latest = self.normalize_symbols(self.refresher.list_spot());
+        let latest_set: HashSet<String> = latest.iter().cloned().collect();
+
+        let (to_add, to_remove) = {
+            let current = self.subscribed.read().unwrap();
+            let to_add: Vec<String> = latest_set.difference(&*current).cloned().collect();
+            let to_remove: Vec<String> = current.difference(&latest_set).cloned().collect();
+            (to_add, to_remove)
+        };
+
+        {
+            let mut guard = self.subscribed.write().unwrap();
+            guard.clear();
+            for sym in &latest_set {
+                guard.insert(sym.clone());
+            }
+        }
+        info!("✓ 新增交易对: {}，减去交易对{}", to_add.len(), to_remove.len());
+        let sub_req = self.build_request(WS_SUBSCRIBE_COMMAND, self.build_streams(&to_add));
+        let unsub_req = self.build_request(WS_UNSUBSCRIBE_COMMAND, self.build_streams(&to_remove));
+        (sub_req, unsub_req)
+    }
+
+    fn send_request(&self, addr: &Addr<WebSocketClient>, req: StreamCommandRequest) -> Result<(), YueError> {
+        let payload = serde_json::to_string(&req)?;
+        addr.try_send(SendTextMessage::new(payload))
+            .map_err(|e| YueError::new(&format!("发送K线订阅消息失败: {}", e)))
+    }
+
+    pub fn refresh(&self) -> Result<(), YueError> {
+        if let Some(addr) = &self.last_ws_addr {
+            let (sub_req, unsub_req) = self.build_refresh_commands();
+            if let Some(req) = sub_req {
+                self.send_request(addr, req)?;
+                info!("✓ K线新增订阅已发送");
+            }
+            if let Some(req) = unsub_req {
+                self.send_request(addr, req)?;
+                info!("✓ K线取消订阅已发送");
+            }
+        }
+        Ok(())
+    }
+}
+
+pub struct BinanceSpotStreamHandler;
 
 impl WebSocketHandler for BinanceSpotStreamHandler {
     type Output = BinanceSpotWebSocketStreamResponse;
@@ -310,8 +448,8 @@ mod tests {
 
     #[test]
     fn test_parse_invalid_json() {
-        let parser = BinanceSpotStreamHandler {};
-        let invalid_json = r#"{"invalid": json}"#;
+        let parser = BinanceSpotStreamHandler;
+        let invalid_json = r#"{\"invalid\": json}"#;
 
         let result = parser.parse_text(invalid_json);
         assert!(result.is_err(), "Should fail on invalid JSON");
@@ -319,7 +457,7 @@ mod tests {
 
     #[test]
     fn test_parse_empty_string() {
-        let parser = BinanceSpotStreamHandler {};
+        let parser = BinanceSpotStreamHandler;
         let result = parser.parse_text("");
         assert!(result.is_err(), "Should fail on empty string");
     }
@@ -467,5 +605,69 @@ mod tests {
             let map = handler.id_to_account.read().unwrap();
             assert_eq!(map.len(), 0, "初始状态下 id_to_account 应为空");
         }
+    }
+
+    struct MockRefresher {
+        symbols: RwLock<Vec<String>>,
+    }
+
+    impl MockRefresher {
+        fn new(symbols: Vec<&str>) -> Self {
+            Self {
+                symbols: RwLock::new(symbols.iter().map(|s| s.to_string()).collect()),
+            }
+        }
+
+        fn set(&self, symbols: Vec<&str>) {
+            let mut guard = self.symbols.write().unwrap();
+            guard.clear();
+            guard.extend(symbols.into_iter().map(|s| s.to_string()));
+        }
+    }
+
+    impl TradingSymbolRefresher for MockRefresher {
+        fn list_spot(&self) -> Vec<String> {
+            self.symbols.read().unwrap().clone()
+        }
+
+        fn list_swap(&self) -> Vec<String> {
+            vec![]
+        }
+    }
+
+    #[test]
+    fn test_kline_initial_subscribe_request_building() {
+        let refresher = Arc::new(MockRefresher::new(vec!["BTCUSDT", "ETHUSDT"]));
+        let kline = KlineSubscribe::new(refresher);
+
+        let req = kline.build_initial_subscribe().expect("初始订阅请求应生成");
+
+        assert_eq!(req.method, WS_SUBSCRIBE_COMMAND);
+        assert_eq!(req.params.len(), 2);
+        assert!(req.params.contains(&"btcusdt@kline_5m".to_string()));
+        assert!(req.params.contains(&"ethusdt@kline_5m".to_string()));
+
+        let state = kline.subscribed.read().unwrap();
+        assert_eq!(state.len(), 2);
+    }
+
+    #[test]
+    fn test_kline_refresh_diff_building() {
+        let refresher = Arc::new(MockRefresher::new(vec!["BTCUSDT"]));
+        let kline = KlineSubscribe::new(refresher.clone());
+
+        kline.build_initial_subscribe();
+
+        refresher.set(vec!["BTCUSDT", "BNBUSDT"]);
+        let (sub_req, unsub_req) = kline.build_refresh_commands();
+        assert!(unsub_req.is_none());
+        let sub_req = sub_req.expect("应该有新增订阅请求");
+        assert_eq!(sub_req.params, vec!["bnbusdt@kline_5m".to_string()]);
+
+        refresher.set(vec!["BNBUSDT"]);
+        let (sub_req, unsub_req) = kline.build_refresh_commands();
+        assert!(sub_req.is_none());
+        let unsub_req = unsub_req.expect("应该有取消订阅请求");
+        assert_eq!(unsub_req.params, vec!["btcusdt@kline_5m".to_string()]);
     }
 }

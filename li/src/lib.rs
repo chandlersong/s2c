@@ -6,3 +6,5 @@ pub mod notification;
 pub mod aws;
 
 pub mod errors;
+
+pub mod actix_jobs;

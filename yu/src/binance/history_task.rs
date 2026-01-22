@@ -1,4 +1,3 @@
-use crate::actix_jobs::AsyncRepeatTask;
 use crate::binance::binance_db_consts::BinanceTables;
 use crate::binance::bn_dashboard::TradingSymbol;
 use crate::duck_db::DBProvider;
@@ -7,6 +6,8 @@ use crate::exchange::{ExchangeDashBoard, HistoryFetcherFactory};
 use crate::utils::get_snowflake_generator;
 use async_trait::async_trait;
 use duckdb::{appender_params_from_iter, DropBehavior};
+use li::actix_jobs::AsyncRepeatTask;
+use li::errors::LiError;
 use li::tools::time::{unix_2_readable, unix_time_now_u64_utc, GENESIS_2020_MS, ONE_HOUR_MS};
 use log::{debug, error, info};
 use std::collections::HashMap;
@@ -254,9 +255,12 @@ where
     R: HistoryPO<Source = V> + Send + Sync + Clone + 'static,
     D: ExchangeDashBoard<TradingSymbol = TradingSymbol> + Send + Sync + Clone + 'static,
 {
-    async fn execute(&self) -> Result<(), YuError> {
+    async fn execute(&self) -> Result<(), LiError> {
         let now = unix_time_now_u64_utc();
-        let latest_symbol = self.data_writer.query_latest_symbols(self.exchange_dashboard.clone(), now)?;
+        let latest_symbol = self
+            .data_writer
+            .query_latest_symbols(self.exchange_dashboard.clone(), now)
+            .map_err(|e| LiError::CustomError(format!("query error: {}", e)))?;
         let (tx, mut rx) = mpsc::channel(100);
         let symbol_count = latest_symbol.len();
 
@@ -303,7 +307,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::actix_jobs::AsyncRepeatTask;
     use crate::binance::binance_db_consts::BinanceTables::SpotKline;
     use crate::binance::bn_dashboard::{BinanceDashboard, TradingSymbol};
     use crate::binance::history_task::{DuckDBHistoryDataWriter, InitialHistoryTask};
@@ -314,6 +317,8 @@ mod tests {
     use crate::test_utils::{generate_test_kline_vec, import_local_csv_and_assert, TEST_BEGIN_TIMESTAMP};
     use crate::utils::initial_memory_db;
     use async_trait::async_trait;
+    use li::actix_jobs::AsyncRepeatTask;
+    use li::errors::LiError;
     use li::tools::time::ONE_HOUR_MS;
     use mockall::{mock, predicate};
     use std::path::Path;
@@ -405,7 +410,7 @@ mod tests {
         let data_writer = Arc::new(DuckDBHistoryDataWriter::new(db_provider.clone(), SpotKline, SymbolType::Spot));
         let manager: InitialHistoryTask<MockHistoryFetcherFactory, CommonParam, KlinePo, BinanceKline, BinanceDashboard> =
             InitialHistoryTask::new(factory, dash_board, data_writer, "test_refresh_spot_kline_normal".to_string());
-        let res: Result<(), YuError> = manager.execute().await;
+        let res: Result<(), LiError> = manager.execute().await;
 
         println!("{:?}", res);
         assert!(res.is_ok());

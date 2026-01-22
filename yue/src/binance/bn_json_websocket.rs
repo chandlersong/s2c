@@ -20,6 +20,7 @@ pub const SPOT_DATA_STREAM_WEBSOCKET: &str = "wss://data-stream.binance.vision";
 pub const WS_PING_COMMAND: &str = "ping";
 pub const WS_TIME_COMMAND: &str = "time";
 pub const WS_SUBSCRIBE_COMMAND: &str = "SUBSCRIBE";
+pub const WS_UNSUBSCRIBE_COMMAND: &str = "UNSUBSCRIBE";
 pub const WS_SET_PROPERTY_COMMAND: &str = "SET_PROPERTY";
 pub const WS_GET_PROPERTY_COMMAND: &str = "GET_PROPERTY";
 pub const USER_DATA_STREAM_SUBSCRIBE_SIGNATURE: &str = "userDataStream.subscribe.signature";

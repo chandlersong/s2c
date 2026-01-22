@@ -1,4 +1,3 @@
-use crate::actix_jobs::{AsyncRepeatTask, CronActor};
 use crate::binance::binance_db_consts::BinanceTables::{SpotKline, SwapFundingRate, SwapKline};
 use crate::binance::binance_db_consts::ALL_BINANCE_TABLES;
 use crate::binance::bn_dashboard::{init_market_depth_dashboard, BinanceDashboard, MarketDepthDashBoard};
@@ -9,7 +8,8 @@ use crate::duck_db::DBProvider;
 use crate::errors::YuError;
 use crate::exchange::CloneHistoryFetcherFactory;
 use crate::websocket::subscribers::{AccountSyncActor, SpotStreamStorageActor};
-use actix::Actor;
+use actix::{Actor, Recipient};
+use li::actix_jobs::{AsyncRepeatTask, CronActor, SubscribeTask, TaskCompletionEvent};
 use log::{info, warn};
 use rust_decimal::prelude::ToPrimitive;
 use serde_json::to_string;
@@ -21,7 +21,7 @@ use yue::binance::bn_models::swap_restful::FundingRate;
 use yue::binance::bn_restful_commands::{SPOT_KLINE_HISTORY_COMMAND, SWAP_FUNDING_RATE_COMMAND, SWAP_KLINE_HISTORY_COMMAND};
 use yue::binance::history_data::{CommonParam, SimpleHistoryFetcher};
 use yue::binance::order_book::{OrderBookService, Subscribe as OrderBookSubscribe};
-use yue::binance::websocket_handler::{BinanceSpotStreamHandler, SpotAccountStreamHandler};
+use yue::binance::websocket_handler::{BinanceSpotStreamHandler, KlineSubscribe, SpotAccountStreamHandler};
 use yue::tools::SnowyFlakeWrapper;
 use yue::websocket::client::{SendTextMessage, SubscribeToEvents, WebSocketClient, WebSocketEvent};
 use yue::websocket::event_bus::{Subscribe, WsMessageBus};
@@ -40,14 +40,18 @@ pub async fn start_bn_jobs() -> Result<(), YuError> {
     if let Err(_e) = initial_tables(None) {
         warn!("币安表创建失败,{}", _e);
     }
+    let dash_board_arc = Arc::new(dash_board.clone());
+    let spot_kline_subscribe_addr = KlineSubscribe::new(dash_board_arc).start();
+    let spot_kline_subscribe: Recipient<WebSocketEvent> = spot_kline_subscribe_addr.clone().recipient();
+    let spot_kline_job: Recipient<TaskCompletionEvent> = spot_kline_subscribe_addr.recipient();
     info!("数据库创建表完成");
-    start_spot_jobs().await?;
-    start_refresh_history_data(dash_board.clone()).await?;
-    start_websocket_job(dash_board.clone()).await?;
+    start_spot_websocket_jobs().await?;
+    start_spot_websocket_stream_job(spot_kline_subscribe).await?;
+    start_refresh_history_data(dash_board.clone(), spot_kline_job).await?;
     Ok(())
 }
 
-pub async fn start_spot_jobs() -> Result<(), YuError> {
+pub async fn start_spot_websocket_jobs() -> Result<(), YuError> {
     let config = get_config();
     let mut client_builder = WebSocketClient::new(SPOT_WEBSOCKET);
 
@@ -91,7 +95,7 @@ pub async fn start_spot_jobs() -> Result<(), YuError> {
 /// 2. 启动WsMessageBus，订阅websocket客户端的事件，分发给不同的订阅者
 /// 3. SpotStreamStorageActor，订阅启动WsMessageBus信息
 /// 4，根据配置信息，启动一个专门管理spot的OrderBookService
-async fn start_websocket_job(dash_board: BinanceDashboard) -> Result<(), YuError> {
+async fn start_spot_websocket_stream_job(kline_subscribe_recipient: Recipient<WebSocketEvent>) -> Result<(), YuError> {
     let config = get_config();
 
     // 检查是否启用了 WebSocket 功能
@@ -139,7 +143,7 @@ async fn start_websocket_job(dash_board: BinanceDashboard) -> Result<(), YuError
     info!("✓ WebSocket 客户端已启动: {}", SPOT_STREAM_WEBSOCKET);
 
     // 步骤2: 启动 WsMessageBus
-    let bus = WsMessageBus::new(BinanceSpotStreamHandler::new(dash_board)).start();
+    let bus = WsMessageBus::new(BinanceSpotStreamHandler).start();
     info!("✓ WsMessageBus 已启动");
 
     // 步骤3: 启动 SpotStreamStorageActor
@@ -194,6 +198,15 @@ async fn start_websocket_job(dash_board: BinanceDashboard) -> Result<(), YuError
         .await
         .map_err(|e| YuError::CustomError(format!("发送订阅事件失败: {}", e)))??;
     info!("✓ WsMessageBus 已订阅 WebSocketClient 事件");
+
+    // KlineSubscribe 订阅 WebSocketClient 事件，监听连接状态并管理订阅
+    client_addr
+        .send(SubscribeToEvents {
+            recipient: kline_subscribe_recipient,
+        })
+        .await
+        .map_err(|e| YuError::CustomError(format!("发送 KlineSubscribe 订阅事件失败: {}", e)))??;
+    info!("✓ KlineSubscribe 已订阅 WebSocketClient 事件");
 
     // 等待连接建立
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
@@ -294,7 +307,7 @@ async fn start_websocket_job(dash_board: BinanceDashboard) -> Result<(), YuError
     Ok(())
 }
 
-async fn start_refresh_history_data(origin_dash_board: BinanceDashboard) -> Result<(), YuError> {
+async fn start_refresh_history_data(origin_dash_board: BinanceDashboard, spot_kline_job: Recipient<TaskCompletionEvent>) -> Result<(), YuError> {
     let update_dashboard_task = origin_dash_board.clone();
     let dash_board = Arc::new(origin_dash_board);
 
@@ -337,7 +350,9 @@ async fn start_refresh_history_data(origin_dash_board: BinanceDashboard) -> Resu
     );
     swap_funding_rate_task.execute().await?;
     //PLAN： 更新交易所时间表达式进入Config
-    let _ = CronActor::new("30 59 */6 * * * *", update_dashboard_task).start();
+    let dash_board_addr = CronActor::new("30 59 */6 * * * *", update_dashboard_task).start();
+    dash_board_addr.do_send(SubscribeTask { subscriber: spot_kline_job });
+
     let _ = CronActor::new("10 0 * * * * *", swap_funding_rate_task).start();
     let _ = CronActor::new("10 1 * * * * *", swap_kline_task).start();
     Ok(())
