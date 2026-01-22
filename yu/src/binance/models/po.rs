@@ -178,9 +178,9 @@ pub struct KlinePo {
     /// K 线周期（如 "1m"）。
     pub interval: u8, //因为节省数据，所以换成了u8，现在只存5m。所以为0
     /// 第一笔成交 ID。
-    pub first_trade_id: Option<u64>,
+    pub first_trade_id: Option<i64>,
     /// 最后一笔成交 ID。
-    pub last_trade_id: Option<u64>,
+    pub last_trade_id: Option<i64>,
 }
 
 impl From<KlineData> for KlinePo {

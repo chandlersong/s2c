@@ -148,10 +148,10 @@ pub struct KlineData {
     pub interval: String,
     #[serde(rename = "f")]
     /// 第一笔成交 ID。
-    pub first_trade_id: u64,
+    pub first_trade_id: i64,
     #[serde(rename = "L")]
     /// 最后一笔成交 ID。
-    pub last_trade_id: u64,
+    pub last_trade_id: i64,
     #[serde(rename = "o")]
     #[serde(with = "string_to_decimal")]
     /// 开盘价。
