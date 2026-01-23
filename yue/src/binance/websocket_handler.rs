@@ -58,6 +58,11 @@ pub struct KlineSubscribe {
 
 impl Actor for KlineSubscribe {
     type Context = actix::Context<Self>;
+
+    fn started(&mut self, _ctx: &mut Self::Context) {
+        info!("✓ KlineSubscribe actor started");
+        _ctx.set_mailbox_capacity(1000);
+    }
 }
 
 impl Handler<WebSocketEvent> for KlineSubscribe {
@@ -171,7 +176,7 @@ impl KlineSubscribe {
 
     fn send_request(&self, addr: &Addr<WebSocketClient>, req: StreamCommandRequest) -> Result<(), YueError> {
         let payload = serde_json::to_string(&req)?;
-        addr.try_send(SendTextMessage::new(payload))
+        addr.try_send(SendTextMessage::new_no_resend(payload))
             .map_err(|e| YueError::new(&format!("发送K线订阅消息失败: {}", e)))
     }
 
