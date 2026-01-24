@@ -33,11 +33,7 @@ impl RollingKVDBConfiguration {
     pub fn new_with_path(path: PathBuf) -> Self {
         let start = get_next_utc_day_begin();
         let duration = Duration::from_secs(24 * 60 * 60);
-        Self {
-            start,
-            duration,
-            path,
-        }
+        Self { start, duration, path }
     }
 }
 
@@ -69,12 +65,8 @@ pub struct RollingKVDB {
     report: Arc<Mutex<RollingKvDBReport>>,
 }
 
-async fn loop_func<F>(
-    start: Instant,
-    duration: Duration,
-    func: F,
-    mut close_refresh_cf_rx: mpsc::Receiver<()>,
-) where
+async fn loop_func<F>(start: Instant, duration: Duration, func: F, mut close_refresh_cf_rx: mpsc::Receiver<()>)
+where
     F: Fn() + Send + 'static,
 {
     tokio::spawn(async move {
@@ -113,8 +105,7 @@ impl RollingKVDB {
         options.create_if_missing(true);
         options.create_missing_column_families(true);
 
-        let existing_cfs =
-            DB::list_cf(&options, &config.path).unwrap_or_else(|_| vec!["default".to_string()]);
+        let existing_cfs = DB::list_cf(&options, &config.path).unwrap_or_else(|_| vec!["default".to_string()]);
 
         let mut cfs = Vec::new();
         for cf in &existing_cfs {
@@ -123,14 +114,10 @@ impl RollingKVDB {
         let open_cf_arc = current_cf.clone();
         let open_cf = &open_cf_arc.read().unwrap();
         if !existing_cfs.contains(open_cf) {
-            cfs.push(ColumnFamilyDescriptor::new(
-                open_cf.to_string(),
-                Options::default(),
-            ));
+            cfs.push(ColumnFamilyDescriptor::new(open_cf.to_string(), Options::default()));
         }
 
-        let db = OptimisticTransactionDB::open_cf_descriptors(&options, config.path, cfs)
-            .expect("Failed to open DB");
+        let db = OptimisticTransactionDB::open_cf_descriptors(&options, config.path, cfs).expect("Failed to open DB");
 
         // 刷新CF
         let cf = current_cf.clone();
@@ -156,9 +143,7 @@ impl RollingKVDB {
             None => {
                 let result = self.current_cf.read().unwrap();
                 let options = Options::default();
-                self.db
-                    .create_cf(result.as_str(), &options)
-                    .expect("TODO: panic message");
+                self.db.create_cf(result.as_str(), &options).expect("TODO: panic message");
                 self.db.cf_handle(result.as_str()).unwrap()
             }
         };
@@ -167,10 +152,7 @@ impl RollingKVDB {
             txn.put_cf(&default_cf, key, value)?;
         }
 
-        self.report
-            .lock()
-            .unwrap()
-            .increment_record_count(data.len() as u32);
+        self.report.lock().unwrap().increment_record_count(data.len() as u32);
         txn.commit()
     }
 
@@ -181,11 +163,7 @@ impl RollingKVDB {
             Ok(Some(value)) => Some(value.to_vec()),
             Ok(None) => None,
             Err(e) => {
-                error!(
-                    "Error reading value from DB: key is {},error is {}",
-                    String::from_utf8_lossy(key),
-                    e
-                );
+                error!("Error reading value from DB: key is {},error is {}", String::from_utf8_lossy(key), e);
                 None
             }
         }
@@ -193,10 +171,7 @@ impl RollingKVDB {
 
     pub async fn close(&self) {
         info!("Closing RollingKVDB");
-        self.close_refresh_cf_tx
-            .send(())
-            .await
-            .expect("关闭cf刷新失败");
+        self.close_refresh_cf_tx.send(()).await.expect("关闭cf刷新失败");
     }
 
     pub async fn get_report(&self) -> Arc<Mutex<RollingKvDBReport>> {

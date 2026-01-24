@@ -19,11 +19,11 @@
 ## 主要任务和里程碑
 
 ### 任务1：模块骨架与核心数据结构
-- [ ] 任务1.1：创建 data_integrity 模块目录与基础 mod.rs
-- [ ] 任务1.2：定义 HealthState 枚举（OK / DEGRADED / RECOVERING / FAILED）及相关结构体
-- [ ] 任务1.3：定义 ValidationResult 事件结构（缺口摘要、重试计数、错误信息）
-- [ ] 任务1.4：定义 RepairRequest 和 RepairResult 消息结构
-- [ ] 任务1.5：定义 ValidationStrategy trait 接口与注册表
+- [x] 任务1.1：创建 data_integrity 模块目录与基础 mod.rs
+- [x] 任务1.2：定义 HealthState 枚举（OK / DEGRADED / RECOVERING / FAILED）及相关结构体
+- [x] 任务1.3：定义 ValidationResult 事件结构（缺口摘要、重试计数、错误信息）
+- [x] 任务1.4：定义 RepairRequest 和 RepairResult 消息结构
+- [x] 任务1.5：定义 ValidationStrategy trait 接口与注册表
 
 ### 任务2：配置与初始化
 - [ ] 任务2.1：在 yu/src/data_integrity/config.rs 定义 DataIntegrityConfig 结构

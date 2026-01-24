@@ -9,4 +9,5 @@ pub mod utils;
 pub mod arrow_flight_server;
 pub mod binance;
 pub mod config;
+pub mod data_integrity;
 pub mod websocket;

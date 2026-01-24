@@ -1,8 +1,6 @@
 use crate::errors::LiError;
 use aws_sdk_dynamodb::config::{BehaviorVersion, Credentials, Region};
-use aws_sdk_dynamodb::types::{
-    AttributeDefinition, KeySchemaElement, KeyType, ProvisionedThroughput, ScalarAttributeType,
-};
+use aws_sdk_dynamodb::types::{AttributeDefinition, KeySchemaElement, KeyType, ProvisionedThroughput, ScalarAttributeType};
 use aws_sdk_dynamodb::{Client, Config};
 
 pub async fn create_dynamodb_client(is_local: bool) -> Result<Client, LiError> {
@@ -32,11 +30,7 @@ pub async fn create_dynamodb_client(is_local: bool) -> Result<Client, LiError> {
     }
 }
 
-pub async fn create_kline_table(
-    client: &Client,
-    table_name: &str,
-    provisioned_throughput: Option<ProvisionedThroughput>,
-) -> Result<(), LiError> {
+pub async fn create_kline_table(client: &Client, table_name: &str, provisioned_throughput: Option<ProvisionedThroughput>) -> Result<(), LiError> {
     // 创建表
     let pt = provisioned_throughput.unwrap_or_else(|| {
         ProvisionedThroughput::builder()

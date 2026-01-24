@@ -17,10 +17,7 @@ async fn initial_stop_notification() -> broadcast::Sender<()> {
 }
 
 pub async fn endless_stop_tx() -> broadcast::Sender<()> {
-    STOP_NOTIFICATION
-        .get_or_init(initial_stop_notification)
-        .await
-        .clone()
+    STOP_NOTIFICATION.get_or_init(initial_stop_notification).await.clone()
 }
 
 pub async fn stop_endless() {

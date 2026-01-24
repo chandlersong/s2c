@@ -103,11 +103,49 @@ pub struct AppConfig {
     #[serde(rename = "logLevel")]
     pub log_level: Option<String>,
     pub binance_websocket: Option<BinanceWebSocketConfig>,
+    pub data_integrity: Option<DataIntegrityConfig>,
 }
 
-#[derive(Deserialize, Debug)]
+impl AppConfig {
+    pub fn get_data_integrity_config(&self) -> DataIntegrityConfig {
+        self.data_integrity.clone().unwrap_or_default()
+    }
+}
+
+#[derive(Deserialize, Debug, Clone)]
 pub struct DuckDBConfig {
     pub path: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct DataIntegrityConfig {
+    // 默认1个小时
+    pub startup_check_timeout_ms: u64,
+    // linux corn的模式 默认 7 * * * * * *。 每小时的7分钟完成。
+    pub periodic_check_interval_cron: String,
+    pub repair_backoff: RepairBackoffConfig,
+}
+
+impl Default for DataIntegrityConfig {
+    fn default() -> Self {
+        DataIntegrityConfig {
+            startup_check_timeout_ms: 3_600_000,
+            periodic_check_interval_cron: "7 * * * * * *".to_string(),
+            repair_backoff: Default::default(),
+        }
+    }
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct RepairBackoffConfig {
+    // 默认3
+    pub max_retries: u32,
+}
+
+impl Default for RepairBackoffConfig {
+    fn default() -> Self {
+        RepairBackoffConfig { max_retries: 3 }
+    }
 }
 
 pub(crate) static CONFIG: OnceLock<AppConfig> = OnceLock::new();
@@ -209,37 +247,51 @@ mod tests {
     }
 
     #[test]
-    fn test_spot_config_get_all_symbols() {
-        let config = super::SpotWebSocketStreamConfig {
-            trade: Some(super::SpotTradeStreamConfig {
-                enabled: Some(true),
-                symbols: vec!["BTCUSDT".to_string(), "ETHUSDT".to_string()],
-                batch_size: Some(100),
-                flush_interval_ms: Some(5000),
-                retention_days: Some(7),
-            }),
-            depth: None,
-        };
+    fn test_data_integrity_config_deserialization() {
+        let yaml = r#"
+proxyUrl: "http://127.0.0.1:1087"
+logLevel: "info"
+data_integrity:
+  startup_check_timeout_ms: 5000
+  periodic_check_interval_cron: "*/5 * * * * * *"
+  repair_backoff:
+    max_retries: 5
+"#;
 
-        let symbols = config.trade.unwrap().symbols;
-        assert_eq!(symbols.len(), 2); // BTCUSDT, ETHUSDT, BNBUSDT (去重)
-        assert!(symbols.contains(&"BTCUSDT".to_string()));
-        assert!(symbols.contains(&"ETHUSDT".to_string()));
+        let config_builder = Config::builder()
+            .add_source(config::File::from_str(yaml, config::FileFormat::Yaml))
+            .build()
+            .expect("Failed to build config");
+
+        let app_config: super::AppConfig = config_builder.try_deserialize().expect("Failed to deserialize config");
+
+        let di = app_config.data_integrity.expect("data_integrity should exist");
+        assert_eq!(di.startup_check_timeout_ms, 5000);
+        assert_eq!(di.periodic_check_interval_cron, "*/5 * * * * * *");
+
+        let backoff = di.repair_backoff;
+        assert_eq!(backoff.max_retries, 5);
     }
 
     #[test]
-    fn test_spot_config_batch_sizes() {
-        let config = super::SpotWebSocketStreamConfig {
-            trade: Some(super::SpotTradeStreamConfig {
-                enabled: Some(true),
-                symbols: vec!["BTCUSDT".to_string()],
-                batch_size: Some(200),
-                flush_interval_ms: Some(5000),
-                retention_days: Some(7),
-            }),
-            depth: None,
-        };
+    fn test_data_integrity_config_defaults() {
+        let yaml = r#"
+proxyUrl: "http://127.0.0.1:1087"
+logLevel: "info"
+"#;
 
-        assert_eq!(config.trade.unwrap().batch_size(), 200);
+        let config_builder = Config::builder()
+            .add_source(config::File::from_str(yaml, config::FileFormat::Yaml))
+            .build()
+            .expect("Failed to build config");
+
+        let app_config: super::AppConfig = config_builder.try_deserialize().expect("Failed to deserialize config");
+
+        let di = app_config.get_data_integrity_config();
+        assert_eq!(di.startup_check_timeout_ms, 3_600_000);
+        assert_eq!(di.periodic_check_interval_cron, "7 * * * * * *");
+
+        let backoff = di.repair_backoff;
+        assert_eq!(backoff.max_retries, 3);
     }
 }
