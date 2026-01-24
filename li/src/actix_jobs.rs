@@ -1,4 +1,5 @@
 use crate::errors::LiError;
+use crate::tools::SubscribeEvent;
 use actix::{Actor, AsyncContext, Context, Handler, Message as ActixMessage, Recipient};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -19,16 +20,6 @@ impl ActixMessage for TaskCompletionEvent {
     type Result = ();
 }
 
-/// 订阅任务完成事件的消息
-#[derive(Debug, Clone)]
-pub struct SubscribeTask {
-    pub subscriber: Recipient<TaskCompletionEvent>,
-}
-
-impl ActixMessage for SubscribeTask {
-    type Result = ();
-}
-
 #[async_trait]
 pub trait AsyncRepeatTask: Send + Sync + Clone + Unpin + 'static {
     async fn execute(&self) -> Result<(), LiError>;
@@ -46,7 +37,7 @@ pub trait AsyncRepeatTask: Send + Sync + Clone + Unpin + 'static {
 ///
 /// 扩展点：
 /// 1. 订阅者可以接收任务执行完成事件（成功或失败）
-/// 2. 可以通过 SubscribeTask 消息动态注册新的订阅者
+/// 2. 可以通过 SubscribeTask 消消息动态注册新的订阅者
 /// 3. TaskCompletionEvent 包含任务名称、时间戳和执行结果，便于监控和日志
 ///
 /// 业务规范：
@@ -129,12 +120,12 @@ impl<T: AsyncRepeatTask> CronActor<T> {
     }
 }
 
-/// 处理 SubscribeTask 消息
-impl<T: AsyncRepeatTask> Handler<SubscribeTask> for CronActor<T> {
+/// 处理 SubscribeEvent<TaskCompletionEvent> 消息
+impl<T: AsyncRepeatTask> Handler<SubscribeEvent<TaskCompletionEvent>> for CronActor<T> {
     type Result = ();
 
-    fn handle(&mut self, msg: SubscribeTask, _ctx: &mut Context<Self>) -> Self::Result {
-        self.subscribers.push(msg.subscriber);
+    fn handle(&mut self, msg: SubscribeEvent<TaskCompletionEvent>, _ctx: &mut Context<Self>) -> Self::Result {
+        self.subscribers.push(msg.0);
         info!(
             "Subscriber registered for task '{}'. Total subscribers: {}",
             self.task.task_name(),
@@ -146,6 +137,8 @@ impl<T: AsyncRepeatTask> Handler<SubscribeTask> for CronActor<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::subscribe_event;
+    use crate::subscribe_event_addr;
     use async_trait::async_trait;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
@@ -255,9 +248,7 @@ mod tests {
         let events = Arc::new(Mutex::new(Vec::new()));
         let subscriber = TestSubscriber { events: events.clone() }.start();
 
-        addr.do_send(SubscribeTask {
-            subscriber: subscriber.recipient(),
-        });
+        subscribe_event_addr!(addr, subscriber, TaskCompletionEvent);
 
         actix_rt::time::sleep(Duration::from_millis(100)).await;
     }
@@ -272,9 +263,7 @@ mod tests {
         let events = Arc::new(Mutex::new(Vec::new()));
         let subscriber = TestSubscriber { events: events.clone() }.start();
 
-        addr.do_send(SubscribeTask {
-            subscriber: subscriber.recipient(),
-        });
+        subscribe_event!(addr, subscriber.recipient(), TaskCompletionEvent);
 
         actix_rt::time::sleep(Duration::from_secs(2)).await;
 
@@ -292,9 +281,7 @@ mod tests {
         let events = Arc::new(Mutex::new(Vec::new()));
         let subscriber = TestSubscriber { events: events.clone() }.start();
 
-        addr.do_send(SubscribeTask {
-            subscriber: subscriber.recipient(),
-        });
+        subscribe_event!(addr, subscriber.recipient(), TaskCompletionEvent);
 
         actix_rt::time::sleep(Duration::from_secs(2)).await;
 
@@ -317,12 +304,8 @@ mod tests {
         let events2 = Arc::new(Mutex::new(Vec::new()));
         let subscriber2 = TestSubscriber { events: events2.clone() }.start();
 
-        addr.do_send(SubscribeTask {
-            subscriber: subscriber1.recipient(),
-        });
-        addr.do_send(SubscribeTask {
-            subscriber: subscriber2.recipient(),
-        });
+        subscribe_event!(addr, subscriber1.recipient(), TaskCompletionEvent);
+        subscribe_event!(addr, subscriber2.recipient(), TaskCompletionEvent);
 
         actix_rt::time::sleep(Duration::from_secs(2)).await;
 

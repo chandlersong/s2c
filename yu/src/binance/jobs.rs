@@ -9,7 +9,8 @@ use crate::errors::YuError;
 use crate::exchange::CloneHistoryFetcherFactory;
 use crate::websocket::subscribers::{AccountSyncActor, SpotStreamStorageActor};
 use actix::{Actor, Recipient};
-use li::actix_jobs::{AsyncRepeatTask, CronActor, SubscribeTask, TaskCompletionEvent};
+use li::actix_jobs::{AsyncRepeatTask, CronActor, TaskCompletionEvent};
+use li::subscribe_event;
 use log::{info, warn};
 use rust_decimal::prelude::ToPrimitive;
 use serde_json::to_string;
@@ -354,8 +355,7 @@ async fn start_refresh_history_data(origin_dash_board: BinanceDashboard, spot_kl
     swap_funding_rate_task.execute().await?;
     //PLAN： 更新交易所时间表达式进入Config
     let dash_board_addr = CronActor::new("30 59 */6 * * * *", update_dashboard_task).start();
-    dash_board_addr.do_send(SubscribeTask { subscriber: spot_kline_job });
-
+    subscribe_event!(dash_board_addr, spot_kline_job, TaskCompletionEvent);
     let _ = CronActor::new("10 0 * * * * *", swap_funding_rate_task).start();
     let _ = CronActor::new("10 1 * * * * *", swap_kline_task).start();
     Ok(())
