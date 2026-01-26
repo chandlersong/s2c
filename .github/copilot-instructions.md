@@ -30,16 +30,19 @@
 
 当遇到以下任务时，我会自动读取相关文档：
 
-| 任务类型 | 对应文档 |
-|---------|---------|
+| 任务类型         | 对应文档 |
+|--------------|---------|
+| 基本开发准则       | `.github/INSTRUCTIONS/a_代码规范.md` |
+| 项目规范         | `.github/project.instructions.md` |
+| 文档规范         | `.github/doc.instructions.md` |
 | WebSocket 相关 | `.github/INSTRUCTIONS/04_WebSocket数据流.md` |
-| HTTP 请求 | `.github/INSTRUCTIONS/05_HTTP请求框架.md` |
-| 数据库操作 | `.github/INSTRUCTIONS/03_数据库操作.md` |
-| 定义数据模型 | `.github/INSTRUCTIONS/02_领域对象定义.md` |
-| 定义 Actor | `.github/INSTRUCTIONS/06_Actor模式.md` |
-| 错误处理 | `.github/INSTRUCTIONS/07_错误处理.md` |
-| 配置管理 | `.github/INSTRUCTIONS/08_配置管理.md` |
-| 架构问题 | `.github/INSTRUCTIONS/01_架构概览.md` |
+| HTTP 请求      | `.github/INSTRUCTIONS/05_HTTP请求框架.md` |
+| 数据库操作        | `.github/INSTRUCTIONS/03_数据库操作.md` |
+| 定义数据模型       | `.github/INSTRUCTIONS/02_领域对象定义.md` |
+| 定义 Actor     | `.github/INSTRUCTIONS/06_Actor模式.md` |
+| 错误处理         | `.github/INSTRUCTIONS/07_错误处理.md` |
+| 配置管理         | `.github/INSTRUCTIONS/08_配置管理.md` |
+| 架构问题         | `.github/INSTRUCTIONS/01_架构概览.md` |
 
 ## 🏗️ 架构速查
 

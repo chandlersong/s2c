@@ -97,6 +97,9 @@ pub struct RepairResult {
 mod tests {
     use super::*;
 
+    // 测试目的：验证 HealthState 序列化/反序列化的行为，确保枚举按 UPPERCASE 序列化
+    // 设计思路：对 HealthState::DEGRADED 做 serde 的 round-trip
+    // 扩展点：可增加对其他枚举值及错误字符串反序列化的边界测试
     #[test]
     fn health_state_serde_round_trip() {
         let json = serde_json::to_string(&HealthState::DEGRADED).unwrap();
@@ -106,6 +109,9 @@ mod tests {
         assert_eq!(state, HealthState::DEGRADED);
     }
 
+    // 测试目的：验证 ValidationGap 与 ValidationResult 的序列化与反序列化正确性
+    // 设计思路：构造带缺口的 ValidationResult，序列化再反序列化后比对字段一致性
+    // 扩展点：可以增加包含多个 gap、error 字段以及 retry_count 的组合场景
     #[test]
     fn validation_gap_enum_and_result_serialization() {
         let gap = ValidationGap::MissingData {
