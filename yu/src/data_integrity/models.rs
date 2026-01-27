@@ -1,7 +1,13 @@
+use actix::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
+use yue::tools::get_snow_flake_id_u64;
 
 /// 全局健康状态枚举，代表当前数据完整性的总体态势。
+/// 关于状态管理。
+/// 1. 启动时候检查，默认是FAILED
+/// 2. 定期的检查，除非发现问题，否则为OK
+/// 3. 发现问题后，状态变为FAILED
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum HealthState {
@@ -9,6 +15,7 @@ pub enum HealthState {
     DEGRADED,
     RECOVERING,
     FAILED,
+    INITIAL,
 }
 
 /// 状态快照，附带时间戳与可选原因，供 Supervisor 对外查询使用。
@@ -39,12 +46,17 @@ pub enum ValidationGap {
         trade_type: String,
         start_time: u64,
         end_time: u64,
+        table: String,
     },
 }
 
 /// 校验结果事件，Checker 产出，交由 RepairExecutor 消费。
+///
+/// ValidationResult,
+///
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationResult {
+    pub id: u64,
     pub strategy: String,
     #[serde(default)]
     pub gaps: Vec<ValidationGap>,
@@ -57,6 +69,7 @@ pub struct ValidationResult {
 impl ValidationResult {
     pub fn ok(strategy: impl Into<String>) -> Self {
         Self {
+            id: get_snow_flake_id_u64(),
             strategy: strategy.into(),
             gaps: Vec::new(),
             retry_count: 0,
@@ -65,16 +78,26 @@ impl ValidationResult {
     }
 }
 
+impl Message for ValidationResult {
+    type Result = ();
+}
+
 /// 修复请求，通常由 ValidationResult 转化后放入 RepairExecutor。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepairRequest {
-    pub id: String,
+    pub id: u64,
     pub strategy: String,
     #[serde(default)]
     pub gaps: Vec<ValidationGap>,
 }
 
+// 为 RepairRequest 实现 actix Message trait，以便可以通过 Recipient 发送
+impl actix::prelude::Message for RepairRequest {
+    type Result = ();
+}
+
 /// 修复状态。
+/// 我觉得这里有点过度设计。感觉有一个两个状态就够了。现阶段先保留SKIPPED
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum RepairStatus {
@@ -86,7 +109,7 @@ pub enum RepairStatus {
 /// 修复结果，反馈给 Supervisor 更新健康状态。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepairResult {
-    pub request_id: String,
+    pub request_id: u64, // 对应的 ValidationResult ID
     pub strategy: String,
     pub status: RepairStatus,
     #[serde(default)]
@@ -119,9 +142,11 @@ mod tests {
             trade_type: "SPOT".to_string(),
             start_time: 1_700_000_000_000,
             end_time: 1_700_000_100_000,
+            table: "".to_string(),
         };
 
         let result = ValidationResult {
+            id: 0,
             strategy: "noop".to_string(),
             gaps: vec![gap.clone()],
             retry_count: 1,

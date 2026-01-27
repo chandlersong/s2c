@@ -1,14 +1,28 @@
 // RepairExecutor 负责接收校验结果并调度修复请求（简化实现）
-use crate::data_integrity::checker::ValidationResultMsg as CheckerValidationResultMsg;
-use crate::data_integrity::{RepairRequest, RepairResult, RepairStatus};
+use crate::data_integrity::models::{RepairRequest, RepairResult, RepairStatus};
 use actix::prelude::*;
-use std::collections::VecDeque;
-use yue::tools::get_snow_flake_id_u64;
+use async_trait::async_trait;
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
+
+/// Repair 策略接口：实现具体修复逻辑。返回 Ok(()) 表示成功，Err(reason) 表示失败（会触发重试/上报）。
+#[async_trait]
+pub trait RepairStrategy: Send + Sync + 'static {
+    async fn repair(&self, req: RepairRequest) -> Result<(), String>;
+    fn name(&self) -> &'static str; // optional name
+}
+
+/// Message: 注册一个 repair 策略到 RepairExecutor
+pub struct RegisterRepairStrategy(pub String, pub Arc<dyn RepairStrategy>);
+impl Message for RegisterRepairStrategy {
+    type Result = ();
+}
 
 pub struct RepairExecutor {
     // 简单队列，持有待处理的请求（此处仅演示转换与存储）
     pub pending: VecDeque<RepairRequest>,
     pub results: Vec<RepairResult>,
+    pub repair_strategies: HashMap<String, Arc<dyn RepairStrategy>>,
 }
 
 impl Default for RepairExecutor {
@@ -16,61 +30,34 @@ impl Default for RepairExecutor {
         RepairExecutor {
             pending: VecDeque::new(),
             results: Vec::new(),
+            repair_strategies: Default::default(),
         }
     }
 }
 
 impl Actor for RepairExecutor {
     type Context = Context<Self>;
-}
 
-/// 接收 Checker 的 ValidationResultMsg 并转换为 RepairRequest
-impl Handler<CheckerValidationResultMsg> for RepairExecutor {
-    type Result = ();
-
-    fn handle(&mut self, msg: CheckerValidationResultMsg, _ctx: &mut Context<Self>) -> Self::Result {
-        let vr = msg.0;
-        // 如果没有 gaps，跳过（将状态记录为 SKIPPED）
-        let id = get_snow_flake_id_u64().to_string();
-        if vr.gaps.is_empty() {
-            let r = RepairResult {
-                request_id: id.clone(),
-                strategy: vr.strategy.clone(),
-                status: RepairStatus::SKIPPED,
-                error: None,
-            };
-            self.results.push(r);
-            return;
-        }
-
-        let req = RepairRequest {
-            id: id.clone(),
-            strategy: vr.strategy.clone(),
-            gaps: vr.gaps.clone(),
-        };
-        self.pending.push_back(req);
-
-        // 模拟修复成功并记录结果（同步示例）
-        let r = RepairResult {
-            request_id: id.clone(),
-            strategy: vr.strategy.clone(),
-            status: RepairStatus::SUCCEEDED,
-            error: None,
-        };
-        self.results.push(r);
+    fn started(&mut self, _ctx: &mut Self::Context) {
+        _ctx.set_mailbox_capacity(1000);
     }
 }
 
-/// 查询当前已完成的修复结果
-pub struct GetRepairResults;
-impl Message for GetRepairResults {
-    type Result = Vec<RepairResult>;
-}
+// 处理来自 Supervisor 的 RepairRequest：将请求入队，记录并返回
+impl Handler<RepairRequest> for RepairExecutor {
+    type Result = ();
 
-impl Handler<GetRepairResults> for RepairExecutor {
-    type Result = MessageResult<GetRepairResults>;
+    fn handle(&mut self, msg: RepairRequest, _ctx: &mut Self::Context) -> Self::Result {
+        // 简化逻辑：将请求加入待处理队列，并记录一个 SKIPPED 结果占位
+        self.pending.push_back(msg.clone());
 
-    fn handle(&mut self, _msg: GetRepairResults, _ctx: &mut Context<Self>) -> Self::Result {
-        MessageResult(self.results.clone())
+        // 记录一个占位 RepairResult（实际实现会调用策略并上报结果）
+        let res = RepairResult {
+            request_id: msg.id,
+            strategy: msg.strategy.clone(),
+            status: RepairStatus::SKIPPED,
+            error: None,
+        };
+        self.results.push(res);
     }
 }

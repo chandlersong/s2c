@@ -412,6 +412,56 @@ impl Actor for StorageActor {
 }
 ```
 
+
+### 注册监听消息
+
+
+原则上，在初始化时，就完成订阅操作。比如把Recipient传入等。
+
+除非非常必要。否则不要用订阅以下模式，只有在非常必要的前提下，采用以下模式。
+凡事需要pub/sub等操作，则按照以下的方式执行。具体参考li/src/actix_jobs.rs
+- ExampleEvent 根据需要取名和加减字段
+
+1. 创建pub
+
+```rust
+
+#[derive(Debug, Clone)]
+pub struct ExampleEvent {
+    pub task_name: String, 
+    pub result: Result<(), String>,
+}
+
+impl ActixMessage for ExampleEvent {
+    type Result = ();
+}
+
+struct ExampleActor{
+    subscribers: Vec<Recipient<ExampleEvent>>, // 订阅者列表
+}
+
+impl  Handler<SubscribeEvent<ExampleEvent>> for ExampleActor<T> {
+    type Result = ();
+
+    fn handle(&mut self, msg: SubscribeEvent<ExampleEvent>, _ctx: &mut Context<Self>) -> Self::Result {
+        self.subscribers.push(msg.0);
+        info!(
+            "Subscriber registered for task '{}'. Total subscribers: {}",
+            self.task.task_name(),
+            self.subscribers.len()
+        );
+    }
+}
+```
+
+2. 创建sub
+```rust
+
+let events = Arc::new(Mutex::new(Vec::new()));
+let subscriber = TestSubscriber { events: events.clone() }.start();
+
+subscribe_event!(addr, subscriber.recipient(), TaskCompletionEvent);
+```
 ## 错误处理
 
 ### Actor 崩溃恢复

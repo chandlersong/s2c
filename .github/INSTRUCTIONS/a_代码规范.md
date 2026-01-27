@@ -10,24 +10,28 @@ description: Universal coding standards, best practices, and patterns for TypeSc
 ## 代码质量原则
 
 ### 1. 可读性优先
+
 - 代码被读的次数多于被写的次数
 - 使用清晰的变量名和函数名
 - 优先使用自说明代码而不是注释
 - 保持格式一致
 
 ### 2. KISS（保持简单，别搞复杂）
+
 - 使用能工作的最简单方案
 - 避免过度设计
 - 不要过早优化
 - 易于理解优于所谓“聪明”的写法
 
 ### 3. DRY（不要重复自己）
+
 - 将公共逻辑提取为函数
 - 创建可复用组件
 - 在模块间共享工具函数
 - 避免拷贝粘贴式编程
 
 ### 4. YAGNI（你不会需要它）
+
 - 不要在还没需要时就实现功能
 - 避免投机性的泛化
 - 仅在必要时增加复杂性
@@ -69,9 +73,9 @@ fn is_valid_email(email: &str) -> bool {
 }
 
 // ❌ 不好：不清晰或仅用名词
-fn market(id: &str) { }
-fn similarity(a: &[f64], b: &[f64]) { }
-fn email(e: &str) { }
+fn market(id: &str) {}
+fn similarity(a: &[f64], b: &[f64]) {}
+fn email(e: &str) {}
 ```
 
 ### 不可变模式（关键）
@@ -79,7 +83,10 @@ fn email(e: &str) { }
 ```rust
 // ✅ 推荐：优先使用不可变绑定和结构体更新语法
 #[derive(Clone)]
-struct User { name: String, age: u32 }
+struct User {
+    name: String,
+    age: u32
+}
 
 let user = User { name: "Alice".into(), age: 30 };
 let updated_user = User { name: "New Name".into(), ..user.clone() };
@@ -148,7 +155,7 @@ enum MarketStatus { Active, Resolved, Closed }
 
 async fn get_market(id: &str) -> Result<Market, Box<dyn std::error::Error>> {
     // 实现
-    Ok(Market { id:id.to_string(), name: "".into(), status: MarketStatus::Active, created_at: Utc::now() })
+    Ok(Market { id: id.to_string(), name: "".into(), status: MarketStatus::Active, created_at: Utc::now() })
 }
 
 // ❌ 不好：使用动态类型或大量 unwrap
@@ -158,64 +165,28 @@ async fn get_market_untyped(id: &str) -> Result<serde_json::Value, Box<dyn std::
 }
 ```
 
-## Rust 前端（组件）最佳实践 （Yew 示例）
+### 尽量多的实现Default的trait，参数多用Option
+目的：
+1. 正式环境下，用正式的代码
 
 ```rust
-// ✅ 良好：使用 Yew 定义带类型的组件
-use yew::prelude::*;
+use yue::tools::get_snow_flake_id_u64;
 
-#[derive(Properties, PartialEq)]
-struct ButtonProps {
-    children: Children,
-    on_click: Callback<MouseEvent>,
-    #[prop_or(false)]
-    disabled: bool,
-    #[prop_or("primary".to_string())]
-    variant: String,
+struct Example {
+    id: u64,
 }
 
-#[function_component(Button)]
-fn button(props: &ButtonProps) -> Html {
-    let class = format!("btn btn-{}", props.variant);
-    html! {
-        <button {class} disabled={props.disabled} onclick={props.on_click.clone()}>
-            { for props.children.iter() }
-        </button>
+impl Default for Example{
+    fn default() -> Self {
+        Example {
+            id: get_snow_flake_id_u64(),
+        }
     }
 }
 
-// ❌ 不好：缺少类型和清晰 API（Yew 也应使用 Properties）
-// 不建议使用未类型化的组件接口
-```
-
-### 自定义“Hook”/工具（Debouncer 示例）
-
-```rust
-// ✅ 良好：用结构体封装防抖逻辑（基于 tokio）
-use std::time::Duration;
-use tokio::sync::mpsc::{self, Sender};
-
-struct Debouncer {
-    sender: Sender<String>,
-}
-
-impl Debouncer {
-    fn new<F: Fn(String) + Send + 'static>(delay: Duration, mut f: F) -> Self {
-        let (tx, mut rx) = mpsc::channel::<String>(1);
-        tokio::spawn(async move {
-            while let Some(val) = rx.recv().await {
-                tokio::time::sleep(delay).await;
-                f(val);
-                // 清空缓冲中的旧事件
-                while rx.try_recv().is_ok() { }
-            }
-        });
-        Debouncer { sender: tx }
-    }
-
-    async fn call(&self, v: String) {
-        let _ = self.sender.send(v).await;
-    }
+fn use_example(example: Option<Example>) {
+    let example = example.unwrap_or_default();
+    println!("Example ID: {}", example.id);
 }
 ```
 
@@ -227,7 +198,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 let count = Arc::new(AtomicUsize::new(0));
-let c = Arc::clone(&count);
+let c = Arc::clone( & count);
 // 基于先前状态的原子更新
 c.fetch_add(1, Ordering::SeqCst);
 
@@ -235,8 +206,8 @@ c.fetch_add(1, Ordering::SeqCst);
 use tokio::sync::Mutex;
 let state = Arc::new(Mutex::new(0i32));
 {
-    let mut s = state.lock().await;
-    *s += 1;
+let mut s = state.lock().await;
+* s += 1;
 }
 ```
 
@@ -290,7 +261,11 @@ struct ApiResponse<T> {
 }
 
 #[derive(Serialize)]
-struct Meta { total: usize, page: usize, limit: usize }
+struct Meta {
+    total: usize,
+    page: usize,
+    limit: usize
+}
 
 // 成功响应（伪代码）
 // 返回 JSON: ApiResponse { success: true, data: Some(markets), meta: Some(Meta { ... }) }
@@ -447,13 +422,13 @@ fn render_dashboard() {
 ```rust
 // ✅ 良好：仅选择必要的列（以 sqlx 为例）
 let rows = sqlx::query!("SELECT id, name, status FROM markets LIMIT 10")
-    .fetch_all(&pool)
-    .await?;
+.fetch_all( & pool)
+.await?;
 
 // ❌ 不好：选择全部字段
 let rows = sqlx::query!("SELECT * FROM markets")
-    .fetch_all(&pool)
-    .await?;
+.fetch_all( & pool)
+.await?;
 ```
 
 ## 测试规范
@@ -485,20 +460,20 @@ mod tests {
 ```rust
 // ✅ 良好：描述性测试名称
 #[test]
-fn returns_empty_vec_when_no_markets_match_query() { }
+fn returns_empty_vec_when_no_markets_match_query() {}
 
 #[test]
-fn throws_error_when_openai_api_key_is_missing() { }
+fn throws_error_when_openai_api_key_is_missing() {}
 
 #[test]
-fn falls_back_to_substring_search_when_redis_unavailable() { }
+fn falls_back_to_substring_search_when_redis_unavailable() {}
 
 // ❌ 不好：含糊的测试名称
 #[test]
-fn works() { }
+fn works() {}
 
 #[test]
-fn test_search() { }
+fn test_search() {}
 ```
 
 ## 代码异味检测
@@ -506,6 +481,7 @@ fn test_search() { }
 注意以下反模式：
 
 ### 1. 长函数
+
 ```rust
 // ❌ 不好：函数过长，超过可维护范围
 fn process_market_data() {
@@ -521,35 +497,43 @@ fn process_market_data() {
 ```
 
 ### 2. 深度嵌套
+
 ```rust
 // ❌ 不好：嵌套过深
 if let Some(user) = get_user() {
-    if user.is_admin {
-        if let Some(market) = get_market_option() {
-            if market.is_active {
-                if has_permission() {
-                    // 做事情
-                }
-            }
-        }
-    }
+if user.is_admin {
+if let Some(market) = get_market_option() {
+if market.is_active {
+if has_permission() {
+// 做事情
+}
+}
+}
+}
 }
 
 // ✅ 良好：提前返回与模式匹配减少嵌套
 fn do_action() {
-    let user = match get_user() { Some(u) => u, None => return };
-    if !user.is_admin { return }
-    let market = match get_market_option() { Some(m) => m, None => return };
-    if !market.is_active { return }
-    if !has_permission() { return }
+    let user = match get_user() {
+        Some(u) => u,
+        None => return
+    };
+    if !user.is_admin { return; }
+    let market = match get_market_option() {
+        Some(m) => m,
+        None => return
+    };
+    if !market.is_active { return; }
+    if !has_permission() { return; }
     // 做事情
 }
 ```
 
-### 3.  魔法数字
+### 3. 魔法数字
+
 ```rust
 // ❌ 不好：无说明的数字
-if retry_count > 3 { }
+if retry_count > 3 {}
 std::thread::sleep(std::time::Duration::from_millis(500));
 
 // ✅ 良好：使用具名常量

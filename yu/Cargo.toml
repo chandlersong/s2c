@@ -32,5 +32,9 @@ tokio-stream = "0.1.17"
 arrow-ipc = "56.2.0"
 arrow-schema = "56.2.0"
 
+# cron scheduling support
+cron = "0.15.0"
+chrono = { version = "0.4", features = ["serde"] }
+
 [dev-dependencies]
 tempfile = "3"

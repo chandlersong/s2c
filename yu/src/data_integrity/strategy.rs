@@ -32,6 +32,10 @@ impl StrategyRegistry {
         let guard = self.strategies.read().await;
         guard.get(name).cloned()
     }
+    pub async fn strategy_num(&self) -> usize {
+        let guard = self.strategies.read().await;
+        guard.keys().len()
+    }
 
     pub async fn list(&self) -> Vec<String> {
         let guard = self.strategies.read().await;
@@ -43,6 +47,7 @@ impl StrategyRegistry {
 mod tests {
     use super::*;
     use crate::data_integrity::models::ValidationGap;
+    use yue::tools::get_snow_flake_id_u64;
 
     // 测试目的：验证 Registry 能注册并返回策略实例，且策略按 name 可被调用
     // 设计思路：实现一个 NoopStrategy 并注册，调用 validate 验证返回值
@@ -69,12 +74,14 @@ mod tests {
     impl ValidationStrategy for GapStrategy {
         async fn validate(&self) -> ValidationResult {
             ValidationResult {
+                id: get_snow_flake_id_u64(),
                 strategy: "gap".to_string(),
                 gaps: vec![ValidationGap::MissingData {
                     symbol: "BTCUSDT".to_string(),
                     trade_type: "SPOT".to_string(),
                     start_time: 1,
                     end_time: 2,
+                    table: "".to_string(),
                 }],
                 retry_count: 0,
                 error: None,
