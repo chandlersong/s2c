@@ -1,14 +1,23 @@
 use crate::data_integrity::models::ValidationResult;
-use crate::data_integrity::strategy::ValidationStrategy;
 use actix::prelude::*;
+use async_trait::async_trait;
 use chrono::Utc;
 use cron::Schedule;
+use log::info;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use yue::tools::get_snow_flake_id_u64;
+
+/// 可插拔校验策略接口，Checker 调用实现校验逻辑。
+#[async_trait]
+pub trait ValidationStrategy: Send + Sync {
+    async fn validate(&self) -> ValidationResult;
+
+    fn name(&self) -> &'static str;
+}
 
 #[derive(Clone)]
 pub enum ScheduleSpec {
@@ -49,15 +58,9 @@ impl Actor for CheckActor {
     type Context = Context<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
+        ctx.set_mailbox_capacity(10000);
         // initial run
-        let strategy = self.strategy.clone();
-        let subscriber = self.subscriber.clone();
         let _name = self.name.clone();
-        let timeout_ms = self.timeout_ms;
-        actix::spawn(async move {
-            let res = run_strategy_with_timeout(strategy, timeout_ms).await;
-            let _ = subscriber.do_send(res);
-        });
 
         // schedule
         match &self.schedule {
@@ -68,6 +71,7 @@ impl Actor for CheckActor {
                     let subscriber = act.subscriber.clone();
                     let timeout_ms = act.timeout_ms;
                     actix::spawn(async move {
+                        info!("开始检测 {}...", strategy.name());
                         let res = run_strategy_with_timeout(strategy, timeout_ms).await;
                         let _ = subscriber.do_send(res);
                     });
@@ -95,6 +99,7 @@ impl Actor for CheckActor {
                             let subscriber = subscriber.clone();
                             let timeout_ms = timeout_ms;
                             actix::spawn(async move {
+                                info!("开始检测 {}...", strategy.name());
                                 let res = run_strategy_with_timeout(strategy, timeout_ms).await;
                                 let _ = subscriber.do_send(res);
                             });

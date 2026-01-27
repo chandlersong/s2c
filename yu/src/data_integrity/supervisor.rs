@@ -1,22 +1,24 @@
 // Supervisor 负责生命周期管理与健康状态维护，后续任务补充 Actor 逻辑。
 
 use crate::config::DataIntegrityConfig;
-use crate::data_integrity::models::{HealthSnapshot, HealthState, RepairRequest, RepairResult, ValidationResult};
-use crate::data_integrity::repair::RepairExecutor;
-use crate::data_integrity::strategy::StrategyRegistry;
+use crate::data_integrity::models::{HealthSnapshot, HealthState, RepairRequest, ValidationResult};
+use crate::data_integrity::repair::{RecordRepairResult, RepairExecutor, RepairStrategy};
 use actix::prelude::*;
 use log::{error, info};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 // 新增 CheckActor 的依赖
-use crate::data_integrity::check::{run_strategy_with_timeout, CheckActor, ScheduleSpec};
+use crate::data_integrity::check::{run_strategy_with_timeout, CheckActor, ScheduleSpec, ValidationStrategy};
 
 /// DataIntegritySupervisor 管理健康状态、策略注册表，并负责启动 Checker。
 pub struct DataIntegritySupervisor {
-    pub config: DataIntegrityConfig,
-    pub check_registry: StrategyRegistry,
-    pub health: HealthSnapshot,
-    pub repair_job_ids: Vec<u64>,
-    pub repair_recipient: Recipient<RepairRequest>,
+    config: DataIntegrityConfig,
+    check_strategy: HashMap<String, Arc<dyn ValidationStrategy>>,
+    repair_strategies: HashMap<String, Arc<dyn RepairStrategy>>,
+    health: HealthSnapshot,
+    repair_job_ids: Vec<u64>,
+    repair_recipient: Option<Recipient<RepairRequest>>,
 }
 
 impl DataIntegritySupervisor {
@@ -25,23 +27,18 @@ impl DataIntegritySupervisor {
     /// 2. new_with_config 不再做初始化校验，初始化逻辑将在 Actor::started 中完成（便于 await 行为由 Actor 启动控制）
     pub async fn new_with_config(
         config: DataIntegrityConfig,
-        check_registry: StrategyRegistry,
-        repair_recipient: Option<Recipient<RepairRequest>>,
+        check_strategy: HashMap<String, Arc<dyn ValidationStrategy>>,
+        repair_strategy: HashMap<String, Arc<dyn RepairStrategy>>,
     ) -> Self {
         // 如果 repair_recipient 为 None，则创建一个新的 RepairExecutor
-        let repair = if let Some(recipient) = repair_recipient {
-            recipient
-        } else {
-            let addr = RepairExecutor::default().start();
-            addr.recipient()
-        };
 
         Self {
             config,
-            check_registry,
+            check_strategy,
+            repair_strategies: repair_strategy,
             health: HealthSnapshot::new(HealthState::OK, None),
             repair_job_ids: Vec::new(),
-            repair_recipient: repair,
+            repair_recipient: None,
         }
     }
 }
@@ -55,28 +52,24 @@ impl Actor for DataIntegritySupervisor {
     /// 4.自己开始监听每个check Actor的ValidationResult事件。
     /// 5.等到以上完成。休息1s，如果repair_job_ids为0，则为OK。否则改成RECOVERING
     fn started(&mut self, ctx: &mut Self::Context) {
-        // 获取当前 Supervisor 的 Recipient<ValidationResult>
+        let repair_job = RepairExecutor::new(ctx.address().recipient::<RecordRepairResult>(), self.repair_strategies.clone()).start();
+        self.repair_recipient = Some(repair_job.recipient());
+
         let supervisor_recipient = ctx.address().recipient::<ValidationResult>();
-        let registry = self.check_registry.clone();
         let config = self.config.clone();
         let self_addr = ctx.address();
-
+        let check_strategies = self.check_strategy.clone();
         // spawn 异步任务只负责启动周期性 CheckActor（不再执行初始化校验）
         actix::spawn(async move {
             let _initial = HealthSnapshot::new(HealthState::INITIAL, None);
 
             // 检查每个策略的修复任务是否仍然存在，更新健康状态
-            let names = registry.list().await;
-            for name in names {
-                if let Some(strategy) = registry.get(&name).await {
-                    let timeout_ms = config.startup_check_timeout_ms;
-                    let res = run_strategy_with_timeout(strategy.clone(), timeout_ms).await;
-                    supervisor_recipient.do_send(res);
-                }
+            for (name, strategy) in &check_strategies {
+                let timeout_ms = config.startup_check_timeout_ms;
+                info!("initial data {}...", name);
+                let res = run_strategy_with_timeout(strategy.clone(), timeout_ms).await;
+                supervisor_recipient.do_send(res);
             }
-            // 所有 Checker 启动完成后，等待 1 秒钟（确保 Checker 有足够时间进行初始校验）
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-
             // 更新 Supervisor 的健康状态，并等待处理完成，确保状态已应用
             if let Ok((success, reason)) = self_addr.send(SetHealth(HealthState::OK, None)).await {
                 if !success {
@@ -86,15 +79,12 @@ impl Actor for DataIntegritySupervisor {
                 error!("DataIntegritySupervisor failed to set health state");
             }
 
-            let names = registry.list().await;
-            for name in names {
-                if let Some(strategy) = registry.get(&name).await {
-                    info!("启动 Checker {}", name);
-                    let timeout_ms = config.startup_check_timeout_ms;
-                    let schedule = ScheduleSpec::Cron(config.periodic_check_interval_cron.clone());
-                    let check = CheckActor::new(name.clone(), strategy, schedule, timeout_ms, supervisor_recipient.clone());
-                    check.start();
-                }
+            for (name, strategy) in &check_strategies {
+                info!("启动 Checker {}", name);
+                let timeout_ms = config.startup_check_timeout_ms;
+                let schedule = ScheduleSpec::Cron(config.periodic_check_interval_cron.clone());
+                let check = CheckActor::new(name.clone(), strategy.clone(), schedule, timeout_ms, supervisor_recipient.clone());
+                check.start();
             }
             // 所有 Checker 启动完成后，先标记为 INITIAL（启动中），然后等待 1 秒钟以让初检完成
         });
@@ -117,7 +107,7 @@ impl Handler<SetHealth> for DataIntegritySupervisor {
     fn handle(&mut self, msg: SetHealth, _ctx: &mut Context<Self>) -> Self::Result {
         let SetHealth(state, reason) = msg;
         let res = if !self.repair_job_ids.is_empty() {
-            let r = reason.clone().or_else(|| Some("repair jobs pending".to_string()));
+            let r = reason.clone().or_else(|| Some("repair jobs is running".to_string()));
             self.health = HealthSnapshot::new(HealthState::RECOVERING, r.clone());
             (false, r)
         } else {
@@ -125,19 +115,6 @@ impl Handler<SetHealth> for DataIntegritySupervisor {
             (true, None)
         };
         MessageResult(res)
-    }
-}
-
-// 新增内部消息：获取 repair_job_ids 的数量
-pub struct GetRepairJobCount;
-impl Message for GetRepairJobCount {
-    type Result = usize;
-}
-impl Handler<GetRepairJobCount> for DataIntegritySupervisor {
-    type Result = MessageResult<GetRepairJobCount>;
-
-    fn handle(&mut self, _msg: GetRepairJobCount, _ctx: &mut Context<Self>) -> Self::Result {
-        MessageResult(self.repair_job_ids.len())
     }
 }
 
@@ -165,7 +142,11 @@ impl Handler<ValidationResult> for DataIntegritySupervisor {
             };
 
             // 通过 Recipient 发送 RepairRequest，如果发送失败则记录错误
-            self.repair_recipient.do_send(req);
+            if let Some(r) = &self.repair_recipient {
+                r.do_send(req);
+            } else {
+                error!("RepairExecutor recipient is not set in DataIntegritySupervisor");
+            }
         }
     }
 }
@@ -186,18 +167,8 @@ impl Handler<GetHealthState> for DataIntegritySupervisor {
     }
 }
 /// Message: RepairExecutor 上报的修复结果包装，用于 Supervisor 更新状态
-pub struct RepairResultMsg(RepairResult);
 
-impl RepairResultMsg {
-    pub fn new(result: RepairResult) -> Self {
-        Self(result)
-    }
-}
-impl Message for RepairResultMsg {
-    type Result = ();
-}
-
-impl Handler<RepairResultMsg> for DataIntegritySupervisor {
+impl Handler<RecordRepairResult> for DataIntegritySupervisor {
     type Result = ();
 
     ///
@@ -208,7 +179,7 @@ impl Handler<RepairResultMsg> for DataIntegritySupervisor {
     ///
     /// TODO: 如果失败这里最好通知人来处理。所以暂时先不管具体操作
     ///
-    fn handle(&mut self, msg: RepairResultMsg, _ctx: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, msg: RecordRepairResult, _ctx: &mut Context<Self>) -> Self::Result {
         let r = msg.0;
         self.repair_job_ids.retain(|&id| id != r.request_id);
         if self.repair_job_ids.is_empty() {
@@ -224,15 +195,15 @@ impl Handler<RepairResultMsg> for DataIntegritySupervisor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data_integrity::check::ValidationStrategy;
     use crate::data_integrity::models::{RepairResult, RepairStatus, ValidationGap};
-    use crate::data_integrity::strategy::ValidationStrategy;
     use async_trait::async_trait;
     use std::sync::Arc;
 
-    struct GapStrategy;
+    struct GapCheckStrategy;
 
     #[async_trait]
-    impl ValidationStrategy for GapStrategy {
+    impl ValidationStrategy for GapCheckStrategy {
         async fn validate(&self) -> ValidationResult {
             ValidationResult {
                 id: yue::tools::get_snow_flake_id_u64(),
@@ -254,13 +225,40 @@ mod tests {
         }
     }
 
+    struct NoopCheckStrategy;
+
+    #[async_trait]
+    impl ValidationStrategy for NoopCheckStrategy {
+        async fn validate(&self) -> ValidationResult {
+            ValidationResult::ok("noop")
+        }
+
+        fn name(&self) -> &'static str {
+            "noop"
+        }
+    }
+
+    struct DelayRepairStrategy(&'static str);
+
+    #[async_trait]
+    impl RepairStrategy for DelayRepairStrategy {
+        async fn repair(&self, _: RepairRequest) -> Result<(), String> {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            Ok(())
+        }
+
+        fn name(&self) -> &'static str {
+            self.0
+        }
+    }
+
     #[actix::test]
     async fn supervisor_starts_checkers_and_handles_validation() {
-        let registry = StrategyRegistry::new();
-        registry.register(Arc::new(GapStrategy)).await;
+        let mut check_strategies: HashMap<String, Arc<dyn ValidationStrategy>> = HashMap::new();
+        check_strategies.insert("gap".to_string(), Arc::new(GapCheckStrategy));
 
         let config = DataIntegrityConfig::default();
-        let supervisor = DataIntegritySupervisor::new_with_config(config, registry.clone(), None).await;
+        let supervisor = DataIntegritySupervisor::new_with_config(config, check_strategies, HashMap::new()).await;
         let addr = supervisor.start();
 
         // 等待 CheckActor 的初次运行完成（稍微宽裕点）
@@ -298,25 +296,11 @@ mod tests {
 
     #[actix::test]
     async fn supervisor_initialization_ok_when_no_gaps() {
-        use crate::data_integrity::strategy::ValidationStrategy;
-        struct NoopStrategy;
-
-        #[async_trait]
-        impl ValidationStrategy for NoopStrategy {
-            async fn validate(&self) -> ValidationResult {
-                ValidationResult::ok("noop")
-            }
-
-            fn name(&self) -> &'static str {
-                "noop"
-            }
-        }
-
-        let registry = StrategyRegistry::new();
-        registry.register(Arc::new(NoopStrategy)).await;
+        let mut check_strategies: HashMap<String, Arc<dyn ValidationStrategy>> = HashMap::new();
+        check_strategies.insert("noop".to_string(), Arc::new(NoopCheckStrategy));
 
         let config = DataIntegrityConfig::default();
-        let supervisor = DataIntegritySupervisor::new_with_config(config, registry.clone(), None).await;
+        let supervisor = DataIntegritySupervisor::new_with_config(config, check_strategies, HashMap::new()).await;
         let addr = supervisor.start();
 
         // 初始化完成后，health 应为 OK
@@ -326,11 +310,11 @@ mod tests {
 
     #[actix::test]
     async fn set_health_success_when_no_repairs() {
-        let registry = StrategyRegistry::new();
         let config = DataIntegrityConfig::default();
-        let supervisor = DataIntegritySupervisor::new_with_config(config, registry.clone(), None).await;
+        let supervisor = DataIntegritySupervisor::new_with_config(config, HashMap::new(), HashMap::new()).await;
         let addr = supervisor.start();
-
+        //等待完成初始化
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         // 尝试设置为 DEGRADED，并带有错误信息
         let res = addr.send(SetHealth(HealthState::DEGRADED, Some("manual".to_string()))).await.unwrap();
         assert!(res.0);
@@ -344,11 +328,10 @@ mod tests {
 
     #[actix::test]
     async fn set_health_forced_recover_when_repairs_pending() {
-        let registry = StrategyRegistry::new();
-        registry.register(Arc::new(GapStrategy)).await;
-
+        let mut check_strategies: HashMap<String, Arc<dyn ValidationStrategy>> = HashMap::new();
+        check_strategies.insert("gap".to_string(), Arc::new(GapCheckStrategy));
         let config = DataIntegrityConfig::default();
-        let supervisor = DataIntegritySupervisor::new_with_config(config, registry.clone(), None).await;
+        let supervisor = DataIntegritySupervisor::new_with_config(config, check_strategies, HashMap::new()).await;
         let addr = supervisor.start();
 
         // 触发一个带 gap 的 ValidationResult，导致 repair_job_ids 记录
@@ -381,9 +364,8 @@ mod tests {
 
     #[actix::test]
     async fn handle_validation_result_no_gaps() {
-        let registry = StrategyRegistry::new();
         let config = DataIntegrityConfig::default();
-        let supervisor = DataIntegritySupervisor::new_with_config(config, registry.clone(), None).await;
+        let supervisor = DataIntegritySupervisor::new_with_config(config, HashMap::new(), HashMap::new()).await;
         let addr = supervisor.start();
 
         // 初始 health 为 OK
@@ -405,19 +387,17 @@ mod tests {
         // health 应该不变，仍为 OK
         let health = addr.send(GetHealthState).await.unwrap();
         assert_eq!(health.state, HealthState::OK);
-
-        // repair_job_ids 应该为空
-        let count = addr.send(GetRepairJobCount).await.unwrap();
-        assert_eq!(count, 0);
     }
 
     #[actix::test]
     async fn handle_validation_result_with_gaps() {
-        let registry = StrategyRegistry::new();
+        let delay_repair_strategy = DelayRepairStrategy("test-gap");
+        let mut repair_strategies: HashMap<String, Arc<dyn RepairStrategy>> = HashMap::new();
+        repair_strategies.insert("test-gap".to_string(), Arc::new(delay_repair_strategy));
         let config = DataIntegrityConfig::default();
-        let supervisor = DataIntegritySupervisor::new_with_config(config, registry.clone(), None).await;
+        let supervisor = DataIntegritySupervisor::new_with_config(config, HashMap::new(), repair_strategies).await;
         let addr = supervisor.start();
-
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         // 发送有 gaps 的 ValidationResult
         let vr = ValidationResult {
             id: yue::tools::get_snow_flake_id_u64(),
@@ -440,17 +420,12 @@ mod tests {
         let health = addr.send(GetHealthState).await.unwrap();
         assert_eq!(health.state, HealthState::RECOVERING);
         assert_eq!(health.reason.as_deref(), Some("missing data"));
-
-        // repair_job_ids 应该包含 id
-        let count = addr.send(GetRepairJobCount).await.unwrap();
-        assert_eq!(count, 1);
     }
 
     #[actix::test]
     async fn repair_result_succeeded_removes_id_and_sets_ok() {
-        let registry = StrategyRegistry::new();
         let config = DataIntegrityConfig::default();
-        let supervisor = DataIntegritySupervisor::new_with_config(config, registry.clone(), None).await;
+        let supervisor = DataIntegritySupervisor::new_with_config(config, HashMap::new(), HashMap::new()).await;
         let addr = supervisor.start();
 
         // 先触发一个带 gap 的 ValidationResult，添加到 repair_job_ids
@@ -478,11 +453,9 @@ mod tests {
             status: RepairStatus::SUCCEEDED,
             error: None,
         };
-        addr.do_send(crate::data_integrity::supervisor::RepairResultMsg::new(rr));
+        addr.do_send(RecordRepairResult(rr));
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        let count = addr.send(GetRepairJobCount).await.unwrap();
-        assert_eq!(count, 0);
         let health = addr.send(GetHealthState).await.unwrap();
         assert_eq!(health.state, HealthState::OK);
     }

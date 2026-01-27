@@ -130,7 +130,7 @@ impl Default for DataIntegrityConfig {
     fn default() -> Self {
         DataIntegrityConfig {
             startup_check_timeout_ms: 3_600_000,
-            periodic_check_interval_cron: "7 * * * * * *".to_string(),
+            periodic_check_interval_cron: "* 7 * * * * *".to_string(),
             repair_backoff: Default::default(),
         }
     }
