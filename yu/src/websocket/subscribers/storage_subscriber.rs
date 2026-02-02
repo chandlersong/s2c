@@ -207,7 +207,7 @@ impl Handler<BinanceSpotWebSocketStreamResponse> for SpotStreamStorageActor {
 mod tests {
     use super::*;
     use crate::binance::jobs::initial_tables;
-    use crate::utils::initial_memory_db;
+    use crate::test_utils::initial_memory_db;
     use rust_decimal::Decimal;
     use std::str::FromStr;
 

@@ -11,15 +11,16 @@ use yu::data_integrity::check::ValidationStrategy;
 use yu::data_integrity::models::{RepairRequest, ValidationGap, ValidationResult};
 use yu::data_integrity::repair::RepairStrategy;
 use yu::data_integrity::supervisor::DataIntegritySupervisor;
+use yu::errors::YuError;
 use yue::tools::get_snow_flake_id_u64;
 
 struct CheckExampleStrategy;
 
 #[async_trait]
 impl ValidationStrategy for CheckExampleStrategy {
-    async fn validate(&self) -> ValidationResult {
+    async fn validate(&self) -> Result<Option<ValidationResult>, YuError> {
         info!("Validating process");
-        ValidationResult {
+        Ok(Some(ValidationResult {
             id: get_snow_flake_id_u64(),
             strategy: "example".to_string(),
             gaps: vec![ValidationGap::MissingData {
@@ -31,7 +32,7 @@ impl ValidationStrategy for CheckExampleStrategy {
             }],
             retry_count: 0,
             error: Some("missing".to_string()),
-        }
+        }))
     }
 
     fn name(&self) -> &'static str {

@@ -206,14 +206,7 @@ impl Handler<BinanceSpotWebSocketResponse> for AccountSyncActor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use duckdb::DuckdbConnectionManager;
-    use r2d2::Pool;
-
-    fn create_memory_db() -> DBProvider {
-        let manager = DuckdbConnectionManager::memory().unwrap();
-        let pool = Pool::builder().max_size(4).build(manager).unwrap();
-        DBProvider::new(pool)
-    }
+    use crate::test_utils::create_memory_db_provider;
 
     #[test]
     fn test_config_defaults() {
@@ -224,7 +217,7 @@ mod tests {
 
     #[test]
     fn test_execution_report_uppercase_symbol() {
-        let db = create_memory_db();
+        let db = create_memory_db_provider();
         let mut actor = AccountSyncActor::new(Some(db));
 
         let payload = AccountWebSocketPayLoad {

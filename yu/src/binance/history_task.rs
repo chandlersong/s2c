@@ -315,8 +315,8 @@ mod tests {
     use crate::duck_db::DBProvider;
     use crate::errors::YuError;
     use crate::exchange::HistoryFetcherFactory;
+    use crate::test_utils::initial_memory_db;
     use crate::test_utils::{generate_test_kline_vec, import_local_csv_and_assert, TEST_BEGIN_TIMESTAMP};
-    use crate::utils::initial_memory_db;
     use async_trait::async_trait;
     use li::actix_jobs::AsyncRepeatTask;
     use li::errors::LiError;

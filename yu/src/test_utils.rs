@@ -1,5 +1,7 @@
+use crate::duck_db::DBProvider;
 use crate::errors::YuError;
-use duckdb::{Connection, Result};
+use duckdb::{Connection, DuckdbConnectionManager, Result};
+use r2d2::Pool;
 use rust_decimal::dec;
 use rust_decimal::prelude::FromPrimitive;
 use std::path::Path;
@@ -51,4 +53,19 @@ pub fn generate_test_kline_vec(start_time: u64, interval_ms: u64, close: f64, co
             }
         })
         .collect()
+}
+
+pub fn create_memory_db_provider() -> DBProvider {
+    let manager = DuckdbConnectionManager::memory().unwrap();
+    let pool = Pool::builder().max_size(4).build(manager).unwrap();
+    DBProvider::new(pool)
+}
+
+pub fn initial_memory_db() -> Pool<DuckdbConnectionManager> {
+    let builder = Pool::builder()
+        .max_size(2) // 最大连接数
+        .min_idle(Some(1)) // 最小空闲连接数
+        .connection_timeout(std::time::Duration::from_secs(5)); // 连接超时时间
+
+    builder.build(DuckdbConnectionManager::memory().unwrap()).unwrap()
 }

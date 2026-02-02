@@ -48,6 +48,10 @@ pub enum ValidationGap {
         end_time: u64,
         table: String,
     },
+    UNKnowError {
+        //占位
+        reason: String,
+    },
 }
 
 /// 校验结果事件，Checker 产出，交由 RepairExecutor 消费。

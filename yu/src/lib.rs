@@ -4,7 +4,6 @@ pub mod exchange;
 
 #[cfg(test)]
 pub mod test_utils;
-pub mod utils;
 
 pub mod arrow_flight_server;
 pub mod binance;

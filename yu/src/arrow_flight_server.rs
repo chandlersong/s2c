@@ -367,7 +367,7 @@ mod tests {
     use super::*;
     use crate::duck_db::DBProvider;
     use crate::errors::YuError;
-    use crate::utils::initial_memory_db;
+    use crate::test_utils::initial_memory_db;
     use arrow_flight::utils as flight_utils;
     use duckdb::params;
 

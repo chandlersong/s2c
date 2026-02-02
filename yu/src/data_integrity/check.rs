@@ -1,20 +1,20 @@
 use crate::data_integrity::models::ValidationResult;
+use crate::errors::YuError;
 use actix::prelude::*;
 use async_trait::async_trait;
 use chrono::Utc;
 use cron::Schedule;
-use log::info;
+use log::{error, info};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
-use yue::tools::get_snow_flake_id_u64;
 
 /// 可插拔校验策略接口，Checker 调用实现校验逻辑。
 #[async_trait]
 pub trait ValidationStrategy: Send + Sync {
-    async fn validate(&self) -> ValidationResult;
+    async fn validate(&self) -> Result<Option<ValidationResult>, YuError>;
 
     fn name(&self) -> &'static str;
 }
@@ -73,7 +73,9 @@ impl Actor for CheckActor {
                     actix::spawn(async move {
                         info!("开始检测 {}...", strategy.name());
                         let res = run_strategy_with_timeout(strategy, timeout_ms).await;
-                        let _ = subscriber.do_send(res);
+                        if let Some(r) = res {
+                            let _ = subscriber.do_send(r);
+                        }
                     });
                 });
             }
@@ -101,7 +103,9 @@ impl Actor for CheckActor {
                             actix::spawn(async move {
                                 info!("开始检测 {}...", strategy.name());
                                 let res = run_strategy_with_timeout(strategy, timeout_ms).await;
-                                let _ = subscriber.do_send(res);
+                                if let Some(r) = res {
+                                    let _ = subscriber.do_send(r);
+                                }
                             });
                         } else {
                             break;
@@ -121,7 +125,7 @@ impl Actor for CheckActor {
 }
 
 // 将函数签名改为 pub(crate) ，以便 supervisor 在启动时可调用做一次初始化校验
-pub(crate) async fn run_strategy_with_timeout(strategy: Arc<dyn ValidationStrategy>, timeout_ms: u64) -> ValidationResult {
+pub(crate) async fn run_strategy_with_timeout(strategy: Arc<dyn ValidationStrategy>, timeout_ms: u64) -> Option<ValidationResult> {
     let name = strategy.name().to_string();
     let handle = tokio::spawn(async move {
         // wrap in catch_unwind if strategy may panic
@@ -131,21 +135,21 @@ pub(crate) async fn run_strategy_with_timeout(strategy: Arc<dyn ValidationStrate
 
     match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), handle).await {
         Ok(join) => match join {
-            Ok(res) => res,
-            Err(e) => ValidationResult {
-                id: get_snow_flake_id_u64(),
-                strategy: name,
-                gaps: Vec::new(),
-                retry_count: 0,
-                error: Some(format!("panic: {:?}", e)),
+            Ok(res) => match res {
+                Ok(r) => r,
+                Err(e) => {
+                    error!("strategy {} returned error: {:?}", name, e);
+                    None
+                }
             },
+            Err(e) => {
+                error!("strategy {} panicked: {:?}", name, e);
+                None
+            }
         },
-        Err(_) => ValidationResult {
-            id: get_snow_flake_id_u64(),
-            strategy: name,
-            gaps: Vec::new(),
-            retry_count: 0,
-            error: Some("timeout".to_string()),
-        },
+        Err(_) => {
+            error!("timeout after {} ms for strategy {}", timeout_ms, name);
+            None
+        }
     }
 }

@@ -85,6 +85,10 @@ impl ExchangeDashBoard for BinanceDashboard {
 
 #[async_trait]
 impl AsyncRepeatTask for BinanceDashboard {
+    ///
+    /// TODO：
+    /// 1，swap根据数据，判断上架和下架操作
+    ///
     async fn execute(&self) -> Result<(), LiError> {
         let (spot_res, swap_res) = tokio::join!(
             get_trading_spot_symbols(None),
