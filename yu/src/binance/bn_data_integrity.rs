@@ -195,7 +195,7 @@ impl SpotCheckStrategy {
     /// # 检查单个symbol的流程
     /// 1. 从数据库中获取时间列的最小值和最大值，min_timestamp,max_timestamp
     /// 2. 检测max_timestamp，是否和现在时间点相差是否小于interval_seconds，如果小于，直接到第5步。否则执行第三步
-    /// 3. 检查max_timestamp和现在时间的差是否大于max_gap_ms，如果大于，则返回空，否则执行第4步
+    /// 3. 检查max_timestamp和现在时间的差是否大于max_allow_gap，如果大于，则返回空，否则执行第4步
     /// 4. 取最近的整点unix time，然后不断加上interval_seconds，取最大的小于当前时间的为max_timestamp
     /// 5. 计算min_timestamp,max_timestamp有多少个interval_seconds的时间段，为time_slots
     /// 6. 通过sql，判断是否记录数是否等于time_slots，如果等于，说明没有缺失数据，返回Ok(None)

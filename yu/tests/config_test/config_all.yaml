@@ -1,5 +1,6 @@
 proxyUrl: "http://localhost:7891"
 logLevel: "info"
+data_retention_hours: 99
 database:
   path: "test.db"
 binance_websocket:

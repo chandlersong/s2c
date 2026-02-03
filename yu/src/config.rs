@@ -99,6 +99,7 @@ pub struct AppConfig {
     #[serde(rename = "proxyUrl")]
     pub proxy_url: Option<String>,
     pub database: Option<DuckDBConfig>,
+    pub data_retention_hours: Option<u64>,
     // Optional log level for the application. Example values: "off", "error", "warn", "info", "debug", "trace"
     #[serde(rename = "logLevel")]
     pub log_level: Option<String>,
@@ -109,6 +110,39 @@ pub struct AppConfig {
 impl AppConfig {
     pub fn get_data_integrity_config(&self) -> DataIntegrityConfig {
         self.data_integrity.clone().unwrap_or_default()
+    }
+
+    pub fn get_data_retention_hours(&self) -> u64 {
+        self.data_retention_hours.unwrap_or(100000) // 默认7天
+    }
+
+    ///
+    /// 获得数据保存的最早整点时间戳，单位毫秒
+    ///
+    /// 如果现在是18:05分，data_retention_hours是10。那么就是取8点的时间戳。
+    /// 如果utc_now为None，则取现在的时间。否则就是取现在的now
+    ///
+    pub fn get_earliest_hour_time_ms(&self, utc_now: Option<u64>) -> u64 {
+        // 以毫秒为单位的一小时常量
+        const HOUR_MS: u64 = 3_600_000;
+
+        // 获取当前时间（毫秒），优先使用传入的 utc_now，否则使用系统时间
+        let now_ms: u64 = utc_now.unwrap_or_else(|| {
+            let dur = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("System time before UNIX_EPOCH");
+            dur.as_millis() as u64
+        });
+
+        // 向下取整到当前整点（小时）
+        let floored_hour_ms = (now_ms / HOUR_MS) * HOUR_MS;
+
+        // 计算需要回退的毫秒数，使用饱和乘法防止溢出
+        let retention_hours = self.get_data_retention_hours();
+        let backoff_ms = retention_hours.saturating_mul(HOUR_MS);
+
+        // 使用饱和减法防止下溢（如果 backoff_ms 大于 floored_hour_ms，则返回 0）
+        floored_hour_ms.saturating_sub(backoff_ms)
     }
 }
 
@@ -169,6 +203,7 @@ pub fn get_config() -> &'static AppConfig {
 
 #[cfg(test)]
 mod tests {
+    use super::AppConfig;
     use config::Config;
 
     // 使用直接反序列化避免 OnceLock 缓存问题
@@ -180,7 +215,7 @@ mod tests {
             .expect("Failed to build config");
 
         let app_config: super::AppConfig = config_builder.try_deserialize().expect("Failed to deserialize config");
-
+        assert_eq!(app_config.get_data_retention_hours(), 99, "get_data_retention_hours 不正确");
         // 验证 spot_websocket 配置
 
         // 验证 binance_websocket 配置存在
@@ -240,6 +275,7 @@ mod tests {
         // 最小配置不应该包含 binance_websocket
         assert!(app_config.binance_websocket.is_none(), "最小配置不应该包含 binance_websocket");
 
+        assert_eq!(app_config.get_data_retention_hours(), 100000, "get_data_retention_hours 默认值不正确");
         // 但应该包含基础配置
         assert!(app_config.database.is_some(), "database 配置应该存在");
         assert!(app_config.proxy_url.is_some(), "proxy_url 应该存在");
@@ -293,5 +329,57 @@ logLevel: "info"
 
         let backoff = di.repair_backoff;
         assert_eq!(backoff.max_retries, 3);
+    }
+
+    // 新增的确定性测试：
+    #[test]
+    fn test_get_earliest_hour_basic() {
+        const HOUR_MS: u64 = 3_600_000;
+        // 10:05 -> 向下取整到 10:00，然后回退 3 小时 -> 7:00
+        let utc_now = 10 * HOUR_MS + 5 * 60 * 1000;
+        let cfg = AppConfig {
+            proxy_url: None,
+            database: None,
+            data_retention_hours: Some(3),
+            log_level: None,
+            binance_websocket: None,
+            data_integrity: None,
+        };
+        let got = cfg.get_earliest_hour_time_ms(Some(utc_now));
+        assert_eq!(got, 7 * HOUR_MS);
+    }
+
+    #[test]
+    fn test_get_earliest_hour_retention_zero() {
+        const HOUR_MS: u64 = 3_600_000;
+        // 15:30 -> 向下取整 15:00，retention 0 -> 返回 15:00
+        let utc_now = 15 * HOUR_MS + 30 * 60 * 1000;
+        let cfg = AppConfig {
+            proxy_url: None,
+            database: None,
+            data_retention_hours: Some(0),
+            log_level: None,
+            binance_websocket: None,
+            data_integrity: None,
+        };
+        let got = cfg.get_earliest_hour_time_ms(Some(utc_now));
+        assert_eq!(got, 15 * HOUR_MS);
+    }
+
+    #[test]
+    fn test_get_earliest_hour_saturating_zero() {
+        const HOUR_MS: u64 = 3_600_000;
+        // 2:30 -> floored 2:00. retention 5 -> backoff 5h > 2h -> saturate to 0
+        let utc_now = 2 * HOUR_MS + 30 * 60 * 1000;
+        let cfg = AppConfig {
+            proxy_url: None,
+            database: None,
+            data_retention_hours: Some(5),
+            log_level: None,
+            binance_websocket: None,
+            data_integrity: None,
+        };
+        let got = cfg.get_earliest_hour_time_ms(Some(utc_now));
+        assert_eq!(got, 0);
     }
 }
