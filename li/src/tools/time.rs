@@ -3,7 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::Instant;
 
 pub const ONE_HOUR_MS: u64 = 60 * 60 * 1000;
-pub const ONE_SECOND_MS: u64 = 1000;
+pub const ONE_MILL_SECOND_MS: u64 = 1;
 
 pub const GENESIS_2020_MS: u64 = 1577836800000;
 pub fn current_date_string() -> String {

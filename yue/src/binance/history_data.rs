@@ -7,10 +7,11 @@ use crate::http_client::NonAuthRequestBuilder;
 use crate::models::{EmptyObject, RequestInfo};
 use async_trait::async_trait;
 use backon::{BackoffBuilder, ExponentialBuilder, Retryable};
-use li::tools::time::{ONE_SECOND_MS, unix_2_readable};
+use li::tools::time::{ONE_MILL_SECOND_MS, unix_2_readable};
 use log::debug;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU16, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradingSymbolInfo {
@@ -59,28 +60,24 @@ impl HistoryInterval {
     }
 
     ///
-    /// 获得最近的时间符合的时间unix mill second
-    /// 比如现在 10:12:33
+    /// 获得传入一个时间戳，最近的时间符合的时间unix mill second
+    /// 比如传入 10:12:33
     /// 那么
     /// 1m: 返回 10:12:00的 unix ms
     /// 5m: 返回 10:10:00的 unix ms
     /// 1h: 返回 10:00:00的 unix ms
     ///
-    pub fn get_close_unix_ms(&self) -> u64 {
+    pub fn get_close_unix_ms(&self, timestamp: u64) -> u64 {
         // 获取当前时间的 unix 毫秒，若出错则返回 0
-        let now_ms: u64 = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-            Ok(dur) => dur.as_millis() as u64,
-            Err(_) => 0,
-        };
         let interval_ms = self.to_milliseconds();
         // 向下取整到 interval 边界
-        (now_ms / interval_ms) * interval_ms
+        (timestamp / interval_ms) * interval_ms
     }
 }
 
 pub trait MuteHistoryParam: ToQueryParams {
     fn initial(symbol: String, limit: u32, interval: HistoryInterval) -> Self;
-    fn create_new(&self, start_time: Option<u64>, end_time: Option<u64>) -> Self;
+    fn create_new(&self, start_time: Option<u64>, end_time: Option<u64>, interval: Option<HistoryInterval>) -> Self;
 
     fn get_symbol(&self) -> &str;
 }
@@ -136,10 +133,12 @@ impl MuteHistoryParam for CommonParam {
             limit: Some(limit),
         }
     }
-    fn create_new(&self, start_time: Option<u64>, end_time: Option<u64>) -> Self {
+    fn create_new(&self, start_time: Option<u64>, end_time: Option<u64>, interval: Option<HistoryInterval>) -> Self {
+        let actual_interval = interval.or_else(|| self.interval.clone());
+
         CommonParam {
             symbol: self.symbol.clone(),
-            interval: self.interval.clone(),
+            interval: actual_interval,
             start_time,
             end_time,
             limit: self.limit.clone(),
@@ -242,7 +241,13 @@ where
     T: MuteHistoryParam + ToQueryParams + Send + Sync,
     O: HistoryVo,
 {
-    async fn get_all_kline_data(&self, base_param: T, start_time: Option<u64>, end_time: Option<u64>) -> Result<(Vec<O>, u16), YueError>;
+    async fn get_all_kline_data(
+        &self,
+        base_param: T,
+        interval: Option<HistoryInterval>,
+        start_time: Option<u64>,
+        end_time: Option<u64>,
+    ) -> Result<(Vec<O>, u16), YueError>;
 }
 
 #[derive(Debug, Clone)]
@@ -267,73 +272,139 @@ where
     /// 获取指定交易对和时间间隔的K线数据
     ///
     /// 大致流程：
-    /// 1. 判断end_time是否为None，如果是None则设置为当前时间
-    /// 2. loop当前的数据。每次请求最多1000条数据
-    /// 3. 每次请求时，设置start_time为上次请求返回的最后一条K线的close_time + 1毫秒
-    /// 4. 如果设置了end_time，则每次请求时，计算当前请求的end_time为min(设置的end_time, current_start_time + interval * 1000 * 1000)
-    /// 3. 每次请求后，检查返回的数据量。如果少于1000条，说明已经获取完毕，跳出循环
+    /// 1. 判断end_time是否为None，如果是None则设置为当前时间。
+    /// 2. 分别通过interval的，更新最近和的开始时间和结束时间。然后结束时间+1ms。
+    /// 3. 根据interval分段获取历数据。
     ///
     /// 注意点
     /// 1. 最后一段时间最好废弃。比如说现在是11:30:00， interval是1h。那么最后一段就是11点到12点的一段时间。
     ///
     ///
     /// # 参数
-    /// * `symbol` - 交易对符号，如 "BTCUSDT"
-    /// * `interval` - K线时间间隔
-    /// * `start_time` - 开始时间（毫秒时间戳），如果为None则获取全部历史数据
-    /// * `end_time` - 结束时间（毫秒时间戳），如果为None则表示是现在
+    /// * `base_param` - 输入请求的基本参数，其应该包含symbol，limit，interval等信息。主要因为多次请求，会需要开始和结束时间。
+    /// * `interval` - K线时间间隔，默认值为5分钟
+    /// * `start_time` - 开始时间（毫秒时间戳），如果为None则获取全部历史数据，默认值为2021年1月1日
+    /// * `end_time` - 结束时间（毫秒时间戳），如果为None则表示是现在，默认值为当前时间
     ///
     /// # 返回
     /// 返回K线数据列表，由于API限制，每次最多1000条，会自动分页获取
-    async fn get_all_kline_data(&self, base_param: T, start_time: Option<u64>, end_time: Option<u64>) -> Result<(Vec<O>, u16), YueError> {
+    async fn get_all_kline_data(
+        &self,
+        base_param: T,
+        interval: Option<HistoryInterval>,
+        start_time: Option<u64>,
+        end_time: Option<u64>,
+    ) -> Result<(Vec<O>, u16), YueError> {
         let mut res: Vec<O> = Vec::new();
-        let mut current_start_time = start_time;
         let request_builder = NonAuthRequestBuilder {};
         let retry_count = AtomicU16::new(0);
         let symbol = base_param.get_symbol();
-        debug!("start fetch {} kline data from {:?}", symbol, start_time);
+
+        // 步骤1：判断end_time是否为None，如果是则设置为当前时间
+        let actual_end_time = if let Some(end) = end_time {
+            end
+        } else {
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|e| YueError::new(&format!("获取当前时间失败: {}", e)))?
+                .as_millis() as u64
+        };
+
+        debug!("start fetch {} kline data from {:?} to {:?}", symbol, start_time, actual_end_time);
+
+        // 步骤2：如果没有显式传入 interval，则默认使用 5 分钟；
+        // 使用选定的 interval 调整开始/结束时间到 interval 边界，然后结束时间+1ms
+        let chosen_interval = if let Some(iv) = &interval {
+            iv.clone()
+        } else {
+            HistoryInterval::FiveMinutes
+        };
+
+        let adjusted_start_time = start_time.map(|st| chosen_interval.get_close_unix_ms(st));
+        let adjusted_end_time = chosen_interval.get_close_unix_ms(actual_end_time) + chosen_interval.to_milliseconds() - 1;
+
+        debug!(
+            "adjusted time range: {:?} to {} (using interval {})",
+            adjusted_start_time,
+            adjusted_end_time,
+            chosen_interval.as_ref()
+        );
+
+        // 步骤3：根据interval分段获取历史数据
+        let mut current_start_time = adjusted_start_time;
         loop {
-            let params = base_param.create_new(current_start_time, None);
+            // 检查是否已经超过结束时间
+            if let Some(current_start) = &current_start_time {
+                if current_start > &adjusted_end_time {
+                    break;
+                }
+            }
+
+            // 将调整好的 adjusted_end_time 传入请求参数，保证服务端返回的数据不超过期望的 endTime
+            let params = base_param.create_new(current_start_time, Some(adjusted_end_time), interval.clone());
             let retry_policy = ExponentialBuilder::default()
-                .with_jitter() // 添加随机抖动
-                .with_factor(1.5) // 指数因子 1.5
+                .with_jitter()
+                .with_factor(1.5)
                 .with_max_times(10)
-                .with_min_delay(std::time::Duration::from_millis(100)) // 最小延迟 500ms
+                .with_min_delay(std::time::Duration::from_millis(100))
                 .with_max_delay(std::time::Duration::from_secs(10))
                 .build();
+
             let klines: Vec<O> = execute_bn_get::<T, NonAuthRequestBuilder, Vec<O>>(&self.request_info, Some(&params), request_builder.clone())
                 .into_retryable()
                 .retry(retry_policy)
                 .notify(|_err, _dur| {
-                    retry_count.fetch_add(1, Ordering::SeqCst); // 每次重试加 1
+                    retry_count.fetch_add(1, Ordering::SeqCst);
                 })
                 .await?;
 
-            if let Some(last_kline) = klines.last() {
-                if current_start_time.is_some() && current_start_time.unwrap() == last_kline.get_close_time() + ONE_SECOND_MS {
-                    break;
-                }
-                current_start_time = Some(last_kline.get_close_time() + ONE_SECOND_MS);
-            } else {
+            if klines.is_empty() {
                 break;
             }
-            // 1745467200003
-            debug!("{} fetch {} kline", symbol, klines.len());
-            let klines_count = klines.len();
-            res.extend(klines);
+
+            // 注意点：废弃所有非close的kline（close_time不符合 interval 倍数）
+            let filtered_klines: Vec<O> = {
+                let iv_ms = chosen_interval.to_milliseconds();
+                klines
+                    .into_iter()
+                    .filter(|kline| {
+                        let close_time = kline.get_close_time() + ONE_MILL_SECOND_MS;
+                        // 检查 close_time 是否在 interval 边界上
+                        close_time % iv_ms == 0
+                    })
+                    .collect()
+            };
+
+            debug!(
+                "{} fetch {} kline, filtered {} kline",
+                symbol,
+                filtered_klines.len(),
+                filtered_klines.len()
+            );
+            let klines_count = filtered_klines.len();
+            res.extend(filtered_klines);
 
             if klines_count < 1000 {
                 break;
             }
+
+            // 更新下一次的开始时间为最后一条kline的close_time + 1ms
+            if let Some(last_kline) = res.last() {
+                current_start_time = Some(last_kline.get_close_time() + ONE_MILL_SECOND_MS);
+            } else {
+                break;
+            }
         }
 
-        debug!(
-            "{} fetch {} kline,from {} to {}",
-            symbol,
-            res.len(),
-            unix_2_readable(&res.first().unwrap().get_open_time()),
-            unix_2_readable(&res.last().unwrap().get_open_time())
-        );
+        if !res.is_empty() {
+            debug!(
+                "{} fetch {} kline, from {} to {}",
+                symbol,
+                res.len(),
+                unix_2_readable(&res.first().unwrap().get_open_time()),
+                unix_2_readable(&res.last().unwrap().get_open_time())
+            );
+        }
         Ok((res, retry_count.load(Ordering::SeqCst)))
     }
 }
@@ -345,6 +416,7 @@ mod tests {
     use crate::binance::history_data::{CommonParam, HistoryFetcher, HistoryInterval, SimpleHistoryFetcher};
     use crate::errors::YueError;
     use crate::http_client::init_http_client;
+    use li::tools::time::ONE_MILL_SECOND_MS;
     use serde_json::json;
     use serial_test::serial;
     use std::net::TcpListener;
@@ -376,15 +448,23 @@ mod tests {
         mock_server
     }
 
+    /// 测试：获取K线数据基本功能
+    ///
+    /// 设计思路：验证get_all_kline_data能够正确获取指定数量的K线数据
+    ///
+    /// 场景说明：
+    /// - 模拟返回500条K线数据（1小时间隔）
+    /// - 调用时传入interval参数，验证能够正确处理
+    /// - 验证返回的K线数量和开始时间正确
     #[tokio::test]
     #[serial]
     async fn test_get_all_kline_data_normal_case() {
         let mock_server = create_net_work().await;
-        // Mock response with 500 klines
+        // Mock response with 500 klines，close_time对齐到1h边界
         let mut mock_klines = vec![];
         for i in 0..500 {
             let open_time = 1609459200000 + i * 3600000; // 1 hour intervals
-            let close_time = open_time + 3600000 - 1;
+            let close_time = open_time + 3600000; // 对齐到1h边界
             mock_klines.push(create_mock_kline(open_time, close_time));
         }
 
@@ -398,23 +478,35 @@ mod tests {
             .await;
         let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonParam::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
-        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher.get_all_kline_data(base_param, None, None).await;
+        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> =
+            fetcher.get_all_kline_data(base_param, Some(HistoryInterval::OneHour), None, None).await;
         assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
         let (kline, _) = kline_res.unwrap();
         assert_eq!(kline.len(), 500);
         assert_eq!(kline[0].open_time, 1609459200000);
     }
 
+    /// 测试：分页获取K线数据
+    ///
+    /// 设计思路：验证当API返回超过1000条时的分页逻辑，确保：
+    /// 1. 第一次请求获取1000条K线
+    /// 2. 第二次请求从第一次的最后一条开始（+1ms）
+    /// 3. 所有K线被正确合并
+    ///
+    /// 场景说明：
+    /// - 第一批：1000条K线（close_time对齐到1h边界）
+    /// - 第二批：200条K线（继续1h间隔）
+    /// - 验证总共获取1200条K线
     #[tokio::test]
     #[serial]
     async fn test_get_all_kline_data_pagination() {
         let mock_server = create_net_work().await;
 
-        // First response: 1000 klines
+        // First response: 1000 klines with close_time aligned to 1h boundary
         let mut first_batch = vec![];
         for i in 0..1000 {
             let open_time = 1609459200000 + i * 3600000;
-            let close_time = open_time + 3600000 - 1;
+            let close_time = open_time + 3600000; // 对齐到1h边界
             first_batch.push(create_mock_kline(open_time, close_time));
         }
 
@@ -422,40 +514,57 @@ mod tests {
         let mut second_batch = vec![];
         for i in 1000..1200 {
             let open_time = 1609459200000 + i * 3600000;
-            let close_time = open_time + 3600000 - 1;
+            let close_time = open_time + 3600000; // 对齐到1h边界
             second_batch.push(create_mock_kline(open_time, close_time));
         }
+
+        // 计算用于 mock 的 startTime：第一次请求 start 为第一个 open 的值（和调用时传入一致）
+        let base_open = 1609459200000u64;
+        let interval_ms = 3600000u64; // 1h
+        let first_start = base_open;
+        let second_start = base_open + (first_batch.len() as u64) * interval_ms + ONE_MILL_SECOND_MS;
 
         Mock::given(method("GET"))
             .and(path("/api/v3/klines"))
             .and(query_param("symbol", "BTCUSDT"))
             .and(query_param("interval", "1h"))
+            .and(query_param("startTime", &first_start.to_string()))
             .and(query_param("limit", "1000"))
-            .and(query_param("startTime", "1609459200000"))
             .respond_with(ResponseTemplate::new(200).set_body_json(first_batch))
             .expect(1)
             .mount(&mock_server)
             .await;
 
+        // 第二次请求的 startTime 应该是第一次批次最后一条 kline 的 close_time + 1ms
         Mock::given(method("GET"))
             .and(path("/api/v3/klines"))
             .and(query_param("symbol", "BTCUSDT"))
             .and(query_param("interval", "1h"))
+            .and(query_param("startTime", &second_start.to_string()))
             .and(query_param("limit", "1000"))
-            .and(query_param("startTime", "1613059200999")) // close_time of last in first batch
             .respond_with(ResponseTemplate::new(200).set_body_json(second_batch))
             .expect(1)
             .mount(&mock_server)
             .await;
+
         let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonParam::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
-        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher.get_all_kline_data(base_param, Some(1609459200000), None).await;
+        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher
+            .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), Some(1609459200000), None)
+            .await;
         assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
         let (kline, _) = kline_res.unwrap();
         assert_eq!(kline.len(), 1200);
         assert_eq!(kline[0].open_time, 1609459200000);
     }
 
+    /// 测试：API返回错误时的处理
+    ///
+    /// 设计思路：验证当API返回错误响应时，函数能够正确返回错误
+    ///
+    /// 场景说明：
+    /// - API返回500错误
+    /// - 验证函数返回Err结果
     #[tokio::test]
     #[serial]
     async fn test_get_all_kline_data_api_error() {
@@ -468,10 +577,21 @@ mod tests {
             .await;
         let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonParam::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
-        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher.get_all_kline_data(base_param, Some(1609459200000), None).await;
+        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher
+            .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), Some(1609459200000), None)
+            .await;
         assert!(kline_res.is_err());
     }
 
+    /// 测试：恰好返回1000条K线时的处理
+    ///
+    /// 设计思路：验证当API返回恰好1000条K线时的分页停止逻辑
+    /// - 如果返回1000条，应该继续请求下一批（可能还有更多数据）
+    /// - 下一次请求如果返回少于1000条，则停止
+    ///
+    /// 场景说明：
+    /// - 第一次请求返回1000条K线
+    /// - 第二次请求返回空或少于1000条，停止
     #[tokio::test]
     #[serial]
     async fn test_get_all_kline_data_exactly_1000() {
@@ -480,38 +600,77 @@ mod tests {
         let mut mock_klines = vec![];
         for i in 0..1000 {
             let open_time = 1609459200000 + i * 3600000;
-            let close_time = open_time + 3600000 - 1;
+            let close_time = open_time + 3600000; // 对齐到1h边界
             mock_klines.push(create_mock_kline(open_time, close_time));
         }
+
+        let empty_response: Vec<serde_json::Value> = vec![];
+
+        // 对于恰好 1000 条的场景，第二次请求应从第一批最后一条 close_time + 1ms 开始
+        let base_open = 1609459200000u64;
+        let interval_ms = 3600000u64; // 1h
+        let first_start = base_open;
+        let second_start = base_open + (mock_klines.len() as u64) * interval_ms + ONE_MILL_SECOND_MS;
 
         Mock::given(method("GET"))
             .and(path("/api/v3/klines"))
             .and(query_param("symbol", "BTCUSDT"))
             .and(query_param("interval", "1h"))
+            .and(query_param("startTime", &first_start.to_string()))
             .and(query_param("limit", "1000"))
             .respond_with(ResponseTemplate::new(200).set_body_json(mock_klines))
-            .expect(2) // Only one request
+            .expect(1)
             .mount(&mock_server)
             .await;
+
+        Mock::given(method("GET"))
+            .and(path("/api/v3/klines"))
+            .and(query_param("symbol", "BTCUSDT"))
+            .and(query_param("interval", "1h"))
+            .and(query_param("startTime", &second_start.to_string()))
+            .and(query_param("limit", "1000"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(empty_response))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
         let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonParam::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
-        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher.get_all_kline_data(base_param, Some(1609459200000), None).await;
+        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher
+            .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), Some(1609459200000), None)
+            .await;
         assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
         let (kline, _) = kline_res.unwrap();
         assert_eq!(kline.len(), 1000);
         assert_eq!(kline[0].open_time, 1609459200000);
     }
 
+    /// 测试：废弃非close的K线数据
+    ///
+    /// 设计思路：验证当API返回的K线中有非close的数据时（close_time不符合interval边界），
+    /// 这些数据应该被过滤掉，只返回符合interval边界的K线
+    ///
+    /// 场景说明：
+    /// - API返回1000条K线，其中：
+    ///   - 900条K线的close_time对齐到1h边界（保留）
+    ///   - 100条K线的close_time不对齐（废弃）
+    /// - 验证最终只返回900条K线
     #[tokio::test]
     #[serial]
-    async fn test_get_stop() {
-        // 测试正好1000个
+    async fn test_get_all_kline_data_discard_non_closed_kline() {
         let mock_server = create_net_work().await;
 
         let mut mock_klines = vec![];
-        for i in 0..1000 {
+        // 添加900条对齐的K线（close_time在1h边界上）
+        for i in 0..900 {
             let open_time = 1609459200000 + i * 3600000;
-            let close_time = open_time + 3600000 - 1;
+            let close_time = open_time + 3600000; // 对齐到1h边界
+            mock_klines.push(create_mock_kline(open_time, close_time));
+        }
+        // 添加100条未对齐的K线（close_time不在1h边界上）
+        for i in 900..1000 {
+            let open_time = 1609459200000 + i * 3600000;
+            let close_time = open_time + 3600000 - 500; // 不对齐，提前500ms
             mock_klines.push(create_mock_kline(open_time, close_time));
         }
 
@@ -521,43 +680,142 @@ mod tests {
             .and(query_param("interval", "1h"))
             .and(query_param("limit", "1000"))
             .respond_with(ResponseTemplate::new(200).set_body_json(mock_klines))
-            .expect(2) // Only one request
+            .expect(1) // Only one request expected
             .mount(&mock_server)
             .await;
+
         let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonParam::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
-        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher.get_all_kline_data(base_param, Some(1609459200000), None).await;
+        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher
+            .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), Some(1609459200000), None)
+            .await;
         assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
         let (kline, _) = kline_res.unwrap();
-        assert_eq!(kline.len(), 1000);
+        // 应该只返回900条对齐的K线，100条未对齐的被废弃
+        assert_eq!(kline.len(), 900, "应该只返回900条对齐的K线，但返回了{}", kline.len());
         assert_eq!(kline[0].open_time, 1609459200000);
     }
 
-    // 新增的同步测试：验证 get_close_unix_ms 在不同间隔下的对齐与非超前性
-    use std::time::{SystemTime, UNIX_EPOCH};
+    /// 测试：获取的K线不超过end_time
+    ///
+    /// 设计思路：验证当指定end_time时，所有返回的K线的close_time都不会超过调整后的end_time
+    ///
+    /// 场景说明：
+    /// - 指定start_time和end_time
+    /// - 验证返回的所有K线的close_time都不超过调整后的end_time
+    /// - 验证最后一条K线的close_time在interval边界内
+    #[tokio::test]
+    #[serial]
+    async fn test_get_all_kline_data_not_exceed_end_time() {
+        let mock_server = create_net_work().await;
 
+        // 计算调整后的 end_time（和生产代码一致的计算）
+        let end_time = 1609545045000u64;
+        let adjusted_end_time = HistoryInterval::OneHour.get_close_unix_ms(end_time) + HistoryInterval::OneHour.to_milliseconds() - 1;
+
+        // 生成 mock klines，但只包含 close_time <= adjusted_end_time，模拟服务端根据 endTime 返回有限数据
+        let mut mock_klines = vec![];
+        let mut i = 0u64;
+        loop {
+            let open_time = 1609459200000u64 + i * 3600000u64; // 1 hour intervals
+            let close_time = open_time + 3600000u64; // 对齐到1h边界
+            if close_time > adjusted_end_time {
+                break;
+            }
+            mock_klines.push(create_mock_kline(open_time, close_time));
+            i += 1;
+        }
+
+        Mock::given(method("GET"))
+            .and(path("/api/v3/klines"))
+            .and(query_param("symbol", "BTCUSDT"))
+            .and(query_param("interval", "1h"))
+            .and(query_param("endTime", &adjusted_end_time.to_string()))
+            .and(query_param("limit", "1000"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mock_klines))
+            .mount(&mock_server)
+            .await;
+
+        let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
+        let base_param = CommonParam::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
+
+        // start_time: 2021-01-01 00:00:00
+        // end_time: 2021-01-02 12:30:45 (这会被调整到2021-01-02 12:00:00的下一个interval，即2021-01-02 13:00:00)
+        let start_time = 1609459200000u64;
+        let end_time = 1609545045000u64;
+
+        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher
+            .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), Some(start_time), Some(end_time))
+            .await;
+
+        assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
+        let (kline, _) = kline_res.unwrap();
+
+        // 验证所有K线的close_time都不超过调整后的end_time
+        let adjusted_end_time = HistoryInterval::OneHour.get_close_unix_ms(end_time) + HistoryInterval::OneHour.to_milliseconds() - 1;
+        for k in &kline {
+            assert!(
+                k.close_time <= adjusted_end_time,
+                "K线close_time {} 超过了end_time {}",
+                k.close_time,
+                adjusted_end_time
+            );
+        }
+
+        // 验证返回的K线不为空
+        assert!(!kline.is_empty(), "应该返回至少一条K线");
+        assert_eq!(kline[0].open_time, start_time);
+    }
+
+    /// 测试：HistoryInterval::get_close_unix_ms 在一分钟间隔下的对齐
+    ///
+    /// 设计思路：验证get_close_unix_ms能够正确将任意时间戳对齐到interval边界
+    ///
+    /// 场景说明：
+    /// - 传入当前时间戳
+    /// - 验证返回的时间戳对齐到1分钟边界
+    /// - 返回的时间戳不应超过传入的时间戳
+    /// - 两者间的差距应小于1分钟
     #[test]
     fn test_get_close_unix_ms_one_minute() {
-        let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
-        let ts = HistoryInterval::OneMinute.get_close_unix_ms();
+        let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+        let ts = HistoryInterval::OneMinute.get_close_unix_ms(now_ms);
         assert!(ts <= now_ms, "返回的时间不应在未来");
         assert_eq!(ts % (60 * 1000), 0, "应对齐到整分钟");
         assert!(now_ms - ts < 60 * 1000, "差距应小于 1 分钟");
     }
 
+    /// 测试：HistoryInterval::get_close_unix_ms 在五分钟间隔下的对齐
+    ///
+    /// 设计思路：验证get_close_unix_ms能够正确将任意时间戳对齐到5分钟边界
+    ///
+    /// 场景说明：
+    /// - 传入当前时间戳
+    /// - 验证返回的时间戳对齐到5分钟边界
+    /// - 返回的时间戳不应超过传入的时间戳
+    /// - 两者间的差距应小于5分钟
     #[test]
     fn test_get_close_unix_ms_five_minutes() {
-        let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
-        let ts = HistoryInterval::FiveMinutes.get_close_unix_ms();
+        let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+        let ts = HistoryInterval::FiveMinutes.get_close_unix_ms(now_ms);
         assert!(ts <= now_ms, "返回的时间不应在未来");
         assert_eq!(ts % (5 * 60 * 1000), 0, "应对齐到 5 分钟边界");
         assert!(now_ms - ts < 5 * 60 * 1000, "差距应小于 5 分钟");
     }
 
+    /// 测试：HistoryInterval::get_close_unix_ms 在一小时间隔下的对齐
+    ///
+    /// 设计思路：验证get_close_unix_ms能够正确将任意时间戳对齐到1小时边界
+    ///
+    /// 场景说明：
+    /// - 传入当前时间戳
+    /// - 验证返回的时间戳对齐到1小时边界
+    /// - 返回的时间戳不应超过传入的时间戳
+    /// - 两者间的差距应小于1小时
     #[test]
     fn test_get_close_unix_ms_one_hour() {
-        let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
-        let ts = HistoryInterval::OneHour.get_close_unix_ms();
+        let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+        let ts = HistoryInterval::OneHour.get_close_unix_ms(now_ms);
         assert!(ts <= now_ms, "返回的时间不应在未来");
         assert_eq!(ts % (60 * 60 * 1000), 0, "应对齐到整小时");
         assert!(now_ms - ts < 60 * 60 * 1000, "差距应小于 1 小时");
