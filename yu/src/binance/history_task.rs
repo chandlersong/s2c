@@ -217,7 +217,7 @@ where
             param.get_symbol(),
             unix_2_readable(&timestamp)
         );
-        let result = match kline_fetcher.get_all_kline_data(param.clone(), Some(timestamp)).await {
+        let result = match kline_fetcher.get_all_kline_data(param.clone(), Some(timestamp), None).await {
             Ok((kline_data, fail_times)) => {
                 let len = kline_data.len();
                 if len <= 1 {
@@ -345,6 +345,7 @@ mod tests {
                 &self,
                 param: CommonParam,
                 start_time: Option<u64>,
+                end_time: Option<u64>,
             ) -> Result<(Vec<BinanceKline>, u16), YueError>;
         }
     }
@@ -367,15 +368,15 @@ mod tests {
         let eth_param = CommonParam::initial("ETHUSDT".to_string(), 1000, HistoryInterval::OneHour);
         fetcher
             .expect_get_all_kline_data()
-            .with(predicate::eq(btc_param.clone()), predicate::eq(Some(1694102460000)))
-            .returning(|_, _| {
+            .with(predicate::eq(btc_param.clone()), predicate::eq(Some(1694102460000)), predicate::eq(None))
+            .returning(|_, _, _| {
                 let klines = generate_test_kline_vec(TEST_BEGIN_TIMESTAMP, ONE_HOUR_MS, 1.0, 2);
                 Ok((klines, 200))
             });
         fetcher
             .expect_get_all_kline_data()
-            .with(predicate::eq(eth_param.clone()), predicate::eq(Some(1694101300000)))
-            .returning(|_, _| {
+            .with(predicate::eq(eth_param.clone()), predicate::eq(Some(1694101300000)), predicate::eq(None))
+            .returning(|_, _, _| {
                 let klines = generate_test_kline_vec(TEST_BEGIN_TIMESTAMP, ONE_HOUR_MS, 1.0, 2);
                 Ok((klines, 200))
             });

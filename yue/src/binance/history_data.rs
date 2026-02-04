@@ -34,44 +34,47 @@ pub struct TradingSymbolInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum HistoryInterval {
-    OneSecond,
     OneMinute,
-    ThreeMinutes,
     FiveMinutes,
-    FifteenMinutes,
-    ThirtyMinutes,
     OneHour,
-    TwoHours,
-    FourHours,
-    SixHours,
-    EightHours,
-    TwelveHours,
-    OneDay,
-    ThreeDays,
-    OneWeek,
-    OneMonth,
 }
 
 impl AsRef<str> for HistoryInterval {
     fn as_ref(&self) -> &str {
         match self {
-            HistoryInterval::OneSecond => "1s",
             HistoryInterval::OneMinute => "1m",
-            HistoryInterval::ThreeMinutes => "3m",
             HistoryInterval::FiveMinutes => "5m",
-            HistoryInterval::FifteenMinutes => "15m",
-            HistoryInterval::ThirtyMinutes => "30m",
             HistoryInterval::OneHour => "1h",
-            HistoryInterval::TwoHours => "2h",
-            HistoryInterval::FourHours => "4h",
-            HistoryInterval::SixHours => "6h",
-            HistoryInterval::EightHours => "8h",
-            HistoryInterval::TwelveHours => "12h",
-            HistoryInterval::OneDay => "1d",
-            HistoryInterval::ThreeDays => "3d",
-            HistoryInterval::OneWeek => "1w",
-            HistoryInterval::OneMonth => "1M",
         }
+    }
+}
+
+impl HistoryInterval {
+    pub fn to_milliseconds(&self) -> u64 {
+        match self {
+            HistoryInterval::OneMinute => 60 * 1000,
+            HistoryInterval::FiveMinutes => 5 * 60 * 1000,
+            HistoryInterval::OneHour => 60 * 60 * 1000,
+        }
+    }
+
+    ///
+    /// 获得最近的时间符合的时间unix mill second
+    /// 比如现在 10:12:33
+    /// 那么
+    /// 1m: 返回 10:12:00的 unix ms
+    /// 5m: 返回 10:10:00的 unix ms
+    /// 1h: 返回 10:00:00的 unix ms
+    ///
+    pub fn get_close_unix_ms(&self) -> u64 {
+        // 获取当前时间的 unix 毫秒，若出错则返回 0
+        let now_ms: u64 = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+            Ok(dur) => dur.as_millis() as u64,
+            Err(_) => 0,
+        };
+        let interval_ms = self.to_milliseconds();
+        // 向下取整到 interval 边界
+        (now_ms / interval_ms) * interval_ms
     }
 }
 
@@ -239,7 +242,7 @@ where
     T: MuteHistoryParam + ToQueryParams + Send + Sync,
     O: HistoryVo,
 {
-    async fn get_all_kline_data(&self, base_param: T, start_time: Option<u64>) -> Result<(Vec<O>, u16), YueError>;
+    async fn get_all_kline_data(&self, base_param: T, start_time: Option<u64>, end_time: Option<u64>) -> Result<(Vec<O>, u16), YueError>;
 }
 
 #[derive(Debug, Clone)]
@@ -263,16 +266,26 @@ where
 {
     /// 获取指定交易对和时间间隔的K线数据
     ///
+    /// 大致流程：
+    /// 1. 判断end_time是否为None，如果是None则设置为当前时间
+    /// 2. loop当前的数据。每次请求最多1000条数据
+    /// 3. 每次请求时，设置start_time为上次请求返回的最后一条K线的close_time + 1毫秒
+    /// 4. 如果设置了end_time，则每次请求时，计算当前请求的end_time为min(设置的end_time, current_start_time + interval * 1000 * 1000)
+    /// 3. 每次请求后，检查返回的数据量。如果少于1000条，说明已经获取完毕，跳出循环
+    ///
     /// 注意点
     /// 1. 最后一段时间最好废弃。比如说现在是11:30:00， interval是1h。那么最后一段就是11点到12点的一段时间。
+    ///
+    ///
     /// # 参数
     /// * `symbol` - 交易对符号，如 "BTCUSDT"
     /// * `interval` - K线时间间隔
     /// * `start_time` - 开始时间（毫秒时间戳），如果为None则获取全部历史数据
+    /// * `end_time` - 结束时间（毫秒时间戳），如果为None则表示是现在
     ///
     /// # 返回
     /// 返回K线数据列表，由于API限制，每次最多1000条，会自动分页获取
-    async fn get_all_kline_data(&self, base_param: T, start_time: Option<u64>) -> Result<(Vec<O>, u16), YueError> {
+    async fn get_all_kline_data(&self, base_param: T, start_time: Option<u64>, end_time: Option<u64>) -> Result<(Vec<O>, u16), YueError> {
         let mut res: Vec<O> = Vec::new();
         let mut current_start_time = start_time;
         let request_builder = NonAuthRequestBuilder {};
@@ -385,7 +398,7 @@ mod tests {
             .await;
         let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonParam::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
-        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher.get_all_kline_data(base_param, None).await;
+        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher.get_all_kline_data(base_param, None, None).await;
         assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
         let (kline, _) = kline_res.unwrap();
         assert_eq!(kline.len(), 500);
@@ -436,7 +449,7 @@ mod tests {
             .await;
         let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonParam::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
-        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher.get_all_kline_data(base_param, Some(1609459200000)).await;
+        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher.get_all_kline_data(base_param, Some(1609459200000), None).await;
         assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
         let (kline, _) = kline_res.unwrap();
         assert_eq!(kline.len(), 1200);
@@ -455,7 +468,7 @@ mod tests {
             .await;
         let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonParam::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
-        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher.get_all_kline_data(base_param, Some(1609459200000)).await;
+        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher.get_all_kline_data(base_param, Some(1609459200000), None).await;
         assert!(kline_res.is_err());
     }
 
@@ -482,7 +495,7 @@ mod tests {
             .await;
         let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonParam::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
-        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher.get_all_kline_data(base_param, Some(1609459200000)).await;
+        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher.get_all_kline_data(base_param, Some(1609459200000), None).await;
         assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
         let (kline, _) = kline_res.unwrap();
         assert_eq!(kline.len(), 1000);
@@ -513,10 +526,40 @@ mod tests {
             .await;
         let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonParam::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
-        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher.get_all_kline_data(base_param, Some(1609459200000)).await;
+        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher.get_all_kline_data(base_param, Some(1609459200000), None).await;
         assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
         let (kline, _) = kline_res.unwrap();
         assert_eq!(kline.len(), 1000);
         assert_eq!(kline[0].open_time, 1609459200000);
+    }
+
+    // 新增的同步测试：验证 get_close_unix_ms 在不同间隔下的对齐与非超前性
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn test_get_close_unix_ms_one_minute() {
+        let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+        let ts = HistoryInterval::OneMinute.get_close_unix_ms();
+        assert!(ts <= now_ms, "返回的时间不应在未来");
+        assert_eq!(ts % (60 * 1000), 0, "应对齐到整分钟");
+        assert!(now_ms - ts < 60 * 1000, "差距应小于 1 分钟");
+    }
+
+    #[test]
+    fn test_get_close_unix_ms_five_minutes() {
+        let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+        let ts = HistoryInterval::FiveMinutes.get_close_unix_ms();
+        assert!(ts <= now_ms, "返回的时间不应在未来");
+        assert_eq!(ts % (5 * 60 * 1000), 0, "应对齐到 5 分钟边界");
+        assert!(now_ms - ts < 5 * 60 * 1000, "差距应小于 5 分钟");
+    }
+
+    #[test]
+    fn test_get_close_unix_ms_one_hour() {
+        let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+        let ts = HistoryInterval::OneHour.get_close_unix_ms();
+        assert!(ts <= now_ms, "返回的时间不应在未来");
+        assert_eq!(ts % (60 * 60 * 1000), 0, "应对齐到整小时");
+        assert!(now_ms - ts < 60 * 60 * 1000, "差距应小于 1 小时");
     }
 }

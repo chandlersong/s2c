@@ -329,35 +329,10 @@ async fn start_refresh_history_data(origin_dash_board: BinanceDashboard, spot_kl
     );
     spot_kline_task.execute().await?;
 
-    let base_swap_kline_fetcher = SimpleHistoryFetcher::new(&SWAP_KLINE_HISTORY_COMMAND);
-    let swap_kline_fetcher: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonParam, BinanceKline> =
-        CloneHistoryFetcherFactory::new(base_swap_kline_fetcher);
-    let swap_kline_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SwapKline, SymbolType::Swap));
-    let swap_kline_task = InitialHistoryTask::<_, _, KlinePo, BinanceKline, BinanceDashboard>::new(
-        swap_kline_fetcher,
-        dash_board.clone(),
-        swap_kline_writer,
-        "refresh swap kline data".to_string(),
-    );
-    swap_kline_task.execute().await?;
-
-    //NEXT: 写一个资金费率的专用的param
-    let base_swap_funding_rate_fetcher = SimpleHistoryFetcher::new(&SWAP_FUNDING_RATE_COMMAND);
-    let swap_funding_rate_fetcher: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonParam, FundingRate> =
-        CloneHistoryFetcherFactory::new(base_swap_funding_rate_fetcher);
-    let swap_funding_rate_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SwapFundingRate, SymbolType::Swap));
-    let swap_funding_rate_task = InitialHistoryTask::<_, _, FundingRatePo, FundingRate, BinanceDashboard>::new(
-        swap_funding_rate_fetcher,
-        dash_board.clone(),
-        swap_funding_rate_writer,
-        "refresh swap funding rate".to_string(),
-    );
-    swap_funding_rate_task.execute().await?;
     //PLAN： 更新交易所时间表达式进入Config
     let dash_board_addr = CronActor::new("30 59 */6 * * * *", update_dashboard_task).start();
     subscribe_event!(dash_board_addr, spot_kline_job, TaskCompletionEvent);
-    let _ = CronActor::new("10 0 * * * * *", swap_funding_rate_task).start();
-    let _ = CronActor::new("10 1 * * * * *", swap_kline_task).start();
+
     Ok(())
 }
 

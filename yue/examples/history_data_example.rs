@@ -49,19 +49,20 @@ async fn main() {
     let symbol = "BTCUSDT";
     let spot_kline_fetch = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
     let base_param = CommonParam::new(symbol.to_string(), 1000, HistoryInterval::OneHour);
-    let spot_btc: Result<(Vec<BinanceKline>, u16), YueError> = spot_kline_fetch.get_all_kline_data(base_param, Some(start_ms)).await;
+    let spot_btc: Result<(Vec<BinanceKline>, u16), YueError> = spot_kline_fetch.get_all_kline_data(base_param, Some(start_ms), None).await;
     info!("================fetch spot btc==============");
     print_kline_result(&spot_btc);
 
     let swap_kline_fetch = SimpleHistoryFetcher::new(&SWAP_KLINE_HISTORY_COMMAND);
     let base_param = CommonParam::new(symbol.to_string(), 1000, HistoryInterval::OneHour);
-    let swap_btc: Result<(Vec<BinanceKline>, u16), YueError> = swap_kline_fetch.get_all_kline_data(base_param, Some(start_ms)).await;
+    let swap_btc: Result<(Vec<BinanceKline>, u16), YueError> = swap_kline_fetch.get_all_kline_data(base_param, Some(start_ms), None).await;
     info!("================fetch swap btc==============");
     print_kline_result(&swap_btc);
 
     let swap_funding_rate_fetch = SimpleHistoryFetcher::new(&SWAP_FUNDING_RATE_COMMAND);
     let base_param = CommonParam::new(symbol.to_string(), 1000, HistoryInterval::OneHour);
-    let btc_funding_rate: Result<(Vec<FundingRate>, u16), YueError> = swap_funding_rate_fetch.get_all_kline_data(base_param, Some(start_ms)).await;
+    let btc_funding_rate: Result<(Vec<FundingRate>, u16), YueError> =
+        swap_funding_rate_fetch.get_all_kline_data(base_param, Some(start_ms), None).await;
     info!("================fetch btc funding rate ==============");
     print_kline_result(&btc_funding_rate);
 }
