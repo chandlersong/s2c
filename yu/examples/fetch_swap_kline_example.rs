@@ -1,4 +1,5 @@
 use li::tools::logs::setup_logger;
+use li::tools::time::unix_time_now_u64_utc;
 use log::{info, LevelFilter};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
@@ -10,9 +11,10 @@ use yu::errors::YuError;
 use yu::exchange::{CloneHistoryFetcherFactory, HistoryFetcherFactory};
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_restful_commands::SWAP_KLINE_HISTORY_COMMAND;
-use yue::binance::history_data::{CommonParam, HistoryInterval, MuteHistoryParam, SimpleHistoryFetcher};
+use yue::binance::history_data::{CommonParam, MuteHistoryParam, SimpleHistoryFetcher};
 use yue::errors::YueError;
 use yue::http_client::init_http_client;
+use yue::models::HistoryInterval;
 
 #[tokio::main]
 async fn main() -> Result<(), YuError> {
@@ -36,6 +38,10 @@ async fn main() -> Result<(), YuError> {
 
     let param = CommonParam::initial("GRASSUSDT".to_string(), 1000, HistoryInterval::OneHour);
     let (tx, mut rx) = mpsc::channel::<Result<Vec<KlinePo>, YueError>>(100);
+    let interval = HistoryInterval::FiveMinutes;
+    let now_timestamp = unix_time_now_u64_utc();
+    let start_time = interval.get_close_unix_ms(now_timestamp - 10 * 60 * 1000);
+    let end_time = interval.get_close_unix_ms(now_timestamp);
 
     let fetch_handle = tokio::spawn(async move {
         InitialHistoryTask::<
@@ -44,7 +50,7 @@ async fn main() -> Result<(), YuError> {
             KlinePo, // 修正为 KlinePo，满足 HistoryPO 约束
             BinanceKline,
             BinanceDashboard,
-        >::fetch_symbol_data(swap_kline_fetcher.create_fetcher(), param, 1731079800000, tx, "test")
+        >::fetch_symbol_data(swap_kline_fetcher.create_fetcher(), param, start_time, end_time, tx, "test", interval)
         .await;
     });
 

@@ -4,9 +4,10 @@ use log::{LevelFilter, debug, error, info};
 use yue::binance::bn_models::common::HistoryVo;
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_restful_commands::{SPOT_KLINE_HISTORY_COMMAND, SWAP_KLINE_HISTORY_COMMAND};
-use yue::binance::history_data::{CommonParam, HistoryFetcher, HistoryInterval, SimpleHistoryFetcher};
+use yue::binance::history_data::{CommonParam, HistoryFetcher, SimpleHistoryFetcher};
 use yue::errors::YueError;
 use yue::http_client::init_http_client;
+use yue::models::HistoryInterval;
 
 fn print_kline_result<H>(result: &Result<(Vec<H>, u16), YueError>, interval: Option<HistoryInterval>)
 where

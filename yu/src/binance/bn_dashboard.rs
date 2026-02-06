@@ -7,9 +7,11 @@ use li::errors::LiError;
 use log::{error, info};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 use yue::binance::history_data::{get_trading_spot_symbols, get_trading_swap_symbols, CONTRACT_TYPE_PERPETUAL};
 use yue::binance::order_book::{OrderBook, OrderBookSnapshotMsg};
 use yue::binance::websocket_handler::TradingSymbolRefresher;
+use yue::models::HistoryInterval;
 
 #[derive(Debug, Clone)]
 pub struct TradingSymbol {
@@ -24,20 +26,23 @@ pub struct TradingSymbol {
 pub struct BinanceDashboard {
     spot_symbols: Arc<RwLock<Vec<TradingSymbol>>>,
     swap_symbols: Arc<RwLock<Vec<TradingSymbol>>>,
+    data_retention_hours: u64,
 }
 
 impl BinanceDashboard {
-    pub fn new() -> Self {
+    pub fn new(data_retention_hours: u64) -> Self {
         BinanceDashboard {
             spot_symbols: Arc::new(RwLock::new(vec![])),
             swap_symbols: Arc::new(RwLock::new(vec![])),
+            data_retention_hours,
         }
     }
 
-    pub fn new_with_data(spot_symbol: Vec<TradingSymbol>, swap_symbol: Vec<TradingSymbol>) -> Self {
+    pub fn new_with_data(spot_symbol: Vec<TradingSymbol>, swap_symbol: Vec<TradingSymbol>, data_retention_hours: u64) -> Self {
         BinanceDashboard {
             spot_symbols: Arc::new(RwLock::new(spot_symbol)),
             swap_symbols: Arc::new(RwLock::new(swap_symbol)),
+            data_retention_hours,
         }
     }
 }
@@ -80,6 +85,33 @@ impl ExchangeDashBoard for BinanceDashboard {
 
     fn swap_symbols(&self) -> Arc<RwLock<Vec<TradingSymbol>>> {
         self.swap_symbols.clone()
+    }
+
+    ///
+    /// 1. 获取当前时间。然后减去data_retention_hours，得到应该保留的最早时间戳
+    /// 2. 根据interval调整时间戳进行调整
+    ///
+    /// interval: 默认值是五分钟
+    /// 返回标准应该保留的最大时间
+    ///
+    fn get_earliest_timestamp(&self, interval: Option<HistoryInterval>) -> Option<u64> {
+        // 获取当前 Unix 毫秒时间
+        let now_ms = match SystemTime::now().duration_since(UNIX_EPOCH) {
+            Ok(d) => d.as_millis() as u64,
+            Err(_) => return None,
+        };
+
+        // 计算保留时长对应的毫秒数（防溢出）
+        let retention_ms = self.data_retention_hours.saturating_mul(3600).saturating_mul(1000);
+
+        // 计算最早保留的时间戳（不小于0）
+        let earliest = now_ms.saturating_sub(retention_ms);
+
+        // 使用传入的 interval 对齐时间戳，默认使用 FiveMinutes
+        let interval_to_use = interval.unwrap_or(HistoryInterval::FiveMinutes);
+        let aligned = interval_to_use.get_close_unix_ms(earliest);
+
+        Some(aligned)
     }
 }
 

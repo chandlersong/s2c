@@ -4,7 +4,7 @@ use crate::binance::bn_models::swap_restful::SwapExchangeInfo;
 use crate::binance::bn_restful_commands::{PING_COMMAND, SPOT_EXCHANGE_COMMAND, SWAP_EXCHANGE_COMMAND, execute_bn_get};
 use crate::errors::YueError;
 use crate::http_client::NonAuthRequestBuilder;
-use crate::models::{EmptyObject, RequestInfo};
+use crate::models::{EmptyObject, HistoryInterval, RequestInfo};
 use async_trait::async_trait;
 use backon::{BackoffBuilder, ExponentialBuilder, Retryable};
 use li::tools::time::{ONE_MILL_SECOND_MS, unix_2_readable};
@@ -31,48 +31,6 @@ pub struct TradingSymbolInfo {
     pub symbol_type: String,
     /// 上线时间，单位毫秒时间戳，spot取不到，所以为None，swap有值
     pub on_board_time: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum HistoryInterval {
-    OneMinute,
-    FiveMinutes,
-    OneHour,
-}
-
-impl AsRef<str> for HistoryInterval {
-    fn as_ref(&self) -> &str {
-        match self {
-            HistoryInterval::OneMinute => "1m",
-            HistoryInterval::FiveMinutes => "5m",
-            HistoryInterval::OneHour => "1h",
-        }
-    }
-}
-
-impl HistoryInterval {
-    pub fn to_milliseconds(&self) -> u64 {
-        match self {
-            HistoryInterval::OneMinute => 60 * 1000,
-            HistoryInterval::FiveMinutes => 5 * 60 * 1000,
-            HistoryInterval::OneHour => 60 * 60 * 1000,
-        }
-    }
-
-    ///
-    /// 获得传入一个时间戳，最近的时间符合的时间unix mill second
-    /// 比如传入 10:12:33
-    /// 那么
-    /// 1m: 返回 10:12:00的 unix ms
-    /// 5m: 返回 10:10:00的 unix ms
-    /// 1h: 返回 10:00:00的 unix ms
-    ///
-    pub fn get_close_unix_ms(&self, timestamp: u64) -> u64 {
-        // 获取当前时间的 unix 毫秒，若出错则返回 0
-        let interval_ms = self.to_milliseconds();
-        // 向下取整到 interval 边界
-        (timestamp / interval_ms) * interval_ms
-    }
 }
 
 pub trait MuteHistoryParam: ToQueryParams {
@@ -413,9 +371,10 @@ where
 mod tests {
     use crate::binance::bn_models::spot_restful::BinanceKline;
     use crate::binance::bn_restful_commands::SPOT_KLINE_HISTORY_COMMAND;
-    use crate::binance::history_data::{CommonParam, HistoryFetcher, HistoryInterval, SimpleHistoryFetcher};
+    use crate::binance::history_data::{CommonParam, HistoryFetcher, SimpleHistoryFetcher};
     use crate::errors::YueError;
     use crate::http_client::init_http_client;
+    use crate::models::HistoryInterval;
     use li::tools::time::ONE_MILL_SECOND_MS;
     use serde_json::json;
     use serial_test::serial;
@@ -765,59 +724,5 @@ mod tests {
         // 验证返回的K线不为空
         assert!(!kline.is_empty(), "应该返回至少一条K线");
         assert_eq!(kline[0].open_time, start_time);
-    }
-
-    /// 测试：HistoryInterval::get_close_unix_ms 在一分钟间隔下的对齐
-    ///
-    /// 设计思路：验证get_close_unix_ms能够正确将任意时间戳对齐到interval边界
-    ///
-    /// 场景说明：
-    /// - 传入当前时间戳
-    /// - 验证返回的时间戳对齐到1分钟边界
-    /// - 返回的时间戳不应超过传入的时间戳
-    /// - 两者间的差距应小于1分钟
-    #[test]
-    fn test_get_close_unix_ms_one_minute() {
-        let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
-        let ts = HistoryInterval::OneMinute.get_close_unix_ms(now_ms);
-        assert!(ts <= now_ms, "返回的时间不应在未来");
-        assert_eq!(ts % (60 * 1000), 0, "应对齐到整分钟");
-        assert!(now_ms - ts < 60 * 1000, "差距应小于 1 分钟");
-    }
-
-    /// 测试：HistoryInterval::get_close_unix_ms 在五分钟间隔下的对齐
-    ///
-    /// 设计思路：验证get_close_unix_ms能够正确将任意时间戳对齐到5分钟边界
-    ///
-    /// 场景说明：
-    /// - 传入当前时间戳
-    /// - 验证返回的时间戳对齐到5分钟边界
-    /// - 返回的时间戳不应超过传入的时间戳
-    /// - 两者间的差距应小于5分钟
-    #[test]
-    fn test_get_close_unix_ms_five_minutes() {
-        let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
-        let ts = HistoryInterval::FiveMinutes.get_close_unix_ms(now_ms);
-        assert!(ts <= now_ms, "返回的时间不应在未来");
-        assert_eq!(ts % (5 * 60 * 1000), 0, "应对齐到 5 分钟边界");
-        assert!(now_ms - ts < 5 * 60 * 1000, "差距应小于 5 分钟");
-    }
-
-    /// 测试：HistoryInterval::get_close_unix_ms 在一小时间隔下的对齐
-    ///
-    /// 设计思路：验证get_close_unix_ms能够正确将任意时间戳对齐到1小时边界
-    ///
-    /// 场景说明：
-    /// - 传入当前时间戳
-    /// - 验证返回的时间戳对齐到1小时边界
-    /// - 返回的时间戳不应超过传入的时间戳
-    /// - 两者间的差距应小于1小时
-    #[test]
-    fn test_get_close_unix_ms_one_hour() {
-        let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
-        let ts = HistoryInterval::OneHour.get_close_unix_ms(now_ms);
-        assert!(ts <= now_ms, "返回的时间不应在未来");
-        assert_eq!(ts % (60 * 60 * 1000), 0, "应对齐到整小时");
-        assert!(now_ms - ts < 60 * 60 * 1000, "差距应小于 1 小时");
     }
 }

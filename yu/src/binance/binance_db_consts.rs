@@ -42,6 +42,10 @@ impl BinanceTables {
             _ => None,
         }
     }
+
+    pub fn count_records(&self) -> Option<String> {
+        format!("select count(*) from {}", self.table_name()).into()
+    }
 }
 
 // 直接为三张表生成格式化建表SQL（不带索引），字段对齐、注释清晰

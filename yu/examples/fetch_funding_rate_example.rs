@@ -1,4 +1,5 @@
 use li::tools::logs::setup_logger;
+use li::tools::time::unix_time_now_u64_utc;
 use log::{info, LevelFilter};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
@@ -12,6 +13,7 @@ use yue::binance::bn_restful_commands::SWAP_FUNDING_RATE_COMMAND;
 use yue::binance::history_data::{CommonParam, MuteHistoryParam, SimpleHistoryFetcher};
 use yue::errors::YueError;
 use yue::http_client::init_http_client;
+use yue::models::HistoryInterval;
 
 /// 建立这个例子，主要是在初始化的时候，发现GRASSUSDT一直取不到数据
 /// 所以也就在这里用了一下
@@ -35,8 +37,13 @@ async fn main() -> Result<(), YuError> {
     let swap_funding_rate_fetcher: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonParam, FundingRate> =
         CloneHistoryFetcherFactory::new(base_swap_funding_rate_fetcher);
 
-    let param = CommonParam::initial("1000SHIBUSDT".to_string(), 1000, yue::binance::history_data::HistoryInterval::OneHour);
+    let param = CommonParam::initial("1000SHIBUSDT".to_string(), 1000, HistoryInterval::OneHour);
     let (tx, mut rx) = mpsc::channel::<Result<Vec<FundingRatePo>, YueError>>(100);
+
+    let interval = HistoryInterval::FiveMinutes;
+    let now_timestamp = unix_time_now_u64_utc();
+    let start_time = interval.get_close_unix_ms(now_timestamp - 10 * 60 * 1000);
+    let end_time = interval.get_close_unix_ms(now_timestamp);
 
     // 用tokio::spawn在后台异步任务中运行fetch_symbol_data
     let fetch_handle = tokio::spawn(async move {
@@ -46,7 +53,15 @@ async fn main() -> Result<(), YuError> {
             FundingRatePo,
             FundingRate,
             BinanceDashboard,
-        >::fetch_symbol_data(swap_funding_rate_fetcher.create_fetcher(), param, 1731079800000, tx, "test")
+        >::fetch_symbol_data(
+            swap_funding_rate_fetcher.create_fetcher(),
+            param,
+            start_time,
+            end_time,
+            tx,
+            "test",
+            interval,
+        )
         .await;
     });
 

@@ -35,7 +35,8 @@ use yue::websocket::event_bus::{Subscribe, WsMessageBus};
 ///
 ///
 pub async fn start_bn_jobs() -> Result<(), YuError> {
-    let dash_board = BinanceDashboard::new();
+    let config = get_config();
+    let dash_board = BinanceDashboard::new(config.get_data_retention_hours());
     dash_board.execute().await?;
     if let Err(_e) = initial_tables(None) {
         warn!("币安表创建失败,{}", _e);
@@ -325,6 +326,7 @@ async fn start_refresh_history_data(origin_dash_board: BinanceDashboard, spot_kl
         dash_board.clone(),
         spot_data_writer,
         "refresh spot kline data".to_string(),
+        SymbolType::Spot,
     );
     spot_kline_task.execute().await?;
 

@@ -3,6 +3,7 @@ use li::tools::time::{UnixTimeStamp, unix_time_now_u64_utc};
 use serde::de::{DeserializeOwned, Error};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
+use std::fmt::Display;
 use std::str::FromStr;
 
 // 查询参数trait定义
@@ -17,11 +18,30 @@ impl ToQueryParams for std::collections::BTreeMap<&str, String> {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
 pub enum SymbolType {
     Spot,   //现货
     Swap,   //永续
     Future, //交割合约
     Option, //期权
+}
+
+impl From<SymbolType> for &'static str {
+    fn from(s: SymbolType) -> &'static str {
+        match s {
+            SymbolType::Spot => "Spot",
+            SymbolType::Swap => "Swap",
+            SymbolType::Future => "Future",
+            SymbolType::Option => "Option",
+        }
+    }
+}
+
+impl Display for SymbolType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s: &'static str = (*self).into();
+        write!(f, "{}", s)
+    }
 }
 
 pub struct EmptyQueryParams;

@@ -7,15 +7,15 @@ use async_trait::async_trait;
 use duckdb::{appender_params_from_iter, DropBehavior};
 use li::actix_jobs::AsyncRepeatTask;
 use li::errors::LiError;
-use li::tools::time::{unix_2_readable, unix_time_now_u64_utc, GENESIS_2020_MS, ONE_HOUR_MS};
+use li::tools::time::{unix_2_readable, unix_time_now_u64_utc, ONE_HOUR_MS};
 use log::{debug, error, info};
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use yue::binance::bn_models::common::{HistoryVo, SymbolType, ToQueryParams};
 use yue::binance::bn_models::swap_restful::FundingRate;
 use yue::binance::history_data::{HistoryFetcher, MuteHistoryParam};
+use yue::models::HistoryInterval;
 use yue::tools::SnowyFlakeWrapper;
 
 pub trait HistoryPO: Debug {
@@ -27,8 +27,15 @@ pub trait HistoryPO: Debug {
 }
 
 pub trait HistoryDataWriter<O: HistoryPO, D: ExchangeDashBoard<TradingSymbol = TradingSymbol>>: Send + Sync {
+    ///
+    /// 批量写入历史数据
+    ///
     fn write_batch(&self, data: Vec<O>) -> Result<(), YuError>;
-    fn query_latest_symbols(&self, dash_board: Arc<D>, now: u64) -> Result<Vec<(String, u64)>, YuError>;
+
+    ///
+    /// 数据库为是否为空
+    ///
+    fn is_empty(&self) -> Result<bool, YuError>;
 }
 
 pub struct DuckDBHistoryDataWriter {
@@ -74,49 +81,40 @@ impl<O: HistoryPO, D: ExchangeDashBoard<TradingSymbol = TradingSymbol>> HistoryD
         Ok(())
     }
 
-    fn query_latest_symbols(&self, dashboard: Arc<D>, now: u64) -> Result<Vec<(String, u64)>, YuError> {
-        let conn = self.provider.acquire()?;
-        let query_sql = match self.table.query_lastest_record() {
-            None => Err(YuError::new(&format!(
-                "Table {} does not support querying latest record",
+    ///
+    /// 这里只是判断当前表是否有没有记录，没有记录，就表示没有记录
+    ///
+    /// FUTURE: 改进判断数据库为空的方式。
+    /// 因为现有方式还是太简单。但是考虑到初始化的复杂程度，其实暂缓开发。
+    /// 可以参考一下其他数据中心的写法。
+    ///
+    /// 步骤，
+    /// 1. 通过sql语句，判断其当前表是否为空，如果为空，则返回true
+    /// 2. 只要有数据，就返回false
+    ///
+    ///
+    fn is_empty(&self) -> Result<bool, YuError> {
+        // 如果表没有提供 query_lastest_record SQL，则认为没有可查询的最新记录
+        let query_sql_opt = self.table.count_records();
+        if query_sql_opt.is_none() {
+            return Err(YuError::CustomError(format!(
+                "Table {:?} does not support counting records",
                 self.table.table_name()
-            )))?,
-            Some(s) => s,
-        };
-        let mut stmt = conn.prepare(&query_sql)?;
-        let symbol_in_db: HashMap<String, u64> = stmt
-            .query_map([], |row| {
-                let symbol: String = row.get(0)?;
-                let close: u64 = row.get(1)?;
-                Ok((symbol, close))
-            })?
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .collect();
-        let symbols = match self.symbol_type {
-            SymbolType::Spot => dashboard.spot_symbols().read().unwrap().clone(),
-            SymbolType::Swap => dashboard.swap_symbols().read().unwrap().clone(),
-            _ => {
-                panic!("Not support symbol type");
-            }
-        };
+            )));
+        }
 
-        let filtered: Vec<(String, u64)> = symbols
-            .into_iter()
-            .filter(|s| s.quote_asset.eq("USDT"))
-            .map(|s| {
-                (
-                    s.symbol.clone(),
-                    symbol_in_db
-                        .get(&s.symbol)
-                        .copied()
-                        .unwrap_or(s.on_board_time.unwrap_or_else(|| GENESIS_2020_MS)),
-                )
-            })
-            .filter(|r| now - r.1 > ONE_HOUR_MS)
-            .collect();
-        info!("{}:fetched {} trading symbols", self.table.table_name(), filtered.len());
-        Ok(filtered)
+        let sql = query_sql_opt.unwrap();
+        let conn = self.provider.acquire()?;
+
+        let mut stmt = conn.prepare(sql.as_str())?;
+        let mut rows = stmt.query([])?;
+
+        if let Some(row) = rows.next()? {
+            let count: i64 = row.get(0)?;
+            return if count == 0 { Ok(true) } else { Ok(false) };
+        }
+
+        Err(YuError::CustomError(format!("Table {:?} 数据库访问失败", self.table.table_name())))
     }
 }
 
@@ -182,6 +180,8 @@ where
     exchange_dashboard: Arc<D>,
     data_writer: Arc<dyn HistoryDataWriter<R, D> + Send + Sync>,
     task_name: String,
+    symbol_type: SymbolType,
+    interval: HistoryInterval,
 }
 
 impl<F, P, R, V, D> InitialHistoryTask<F, P, R, V, D>
@@ -192,21 +192,31 @@ where
     R: HistoryPO + Clone,
     D: ExchangeDashBoard<TradingSymbol = TradingSymbol> + Send + Sync,
 {
-    pub fn new(factory: F, exchange_dashboard: Arc<D>, data_writer: Arc<dyn HistoryDataWriter<R, D> + Send + Sync>, task_name: String) -> Self {
+    pub fn new(
+        factory: F,
+        exchange_dashboard: Arc<D>,
+        data_writer: Arc<dyn HistoryDataWriter<R, D> + Send + Sync>,
+        task_name: String,
+        symbol_type: SymbolType,
+    ) -> Self {
         InitialHistoryTask {
             kline_fetcher_factory: factory,
             exchange_dashboard,
             data_writer,
             task_name,
+            symbol_type,
+            interval: HistoryInterval::FiveMinutes,
         }
     }
 
     pub async fn fetch_symbol_data<T>(
         kline_fetcher: T,
         param: P,
-        timestamp: u64,
+        start_time: u64,
+        end_time: u64,
         tx: mpsc::Sender<Result<Vec<R>, yue::errors::YueError>>,
         task_name: &str,
+        interval: HistoryInterval,
     ) where
         T: HistoryFetcher<P, V> + Send + Sync + 'static,
         R: HistoryPO<Source = V> + Clone,
@@ -215,9 +225,12 @@ where
             "update {} -> symbol: {}, latest: {}",
             task_name,
             param.get_symbol(),
-            unix_2_readable(&timestamp)
+            unix_2_readable(&start_time)
         );
-        let result = match kline_fetcher.get_all_kline_data(param.clone(), None, Some(timestamp), None).await {
+        let result = match kline_fetcher
+            .get_all_kline_data(param.clone(), Some(interval), Some(start_time), Some(end_time))
+            .await
+        {
             Ok((kline_data, fail_times)) => {
                 let len = kline_data.len();
                 if len <= 1 {
@@ -257,28 +270,62 @@ where
     D: ExchangeDashBoard<TradingSymbol = TradingSymbol> + Send + Sync + Clone + 'static,
 {
     async fn execute(&self) -> Result<(), LiError> {
-        let now = unix_time_now_u64_utc();
-        let latest_symbol = self
-            .data_writer
-            .query_latest_symbols(self.exchange_dashboard.clone(), now)
-            .map_err(|e| LiError::CustomError(format!("query error: {}", e)))?;
+        if !self.data_writer.is_empty().unwrap() {
+            info!("{} database is not empty, skip initial history data fetch", self.task_name);
+            return Ok(());
+        }
         let (tx, mut rx) = mpsc::channel(100);
-        let symbol_count = latest_symbol.len();
+        let earliest_time = self
+            .exchange_dashboard
+            .get_earliest_timestamp(Some(HistoryInterval::FiveMinutes))
+            .ok_or_else(|| LiError::CustomError("Failed to get earliest timestamp from exchange_dashboard".to_string()))?;
+        let symbols: Vec<TradingSymbol> = match self.symbol_type {
+            SymbolType::Spot => self.exchange_dashboard.spot_symbols(),
+            SymbolType::Swap => self.exchange_dashboard.swap_symbols(),
+            _ => {
+                return Err(LiError::CustomError(format!(
+                    "Unsupported symbol type {:?} in InitialHistoryTask",
+                    self.symbol_type
+                )));
+            }
+        }
+        .read()
+        .unwrap()
+        .clone()
+        .into_iter()
+        .filter(|symbol| symbol.quote_asset == "USDT")
+        .collect();
+        let symbol_count = symbols.len();
+        info!(
+            "start at {} fetch {},symbol num:{}",
+            unix_2_readable(&earliest_time),
+            self.task_name,
+            symbol_count
+        );
 
-        info!("start fetch {},symbol:{}", self.task_name, symbol_count);
-
-        for (symbol, timestamp) in latest_symbol {
+        let now_timestamp = unix_time_now_u64_utc();
+        for symbol in symbols {
             let tx_clone = tx.clone();
             let kline_fetcher = self.kline_fetcher_factory.create_fetcher();
             // NEXT： 这里1000变成参数化，现在是历史数据无所谓。但是实盘需要准确一点
-            let param = P::initial(symbol, 1000, yue::binance::history_data::HistoryInterval::OneHour);
+            let interval = self.interval.clone();
+            let param = P::initial(symbol.symbol.clone(), 1000, interval.clone());
             let task_name = self.task_name().to_string();
             tokio::spawn({
                 let tx_clone = tx_clone.clone();
                 let param = param.clone();
                 let kline_fetcher = kline_fetcher;
                 async move {
-                    Self::fetch_symbol_data::<_>(kline_fetcher, param, timestamp, tx_clone, &task_name).await;
+                    Self::fetch_symbol_data::<_>(
+                        kline_fetcher,
+                        param,
+                        earliest_time,
+                        interval.get_close_unix_ms(now_timestamp),
+                        tx_clone,
+                        &task_name,
+                        interval.clone(),
+                    )
+                    .await;
                 }
             });
         }
@@ -326,8 +373,9 @@ mod tests {
     use std::sync::Arc;
     use yue::binance::bn_models::common::SymbolType;
     use yue::binance::bn_models::spot_restful::BinanceKline;
-    use yue::binance::history_data::{CommonParam, HistoryFetcher, HistoryInterval, MuteHistoryParam};
+    use yue::binance::history_data::{CommonParam, HistoryFetcher, MuteHistoryParam};
     use yue::errors::YueError;
+    use yue::models::HistoryInterval;
 
     // mock 测试部分同步修正
     mock! {
@@ -417,13 +465,18 @@ mod tests {
             quote_asset: "USDT".to_string(),
             status: "TRADING".to_string(),
         }];
-        let dash_board = Arc::new(BinanceDashboard::new_with_data(trading_symbols, vec![]));
+        let dash_board = Arc::new(BinanceDashboard::new_with_data(trading_symbols, vec![], 0));
         import_local_csv_and_assert(&conn, SpotKline.table_name().as_str(), csv_path.as_path(), 7)?;
 
         let factory = MockHistoryFetcherFactory {};
         let data_writer = Arc::new(DuckDBHistoryDataWriter::new(db_provider.clone(), SpotKline, SymbolType::Spot));
-        let manager: InitialHistoryTask<MockHistoryFetcherFactory, CommonParam, KlinePo, BinanceKline, BinanceDashboard> =
-            InitialHistoryTask::new(factory, dash_board, data_writer, "test_refresh_spot_kline_normal".to_string());
+        let manager: InitialHistoryTask<MockHistoryFetcherFactory, CommonParam, KlinePo, BinanceKline, BinanceDashboard> = InitialHistoryTask::new(
+            factory,
+            dash_board,
+            data_writer,
+            "test_refresh_spot_kline_normal".to_string(),
+            SymbolType::Spot,
+        );
         let res: Result<(), LiError> = manager.execute().await;
 
         println!("{:?}", res);
