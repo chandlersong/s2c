@@ -179,7 +179,7 @@ impl Handler<RecordRepairResult> for DataIntegritySupervisor {
     /// 2. 判断repair_job_ids是否为空。
     /// 2. 失败的话，临时复用repair_job_ids的逻辑
     ///
-    /// TODO: 如果失败这里最好通知人来处理。所以暂时先不管具体操作
+    /// FUTURE: 如果失败这里最好通知人来处理。所以暂时先不管具体操作
     ///
     fn handle(&mut self, msg: RecordRepairResult, _ctx: &mut Context<Self>) -> Self::Result {
         let r = msg.0;

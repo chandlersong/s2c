@@ -7,6 +7,7 @@ use crate::config::get_config;
 use crate::duck_db::DBProvider;
 use crate::errors::YuError;
 use crate::exchange::CloneHistoryFetcherFactory;
+use crate::websocket::subscribers::storage_subscriber::get_spot_stream_writer;
 use crate::websocket::subscribers::{AccountSyncActor, SpotStreamStorageActor};
 use actix::{Actor, Recipient};
 use li::actix_jobs::{AsyncRepeatTask, CronActor, TaskCompletionEvent};
@@ -129,9 +130,6 @@ async fn start_spot_websocket_stream_job(kline_subscribe_recipient: Recipient<We
         return Ok(());
     }
 
-    // 初始化数据库表
-    info!("✓ WebSocket 数据库表初始化完成");
-
     // 步骤1: 启动 WebSocket 客户端
     let mut client_builder = WebSocketClient::new(SPOT_STREAM_WEBSOCKET);
 
@@ -148,7 +146,7 @@ async fn start_spot_websocket_stream_job(kline_subscribe_recipient: Recipient<We
     info!("✓ WsMessageBus 已启动");
 
     // 步骤3: 启动 SpotStreamStorageActor
-    let storage_actor = SpotStreamStorageActor::new(spot_config.clone(), DBProvider::default()).start();
+    let storage_actor = get_spot_stream_writer();
     info!("✓ SpotStreamStorageActor 已启动");
 
     // 订阅 WsMessageBus 到存储 Actor
@@ -309,7 +307,6 @@ async fn start_spot_websocket_stream_job(kline_subscribe_recipient: Recipient<We
 }
 
 ///
-/// TODO 初始化的K线改成5分钟级别
 ///
 async fn start_refresh_history_data(origin_dash_board: BinanceDashboard, spot_kline_job: Recipient<TaskCompletionEvent>) -> Result<(), YuError> {
     let update_dashboard_task = origin_dash_board.clone();

@@ -1,18 +1,28 @@
 use crate::binance::history_task::HistoryPO;
 use crate::binance::models::po::KlinePo;
 use crate::binance::models::SpotStreamTradeRecordPo;
-use crate::config::SpotWebSocketStreamConfig;
+use crate::config::{get_config, SpotWebSocketStreamConfig};
 use crate::duck_db::DBProvider;
-use actix::{Actor, AsyncContext, Context, Handler};
-use duckdb::params;
+use crate::errors::YuError;
+use actix::{Actor, Addr, AsyncContext, Context, Handler};
+use duckdb::{params, DuckdbConnectionManager};
 use log::{debug, error, info};
+use r2d2::Pool;
+use std::sync::OnceLock;
 use std::time::Duration;
 use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamResponse;
 
+pub(crate) static SPOT_STREAM_WRITER_ADDR: OnceLock<Addr<SpotStreamStorageActor>> = OnceLock::new();
+
+pub fn get_spot_stream_writer() -> Addr<SpotStreamStorageActor> {
+    SPOT_STREAM_WRITER_ADDR
+        .get_or_init(|| SpotStreamStorageActor::start_new().unwrap())
+        .clone()
+}
+
 /// 存储订阅者 Actor
 /// 接收 Trade 和 Depth 事件，缓冲并批量写入 DuckDB
-/// TODO:
-/// 定时删除旧信息
+/// TODO:  定时删除旧信息
 pub struct SpotStreamStorageActor {
     config: SpotWebSocketStreamConfig,
     db: DBProvider,
@@ -36,6 +46,28 @@ impl SpotStreamStorageActor {
             kline_buffer: Vec::new(),
             flushed_klines: 0,
         }
+    }
+
+    pub fn start_new() -> Result<Addr<Self>, YuError> {
+        let config = get_config();
+
+        // 检查是否启用了 WebSocket 功能
+        let ws_config = match &config.binance_websocket {
+            Some(ws) => ws,
+            None => {
+                info!("binance_websocket 配置未启用，跳过 WebSocket 任务");
+                return Err(YuError::new("binance_websocket 配置未启用，跳过 WebSocket 任务"));
+            }
+        };
+
+        let spot_config = match &ws_config.spot_stream {
+            Some(spot) => spot,
+            None => {
+                info!("binance_websocket.spot 配置未启用，跳过 Spot WebSocket 任务");
+                return Err(YuError::new("binance_websocket 配置未启用，跳过 WebSocket 任务"));
+            }
+        };
+        Ok(SpotStreamStorageActor::new(spot_config.clone(), DBProvider::default()).start())
     }
 
     fn get_trade_batch_size(&self) -> usize {
