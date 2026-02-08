@@ -1,5 +1,5 @@
 # 查询BTCUSDT，5分钟K线，从2023-08-21 00:00:00到2023-08-22 00:00:00（UTC时间
-GET https://api.binance.com/api/v3/klines
+GET https://api.binance.com/api/v3/lines
     ?symbol=BTCUSDT
     &interval=5m
     &startTime=1692614400000

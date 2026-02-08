@@ -1,4 +1,4 @@
-use crate::binance::binance_db_consts::BinanceTables::{SpotKline, SwapKline};
+use crate::binance::binance_db_consts::BinanceTables::SpotKline;
 use crate::binance::binance_db_consts::ALL_BINANCE_TABLES;
 use crate::binance::bn_dashboard::{init_market_depth_dashboard, BinanceDashboard, MarketDepthDashBoard};
 use crate::binance::history_task::{DuckDBHistoryDataWriter, InitialHistoryTask};
@@ -8,7 +8,7 @@ use crate::duck_db::DBProvider;
 use crate::errors::YuError;
 use crate::exchange::CloneHistoryFetcherFactory;
 use crate::websocket::subscribers::storage_subscriber::get_spot_stream_writer;
-use crate::websocket::subscribers::{AccountSyncActor, SpotStreamStorageActor};
+use crate::websocket::subscribers::AccountSyncActor;
 use actix::{Actor, Recipient};
 use li::actix_jobs::{AsyncRepeatTask, CronActor, TaskCompletionEvent};
 use li::subscribe_event;
@@ -316,7 +316,7 @@ async fn start_refresh_history_data(origin_dash_board: BinanceDashboard, spot_kl
     let spot_kline_fetcher: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonParam, BinanceKline> =
         CloneHistoryFetcherFactory::new(base_spot_kline_fetcher);
 
-    let spot_data_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SpotKline, SymbolType::Spot));
+    let spot_data_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SpotKline));
 
     let spot_kline_task = InitialHistoryTask::<_, _, KlinePo, BinanceKline, BinanceDashboard>::new(
         spot_kline_fetcher,

@@ -1,5 +1,5 @@
 use chrono::{DateTime, Datelike, Duration as ChronoDuration, TimeZone, Timelike, Utc};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 use tokio::time::Instant;
 
 pub const ONE_HOUR_MS: u64 = 60 * 60 * 1000;
@@ -108,9 +108,8 @@ pub fn unix_2_readable(unix_timestamp_millis: &u64) -> DateTime<Utc> {
 pub type UnixTimeStamp = u64;
 
 pub fn unix_time_now_u64_utc() -> UnixTimeStamp {
-    let now = SystemTime::now();
-    let since_epoch = now.duration_since(UNIX_EPOCH).unwrap();
-    since_epoch.as_secs() * 1000 + u64::from(since_epoch.subsec_nanos()) / 1_000_000
+    let now = Utc::now();
+    now.timestamp_millis() as u64
 }
 
 #[cfg(test)]

@@ -178,7 +178,7 @@ use yue::binance::bn_restful_commands::{
 
 // 方式1：完整 URL
 let info = RequestInfo::new_full_url(
-    "https://api.binance.com/api/v3/klines",
+    "https://api.binance.com/api/v3/lines",
     false,                    // 无安全认证
     2,                        // 权重为2
     get_bn_spot_limit(),      // 限流器

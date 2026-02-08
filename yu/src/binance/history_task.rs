@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use duckdb::{appender_params_from_iter, DropBehavior};
 use li::actix_jobs::AsyncRepeatTask;
 use li::errors::LiError;
-use li::tools::time::{unix_2_readable, unix_time_now_u64_utc, ONE_HOUR_MS};
+use li::tools::time::{unix_2_readable, unix_time_now_u64_utc};
 use log::{debug, error, info};
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -41,16 +41,11 @@ pub trait HistoryDataWriter<O: HistoryPO, D: ExchangeDashBoard<TradingSymbol = T
 pub struct DuckDBHistoryDataWriter {
     provider: DBProvider,
     table: BinanceTables,
-    symbol_type: SymbolType,
 }
 
 impl DuckDBHistoryDataWriter {
-    pub fn new(provider: DBProvider, table: BinanceTables, symbol_type: SymbolType) -> Self {
-        DuckDBHistoryDataWriter {
-            provider,
-            table,
-            symbol_type,
-        }
+    pub fn new(provider: DBProvider, table: BinanceTables) -> Self {
+        DuckDBHistoryDataWriter { provider, table }
     }
 }
 
@@ -222,10 +217,11 @@ where
         R: HistoryPO<Source = V> + Clone,
     {
         debug!(
-            "update {} -> symbol: {}, latest: {}",
+            "update {} -> symbol: {}, time from {} to {}",
             task_name,
             param.get_symbol(),
-            unix_2_readable(&start_time)
+            unix_2_readable(&start_time),
+            unix_2_readable(&end_time)
         );
         let result = match kline_fetcher
             .get_all_kline_data(param.clone(), Some(interval), Some(start_time), Some(end_time))
@@ -469,7 +465,7 @@ mod tests {
         import_local_csv_and_assert(&conn, SpotKline.table_name().as_str(), csv_path.as_path(), 7)?;
 
         let factory = MockHistoryFetcherFactory {};
-        let data_writer = Arc::new(DuckDBHistoryDataWriter::new(db_provider.clone(), SpotKline, SymbolType::Spot));
+        let data_writer = Arc::new(DuckDBHistoryDataWriter::new(db_provider.clone(), SpotKline));
         let manager: InitialHistoryTask<MockHistoryFetcherFactory, CommonParam, KlinePo, BinanceKline, BinanceDashboard> = InitialHistoryTask::new(
             factory,
             dash_board,

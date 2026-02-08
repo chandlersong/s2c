@@ -116,6 +116,10 @@ impl AppConfig {
         self.data_retention_hours.unwrap_or(100000) // 默认7天
     }
 
+    pub fn get_data_retention_ms(&self) -> u64 {
+        self.get_data_retention_hours() * 60 * 60 * 1000
+    }
+
     ///
     /// 获得数据保存的最早整点时间戳，单位毫秒
     ///

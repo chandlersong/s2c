@@ -1,4 +1,5 @@
 use crate::http_client::DefaultRateLimiter;
+use li::tools::time::unix_time_now_u64_utc;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::collections::HashMap;
 use url::Url;
@@ -164,6 +165,10 @@ impl HistoryInterval {
         let interval_ms = self.to_milliseconds();
         // 向下取整到 interval 边界
         (timestamp / interval_ms) * interval_ms
+    }
+
+    pub fn get_now_close_unix_ms_utc(&self) -> u64 {
+        self.get_close_unix_ms(unix_time_now_u64_utc())
     }
 }
 

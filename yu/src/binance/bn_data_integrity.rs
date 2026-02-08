@@ -1,10 +1,20 @@
 use crate::binance::binance_db_consts::BinanceTables;
 use crate::data_integrity::check::ValidationStrategy;
-use crate::data_integrity::models::{ValidationGap, ValidationResult};
+use crate::data_integrity::models::{RepairRequest, ValidationGap, ValidationResult};
+use crate::data_integrity::repair::RepairStrategy;
 use crate::duck_db::DBProvider;
 use crate::errors::YuError;
+use crate::exchange::{CloneHistoryFetcherFactory, HistoryFetcherFactory};
+use crate::websocket::subscribers::storage_subscriber::get_spot_stream_writer;
 use async_trait::async_trait;
 use log::{debug, error, info};
+use yue::binance::bn_models::common::SymbolType;
+use yue::binance::bn_models::spot_restful::BinanceKline;
+use yue::binance::bn_models::spot_websocket_stream::{BinanceSpotWebSocketStreamResponse, KlineData, KlineStreamPayload};
+use yue::binance::bn_restful_commands::{SPOT_KLINE_HISTORY_COMMAND, SWAP_KLINE_HISTORY_COMMAND};
+use yue::binance::history_data::{CommonParam, HistoryFetcher, MuteHistoryParam, SimpleHistoryFetcher};
+use yue::errors::YueError;
+use yue::models::HistoryInterval;
 
 pub const BN_SPOT_KLINE_CHECK: &str = "binance_spot_check"; // WireMock server address
 
@@ -15,12 +25,13 @@ pub const BN_SPOT_KLINE_CHECK: &str = "binance_spot_check"; // WireMock server a
 ///
 #[derive(Clone)]
 pub struct SpotCheckStrategy {
-    db_provider: DBProvider, // Database provider for data access
-    table_name: String,      // Table to validate
-    time_column: String,     // 时间检测列，改列的时间都是unix时间戳，单位毫秒
-    symbol_column: String,   // symbol的column
-    interval_ms: u64,        // Interval in seconds for each validation chunk
-    max_allow_gap: u64,      // 当gap超过这点时间，就不算missing。主要是防止下假币反复查询。
+    db_provider: DBProvider,   // Database provider for data access
+    table_name: String,        // Table to validate
+    time_column: String,       // 时间检测列，改列的时间都是unix时间戳，单位毫秒
+    symbol_column: String,     // symbol的column
+    interval: HistoryInterval, // Interval in seconds for each validation chunk
+    max_allow_gap: u64,        // 当gap超过这点时间，就不算missing。主要是防止下假币反复查询。
+    data_retention_time: u64,  // 数据保留时间，超过这个时间的数据，不进行检测
 }
 
 ///
@@ -36,24 +47,35 @@ pub struct SpotCheckStrategy {
 /// 1. symbol是否完整。这个是另外建立一个检测策略，还是其他就另说。
 ///
 impl SpotCheckStrategy {
-    pub fn spot_check_strategy(db_source: Option<DBProvider>) -> Self {
+    pub fn spot_check_strategy(db_source: Option<DBProvider>, data_retention_time: u64) -> Self {
         let db_provider = db_source.unwrap_or_else(|| DBProvider::default());
         Self {
             db_provider,
             table_name: BinanceTables::SpotKline.table_name(),
             time_column: "candle_begin_time".to_string(),
             symbol_column: "symbol".to_string(),
-            interval_ms: 5 * 60 * 1000,         // 5分钟
-            max_allow_gap: 24 * 60 * 60 * 1000, //一天
+            interval: HistoryInterval::FiveMinutes, // 5分钟
+            max_allow_gap: 24 * 60 * 60 * 1000,     //一天
+            data_retention_time,
         }
     }
 
     // helper: count distinct time rows between [start, end]
-    fn count_distinct_between(conn: &mut duckdb::Connection, table: &str, time_col: &str, start: u64, end: u64) -> Result<u64, YuError> {
+    fn count_distinct_between(
+        &self,
+        conn: &mut duckdb::Connection,
+        table: &str,
+        symbol: &str,
+        time_col: &str,
+        start: u64,
+        end: u64,
+    ) -> Result<u64, YuError> {
         let sql = format!(
-            "SELECT COUNT(DISTINCT {time_col}) FROM {table} WHERE {time_col} >= ? AND {time_col} <= ?",
+            "SELECT COUNT(DISTINCT {time_col}) FROM {table} WHERE {time_col} >= ? AND {time_col} < ? AND {symbol_col}='{symbol}'",
             time_col = time_col,
-            table = table
+            table = table,
+            symbol_col = self.symbol_column,
+            symbol = symbol
         );
         let mut stmt = conn.prepare(&sql)?;
         let mut rows = stmt.query([start as i64, end as i64])?;
@@ -73,43 +95,54 @@ impl SpotCheckStrategy {
     /// 5. 用同样办法检查右半
     /// 6. 递归执行2-5步，直到找到所有缺失的时间段
     /// 7. 找出的缺失时间段。都加入到ValidationResult返回
+    ///
+    /// # gaps的要求
+    /// 1. end_time为数据库的close_time+1。
+    /// 2. 返回的gaps的start_time不允许小于start，end_time不允许大于end。
+    ///
+    /// 数据说明
+    /// 1. 数据库中的数据，candle_begin_time和close_time相差的是interval-1。
+    ///    - 比如说candle_begin_time是0， interval是300_000，那么close_time是299_999
+    ///
+    ///
     fn find_gaps_rec(
+        &self,
+        symbol: &str,
         conn: &mut duckdb::Connection,
         table: &str,
         time_col: &str,
-        interval_ms: u64,
+        interval: &HistoryInterval,
         start: u64,
         end: u64,
         gaps: &mut Vec<ValidationGap>,
     ) -> Result<(), YuError> {
-        if start > end {
+        let interval_ms = interval.to_milliseconds();
+        if start >= end {
             return Ok(());
         }
-        let expected = (end - start) / interval_ms + 1;
-        let actual = Self::count_distinct_between(conn, table, time_col, start, end)?;
+        let expected = (end - start) / interval_ms;
+        let actual = self.count_distinct_between(conn, table, symbol, time_col, start, end)?;
         if actual == expected {
             return Ok(());
         }
-        // if the window is a single slot, it's missing
-        if start + interval_ms >= end {
-            // record a missing gap
+        // 基准情况：如果期望的 slot 数为 1，则该窗口只包含单个时间槽，且已经排除了 actual==expected 的情况，说明该槽缺失
+        if expected == 1 {
+            // 记录缺失区间：end_time 使用修正后的 gap_end
             gaps.push(ValidationGap::MissingData {
-                symbol: "*".to_string(),
+                symbol: symbol.to_string(),
                 trade_type: "SPOT".to_string(),
                 start_time: start,
-                end_time: end,
+                end_time: start + interval_ms,
                 table: table.to_string(),
             });
             return Ok(());
         }
         let mid = start + ((end - start) / 2 / interval_ms) * interval_ms; // align mid to interval boundary
-                                                                           // ensure mid >= start
-        let mid = if mid <= start { start + interval_ms } else { mid };
 
         // left
-        Self::find_gaps_rec(conn, table, time_col, interval_ms, start, mid - interval_ms, gaps)?;
+        self.find_gaps_rec(symbol, conn, table, time_col, interval, start, mid, gaps)?;
         // right
-        Self::find_gaps_rec(conn, table, time_col, interval_ms, mid, end, gaps)?;
+        self.find_gaps_rec(symbol, conn, table, time_col, interval, mid, end, gaps)?;
         Ok(())
     }
 
@@ -193,23 +226,25 @@ impl SpotCheckStrategy {
 
     ///
     /// # 检查单个symbol的流程
-    /// 1. 从数据库中获取时间列的最小值和最大值，min_timestamp,max_timestamp
-    /// 2. 检测max_timestamp，是否和现在时间点相差是否小于interval_seconds，如果小于，直接到第5步。否则执行第三步
-    /// 3. 检查max_timestamp和现在时间的差是否大于max_allow_gap，如果大于，则返回空，否则执行第4步
-    /// 4. 取最近的整点unix time，然后不断加上interval_seconds，取最大的小于当前时间的为max_timestamp
-    /// 5. 计算min_timestamp,max_timestamp有多少个interval_seconds的时间段，为time_slots
-    /// 6. 通过sql，判断是否记录数是否等于time_slots，如果等于，说明没有缺失数据，返回Ok(None)
-    /// 7. 如果不等于，说明有缺失数据，通过sql，通过二分法开始查找缺失的时间段。
+    /// 1. 从数据库中获取时间列的最小值和最大值，min_timestamp_db,max_timestamp_db
+    /// 2. 检查max_timestamp_db和max_timestamp的差是否大于max_allow_gap，如果大于，则返回空，否则继续执行
+    /// 3. 在(max_timestamp-data_retention_time)和min_timestamp_db去最大值为min_timestamp
+    /// 4. 计算min_timestamp,max_timestamp有多少个interval_seconds的时间段，为time_slots
+    /// 5. 通过sql，判断是否记录数是否等于time_slots，如果等于，说明没有缺失数据，返回Ok(None)
+    /// 6. 如果不等于，说明有缺失数据，通过sql，通过二分法开始查找缺失的时间段。
     ///
-    fn check_one_symbol(&self, symbol: &str) -> Result<Vec<ValidationGap>, YuError> {
+    fn check_one_symbol(&self, symbol: &str, max_timestamp: u64) -> Result<Vec<ValidationGap>, YuError> {
         debug!("check_one_symbol symbol: {} at {}", symbol, self.time_column);
         let mut conn = self.db_provider.acquire()?;
+        let interval_ms = self.interval.to_milliseconds();
+
+        // 使用参数化查询以避免注入，并安全获取 min/max
         let sql = format!(
-            "SELECT MIN({}), MAX({}) FROM {} Where {} = {}",
-            self.time_column, self.time_column, self.table_name, self.symbol_column, symbol
+            "SELECT MIN({}), MAX({}) FROM {} WHERE {} = ?",
+            self.time_column, self.time_column, self.table_name, self.symbol_column
         );
         let mut stmt = conn.prepare(&sql)?;
-        let mut rows = stmt.query([])?;
+        let mut rows = stmt.query([symbol])?;
         let (min_ts_opt, max_ts_opt) = if let Some(row) = rows.next()? {
             let min_v: Option<i64> = row.get(0).ok();
             let max_v: Option<i64> = row.get(1).ok();
@@ -221,48 +256,47 @@ impl SpotCheckStrategy {
         if min_ts_opt.is_none() || max_ts_opt.is_none() {
             return Ok(vec![]);
         }
-        let min_ts = min_ts_opt.unwrap();
-        let mut max_ts = max_ts_opt.unwrap();
+        let min_ts_db = min_ts_opt.unwrap();
+        let max_ts_db = max_ts_opt.unwrap();
 
-        let now_ms = chrono::Utc::now().timestamp_millis() as u64;
-        if (now_ms - max_ts) > self.max_allow_gap {
-            // 超过最大gap时间，不进行检测，直接返回空
+        // 先比较 DB 中的 max_ts 与传入的 max_timestamp：如果两者差距过大（超过 max_allow_gap），则认为数据可能被下架或不可靠，放弃检测
+        let diff = if max_ts_db > max_timestamp {
+            max_ts_db - max_timestamp
+        } else {
+            max_timestamp - max_ts_db
+        };
+        if diff > self.max_allow_gap {
             info!(
-                "symbol:{} 可能已经下架，不再检测，now_ms:{}, max_ts:{},max allow gap:{}",
-                symbol, now_ms, max_ts, self.max_allow_gap
+                "symbol:{} db_max_ts and provided max_timestamp gap too large, skip check, db_max_ts:{}, provided_max_ts:{}, max_allow_gap:{}",
+                symbol, max_ts_db, max_timestamp, self.max_allow_gap
             );
             return Ok(vec![]);
         }
 
-        if now_ms > max_ts {
-            let delta = now_ms - max_ts;
-            if delta > self.interval_ms {
-                // align to interval boundary from earliest point: align max_ts to the latest slot before now
-                let remainder = max_ts % self.interval_ms;
-                max_ts = max_ts - remainder;
-                // DO NOT advance max_ts toward now_ms to avoid creating a huge search window which would
-                // dramatically increase the number of expected slots and make binary search impractical.
-            }
-        }
+        // 根据 data_retention_time 限制最小时间：取 DB min 和 (provided_max_timestamp - retention) 的较大者
+        let retention_floor = max_timestamp.saturating_sub(self.data_retention_time);
+        let min_timestamp = std::cmp::max(min_ts_db, retention_floor);
 
-        if max_ts < min_ts {
+        if max_timestamp <= min_timestamp {
+            //AI生成的，健壮编程
             return Ok(vec![]);
         }
 
-        let expected_slots = (max_ts - min_ts) / self.interval_ms + 1;
-        let actual = Self::count_distinct_between(&mut conn, &self.table_name, &self.time_column, min_ts, max_ts)?;
+        let expected_slots = (max_timestamp - min_timestamp) / interval_ms + 1;
+        let actual = self.count_distinct_between(&mut conn, &self.table_name, symbol, &self.time_column, min_timestamp, max_timestamp)?;
         if actual == expected_slots {
             return Ok(vec![]);
         }
 
         let mut gaps: Vec<ValidationGap> = Vec::new();
-        Self::find_gaps_rec(
+        self.find_gaps_rec(
+            symbol,
             &mut conn,
             &self.table_name,
             &self.time_column,
-            self.interval_ms,
-            min_ts,
-            max_ts,
+            &self.interval,
+            min_timestamp,
+            max_timestamp,
             &mut gaps,
         )?;
 
@@ -275,7 +309,6 @@ impl SpotCheckStrategy {
         Ok(merged_gaps)
     }
 }
-
 #[async_trait]
 impl ValidationStrategy for SpotCheckStrategy {
     ///
@@ -313,12 +346,13 @@ impl ValidationStrategy for SpotCheckStrategy {
             return Ok(None);
         }
 
+        let now = self.interval.get_now_close_unix_ms_utc();
         // 2. 并行检查每个 symbol（check_one_symbol 是同步 DB 操作，使用 spawn_blocking）
         let mut handles = Vec::new();
         for sym in symbols.into_iter() {
             let strategy = self.clone();
             let s = sym.clone();
-            let h = tokio::task::spawn_blocking(move || strategy.check_one_symbol(&s));
+            let h = tokio::task::spawn_blocking(move || strategy.check_one_symbol(&s, now));
             handles.push(h);
         }
 
@@ -327,7 +361,9 @@ impl ValidationStrategy for SpotCheckStrategy {
         for h in handles {
             match h.await {
                 Ok(Ok(mut gaps)) => {
-                    all_gaps.append(&mut gaps);
+                    if !gaps.is_empty() {
+                        all_gaps.append(&mut gaps);
+                    }
                 }
                 Ok(Err(e)) => {
                     error!("check_one_symbol returned error: {:?}", e);
@@ -344,12 +380,10 @@ impl ValidationStrategy for SpotCheckStrategy {
             return Ok(None);
         }
 
-        // 合并并返回 ValidationResult
-        let merged = Self::merge_gaps(&mut all_gaps);
         let result = ValidationResult {
             id: yue::tools::get_snow_flake_id_u64(),
             strategy: self.name().to_string(),
-            gaps: merged,
+            gaps: all_gaps,
             retry_count: 0,
             error: None,
         };
@@ -359,6 +393,149 @@ impl ValidationStrategy for SpotCheckStrategy {
 
     fn name(&self) -> &'static str {
         BN_SPOT_KLINE_CHECK
+    }
+}
+
+///
+/// 修复K线的问题
+///
+pub struct KlineGapRepairStrategy {
+    symbol_type: SymbolType,
+}
+
+impl KlineGapRepairStrategy {
+    pub fn spot() -> Self {
+        Self {
+            symbol_type: SymbolType::Spot,
+        }
+    }
+}
+
+#[async_trait]
+impl RepairStrategy for KlineGapRepairStrategy {
+    ///
+    /// 1.loop req中的ValidationGap
+    /// 2.通过HistoryFetcherFactory,来获取所有的kline
+    /// 3.通过SPOT_STREAM_WRITER_ADDR，获得addr，发送消息去保存
+    ///
+    async fn repair(&self, req: RepairRequest) -> Result<(), String> {
+        if req.gaps.is_empty() {
+            return Ok(());
+        }
+
+        let base_spot_kline_fetcher = match self.symbol_type {
+            SymbolType::Spot => SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND),
+            SymbolType::Swap => SimpleHistoryFetcher::new(&SWAP_KLINE_HISTORY_COMMAND),
+            _ => {
+                return Err(format!("KlineGapRepairStrategy does not support symbol type: {:?}", self.symbol_type));
+            }
+        };
+        let spot_kline_fetcher_factory: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonParam, BinanceKline> =
+            CloneHistoryFetcherFactory::new(base_spot_kline_fetcher);
+        let writer = get_spot_stream_writer();
+
+        // 并发拉取：使用 Semaphore 控制并发量，避免同时发起过多请求
+        use std::sync::Arc;
+        use tokio::sync::Semaphore;
+
+        let concurrency_limit = 10usize; // 可调整
+        let sem = Arc::new(Semaphore::new(concurrency_limit));
+
+        let mut handles = Vec::new();
+        for gap in req.gaps.into_iter() {
+            match gap {
+                ValidationGap::MissingData {
+                    symbol,
+                    start_time,
+                    end_time,
+                    table: _,
+                    ..
+                } => {
+                    let factory = spot_kline_fetcher_factory.clone();
+                    let writer_clone = writer.clone();
+                    let sem_clone = sem.clone();
+
+                    // spawn 一个异步任务来处理该 gap
+                    let handle = tokio::spawn(async move {
+                        // 获取信号量许可
+                        let _permit = sem_clone.acquire().await;
+
+                        let fetcher = factory.create_fetcher();
+                        let param = <CommonParam as MuteHistoryParam>::initial(symbol.clone(), 1000, HistoryInterval::FiveMinutes);
+                        let fetch_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher
+                            .get_all_kline_data(param, Some(HistoryInterval::FiveMinutes), Some(start_time), Some(end_time))
+                            .await;
+
+                        match fetch_res {
+                            Ok((lines, _fail_times)) => {
+                                let klines: Vec<BinanceKline> = lines;
+                                if klines.is_empty() {
+                                    debug!("repair(task): no lines fetched for {} {}-{}", symbol, start_time, end_time);
+                                    return Ok::<(), String>(());
+                                }
+                                for bk in klines.into_iter() {
+                                    let k = KlineData {
+                                        start_time: bk.open_time,
+                                        close_time: bk.close_time,
+                                        symbol: symbol.clone(),
+                                        interval: "5m".to_string(),
+                                        first_trade_id: -1,
+                                        last_trade_id: -1,
+                                        open: bk.open,
+                                        close: bk.close,
+                                        high: bk.high,
+                                        low: bk.low,
+                                        volume: bk.volume,
+                                        trade_count: bk.number_of_trades,
+                                        is_closed: true,
+                                        quote_volume: bk.quote_asset_volume,
+                                        taker_buy_base_volume: bk.taker_buy_base_asset_volume,
+                                        taker_buy_quote_volume: bk.taker_buy_quote_asset_volume,
+                                        ignore: "".to_string(),
+                                    };
+                                    let payload = KlineStreamPayload {
+                                        event: "kline".to_string(),
+                                        event_time: k.close_time,
+                                        symbol: symbol.clone(),
+                                        kline: k,
+                                    };
+                                    let _ = writer_clone.try_send(BinanceSpotWebSocketStreamResponse::Kline(payload));
+                                }
+                                Ok::<(), String>(())
+                            }
+                            Err(e) => {
+                                error!("repair(task): failed to fetch lines for {}: {:?}", symbol, e);
+                                Err(format!("{}:{}", symbol, e))
+                            }
+                        }
+                    });
+                    handles.push(handle);
+                }
+                other => {
+                    debug!("repair: unsupported gap variant: {:?}", other);
+                }
+            }
+        }
+
+        // 收集所有任务结果
+        let mut errors: Vec<String> = Vec::new();
+        for h in handles {
+            match h.await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => errors.push(e),
+                Err(join_err) => errors.push(format!("join error: {}", join_err)),
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("; "))
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "kline_repair_strategy"
     }
 }
 
@@ -380,17 +557,25 @@ mod tests {
         let mut conn = db.acquire()?;
         conn.execute_batch(CREATE_SPOT_KLINE_TABLE)?;
         let t0: i64 = 1_700_000_000;
-        let interval = 5 * 60 * 1000;
+        let symbol = "BTCUSDT";
+        let interval = HistoryInterval::FiveMinutes;
+        let interval_ms = interval.to_milliseconds() as i64;
         for i in 0..5 {
-            let ts = t0 + i * interval;
-            let sql = format!("INSERT INTO bn_spot_kline (id, symbol, candle_begin_time, open, high, low, close, volume, quote_volume, number_of_trades, taker_buy_base_asset_volume, taker_buy_quote_asset_volume, close_time, interval, first_trade_id, last_trade_id) VALUES ({}, 'BTCUSDT', {}, 0,0,0,0,0,0,0,0,0,{}, 1, 0, 0);", i, ts, ts+interval);
+            let ts = t0 + i * interval_ms;
+            let close_time = ts + interval_ms - 1;
+            let sql = format!("INSERT INTO bn_spot_kline (id, symbol, candle_begin_time, open, high, low, close, volume, quote_volume, number_of_trades, taker_buy_base_asset_volume, taker_buy_quote_asset_volume, close_time, interval, first_trade_id, last_trade_id) VALUES ({}, '{}', {}, 0,0,0,0,0,0,0,0,0,{}, 1, 0, 0);", i, symbol,ts, close_time);
             conn.execute_batch(&sql)?;
         }
 
+        let check_strategy = SpotCheckStrategy::spot_check_strategy(
+            Some(db.clone()),
+            100 * 24 * 60 * 60 * 1000, // 100 days retention
+        );
+
         let start = t0 as u64;
-        let end = (t0 + (5 - 1) * interval) as u64;
+        let end = (t0 + (5 - 1) * interval_ms) as u64;
         let mut gaps: Vec<ValidationGap> = Vec::new();
-        SpotCheckStrategy::find_gaps_rec(&mut conn, "bn_spot_kline", "candle_begin_time", interval as u64, start, end, &mut gaps)?;
+        check_strategy.find_gaps_rec(symbol, &mut conn, "bn_spot_kline", "candle_begin_time", &interval, start, end, &mut gaps)?;
         assert!(gaps.is_empty(), "expected no gaps but found: {:?}", gaps);
         Ok(())
     }
@@ -405,33 +590,205 @@ mod tests {
         let mut conn = db.acquire()?;
         conn.execute_batch(CREATE_SPOT_KLINE_TABLE)?;
         let t0: i64 = 1_700_000_000;
-        let interval = 5 * 60 * 1000;
+        let interval = HistoryInterval::FiveMinutes;
+        let interval_ms = interval.to_milliseconds() as i64;
+        let expected_symbol = "BTCUSDT";
         for i in 0..5 {
             if i == 2 {
                 continue;
             }
-            let ts = t0 + i * interval;
-            let sql = format!("INSERT INTO bn_spot_kline (id, symbol, candle_begin_time, open, high, low, close, volume, quote_volume, number_of_trades, taker_buy_base_asset_volume, taker_buy_quote_asset_volume, close_time, interval, first_trade_id, last_trade_id) VALUES ({}, 'BTCUSDT', {}, 0,0,0,0,0,0,0,0,0,{}, 1, 0, 0);", i, ts, ts+interval);
+            let ts = t0 + i * interval_ms;
+            let close_time = ts + interval_ms - 1;
+            let sql = format!("INSERT INTO bn_spot_kline (id, symbol, candle_begin_time, open, high, low, close, volume, quote_volume, number_of_trades, taker_buy_base_asset_volume, taker_buy_quote_asset_volume, close_time, interval, first_trade_id, last_trade_id) VALUES ({}, '{}', {}, 0,0,0,0,0,0,0,0,0,{}, 1, 0, 0);", i, expected_symbol, ts, close_time);
             conn.execute_batch(&sql)?;
         }
-
+        let check_strategy = SpotCheckStrategy::spot_check_strategy(
+            Some(db.clone()),
+            100 * 24 * 60 * 60 * 1000, // 100 days retention
+        );
         let start = t0 as u64;
-        let end = (t0 + (5 - 1) * interval) as u64;
+        let end = (t0 + 5 * interval_ms) as u64;
         let mut gaps: Vec<ValidationGap> = Vec::new();
-        SpotCheckStrategy::find_gaps_rec(&mut conn, "bn_spot_kline", "candle_begin_time", interval as u64, start, end, &mut gaps)?;
+        check_strategy.find_gaps_rec(
+            expected_symbol,
+            &mut conn,
+            "bn_spot_kline",
+            "candle_begin_time",
+            &interval,
+            start,
+            end,
+            &mut gaps,
+        )?;
         assert!(!gaps.is_empty(), "expected gaps but found none");
         // ensure one gap covers the missing slot at t0 + 2*interval
-        let missing_ts = (t0 + 2 * interval) as u64;
+        let missing_ts = (t0 + 2 * interval_ms) as u64;
+        let missing_close_ts = missing_ts + interval_ms as u64;
         let mut found = false;
         for g in gaps.iter() {
-            if let ValidationGap::MissingData { start_time, end_time, .. } = g {
-                if *start_time <= missing_ts && *end_time >= missing_ts {
+            if let ValidationGap::MissingData {
+                symbol,
+                start_time,
+                end_time,
+                ..
+            } = g
+            {
+                if *start_time == missing_ts && *end_time == missing_close_ts {
+                    assert_eq!(symbol, expected_symbol);
                     found = true;
                     break;
                 }
             }
         }
         assert!(found, "missing slot not detected in gaps: {:?}", gaps);
+        Ok(())
+    }
+
+    /// 测试说明（单个缺失槽）:
+    /// 场景: 数据库中有两列不同的symbol。BTCUSDT和ETHUSDT，在一段连续时间序列中刻意跳过中间一个时间槽（slot），其他槽均插入
+    /// 输入: BTCUSDT 插入 0,1,3,4 四个槽的数据，缺少第 2 号槽，ETH为全部槽都是满的
+    /// 预期: find_gaps_rec 能检测到一个 MissingData gap 覆盖缺失槽的时间点，且为BTCUSDT
+    #[actix_rt::test]
+    async fn test_find_gaps_rec_missing_gap_d_symbol() -> Result<(), YuError> {
+        let db = create_memory_db_provider();
+        let mut conn = db.acquire()?;
+        conn.execute_batch(CREATE_SPOT_KLINE_TABLE)?;
+        let t0: i64 = 1_700_000_000;
+        let interval = HistoryInterval::FiveMinutes;
+        let interval_ms = interval.to_milliseconds() as i64;
+        let expected_symbol = "BTCUSDT";
+        for i in 0..5 {
+            let ts = t0 + i * interval_ms;
+            let close_time = ts + interval_ms - 1;
+            if i == 2 {
+                println!("missing data from {} to {}", ts, close_time);
+                continue;
+            }
+            let sql = format!("INSERT INTO bn_spot_kline (id, symbol, candle_begin_time, open, high, low, close, volume, quote_volume, number_of_trades, taker_buy_base_asset_volume, taker_buy_quote_asset_volume, close_time, interval, first_trade_id, last_trade_id) VALUES ({}, '{}', {}, 0,0,0,0,0,0,0,0,0,{}, 1, 0, 0);", i, expected_symbol, ts, close_time);
+            conn.execute_batch(&sql)?;
+        }
+
+        let expected_second_symbol = "ETHUSDT";
+        for i in 0..5 {
+            if i == 3 {
+                continue;
+            }
+            let ts = t0 + i * interval_ms;
+            let close_time = ts + interval_ms - 1;
+            let sql = format!("INSERT INTO bn_spot_kline (id, symbol, candle_begin_time, open, high, low, close, volume, quote_volume, number_of_trades, taker_buy_base_asset_volume, taker_buy_quote_asset_volume, close_time, interval, first_trade_id, last_trade_id) VALUES ({}, '{}', {}, 0,0,0,0,0,0,0,0,0,{}, 1, 0, 0);", i, expected_second_symbol, ts, close_time);
+            conn.execute_batch(&sql)?;
+        }
+        let check_strategy = SpotCheckStrategy::spot_check_strategy(
+            Some(db.clone()),
+            100 * 24 * 60 * 60 * 1000, // 100 days retention
+        );
+        let start = t0 as u64;
+        let end = (t0 + (5 - 1) * interval_ms) as u64;
+        let mut gaps: Vec<ValidationGap> = Vec::new();
+        check_strategy.find_gaps_rec(
+            expected_symbol,
+            &mut conn,
+            "bn_spot_kline",
+            "candle_begin_time",
+            &interval,
+            start,
+            end,
+            &mut gaps,
+        )?;
+        assert!(!gaps.is_empty(), "expected gaps but found none");
+        // ensure one gap covers the missing slot at t0 + 2*interval
+        let missing_ts = (t0 + 2 * interval_ms) as u64;
+        let missing_close_ts = missing_ts + interval_ms as u64;
+        let mut found = false;
+        for g in gaps.iter() {
+            if let ValidationGap::MissingData {
+                symbol,
+                start_time,
+                end_time,
+                ..
+            } = g
+            {
+                if *start_time == missing_ts && *end_time == missing_close_ts {
+                    assert_eq!(symbol, expected_symbol);
+                    found = true;
+                    break;
+                }
+            }
+        }
+        assert!(found, "missing slot not detected in gaps: {:?}", gaps);
+        Ok(())
+    }
+
+    /// 测试说明（缺失多个槽）:
+    /// 场景: 完整数据是 0-9 共10个槽，刻意缺失多个槽（2,3,6,7,9）
+    /// 输入: 插入 0,1,4,5,8 五个槽的数据，缺少 2,3,6,7,9 五个槽
+    /// 预期: find_gaps_rec 能检测到至少一个 MissingData gap 覆盖缺失槽的时间点
+    #[actix_rt::test]
+    async fn test_find_gaps_rec_missing_multi_gap() -> Result<(), YuError> {
+        let db = create_memory_db_provider();
+        let mut conn = db.acquire()?;
+        conn.execute_batch(CREATE_SPOT_KLINE_TABLE)?;
+        let t0: i64 = 1_700_000_000;
+        let interval = HistoryInterval::FiveMinutes;
+        let interval_ms = interval.to_milliseconds() as i64;
+        let mut missing_indices = vec![2, 3, 6, 7, 9];
+        let expected_symbol = "BTCUSDT";
+        // 插入 0..9 的槽，跳过 missing_indices
+        for i in 0..10 {
+            if missing_indices.contains(&i) {
+                continue;
+            }
+            let ts = t0 + i * interval_ms;
+            let close_time = ts + interval_ms - 1;
+            let sql = format!("INSERT INTO bn_spot_kline (id, symbol, candle_begin_time, open, high, low, close, volume, quote_volume, number_of_trades, taker_buy_base_asset_volume, taker_buy_quote_asset_volume, close_time, interval, first_trade_id, last_trade_id) VALUES ({}, '{}', {}, 0,0,0,0,0,0,0,0,0,{}, 1, 0, 0);", i, expected_symbol, ts, close_time);
+            conn.execute_batch(&sql)?;
+        }
+        let check_strategy = SpotCheckStrategy::spot_check_strategy(
+            Some(db.clone()),
+            100 * 24 * 60 * 60 * 1000, // 100 days retention
+        );
+
+        let start = t0 as u64;
+        let end = (t0 + 10 * interval_ms) as u64;
+        let mut gaps: Vec<ValidationGap> = Vec::new();
+        check_strategy.find_gaps_rec(
+            expected_symbol,
+            &mut conn,
+            "bn_spot_kline",
+            "candle_begin_time",
+            &interval,
+            start,
+            end,
+            &mut gaps,
+        )?;
+        assert!(!gaps.is_empty(), "expected gaps but found none");
+
+        // 验证每个缺失索引都能被检测到
+        let mut found_missing = std::collections::HashSet::new();
+
+        for g in gaps.iter() {
+            if let ValidationGap::MissingData {
+                symbol,
+                start_time,
+                end_time,
+                ..
+            } = g
+            {
+                let idx = ((*start_time as i64 - t0) / interval_ms) as i64;
+                assert!(missing_indices.contains(&idx), "检测到不该缺失的槽 idx:{}", idx);
+                // 按值删除已发现的缺失索引（使用 retain）
+                missing_indices.retain(|&v| v != idx);
+                assert!(idx <= 9, "查询不再区间内的时间，idx:{}", idx);
+                // 检查端点大小
+                assert_eq!(*end_time, *start_time + interval_ms as u64);
+                found_missing.insert(idx);
+                assert_eq!(symbol, expected_symbol)
+            }
+        }
+        assert!(missing_indices.is_empty(), "有些漏洞没有找出，{:?}", missing_indices);
+        assert_eq!(gaps.len(), 5, "判断不对");
+        for m in missing_indices.into_iter() {
+            assert!(found_missing.contains(&(m)), "missing slot {} not detected, gaps: {:?}", m, gaps);
+        }
         Ok(())
     }
 
