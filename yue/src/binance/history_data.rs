@@ -477,13 +477,15 @@ mod tests {
         let interval_ms = 3600000u64; // 1h
         let first_start = base_open;
         let second_start = base_open + (first_batch.len() as u64) * interval_ms;
+        let close_time = base_open + 1200 * 3600000; // 最后一条的 close_time
+        let adjusted_end_time = HistoryInterval::OneHour.get_close_unix_ms(close_time) + HistoryInterval::OneHour.to_milliseconds() - 1;
 
         Mock::given(method("GET"))
             .and(path("/api/v3/klines"))
             .and(query_param("symbol", "BTCUSDT"))
             .and(query_param("interval", "1h"))
             .and(query_param("startTime", &first_start.to_string()))
-            .and(query_param("endTime", "1770649199999"))
+            .and(query_param("endTime", &adjusted_end_time.to_string()))
             .and(query_param("limit", "1000"))
             .respond_with(ResponseTemplate::new(200).set_body_json(first_batch))
             .expect(1)
@@ -496,7 +498,7 @@ mod tests {
             .and(query_param("symbol", "BTCUSDT"))
             .and(query_param("interval", "1h"))
             .and(query_param("startTime", &second_start.to_string()))
-            .and(query_param("endTime", "1770649199999"))
+            .and(query_param("endTime", &adjusted_end_time.to_string()))
             .and(query_param("limit", "1000"))
             .respond_with(ResponseTemplate::new(200).set_body_json(second_batch))
             .expect(1)
@@ -506,7 +508,7 @@ mod tests {
         let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonParam::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
         let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher
-            .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), Some(1609459200000), None)
+            .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), Some(1609459200000), Some(close_time))
             .await;
         assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
         let (kline, _) = kline_res.unwrap();
