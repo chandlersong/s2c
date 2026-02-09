@@ -371,7 +371,6 @@ mod tests {
     use crate::errors::YueError;
     use crate::http_client::init_http_client;
     use crate::models::HistoryInterval;
-    use li::tools::time::ONE_MILL_SECOND_MS;
     use serde_json::json;
     use serial_test::serial;
     use std::net::TcpListener;
@@ -419,7 +418,7 @@ mod tests {
         let mut mock_klines = vec![];
         for i in 0..500 {
             let open_time = 1609459200000 + i * 3600000; // 1 hour intervals
-            let close_time = open_time + 3600000; // 对齐到1h边界
+            let close_time = open_time + 3600000 - 1; // 对齐到1h边界
             mock_klines.push(create_mock_kline(open_time, close_time));
         }
 
@@ -461,7 +460,7 @@ mod tests {
         let mut first_batch = vec![];
         for i in 0..1000 {
             let open_time = 1609459200000 + i * 3600000;
-            let close_time = open_time + 3600000; // 对齐到1h边界
+            let close_time = open_time + 3600000 - 1; // 对齐到1h边界
             first_batch.push(create_mock_kline(open_time, close_time));
         }
 
@@ -469,7 +468,7 @@ mod tests {
         let mut second_batch = vec![];
         for i in 1000..1200 {
             let open_time = 1609459200000 + i * 3600000;
-            let close_time = open_time + 3600000; // 对齐到1h边界
+            let close_time = open_time + 3600000 - 1; // 对齐到1h边界
             second_batch.push(create_mock_kline(open_time, close_time));
         }
 
@@ -477,13 +476,14 @@ mod tests {
         let base_open = 1609459200000u64;
         let interval_ms = 3600000u64; // 1h
         let first_start = base_open;
-        let second_start = base_open + (first_batch.len() as u64) * interval_ms + ONE_MILL_SECOND_MS;
+        let second_start = base_open + (first_batch.len() as u64) * interval_ms;
 
         Mock::given(method("GET"))
             .and(path("/api/v3/klines"))
             .and(query_param("symbol", "BTCUSDT"))
             .and(query_param("interval", "1h"))
             .and(query_param("startTime", &first_start.to_string()))
+            .and(query_param("endTime", "1770649199999"))
             .and(query_param("limit", "1000"))
             .respond_with(ResponseTemplate::new(200).set_body_json(first_batch))
             .expect(1)
@@ -496,6 +496,7 @@ mod tests {
             .and(query_param("symbol", "BTCUSDT"))
             .and(query_param("interval", "1h"))
             .and(query_param("startTime", &second_start.to_string()))
+            .and(query_param("endTime", "1770649199999"))
             .and(query_param("limit", "1000"))
             .respond_with(ResponseTemplate::new(200).set_body_json(second_batch))
             .expect(1)
@@ -555,7 +556,7 @@ mod tests {
         let mut mock_klines = vec![];
         for i in 0..1000 {
             let open_time = 1609459200000 + i * 3600000;
-            let close_time = open_time + 3600000; // 对齐到1h边界
+            let close_time = open_time + 3600000 - 1; // 对齐到1h边界
             mock_klines.push(create_mock_kline(open_time, close_time));
         }
 
@@ -563,15 +564,18 @@ mod tests {
 
         // 对于恰好 1000 条的场景，第二次请求应从第一批最后一条 close_time + 1ms 开始
         let base_open = 1609459200000u64;
+        let close_time = base_open + (mock_klines.len() as u64) * 3600000; // 最后一条的 close_time
+        let adjusted_end_time = HistoryInterval::OneHour.get_close_unix_ms(close_time) + HistoryInterval::OneHour.to_milliseconds() - 1;
         let interval_ms = 3600000u64; // 1h
         let first_start = base_open;
-        let second_start = base_open + (mock_klines.len() as u64) * interval_ms + ONE_MILL_SECOND_MS;
+        let second_start = base_open + (mock_klines.len() as u64) * interval_ms;
 
         Mock::given(method("GET"))
             .and(path("/api/v3/klines"))
             .and(query_param("symbol", "BTCUSDT"))
             .and(query_param("interval", "1h"))
             .and(query_param("startTime", &first_start.to_string()))
+            .and(query_param("endTime", &adjusted_end_time.to_string()))
             .and(query_param("limit", "1000"))
             .respond_with(ResponseTemplate::new(200).set_body_json(mock_klines))
             .expect(1)
@@ -592,7 +596,7 @@ mod tests {
         let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonParam::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
         let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher
-            .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), Some(1609459200000), None)
+            .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), Some(1609459200000), Some(close_time))
             .await;
         assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
         let (kline, _) = kline_res.unwrap();
@@ -619,13 +623,13 @@ mod tests {
         // 添加900条对齐的K线（close_time在1h边界上）
         for i in 0..900 {
             let open_time = 1609459200000 + i * 3600000;
-            let close_time = open_time + 3600000; // 对齐到1h边界
+            let close_time = open_time + 3600000 - 1; // 对齐到1h边界
             mock_klines.push(create_mock_kline(open_time, close_time));
         }
         // 添加100条未对齐的K线（close_time不在1h边界上）
         for i in 900..1000 {
             let open_time = 1609459200000 + i * 3600000;
-            let close_time = open_time + 3600000 - 500; // 不对齐，提前500ms
+            let close_time = open_time + 3600000 - 500 - 1; // 不对齐，提前500ms
             mock_klines.push(create_mock_kline(open_time, close_time));
         }
 
@@ -673,7 +677,7 @@ mod tests {
         let mut i = 0u64;
         loop {
             let open_time = 1609459200000u64 + i * 3600000u64; // 1 hour intervals
-            let close_time = open_time + 3600000u64; // 对齐到1h边界
+            let close_time = open_time + 3600000u64 - 1; // 对齐到1h边界
             if close_time > adjusted_end_time {
                 break;
             }
