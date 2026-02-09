@@ -98,6 +98,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let supervisor = DataIntegritySupervisor::new_with_config(config, check_strategies, repair_strategies).await;
     supervisor.start();
-    tokio::time::sleep(std::time::Duration::from_mins(5)).await;
+    tokio::time::sleep(tokio::time::Duration::from_mins(5)).await;
     Ok(())
 }
