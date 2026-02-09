@@ -320,6 +320,7 @@ where
                 break;
             }
 
+            let kline_num = klines.len();
             // 注意点：废弃所有非close的kline（close_time不符合 interval 倍数）
             let filtered_klines: Vec<O> = {
                 let iv_ms = chosen_interval.to_milliseconds();
@@ -333,12 +334,7 @@ where
                     .collect()
             };
 
-            debug!(
-                "{} fetch {} kline, filtered {} kline",
-                symbol,
-                filtered_klines.len(),
-                filtered_klines.len()
-            );
+            debug!("{} fetch {} kline, after filtered {} kline", symbol, kline_num, filtered_klines.len());
             let klines_count = filtered_klines.len();
             res.extend(filtered_klines);
 

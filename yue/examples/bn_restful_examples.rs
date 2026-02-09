@@ -1,4 +1,4 @@
-use li::tools::time::unix_2_readable;
+use li::tools::time::{unix_2_readable, unix_time_now_u64_utc};
 use std::collections::BTreeMap;
 use yue::binance::bn_models::common::{EmptyQueryParams, ServerTime};
 use yue::binance::bn_models::spot_restful::{BinanceKline, Depth, Ticker24hr};
@@ -36,7 +36,11 @@ async fn main() {
         .await
     {
         Ok(server_time) => {
-            println!("测试网络服务器时间: {}", unix_2_readable(&server_time.time));
+            let server_time = server_time.time;
+            let local_time = unix_time_now_u64_utc();
+            let gap: i64 = server_time as i64 - local_time as i64;
+            println!("测试服务器时间{},local time:{},gap is {} ms", server_time, local_time, gap);
+            println!("测试网络服务器时间: {}", unix_2_readable(&server_time));
         }
         Err(e) => println!("获取服务器时间失败: {}", e),
     }

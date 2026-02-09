@@ -148,15 +148,19 @@ impl SpotStreamStorageActor {
         Ok(self.trade_buffer.len())
     }
 
-    fn write_klines_to_db(&self) -> Result<usize, crate::errors::YuError> {
+    fn write_klines_to_db(&self) -> Result<usize, YuError> {
         let conn = self.db.acquire()?;
         let mut appender = conn.appender("bn_spot_kline")?;
 
         for kline in &self.kline_buffer {
-            appender.append_row(kline.to_params())?;
+            if let Err(e) = appender.append_row(kline.to_params()) {
+                error!("Failed to append kline to db: {:?}", e);
+            }
         }
 
-        let _ = appender.flush();
+        if let Err(e) = appender.flush() {
+            error!("Failed to flush kline to db: {:?}", e);
+        }
         Ok(self.kline_buffer.len())
     }
 
@@ -225,6 +229,9 @@ impl Handler<BinanceSpotWebSocketStreamResponse> for SpotStreamStorageActor {
                 if kline.kline.is_closed == true {
                     let kline_po = KlinePo::from(kline.kline);
                     self.buffer_kline(kline_po);
+                    if self.kline_buffer.len() >= self.get_kline_batch_size() {
+                        self.flush_klines();
+                    }
                 }
             }
             _ => {

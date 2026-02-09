@@ -3,10 +3,11 @@
 use actix::Actor;
 use async_trait::async_trait;
 use li::tools::logs::setup_logger;
+use li::tools::time::unix_time_now_u64_utc;
 use log::{info, LevelFilter};
 use std::collections::HashMap;
 use std::sync::Arc;
-use yu::binance::bn_data_integrity::{KlineGapRepairStrategy, SpotCheckStrategy};
+use yu::binance::bn_data_integrity::{KlineGapRepairStrategy, SpotCheckStrategy, BN_SPOT_KLINE_CHECK};
 use yu::config::{get_config, DataIntegrityConfig};
 use yu::data_integrity::check::ValidationStrategy;
 use yu::data_integrity::models::{RepairRequest, ValidationGap, ValidationResult};
@@ -14,6 +15,7 @@ use yu::data_integrity::repair::RepairStrategy;
 use yu::data_integrity::supervisor::DataIntegritySupervisor;
 use yu::errors::YuError;
 use yue::http_client::init_http_client;
+use yue::models::HistoryInterval;
 use yue::tools::get_snow_flake_id_u64;
 
 struct CheckExampleStrategy;
@@ -74,7 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let config = DataIntegrityConfig {
-        startup_check_timeout_ms: 0,
+        startup_check_timeout_ms: 5 * 60 * 1000, // 5 mins
         periodic_check_interval_cron: "* 0 * * * * *".to_string(),
         repair_backoff: Default::default(),
     };
@@ -82,14 +84,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let data_retention_time = app_config.get_data_retention_ms();
 
     let check_spot_kline_strategy = SpotCheckStrategy::spot_check_strategy(None, data_retention_time);
+    // let now = HistoryInterval::FiveMinutes.get_now_close_unix_ms_utc();
+    // if let Ok(gaps) = check_spot_kline_strategy.check_one_symbol("BMTUSDT", now) {
+    //     println!("Spot check one: {:?}", gaps);
+    // }
+
     let mut check_strategies: HashMap<String, Arc<dyn ValidationStrategy>> = HashMap::new();
     // check_strategies.insert("example".to_string(), Arc::new(CheckExampleStrategy));
-    check_strategies.insert("spot_kline".to_string(), Arc::new(check_spot_kline_strategy));
+    check_strategies.insert(BN_SPOT_KLINE_CHECK.to_string(), Arc::new(check_spot_kline_strategy));
 
     let repair_spot_kline_strategy = KlineGapRepairStrategy::spot();
     let mut repair_strategies: HashMap<String, Arc<dyn RepairStrategy>> = HashMap::new();
     // repair_strategies.insert("example".to_string(), Arc::new(RepairExampleStrategy));
-    repair_strategies.insert("spot_kline".to_string(), Arc::new(repair_spot_kline_strategy));
+    repair_strategies.insert(BN_SPOT_KLINE_CHECK.to_string(), Arc::new(repair_spot_kline_strategy));
 
     let supervisor = DataIntegritySupervisor::new_with_config(config, check_strategies, repair_strategies).await;
     supervisor.start();

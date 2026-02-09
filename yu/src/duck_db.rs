@@ -38,7 +38,25 @@ impl DBProvider {
     }
 
     pub fn acquire(&self) -> Result<PooledConnection<DuckdbConnectionManager>, YuError> {
-        Ok(self.pool.get()?)
+        const MAX_RETRIES: usize = 100;
+        for attempt in 0..MAX_RETRIES {
+            match self.pool.get() {
+                Ok(conn) => return Ok(conn),
+                Err(e) => {
+                    if attempt + 1 == MAX_RETRIES {
+                        return Err(e.into());
+                    }
+                    // 基于当前时间生成一个小的随机抖动，避免同时重试的冲突
+                    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_nanos();
+                    let jitter = (nanos % 200) as u64; // 0..199 ms
+                    let backoff_ms = 50 + (attempt as u64 * 50) + jitter; // 指数增长基数 + 抖动
+                    std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
+                    continue;
+                }
+            }
+        }
+        // 理论上不会到达这里，但为满足签名返回一个错误
+        Err(YuError::new("failed to acquire connection"))
     }
 }
 

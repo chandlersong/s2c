@@ -398,7 +398,7 @@ impl WebSocketConnection {
                 }
                 // 处理要发送的 WebSocket 消息
                 Some(msg) = ws_rx.recv() => {
-                    info!("实际发送消息");
+                    info!("实际发送消息,{}",msg);
                     if let Err(e) = write.send(msg).await {
                         error!("发送消息失败: {}", e);
                         return Err(YueError::CustomError(format!("发送消息失败: {}", e)));

@@ -7,7 +7,8 @@ use crate::errors::YuError;
 use crate::exchange::{CloneHistoryFetcherFactory, HistoryFetcherFactory};
 use crate::websocket::subscribers::storage_subscriber::get_spot_stream_writer;
 use async_trait::async_trait;
-use log::{debug, error, info};
+use li::tools::time::unix_2_readable;
+use log::{debug, error, info, trace, Level};
 use yue::binance::bn_models::common::SymbolType;
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_models::spot_websocket_stream::{BinanceSpotWebSocketStreamResponse, KlineData, KlineStreamPayload};
@@ -78,7 +79,9 @@ impl SpotCheckStrategy {
             symbol = symbol
         );
         let mut stmt = conn.prepare(&sql)?;
-        let mut rows = stmt.query([start as i64, end as i64])?;
+        let mut rows = stmt
+            .query([start as i64, end as i64])
+            .map_err(|_| YuError::new(&format!("{}, query gap from {} to {}", symbol, start, end)))?;
         if let Some(row) = rows.next()? {
             let c: i64 = row.get(0)?;
             Ok(c as u64)
@@ -211,12 +214,13 @@ impl SpotCheckStrategy {
 
         // rebuild ValidationGap list from merged items
         let mut result: Vec<ValidationGap> = Vec::new();
+        //因为取binance查询的时候，包含临界值的话，会把这个临界值为candle_begin_time查询下一个周期。所以这里-1，避免这种问题
         for (table, symbol, trade_type, start, end) in merged_items.into_iter() {
             result.push(ValidationGap::MissingData {
                 symbol,
                 trade_type,
                 start_time: start,
-                end_time: end,
+                end_time: end - 1,
                 table,
             });
         }
@@ -233,9 +237,12 @@ impl SpotCheckStrategy {
     /// 5. 通过sql，判断是否记录数是否等于time_slots，如果等于，说明没有缺失数据，返回Ok(None)
     /// 6. 如果不等于，说明有缺失数据，通过sql，通过二分法开始查找缺失的时间段。
     ///
-    fn check_one_symbol(&self, symbol: &str, max_timestamp: u64) -> Result<Vec<ValidationGap>, YuError> {
-        debug!("check_one_symbol symbol: {} at {}", symbol, self.time_column);
-        let mut conn = self.db_provider.acquire()?;
+    pub fn check_one_symbol(&self, symbol: &str, max_timestamp: u64) -> Result<Vec<ValidationGap>, YuError> {
+        trace!("check_one_symbol symbol: {} at {}", symbol, self.time_column);
+        let mut conn = self
+            .db_provider
+            .acquire()
+            .map_err(|_| YuError::new(&format!("{}, query db provider", symbol)))?;
         let interval_ms = self.interval.to_milliseconds();
 
         // 使用参数化查询以避免注入，并安全获取 min/max
@@ -243,9 +250,15 @@ impl SpotCheckStrategy {
             "SELECT MIN({}), MAX({}) FROM {} WHERE {} = ?",
             self.time_column, self.time_column, self.table_name, self.symbol_column
         );
-        let mut stmt = conn.prepare(&sql)?;
-        let mut rows = stmt.query([symbol])?;
-        let (min_ts_opt, max_ts_opt) = if let Some(row) = rows.next()? {
+        let mut stmt = conn.prepare(&sql).map_err(|_| YuError::new(&format!("{} error at draw sql", symbol)))?;
+        let mut rows = stmt
+            .query([symbol])
+            .map_err(|_| YuError::new(&format!("{}, query min/max timestamp", symbol)))?;
+        let timestamp_result = rows.next().unwrap_or_else(|e| {
+            error!("error at query max/min timestamp:error is {}", e);
+            None
+        });
+        let (min_ts_opt, max_ts_opt) = if let Some(row) = timestamp_result {
             let min_v: Option<i64> = row.get(0).ok();
             let max_v: Option<i64> = row.get(1).ok();
             (min_v.map(|v| v as u64), max_v.map(|v| v as u64))
@@ -302,7 +315,27 @@ impl SpotCheckStrategy {
 
         // 合并相邻的缺失区间以便返回更简洁的结果（假设输入 gaps 无重叠）
         let merged_gaps = Self::merge_gaps(&mut gaps);
-
+        if log::max_level() <= Level::Debug {
+            for g in merged_gaps.iter() {
+                match g {
+                    ValidationGap::MissingData {
+                        start_time,
+                        end_time,
+                        symbol,
+                        ..
+                    } => {
+                        debug!(
+                            "symbol:{} found gap: {} - {}, duration: {} mins",
+                            symbol,
+                            unix_2_readable(start_time),
+                            unix_2_readable(end_time),
+                            (end_time - start_time) / 60000
+                        );
+                    }
+                    ValidationGap::UNKnowError { .. } => {}
+                }
+            }
+        }
         if merged_gaps.is_empty() {
             return Ok(vec![]);
         }
@@ -377,6 +410,7 @@ impl ValidationStrategy for SpotCheckStrategy {
         }
 
         if all_gaps.is_empty() {
+            info!("check {} completed,no gaps found", self.table_name);
             return Ok(None);
         }
 
@@ -454,7 +488,6 @@ impl RepairStrategy for KlineGapRepairStrategy {
                     let factory = spot_kline_fetcher_factory.clone();
                     let writer_clone = writer.clone();
                     let sem_clone = sem.clone();
-
                     // spawn 一个异步任务来处理该 gap
                     let handle = tokio::spawn(async move {
                         // 获取信号量许可
@@ -467,7 +500,7 @@ impl RepairStrategy for KlineGapRepairStrategy {
                             .await;
 
                         match fetch_res {
-                            Ok((lines, _fail_times)) => {
+                            Ok((lines, _)) => {
                                 let klines: Vec<BinanceKline> = lines;
                                 if klines.is_empty() {
                                     debug!("repair(task): no lines fetched for {} {}-{}", symbol, start_time, end_time);
@@ -563,7 +596,7 @@ mod tests {
         for i in 0..5 {
             let ts = t0 + i * interval_ms;
             let close_time = ts + interval_ms - 1;
-            let sql = format!("INSERT INTO bn_spot_kline (id, symbol, candle_begin_time, open, high, low, close, volume, quote_volume, number_of_trades, taker_buy_base_asset_volume, taker_buy_quote_asset_volume, close_time, interval, first_trade_id, last_trade_id) VALUES ({}, '{}', {}, 0,0,0,0,0,0,0,0,0,{}, 1, 0, 0);", i, symbol,ts, close_time);
+            let sql = format!("INSERT INTO bn_spot_kline (id, symbol, candle_begin_time, open, high, low, close, volume, quote_volume, number_of_trades, taker_buy_base_asset_volume, taker_buy_quote_asset_volume, close_time, interval, first_trade_id, last_trade_id) VALUES ({}, '{}', {}, 0,0,0,0,0,0,0,0,0,{}, 1, 0, 0);", i, symbol, ts, close_time);
             conn.execute_batch(&sql)?;
         }
 
