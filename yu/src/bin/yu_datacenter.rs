@@ -4,6 +4,7 @@ use log::{error, info, LevelFilter};
 use std::collections::HashMap;
 use yu::binance::jobs::start_bn_jobs;
 use yu::config::get_config;
+use yu::data_integrity::jobs::start_check_data_integrity_jobs;
 use yu::errors::YuError;
 use yue::http_client::init_http_client;
 
@@ -37,6 +38,14 @@ async fn main() -> Result<(), YuError> {
         Ok(_) => info!("Binance jobs started successfully"),
         Err(e) => {
             error!("Failed to start Binance jobs: {}", e);
+            panic!("stop process");
+        }
+    }
+
+    match start_check_data_integrity_jobs().await {
+        Ok(_) => {}
+        Err(e) => {
+            error!("Failed to start check data integrity jobs: {}", e);
             panic!("stop process");
         }
     }

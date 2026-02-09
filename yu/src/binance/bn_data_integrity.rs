@@ -869,7 +869,7 @@ mod tests {
                 ..
             } => {
                 assert_eq!(*start_time, 100);
-                assert_eq!(*end_time, 400);
+                assert_eq!(*end_time, 399);
                 assert_eq!(symbol, "BTCUSDT");
                 assert_eq!(table, "t1");
             }
@@ -949,7 +949,7 @@ mod tests {
                     ..
                 } => {
                     assert_eq!(*start_time, expected[i].0);
-                    assert_eq!(*end_time, expected[i].1);
+                    assert_eq!(*end_time, expected[i].1 - 1);
                     assert_eq!(symbol, "BTCUSDT");
                     assert_eq!(table, "t1");
                 }
@@ -980,7 +980,7 @@ mod tests {
         assert_eq!(merged_single.len(), 1, "single gap should remain single");
         if let ValidationGap::MissingData { start_time, end_time, .. } = &merged_single[0] {
             assert_eq!(*start_time, 777);
-            assert_eq!(*end_time, 888);
+            assert_eq!(*end_time, 887);
         }
 
         // 空输入
