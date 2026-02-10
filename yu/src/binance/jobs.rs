@@ -9,9 +9,8 @@ use crate::errors::YuError;
 use crate::exchange::CloneHistoryFetcherFactory;
 use crate::websocket::subscribers::storage_subscriber::get_spot_stream_writer;
 use crate::websocket::subscribers::AccountSyncActor;
-use actix::{Actor, Recipient};
-use li::actix_jobs::{AsyncRepeatTask, CronActor, TaskCompletionEvent};
-use li::subscribe_event;
+use actix::Actor;
+use li::actix_jobs::{AsyncRepeatTask, CronActor};
 use log::{info, warn};
 use rust_decimal::prelude::ToPrimitive;
 use serde_json::to_string;
@@ -45,11 +44,9 @@ pub async fn start_bn_jobs() -> Result<(), YuError> {
     info!("数据库创建表完成");
     let dash_board_arc = Arc::new(dash_board.clone());
     let spot_kline_subscribe_addr = KlineSubscribe::new(dash_board_arc).start();
-    let spot_kline_subscribe: Recipient<WebSocketEvent> = spot_kline_subscribe_addr.clone().recipient();
-    let spot_kline_job: Recipient<TaskCompletionEvent> = spot_kline_subscribe_addr.recipient();
-    start_refresh_history_data(dash_board.clone(), spot_kline_job).await?;
+    start_refresh_history_data(dash_board.clone()).await?;
     start_spot_websocket_jobs().await?;
-    start_spot_websocket_stream_job(spot_kline_subscribe).await?;
+    start_spot_websocket_stream_job().await?;
     Ok(())
 }
 
@@ -97,7 +94,7 @@ pub async fn start_spot_websocket_jobs() -> Result<(), YuError> {
 /// 2. 启动WsMessageBus，订阅websocket客户端的事件，分发给不同的订阅者
 /// 3. SpotStreamStorageActor，订阅启动WsMessageBus信息
 /// 4，根据配置信息，启动一个专门管理spot的OrderBookService
-async fn start_spot_websocket_stream_job(kline_subscribe_recipient: Recipient<WebSocketEvent>) -> Result<(), YuError> {
+async fn start_spot_websocket_stream_job() -> Result<(), YuError> {
     let config = get_config();
 
     // 检查是否启用了 WebSocket 功能
@@ -198,15 +195,6 @@ async fn start_spot_websocket_stream_job(kline_subscribe_recipient: Recipient<We
         .map_err(|e| YuError::CustomError(format!("发送订阅事件失败: {}", e)))??;
     info!("✓ WsMessageBus 已订阅 WebSocketClient 事件");
 
-    // KlineSubscribe 订阅 WebSocketClient 事件，监听连接状态并管理订阅
-    client_addr
-        .send(SubscribeToEvents {
-            recipient: kline_subscribe_recipient,
-        })
-        .await
-        .map_err(|e| YuError::CustomError(format!("发送 KlineSubscribe 订阅事件失败: {}", e)))??;
-    info!("✓ KlineSubscribe 已订阅 WebSocketClient 事件");
-
     // 等待连接建立
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
 
@@ -235,80 +223,12 @@ async fn start_spot_websocket_stream_job(kline_subscribe_recipient: Recipient<We
         info!("✓ 交易流订阅请求已发送");
     }
 
-    // // 获取所有需要订阅kline的symbol
-    // let spot_data_writer: Arc<dyn HistoryDataWriter<KlinePo, BinanceDashboard>> =
-    //     Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SpotKline, SymbolType::Spot));
-    // let symbols = spot_data_writer.query_latest_symbols(Arc::new(dash_board.clone()), unix_time_now_u64_utc())?;
-    let symbols: Vec<(String, u32)> = vec![];
-    if !symbols.is_empty() {
-        let mut kline_params = Vec::new();
-        for (symbol, _) in &symbols {
-            // 订阅5分钟kline: btcusdt@kline_5m
-            kline_params.push(format!("{}@kline_5m", symbol.to_lowercase()));
-        }
-
-        info!("📤 订阅K线流: {:?}", kline_params);
-        let kline_subscribe_request = StreamCommandRequest {
-            method: WS_SUBSCRIBE_COMMAND.to_string(),
-            params: kline_params,
-            id: snow_flake.next_id_u64(),
-        };
-
-        client_addr
-            .send(SendTextMessage::new(
-                to_string(&kline_subscribe_request).map_err(|e| YuError::CustomError(format!("序列化K线订阅请求失败: {}", e)))?,
-            ))
-            .await
-            .map_err(|e| YuError::CustomError(format!("发送K线订阅消息失败: {}", e)))??;
-        info!("✓ K线流订阅请求已发送");
-    }
-
-    // 根据配置订阅深度流
-    if let Some(depth_config) = &spot_config.depth {
-        if depth_config.enabled() && !depth_config.symbols.is_empty() {
-            let mut depth_params = Vec::new();
-            let update_speed = depth_config.update_speed();
-
-            for symbol in &depth_config.symbols {
-                // 转换为小写并添加深度流后缀
-                // 格式: btcusdt@depth20@100ms 或 btcusdt@depth@100ms
-                depth_params.push(format!("{}@depth@{}", symbol.to_lowercase(), update_speed));
-            }
-
-            if !depth_params.is_empty() {
-                info!(
-                    "📤 订阅深度流: {:?} (update_speed={}, levels={})",
-                    depth_params,
-                    depth_config.update_speed(),
-                    depth_config.levels()
-                );
-                let depth_subscribe_request = StreamCommandRequest {
-                    method: WS_SUBSCRIBE_COMMAND.to_string(),
-                    params: depth_params,
-                    id: snow_flake.next_id_u64(),
-                };
-
-                client_addr
-                    .send(SendTextMessage::new(
-                        to_string(&depth_subscribe_request).map_err(|e| YuError::CustomError(format!("序列化深度订阅请求失败: {}", e)))?,
-                    ))
-                    .await
-                    .map_err(|e| YuError::CustomError(format!("发送深度订阅消息失败: {}", e)))??;
-                info!("✓ 深度流订阅请求已发送");
-            }
-        } else {
-            info!("binance_websocket.spot.depth 未启用或没有配置symbols，跳过深度流订阅");
-        }
-    } else {
-        info!("binance_websocket.spot.depth 配置未启用，跳过深度流订阅");
-    }
-
     Ok(())
 }
 
 ///
 ///
-async fn start_refresh_history_data(origin_dash_board: BinanceDashboard, spot_kline_job: Recipient<TaskCompletionEvent>) -> Result<(), YuError> {
+async fn start_refresh_history_data(origin_dash_board: BinanceDashboard) -> Result<(), YuError> {
     let update_dashboard_task = origin_dash_board.clone();
     let dash_board = Arc::new(origin_dash_board);
 
@@ -328,8 +248,7 @@ async fn start_refresh_history_data(origin_dash_board: BinanceDashboard, spot_kl
     spot_kline_task.execute().await?;
 
     //PLAN： 更新交易所时间表达式进入Config
-    let dash_board_addr = CronActor::new("30 59 */6 * * * *", update_dashboard_task).start();
-    subscribe_event!(dash_board_addr, spot_kline_job, TaskCompletionEvent);
+    let _ = CronActor::new("30 59 */6 * * * *", update_dashboard_task).start();
 
     Ok(())
 }
