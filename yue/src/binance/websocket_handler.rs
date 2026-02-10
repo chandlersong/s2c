@@ -30,6 +30,11 @@ pub trait TradingSymbolRefresher {
 
 /// Binance 现货websocket处理
 ///
+/// FUTURE：保留websocket订阅kline的能力。
+/// 在测试中，发觉订阅Kline和trade等信息在一起，会经常抱错。估计是因为压力太大。
+/// 所以就删除通过websocket订阅的部分K线信息就单独订阅。
+/// 但是代码保留。以后可以单独起个程序去订阅。属于优化项了
+///
 /// 最新的可交易symbol通过latest_symbol_refresher的list获得
 ///
 /// # KlineStreamPayload的订阅逻辑
