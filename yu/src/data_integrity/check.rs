@@ -88,7 +88,7 @@ impl Actor for CheckActor {
                 let timeout_ms = self.timeout_ms;
 
                 // spawn a background task to handle cron timing
-                let handle = actix::spawn(async move {
+                let handle = tokio::spawn(async move {
                     let schedule = Schedule::from_str(&expr).expect("invalid cron expression");
                     let mut upcoming = schedule.upcoming(Utc);
                     loop {
@@ -100,7 +100,7 @@ impl Actor for CheckActor {
                             let strategy = strategy.clone();
                             let subscriber = subscriber.clone();
                             let timeout_ms = timeout_ms;
-                            actix::spawn(async move {
+                            tokio::spawn(async move {
                                 info!("开始检测 {}...", strategy.name());
                                 let res = run_strategy_with_timeout(strategy, timeout_ms).await;
                                 if let Some(r) = res {

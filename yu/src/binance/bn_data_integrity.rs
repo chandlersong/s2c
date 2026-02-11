@@ -9,6 +9,10 @@ use crate::websocket::subscribers::storage_subscriber::get_spot_stream_writer;
 use async_trait::async_trait;
 use li::tools::time::unix_2_readable;
 use log::{debug, error, info, trace, Level};
+use std::collections::{HashMap, HashSet};
+use std::fmt::Debug;
+use std::sync::{Arc, Mutex};
+use tokio::sync::RwLock;
 use yue::binance::bn_models::common::SymbolType;
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_models::spot_websocket_stream::{BinanceSpotWebSocketStreamResponse, KlineData, KlineStreamPayload};
@@ -20,19 +24,77 @@ use yue::models::HistoryInterval;
 pub const BN_SPOT_KLINE_CHECK: &str = "binance_spot_check"; // WireMock server address
 
 ///
+/// 判断重复的过程是这样的。
+/// 1. 每个symbol返回的gaps，取start相加作为key。因为end_time会变化。判断次数
+/// 2. 如果超过次数，则加入ignore列表
+///
+#[derive(Clone)]
+struct IgnoreSymbols {
+    symbols: HashSet<String>,
+    missing_counts: HashMap<u64, u64>,
+    max_count: u64,
+}
+
+impl IgnoreSymbols {
+    pub fn reset(&mut self) {
+        self.missing_counts.clear();
+    }
+
+    pub fn is_ignored(&self, symbol: &str) -> bool {
+        self.symbols.contains(symbol)
+    }
+
+    pub fn plus_missing(&mut self, gaps: &Vec<ValidationGap>) -> bool {
+        let symbol = match gaps.first() {
+            Some(ValidationGap::MissingData { symbol, .. }) => symbol.clone(),
+            _ => return true,
+        };
+        let mut key = 0;
+        for gap in gaps {
+            match gap {
+                ValidationGap::MissingData { start_time, .. } => {
+                    key = key + start_time;
+                }
+                _ => {}
+            }
+        }
+
+        let missing_count = self.missing_counts.get(&key).unwrap_or(&0) + 1;
+        if missing_count > self.max_count {
+            info!("symbol:{} 加入更新ignore列表，因为缺失次数超过{}", symbol, self.max_count);
+            self.symbols.insert(symbol);
+            return false;
+        }
+        self.missing_counts.insert(key, missing_count);
+        true
+    }
+}
+
+impl Default for IgnoreSymbols {
+    fn default() -> Self {
+        Self {
+            symbols: Default::default(),
+            missing_counts: Default::default(),
+            max_count: 3,
+        }
+    }
+}
+
+///
 /// 检测 Binance 现货数据完整性的策略实现
 /// 以后想要转换成一个通用类。
 ///
+/// 如果超过3次没有记录，则这个symbol不会再进入再进入check
 ///
 #[derive(Clone)]
 pub struct SpotCheckStrategy {
-    db_provider: DBProvider,   // Database provider for data access
-    table_name: String,        // Table to validate
-    time_column: String,       // 时间检测列，改列的时间都是unix时间戳，单位毫秒
-    symbol_column: String,     // symbol的column
-    interval: HistoryInterval, // Interval in seconds for each validation chunk
-    max_allow_gap: u64,        // 当gap超过这点时间，就不算missing。主要是防止下假币反复查询。
-    data_retention_time: u64,  // 数据保留时间，超过这个时间的数据，不进行检测
+    db_provider: DBProvider,                    // Database provider for data access
+    table_name: String,                         // Table to validate
+    time_column: String,                        // 时间检测列，改列的时间都是unix时间戳，单位毫秒
+    symbol_column: String,                      // symbol的column
+    interval: HistoryInterval,                  // Interval in seconds for each validation chunk
+    ignore_symbols: Arc<RwLock<IgnoreSymbols>>, // 当gap超过这点时间，就不算missing。主要是防止下假币反复查询。
+    data_retention_time: u64,                   // 数据保留时间，超过这个时间的数据，不进行检测
 }
 
 ///
@@ -56,7 +118,7 @@ impl SpotCheckStrategy {
             time_column: "candle_begin_time".to_string(),
             symbol_column: "symbol".to_string(),
             interval: HistoryInterval::FiveMinutes, // 5分钟
-            max_allow_gap: 24 * 60 * 60 * 1000,     //一天
+            ignore_symbols: Arc::new(RwLock::new(IgnoreSymbols::default())),
             data_retention_time,
         }
     }
@@ -270,21 +332,6 @@ impl SpotCheckStrategy {
             return Ok(vec![]);
         }
         let min_ts_db = min_ts_opt.unwrap();
-        let max_ts_db = max_ts_opt.unwrap();
-
-        // 先比较 DB 中的 max_ts 与传入的 max_timestamp：如果两者差距过大（超过 max_allow_gap），则认为数据可能被下架或不可靠，放弃检测
-        let diff = if max_ts_db > max_timestamp {
-            max_ts_db - max_timestamp
-        } else {
-            max_timestamp - max_ts_db
-        };
-        if diff > self.max_allow_gap {
-            info!(
-                "symbol:{} db_max_ts and provided max_timestamp gap too large, skip check, db_max_ts:{}, provided_max_ts:{}, max_allow_gap:{}",
-                symbol, max_ts_db, max_timestamp, self.max_allow_gap
-            );
-            return Ok(vec![]);
-        }
 
         // 根据 data_retention_time 限制最小时间：取 DB min 和 (provided_max_timestamp - retention) 的较大者
         let retention_floor = max_timestamp.saturating_sub(self.data_retention_time);
@@ -385,6 +432,9 @@ impl ValidationStrategy for SpotCheckStrategy {
         for sym in symbols.into_iter() {
             let strategy = self.clone();
             let s = sym.clone();
+            if self.ignore_symbols.read().await.is_ignored(&s) {
+                continue;
+            }
             let h = tokio::task::spawn_blocking(move || strategy.check_one_symbol(&s, now));
             handles.push(h);
         }
@@ -395,6 +445,9 @@ impl ValidationStrategy for SpotCheckStrategy {
             match h.await {
                 Ok(Ok(mut gaps)) => {
                     if !gaps.is_empty() {
+                        if !self.ignore_symbols.write().await.plus_missing(&gaps) {
+                            continue;
+                        }
                         all_gaps.append(&mut gaps);
                     }
                 }
@@ -411,6 +464,9 @@ impl ValidationStrategy for SpotCheckStrategy {
 
         if all_gaps.is_empty() {
             info!("check {} completed,no gaps found", self.table_name);
+            {
+                self.ignore_symbols.write().await.reset();
+            }
             return Ok(None);
         }
 

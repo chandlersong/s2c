@@ -5,4 +5,6 @@ pub mod endless;
 
 #[macro_use]
 pub mod pubsub;
+mod common;
+
 pub use pubsub::*;

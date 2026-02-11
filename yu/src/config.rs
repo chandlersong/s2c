@@ -159,7 +159,7 @@ pub struct DuckDBConfig {
 pub struct DataIntegrityConfig {
     // 默认1个小时
     pub startup_check_timeout_ms: u64,
-    // linux corn的模式 默认 * 3/10 * * * * *。 每小时3分钟开始，然后没5分钟一次。
+    // linux corn的模式 默认 * 3-53/10 * * * * *。 每小时3分钟开始，然后没5分钟一次。
     pub periodic_check_interval_cron: String,
     pub repair_backoff: RepairBackoffConfig,
 }
@@ -168,7 +168,7 @@ impl Default for DataIntegrityConfig {
     fn default() -> Self {
         DataIntegrityConfig {
             startup_check_timeout_ms: 3_600_000,
-            periodic_check_interval_cron: "* 3/10 * * * * *".to_string(),
+            periodic_check_interval_cron: "* 3-53/10 * * * * *".to_string(),
             repair_backoff: Default::default(),
         }
     }
@@ -329,7 +329,7 @@ logLevel: "info"
 
         let di = app_config.get_data_integrity_config();
         assert_eq!(di.startup_check_timeout_ms, 3_600_000);
-        assert_eq!(di.periodic_check_interval_cron, "* 3/10 * * * * *");
+        assert_eq!(di.periodic_check_interval_cron, "* 3-53/10 * * * * *");
 
         let backoff = di.repair_backoff;
         assert_eq!(backoff.max_retries, 3);

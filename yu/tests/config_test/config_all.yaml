@@ -1,6 +1,11 @@
 proxyUrl: "http://localhost:7891"
 logLevel: "info"
 data_retention_hours: 99
+data_integrity:
+  startup_check_timeout_ms: 3600000
+  periodic_check_interval_cron: "*/10 * * * * * *"
+  repair_backoff:
+    max_retries: 10
 database:
   path: "test.db"
 binance_websocket:
