@@ -120,6 +120,7 @@ impl AsyncRepeatTask for BinanceDashboard {
     ///
     /// FUTURE：
     /// 1，swap根据数据，判断上架和下架操作
+    /// 2, status会不会出现上下架的操作。这点需要能够对接telegram
     ///
     async fn execute(&self) -> Result<(), LiError> {
         let (spot_res, swap_res) = tokio::join!(
