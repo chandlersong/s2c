@@ -167,7 +167,7 @@ impl AsyncRepeatTask for BinanceDashboard {
     /// 初始化数据，与execute方法完全相同的逻辑
     ///
     async fn initial_data(&self) -> Result<(), LiError> {
-        Err(LiError::CustomError("BinanceDashboard::initial_data 尚未实现".to_string()))
+        self.execute().await
     }
 
     fn task_name(&self) -> &str {
