@@ -1,6 +1,6 @@
 # Dockerfile
 FROM chandlersong/rocksdb:bookworm-slim-9.9.3 AS rocksdb
-FROM chandlersong/rust_ci:1.90-slim-bookworm AS builder
+FROM chandlersong/rust_ci:1.93-slim-bookworm AS builder
 WORKDIR /app
 COPY ../.. .
 ARG LIBDIR
@@ -11,7 +11,7 @@ ENV OPENSSL_LIB_DIR=/usr/lib/${LIBDIR}
 COPY --from=rocksdb /usr/lib/${LIBDIR}/librocksdb* /usr/lib/${LIBDIR}/
 RUN cargo build --release
 
-FROM chandlersong/rust_runtime:1.90-slim-bookworm AS runtime
+FROM chandlersong/rust_runtime:1.93-slim-bookworm AS runtime
 ARG APP_NAME=test
 ENV LIBDIR=${LIBDIR}
 COPY --from=builder /app/target/release/${APP_NAME} /app/app
