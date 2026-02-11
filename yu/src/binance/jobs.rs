@@ -42,8 +42,6 @@ pub async fn start_bn_jobs() -> Result<(), YuError> {
         warn!("币安表创建失败,{}", _e);
     }
     info!("数据库创建表完成");
-    let dash_board_arc = Arc::new(dash_board.clone());
-    let spot_kline_subscribe_addr = KlineSubscribe::new(dash_board_arc).start();
     start_refresh_history_data(dash_board.clone()).await?;
     start_spot_websocket_jobs().await?;
     start_spot_websocket_stream_job().await?;

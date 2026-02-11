@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use duckdb::{appender_params_from_iter, DropBehavior};
 use li::actix_jobs::AsyncRepeatTask;
 use li::errors::LiError;
-use li::tools::time::{unix_2_readable, unix_time_now_u64_utc, UnixTimeStamp};
+use li::tools::time::{unix_2_readable, UnixTimeStamp};
 use log::{debug, error, info};
 use std::fmt::Debug;
 use std::sync::Arc;
