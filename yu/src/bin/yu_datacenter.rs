@@ -2,6 +2,7 @@ use actix::System;
 use li::tools::logs::{parse_level, setup_logger};
 use log::{error, info, LevelFilter};
 use std::collections::HashMap;
+use yu::binance::jobs::start_bn_jobs;
 use yu::config::get_config;
 use yu::data_integrity::jobs::start_check_data_integrity_jobs;
 use yu::errors::YuError;
@@ -33,13 +34,13 @@ async fn main() -> Result<(), YuError> {
         log_in_config,
         parse_level(app_config.log_level.as_deref())
     );
-    // match start_bn_jobs().await {
-    //     Ok(_) => info!("Binance jobs started successfully"),
-    //     Err(e) => {
-    //         error!("Failed to start Binance jobs: {}", e);
-    //         panic!("stop process");
-    //     }
-    // }
+    match start_bn_jobs().await {
+        Ok(_) => info!("Binance jobs started successfully"),
+        Err(e) => {
+            error!("Failed to start Binance jobs: {}", e);
+            panic!("stop process");
+        }
+    }
 
     match start_check_data_integrity_jobs().await {
         Ok(_) => {}
