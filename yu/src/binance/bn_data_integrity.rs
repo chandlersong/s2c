@@ -7,6 +7,7 @@ use crate::errors::YuError;
 use crate::exchange::{CloneHistoryFetcherFactory, HistoryFetcherFactory};
 use crate::websocket::subscribers::storage_subscriber::get_spot_stream_writer;
 use async_trait::async_trait;
+use li::hash_of;
 use li::tools::time::unix_2_readable;
 use log::{debug, error, info, trace, Level};
 use std::collections::{HashMap, HashSet};
@@ -30,7 +31,7 @@ pub const BN_SPOT_KLINE_CHECK: &str = "binance_spot_check"; // WireMock server a
 #[derive(Clone)]
 struct IgnoreSymbols {
     symbols: HashSet<String>,
-    missing_counts: HashMap<u64, u64>,
+    missing_counts: HashMap<String, u64>,
     max_count: u64,
 }
 
@@ -57,14 +58,15 @@ impl IgnoreSymbols {
                 _ => {}
             }
         }
+        let real_key = format!("symbol:{}_key:{}", symbol, key);
 
-        let missing_count = self.missing_counts.get(&key).unwrap_or(&0) + 1;
+        let missing_count = self.missing_counts.get(&real_key).unwrap_or(&0) + 1;
         if missing_count > self.max_count {
             info!("symbol:{} 加入更新ignore列表，因为缺失次数超过{}", symbol, self.max_count);
             self.symbols.insert(symbol);
             return false;
         }
-        self.missing_counts.insert(key, missing_count);
+        self.missing_counts.insert(real_key, missing_count);
         true
     }
 }
@@ -74,7 +76,7 @@ impl Default for IgnoreSymbols {
         Self {
             symbols: Default::default(),
             missing_counts: Default::default(),
-            max_count: 3,
+            max_count: 1,
         }
     }
 }

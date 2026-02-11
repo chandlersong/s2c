@@ -131,7 +131,7 @@ impl SpotStreamStorageActor {
         let mut appender = conn.appender("bn_spot_trade")?;
 
         for record in &self.trade_buffer {
-            appender.append_row(params![
+            if let Err(e) = appender.append_row(params![
                 record.id,
                 record.event_time,
                 &record.symbol,
@@ -141,7 +141,12 @@ impl SpotStreamStorageActor {
                 record.trade_time,
                 record.is_buyer_maker,
                 record.created_at,
-            ])?;
+            ]) {
+                // FUTURE: 失败重试机制。
+                // 先不考虑吧。因为应该会在check的时候，去补全
+
+                error!("Failed to append trade records: {:?}", e);
+            };
         }
 
         let _ = appender.flush();
