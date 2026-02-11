@@ -4,7 +4,7 @@ use log::{info, LevelFilter};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 use yu::binance::bn_dashboard::BinanceDashboard;
-use yu::binance::history_task::InitialHistoryTask;
+use yu::binance::history_task::HistoryDataTask;
 use yu::binance::models::po::KlinePo;
 use yu::config::get_config;
 use yu::errors::YuError;
@@ -44,7 +44,7 @@ async fn main() -> Result<(), YuError> {
     let end_time = interval.get_close_unix_ms(now_timestamp);
 
     let fetch_handle = tokio::spawn(async move {
-        InitialHistoryTask::<
+        HistoryDataTask::<
             CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonParam, BinanceKline>,
             CommonParam,
             KlinePo, // 修正为 KlinePo，满足 HistoryPO 约束

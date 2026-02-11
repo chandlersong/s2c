@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use duckdb::{appender_params_from_iter, DropBehavior};
 use li::actix_jobs::AsyncRepeatTask;
 use li::errors::LiError;
-use li::tools::time::{unix_2_readable, unix_time_now_u64_utc};
+use li::tools::time::{unix_2_readable, unix_time_now_u64_utc, UnixTimeStamp};
 use log::{debug, error, info};
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -163,7 +163,7 @@ impl HistoryPO for FundingRatePo {
 /// 初始化的历史数据任务，每次启动的时候，都会调用
 /// NEXT：写一个实时更新的task
 #[derive(Clone)]
-pub struct InitialHistoryTask<F, P, R, V, D>
+pub struct HistoryDataTask<F, P, R, V, D>
 where
     F: HistoryFetcherFactory<Param = P, Output = V>,
     P: MuteHistoryParam + ToQueryParams + Clone + Send + Sync,
@@ -179,12 +179,12 @@ where
     interval: HistoryInterval,
 }
 
-impl<F, P, R, V, D> InitialHistoryTask<F, P, R, V, D>
+impl<F, P, R, V, D> HistoryDataTask<F, P, R, V, D>
 where
-    F: HistoryFetcherFactory<Param = P, Output = V>,
-    P: MuteHistoryParam + ToQueryParams + Clone + Send + Sync,
-    V: HistoryVo + Clone,
-    R: HistoryPO + Clone,
+    F: HistoryFetcherFactory<Param = P, Output = V> + Clone + Send + Sync + 'static,
+    P: MuteHistoryParam + ToQueryParams + Clone + Send + Sync + 'static,
+    V: HistoryVo + Clone + Send + Sync + 'static,
+    R: HistoryPO<Source = V> + Clone + Send + Sync + 'static,
     D: ExchangeDashBoard<TradingSymbol = TradingSymbol> + Send + Sync,
 {
     pub fn new(
@@ -194,7 +194,7 @@ where
         task_name: String,
         symbol_type: SymbolType,
     ) -> Self {
-        InitialHistoryTask {
+        HistoryDataTask {
             kline_fetcher_factory: factory,
             exchange_dashboard,
             data_writer,
@@ -202,6 +202,67 @@ where
             symbol_type,
             interval: HistoryInterval::FiveMinutes,
         }
+    }
+
+    ///
+    /// 并发获取所有交易对的历史数据并串行写入数据库
+    ///
+    /// # 参数
+    /// * `symbols` - 需要处理的交易对列表
+    /// * `earliest_time` - 数据获取的开始时间
+    /// * `now_timestamp` - 当前时间戳
+    ///
+    async fn fetch_and_write_history_data(
+        &self,
+        symbols: Vec<TradingSymbol>,
+        start_timestamp: UnixTimeStamp,
+        end_timestamp: UnixTimeStamp,
+    ) -> Result<(), LiError> {
+        let symbol_count = symbols.len();
+        let (tx, mut rx) = mpsc::channel(100);
+
+        for symbol in symbols {
+            let tx_clone = tx.clone();
+            let kline_fetcher = self.kline_fetcher_factory.create_fetcher();
+            // NEXT： 这里1000变成参数化，现在是历史数据无所谓。但是实盘需要准确一点
+            let interval = self.interval.clone();
+            let param = P::initial(symbol.symbol.clone(), 1000, interval.clone());
+            let task_name = self.task_name.clone();
+            tokio::spawn({
+                let tx_clone = tx_clone.clone();
+                let param = param.clone();
+                let kline_fetcher = kline_fetcher;
+                async move {
+                    Self::fetch_symbol_data::<_>(
+                        kline_fetcher,
+                        param,
+                        start_timestamp,
+                        end_timestamp,
+                        tx_clone,
+                        &task_name,
+                        interval.clone(),
+                    )
+                    .await;
+                }
+            });
+        }
+        drop(tx);
+
+        // 在主线程中接收结果并串行插入数据库
+        for _ in 0..symbol_count {
+            if let Some(result) = rx.recv().await {
+                match result {
+                    Ok(data) => {
+                        let _ = self.data_writer.write_batch(data);
+                    }
+                    Err(e) => {
+                        error!("Failed to fetch symbol data: {}", e);
+                    }
+                }
+            }
+        }
+        info!("finish fetch {}", self.task_name);
+        Ok(())
     }
 
     pub async fn fetch_symbol_data<T>(
@@ -257,7 +318,7 @@ where
 }
 
 #[async_trait]
-impl<F, P, R, V, D> AsyncRepeatTask for InitialHistoryTask<F, P, R, V, D>
+impl<F, P, R, V, D> AsyncRepeatTask for HistoryDataTask<F, P, R, V, D>
 where
     F: HistoryFetcherFactory<Param = P, Output = V> + Clone + Send + Sync + Unpin + 'static,
     P: MuteHistoryParam + ToQueryParams + Clone + Send + Sync + 'static,
@@ -265,12 +326,17 @@ where
     R: HistoryPO<Source = V> + Send + Sync + Clone + 'static,
     D: ExchangeDashBoard<TradingSymbol = TradingSymbol> + Send + Sync + Clone + 'static,
 {
-    async fn execute(&self) -> Result<(), LiError> {
+    ///
+    /// 初始化任务特点
+    /// 1. symbol为全集不为全部
+    /// 2. 时间范围为设定的最早时间到现在
+    ///
+    async fn initial_data(&self) -> Result<(), LiError> {
         if !self.data_writer.is_empty().unwrap() {
             info!("{} database is not empty, skip initial history data fetch", self.task_name);
             return Ok(());
         }
-        let (tx, mut rx) = mpsc::channel(100);
+
         let earliest_time = self
             .exchange_dashboard
             .get_earliest_timestamp(Some(HistoryInterval::FiveMinutes))
@@ -292,56 +358,56 @@ where
         .filter(|symbol| symbol.quote_asset == "USDT")
         .collect();
         let symbol_count = symbols.len();
+        let end_timestamp = self.interval.get_now_close_unix_ms_utc();
         info!(
-            "start at {} fetch {},symbol num:{}",
+            "inital data from {} to  {} fetch {},symbol num:{}",
             unix_2_readable(&earliest_time),
+            unix_2_readable(&end_timestamp),
             self.task_name,
             symbol_count
         );
 
-        let now_timestamp = unix_time_now_u64_utc();
-        for symbol in symbols {
-            let tx_clone = tx.clone();
-            let kline_fetcher = self.kline_fetcher_factory.create_fetcher();
-            // NEXT： 这里1000变成参数化，现在是历史数据无所谓。但是实盘需要准确一点
-            let interval = self.interval.clone();
-            let param = P::initial(symbol.symbol.clone(), 1000, interval.clone());
-            let task_name = self.task_name().to_string();
-            tokio::spawn({
-                let tx_clone = tx_clone.clone();
-                let param = param.clone();
-                let kline_fetcher = kline_fetcher;
-                async move {
-                    Self::fetch_symbol_data::<_>(
-                        kline_fetcher,
-                        param,
-                        earliest_time,
-                        interval.get_close_unix_ms(now_timestamp),
-                        tx_clone,
-                        &task_name,
-                        interval.clone(),
-                    )
-                    .await;
-                }
-            });
-        }
-        drop(tx);
+        self.fetch_and_write_history_data(symbols, earliest_time, end_timestamp).await
+    }
 
-        // 在主线程中接收结果并串行插入数据库
-        for _ in 0..symbol_count {
-            if let Some(result) = rx.recv().await {
-                match result {
-                    Ok(data) => {
-                        let _ = self.data_writer.write_batch(data);
-                    }
-                    Err(e) => {
-                        error!("Failed to fetch symbol data: {}", e);
-                    }
-                }
+    ///
+    /// 初始化任务特点
+    /// 1. symbol为正在交易的数据
+    /// 2. 时间范围为过去的一个interval
+    ///
+    async fn execute(&self) -> Result<(), LiError> {
+        let symbols: Vec<TradingSymbol> = match self.symbol_type {
+            SymbolType::Spot => self.exchange_dashboard.spot_symbols(),
+            SymbolType::Swap => self.exchange_dashboard.swap_symbols(),
+            _ => {
+                return Err(LiError::CustomError(format!(
+                    "Unsupported symbol type {:?} in InitialHistoryTask",
+                    self.symbol_type
+                )));
             }
         }
-        info!("finish fetch {}", self.task_name);
-        Ok(())
+        .read()
+        .unwrap()
+        .clone()
+        .into_iter()
+        .filter(|symbol| symbol.quote_asset == "USDT")
+        .filter(|symbol| symbol.status == "TRADE")
+        .collect();
+        let symbol_count = symbols.len();
+
+        let earliest_time = self.interval.get_now_close_unix_ms_utc() - self.interval.to_milliseconds();
+        let end_timestamp = earliest_time + self.interval.to_milliseconds() - 1;
+
+        info!(
+            "refresh data from {} to {} fetch {},symbol num:{}",
+            unix_2_readable(&earliest_time),
+            unix_2_readable(&end_timestamp),
+            self.task_name,
+            symbol_count
+        );
+
+        let end_timestamp = self.interval.get_now_close_unix_ms_utc();
+        self.fetch_and_write_history_data(symbols, earliest_time, end_timestamp).await
     }
 
     fn task_name(&self) -> &str {
@@ -353,7 +419,7 @@ where
 mod tests {
     use crate::binance::binance_db_consts::BinanceTables::SpotKline;
     use crate::binance::bn_dashboard::{BinanceDashboard, TradingSymbol};
-    use crate::binance::history_task::{DuckDBHistoryDataWriter, InitialHistoryTask};
+    use crate::binance::history_task::{DuckDBHistoryDataWriter, HistoryDataTask};
     use crate::binance::models::po::KlinePo;
     use crate::duck_db::DBProvider;
     use crate::errors::YuError;
@@ -466,14 +532,14 @@ mod tests {
 
         let factory = MockHistoryFetcherFactory {};
         let data_writer = Arc::new(DuckDBHistoryDataWriter::new(db_provider.clone(), SpotKline));
-        let manager: InitialHistoryTask<MockHistoryFetcherFactory, CommonParam, KlinePo, BinanceKline, BinanceDashboard> = InitialHistoryTask::new(
+        let manager: HistoryDataTask<MockHistoryFetcherFactory, CommonParam, KlinePo, BinanceKline, BinanceDashboard> = HistoryDataTask::new(
             factory,
             dash_board,
             data_writer,
             "test_refresh_spot_kline_normal".to_string(),
             SymbolType::Spot,
         );
-        let res: Result<(), LiError> = manager.execute().await;
+        let res: Result<(), LiError> = manager.initial_data().await;
 
         println!("{:?}", res);
         assert!(res.is_ok());

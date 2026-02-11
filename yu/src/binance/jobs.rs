@@ -1,7 +1,7 @@
 use crate::binance::binance_db_consts::BinanceTables::SpotKline;
 use crate::binance::binance_db_consts::ALL_BINANCE_TABLES;
 use crate::binance::bn_dashboard::{init_market_depth_dashboard, BinanceDashboard, MarketDepthDashBoard};
-use crate::binance::history_task::{DuckDBHistoryDataWriter, InitialHistoryTask};
+use crate::binance::history_task::{DuckDBHistoryDataWriter, HistoryDataTask};
 use crate::binance::models::po::KlinePo;
 use crate::config::get_config;
 use crate::duck_db::DBProvider;
@@ -37,7 +37,7 @@ use yue::websocket::event_bus::{Subscribe, WsMessageBus};
 pub async fn start_bn_jobs() -> Result<(), YuError> {
     let config = get_config();
     let dash_board = BinanceDashboard::new(config.get_data_retention_hours());
-    dash_board.execute().await?;
+    dash_board.initial_data().await?;
     if let Err(_e) = initial_tables(None) {
         warn!("币安表创建失败,{}", _e);
     }
@@ -238,18 +238,19 @@ async fn start_refresh_history_data(origin_dash_board: BinanceDashboard) -> Resu
 
     let spot_data_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SpotKline));
 
-    let spot_kline_task = InitialHistoryTask::<_, _, KlinePo, BinanceKline, BinanceDashboard>::new(
+    let spot_kline_task = HistoryDataTask::<_, _, KlinePo, BinanceKline, BinanceDashboard>::new(
         spot_kline_fetcher,
         dash_board.clone(),
         spot_data_writer,
         "refresh spot kline data".to_string(),
         SymbolType::Spot,
     );
-    spot_kline_task.execute().await?;
+    spot_kline_task.initial_data().await?;
 
     //PLAN： 更新交易所时间表达式进入Config
     let _ = CronActor::new("30 59 */6 * * * *", update_dashboard_task).start();
-
+    //FUTURE: 支持不同的interval
+    let _ = CronActor::new("01 */5 * * * * *", spot_kline_task).start();
     Ok(())
 }
 

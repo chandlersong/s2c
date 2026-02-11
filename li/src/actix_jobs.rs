@@ -22,8 +22,15 @@ impl ActixMessage for TaskCompletionEvent {
 
 #[async_trait]
 pub trait AsyncRepeatTask: Send + Sync + Clone + Unpin + 'static {
-    async fn execute(&self) -> Result<(), LiError>;
+    /**
+     * 专门用于初始化。
+     */
+    async fn initial_data(&self) -> Result<(), LiError>;
 
+    /**
+     * 专门用于日常更新。
+     */
+    async fn execute(&self) -> Result<(), LiError>;
     fn task_name(&self) -> &str;
 }
 
@@ -150,9 +157,14 @@ mod tests {
 
     #[async_trait]
     impl AsyncRepeatTask for SuccessTask {
-        async fn execute(&self) -> Result<(), LiError> {
+        async fn initial_data(&self) -> Result<(), LiError> {
             let mut count = self.called.lock().unwrap();
             *count += 1;
+            Ok(())
+        }
+
+        async fn execute(&self) -> Result<(), LiError> {
+            info!("Executing success initial task");
             Ok(())
         }
 
@@ -166,8 +178,13 @@ mod tests {
 
     #[async_trait]
     impl AsyncRepeatTask for FailTask {
-        async fn execute(&self) -> Result<(), LiError> {
+        async fn initial_data(&self) -> Result<(), LiError> {
             Err(LiError::CustomError("fail".to_string()))
+        }
+
+        async fn execute(&self) -> Result<(), LiError> {
+            info!("Executing fail initial task");
+            Ok(())
         }
 
         fn task_name(&self) -> &str {

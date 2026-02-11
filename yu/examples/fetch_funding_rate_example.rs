@@ -4,7 +4,7 @@ use log::{info, LevelFilter};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 use yu::binance::bn_dashboard::BinanceDashboard;
-use yu::binance::history_task::{FundingRatePo, InitialHistoryTask};
+use yu::binance::history_task::{FundingRatePo, HistoryDataTask};
 use yu::config::get_config;
 use yu::errors::YuError;
 use yu::exchange::{CloneHistoryFetcherFactory, HistoryFetcherFactory};
@@ -47,7 +47,7 @@ async fn main() -> Result<(), YuError> {
 
     // 用tokio::spawn在后台异步任务中运行fetch_symbol_data
     let fetch_handle = tokio::spawn(async move {
-        InitialHistoryTask::<
+        HistoryDataTask::<
             CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonParam, FundingRate>,
             CommonParam,
             FundingRatePo,
