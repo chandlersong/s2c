@@ -157,13 +157,13 @@ mod tests {
 
     #[async_trait]
     impl AsyncRepeatTask for SuccessTask {
-        async fn initial_data(&self) -> Result<(), LiError> {
+        async fn execute(&self) -> Result<(), LiError> {
             let mut count = self.called.lock().unwrap();
             *count += 1;
             Ok(())
         }
 
-        async fn execute(&self) -> Result<(), LiError> {
+        async fn initial_data(&self) -> Result<(), LiError> {
             info!("Executing success initial task");
             Ok(())
         }
@@ -178,11 +178,11 @@ mod tests {
 
     #[async_trait]
     impl AsyncRepeatTask for FailTask {
-        async fn initial_data(&self) -> Result<(), LiError> {
+        async fn execute(&self) -> Result<(), LiError> {
             Err(LiError::CustomError("fail".to_string()))
         }
 
-        async fn execute(&self) -> Result<(), LiError> {
+        async fn initial_data(&self) -> Result<(), LiError> {
             info!("Executing fail initial task");
             Ok(())
         }

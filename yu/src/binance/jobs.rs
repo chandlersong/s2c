@@ -21,7 +21,7 @@ use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_restful_commands::SPOT_KLINE_HISTORY_COMMAND;
 use yue::binance::history_data::{CommonParam, SimpleHistoryFetcher};
 use yue::binance::order_book::{OrderBookService, Subscribe as OrderBookSubscribe};
-use yue::binance::websocket_handler::{BinanceSpotStreamHandler, KlineSubscribe, SpotAccountStreamHandler};
+use yue::binance::websocket_handler::{BinanceSpotStreamHandler, SpotAccountStreamHandler};
 use yue::tools::SnowyFlakeWrapper;
 use yue::websocket::client::{SendTextMessage, SubscribeToEvents, WebSocketClient, WebSocketEvent};
 use yue::websocket::event_bus::{Subscribe, WsMessageBus};
