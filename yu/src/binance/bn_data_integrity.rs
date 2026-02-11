@@ -25,7 +25,7 @@ pub const BN_SPOT_KLINE_CHECK: &str = "binance_spot_check"; // WireMock server a
 
 ///
 /// 判断重复的过程是这样的。
-/// 1. 每个symbol返回的gaps，取start相加作为key。因为end_time会变化。判断次数
+/// 1. 每个symbol返回的gaps，取start的和作为key。因为end_time会变化。判断次数
 /// 2. 如果超过次数，则加入ignore列表
 ///
 #[derive(Clone)]
