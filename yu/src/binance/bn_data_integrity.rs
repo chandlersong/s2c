@@ -76,7 +76,7 @@ impl Default for IgnoreSymbols {
         Self {
             symbols: Default::default(),
             missing_counts: Default::default(),
-            max_count: 1,
+            max_count: 10,
         }
     }
 }
