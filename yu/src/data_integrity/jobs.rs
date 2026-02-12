@@ -1,10 +1,12 @@
 use crate::binance::bn_data_integrity::{KlineGapRepairStrategy, SpotCheckStrategy, BN_SPOT_KLINE_CHECK};
 use crate::config::get_config;
 use crate::data_integrity::check::ValidationStrategy;
+use crate::data_integrity::clean::TableCleaner;
 use crate::data_integrity::repair::RepairStrategy;
 use crate::data_integrity::supervisor::DataIntegritySupervisor;
 use crate::errors::YuError;
 use actix::Actor;
+use li::actix_jobs::CronActor;
 use log::info;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -26,5 +28,10 @@ pub async fn start_check_data_integrity_jobs() -> Result<(), YuError> {
     let supervisor = DataIntegritySupervisor::new_with_config(config, check_strategies, repair_strategies).await;
     let _ = supervisor.start();
     info!("DataIntegrity started successfully");
+
+    let cleaner = TableCleaner::new(app_config.get_data_retention_ms());
+    //FUTURE: 可配置
+    let _ = CronActor::new("0 12 */3 * * * *", cleaner).start();
+    info!("data cleaner started successfully");
     Ok(())
 }
