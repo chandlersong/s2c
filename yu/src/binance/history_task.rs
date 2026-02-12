@@ -342,8 +342,8 @@ where
             .get_earliest_timestamp(Some(HistoryInterval::FiveMinutes))
             .ok_or_else(|| LiError::CustomError("Failed to get earliest timestamp from exchange_dashboard".to_string()))?;
         let symbols: Vec<TradingSymbol> = match self.symbol_type {
-            SymbolType::Spot => self.exchange_dashboard.spot_symbols(),
-            SymbolType::Swap => self.exchange_dashboard.swap_symbols(),
+            SymbolType::Spot => self.exchange_dashboard.spot_all_symbols(),
+            SymbolType::Swap => self.exchange_dashboard.swap_all_symbols(),
             _ => {
                 return Err(LiError::CustomError(format!(
                     "Unsupported symbol type {:?} in InitialHistoryTask",
@@ -377,22 +377,15 @@ where
     ///
     async fn execute(&self) -> Result<(), LiError> {
         let symbols: Vec<TradingSymbol> = match self.symbol_type {
-            SymbolType::Spot => self.exchange_dashboard.spot_symbols(),
-            SymbolType::Swap => self.exchange_dashboard.swap_symbols(),
+            SymbolType::Spot => self.exchange_dashboard.spot_trading_symbols(),
+            SymbolType::Swap => self.exchange_dashboard.swap_trading_symbols(),
             _ => {
                 return Err(LiError::CustomError(format!(
                     "Unsupported symbol type {:?} in InitialHistoryTask",
                     self.symbol_type
                 )));
             }
-        }
-        .read()
-        .unwrap()
-        .clone()
-        .into_iter()
-        .filter(|symbol| symbol.quote_asset == "USDT")
-        .filter(|symbol| symbol.status == "TRADE")
-        .collect();
+        };
         let symbol_count = symbols.len();
 
         let earliest_time = self.interval.get_now_close_unix_ms_utc() - self.interval.to_milliseconds();

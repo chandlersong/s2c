@@ -79,12 +79,36 @@ impl TradingSymbolRefresher for BinanceDashboard {
 impl ExchangeDashBoard for BinanceDashboard {
     type TradingSymbol = TradingSymbol;
 
-    fn spot_symbols(&self) -> Arc<RwLock<Vec<TradingSymbol>>> {
+    fn spot_all_symbols(&self) -> Arc<RwLock<Vec<TradingSymbol>>> {
         self.spot_symbols.clone()
     }
 
-    fn swap_symbols(&self) -> Arc<RwLock<Vec<TradingSymbol>>> {
+    fn swap_all_symbols(&self) -> Arc<RwLock<Vec<TradingSymbol>>> {
         self.swap_symbols.clone()
+    }
+
+    fn spot_trading_symbols(&self) -> Vec<TradingSymbol> {
+        self.spot_symbols
+            .read()
+            .unwrap()
+            .clone()
+            .iter()
+            .filter(|symbol| symbol.status == "TRADING")
+            .filter(|symbol| symbol.quote_asset == "USDT")
+            .map(|s| s.clone())
+            .collect()
+    }
+
+    fn swap_trading_symbols(&self) -> Vec<TradingSymbol> {
+        self.swap_symbols
+            .read()
+            .unwrap()
+            .clone()
+            .iter()
+            .filter(|symbol| symbol.status == "TRADING")
+            .filter(|symbol| symbol.quote_asset == "USDT")
+            .map(|s| s.clone())
+            .collect()
     }
 
     ///
@@ -117,6 +141,13 @@ impl ExchangeDashBoard for BinanceDashboard {
 
 #[async_trait]
 impl AsyncRepeatTask for BinanceDashboard {
+    ///
+    /// 初始化数据，与execute方法完全相同的逻辑
+    ///
+    async fn initial_data(&self) -> Result<(), LiError> {
+        self.execute().await
+    }
+
     ///
     /// FUTURE：
     /// 1，swap根据数据，判断上架和下架操作
@@ -162,13 +193,6 @@ impl AsyncRepeatTask for BinanceDashboard {
                 Err(LiError::CustomError(format!("获取合约交易对失败: {}", e)))
             }
         }
-    }
-
-    ///
-    /// 初始化数据，与execute方法完全相同的逻辑
-    ///
-    async fn initial_data(&self) -> Result<(), LiError> {
-        self.execute().await
     }
 
     fn task_name(&self) -> &str {

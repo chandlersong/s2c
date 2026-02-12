@@ -57,10 +57,13 @@ where
 pub trait ExchangeDashBoard {
     type TradingSymbol;
 
-    fn spot_symbols(&self) -> Arc<RwLock<Vec<Self::TradingSymbol>>>;
+    fn spot_all_symbols(&self) -> Arc<RwLock<Vec<Self::TradingSymbol>>>;
 
-    fn swap_symbols(&self) -> Arc<RwLock<Vec<Self::TradingSymbol>>>;
+    fn swap_all_symbols(&self) -> Arc<RwLock<Vec<Self::TradingSymbol>>>;
 
+    fn spot_trading_symbols(&self) -> Vec<Self::TradingSymbol>;
+
+    fn swap_trading_symbols(&self) -> Vec<Self::TradingSymbol>;
     ///
     /// 返回系统中应该保留的的最早的时间戳。
     /// 理论上，早于这个时间戳的数据，不保证存在。
