@@ -7,7 +7,15 @@ GET https://fapi.binance.com/fapi/v1/fundingRate
 content-type: application/json
 
 
-### 查询HUSDT
+### 查询HUSDT资金费率历史
 GET https://fapi.binance.com/fapi/v1/fundingRate
     ?symbol=RAYSOLUSDT HTTP/1.1
+content-type: application/json
+
+### 查询资金费率信息
+GET https://fapi.binance.com/fapi/v1/fundingInfo HTTP/1.1
+content-type: application/json
+
+### 查询最新标记价格和资金费率
+GET https://fapi.binance.com/fapi/v1/premiumIndex HTTP/1.1
 content-type: application/json

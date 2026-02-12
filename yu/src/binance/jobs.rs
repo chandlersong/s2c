@@ -221,6 +221,46 @@ async fn start_spot_websocket_stream_job() -> Result<(), YuError> {
         info!("✓ 交易流订阅请求已发送");
     }
 
+    // 根据配置订阅深度流
+    if let Some(depth_config) = &spot_config.depth {
+        if depth_config.enabled() && !depth_config.symbols.is_empty() {
+            let mut depth_params = Vec::new();
+            let update_speed = depth_config.update_speed();
+
+            for symbol in &depth_config.symbols {
+                // 转换为小写并添加深度流后缀
+                // 格式: btcusdt@depth20@100ms 或 btcusdt@depth@100ms
+                depth_params.push(format!("{}@depth@{}", symbol.to_lowercase(), update_speed));
+            }
+
+            if !depth_params.is_empty() {
+                info!(
+                    "📤 订阅深度流: {:?} (update_speed={}, levels={})",
+                    depth_params,
+                    depth_config.update_speed(),
+                    depth_config.levels()
+                );
+                let depth_subscribe_request = StreamCommandRequest {
+                    method: WS_SUBSCRIBE_COMMAND.to_string(),
+                    params: depth_params,
+                    id: snow_flake.next_id_u64(),
+                };
+
+                client_addr
+                    .send(SendTextMessage::new(
+                        to_string(&depth_subscribe_request).map_err(|e| YuError::CustomError(format!("序列化深度订阅请求失败: {}", e)))?,
+                    ))
+                    .await
+                    .map_err(|e| YuError::CustomError(format!("发送深度订阅消息失败: {}", e)))??;
+                info!("✓ 深度流订阅请求已发送");
+            }
+        } else {
+            info!("binance_websocket.spot.depth 未启用或没有配置symbols，跳过深度流订阅");
+        }
+    } else {
+        info!("binance_websocket.spot.depth 配置未启用，跳过深度流订阅");
+    }
+
     Ok(())
 }
 

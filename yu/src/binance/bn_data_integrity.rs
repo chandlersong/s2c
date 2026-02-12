@@ -7,7 +7,6 @@ use crate::errors::YuError;
 use crate::exchange::{CloneHistoryFetcherFactory, HistoryFetcherFactory};
 use crate::websocket::subscribers::storage_subscriber::get_spot_stream_writer;
 use async_trait::async_trait;
-use li::hash_of;
 use li::tools::time::unix_2_readable;
 use log::{debug, error, info, trace, Level};
 use std::collections::{HashMap, HashSet};

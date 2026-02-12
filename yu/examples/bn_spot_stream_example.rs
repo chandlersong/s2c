@@ -143,7 +143,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("✓ 请求 #2 已发送");
 
-    tokio::time::sleep(tokio::time::Duration::from_secs(90)).await;
+    loop {
+        tokio::time::sleep(tokio::time::Duration::from_secs(90)).await;
+    }
 
     info!("\n========== 示例结束 ==========");
     info!("提示: SPOT_WEBSOCKET 支持的方法包括:");
