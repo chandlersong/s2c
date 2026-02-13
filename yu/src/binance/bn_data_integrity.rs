@@ -21,6 +21,7 @@ use yue::errors::YueError;
 use yue::models::HistoryInterval;
 
 pub const BN_SPOT_KLINE_CHECK: &str = "binance_spot_check"; // WireMock server address
+pub const BN_SWAP_KLINE_CHECK: &str = "binance_swap_check"; // WireMock server address
 
 ///
 /// 判断重复的过程是这样的。
@@ -115,6 +116,19 @@ impl SpotCheckStrategy {
         Self {
             db_provider,
             table_name: BinanceTables::SpotKline.table_name(),
+            time_column: "candle_begin_time".to_string(),
+            symbol_column: "symbol".to_string(),
+            interval: HistoryInterval::FiveMinutes, // 5分钟
+            ignore_symbols: Arc::new(RwLock::new(IgnoreSymbols::default())),
+            data_retention_time,
+        }
+    }
+
+    pub fn swap_check_strategy(db_source: Option<DBProvider>, data_retention_time: u64) -> Self {
+        let db_provider = db_source.unwrap_or_else(|| DBProvider::default());
+        Self {
+            db_provider,
+            table_name: BinanceTables::SwapKline.table_name(),
             time_column: "candle_begin_time".to_string(),
             symbol_column: "symbol".to_string(),
             interval: HistoryInterval::FiveMinutes, // 5分钟
@@ -499,6 +513,12 @@ impl KlineGapRepairStrategy {
             symbol_type: SymbolType::Spot,
         }
     }
+
+    pub fn swap() -> Self {
+        Self {
+            symbol_type: SymbolType::Swap,
+        }
+    }
 }
 
 #[async_trait]
@@ -513,15 +533,15 @@ impl RepairStrategy for KlineGapRepairStrategy {
             return Ok(());
         }
 
-        let base_spot_kline_fetcher = match self.symbol_type {
+        let kline_fetcher = match self.symbol_type {
             SymbolType::Spot => SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND),
             SymbolType::Swap => SimpleHistoryFetcher::new(&SWAP_KLINE_HISTORY_COMMAND),
             _ => {
                 return Err(format!("KlineGapRepairStrategy does not support symbol type: {:?}", self.symbol_type));
             }
         };
-        let spot_kline_fetcher_factory: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonParam, BinanceKline> =
-            CloneHistoryFetcherFactory::new(base_spot_kline_fetcher);
+        let fetch_factory: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonParam, BinanceKline> =
+            CloneHistoryFetcherFactory::new(kline_fetcher);
         let writer = get_spot_stream_writer();
 
         // 并发拉取：使用 Semaphore 控制并发量，避免同时发起过多请求
@@ -541,7 +561,7 @@ impl RepairStrategy for KlineGapRepairStrategy {
                     table: _,
                     ..
                 } => {
-                    let factory = spot_kline_fetcher_factory.clone();
+                    let factory = fetch_factory.clone();
                     let writer_clone = writer.clone();
                     let sem_clone = sem.clone();
                     // spawn 一个异步任务来处理该 gap
