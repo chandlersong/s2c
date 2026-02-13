@@ -26,10 +26,28 @@ impl TableCleaner {
     /// 代码即配置。因为现阶段没必要做成可配置。就这样来弄了。
     ///
     pub fn new(retain_ms: u64) -> Self {
-        let info = vec![CleanInfo {
-            table_name: BinanceTables::SpotKline.table_name(),
-            time_col_name: "candle_begin_time".to_string(),
-        }];
+        let info = vec![
+            CleanInfo {
+                table_name: BinanceTables::SpotKline.table_name(),
+                time_col_name: "candle_begin_time".to_string(),
+            },
+            CleanInfo {
+                table_name: BinanceTables::SwapKline.table_name(),
+                time_col_name: "candle_begin_time".to_string(),
+            },
+            CleanInfo {
+                table_name: BinanceTables::SwapFundingRate.table_name(),
+                time_col_name: "funding_time".to_string(),
+            },
+            CleanInfo {
+                table_name: BinanceTables::SpotOrderEvents.table_name(),
+                time_col_name: "event_time".to_string(),
+            },
+            CleanInfo {
+                table_name: BinanceTables::SpotTrade.table_name(),
+                time_col_name: "event_time".to_string(),
+            },
+        ];
         Self {
             info,
             retain_ms,
