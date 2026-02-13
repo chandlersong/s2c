@@ -308,7 +308,7 @@ async fn start_refresh_history_data(origin_dash_board: BinanceDashboard) -> Resu
         &SWAP_KLINE_HISTORY_COMMAND,
         dash_board.clone(),
         swap_data_writer.clone(),
-        "refresh spot kline data",
+        "initial swap kline data",
         SymbolType::Swap,
         HistoryInterval::FiveMinutes,
     );
