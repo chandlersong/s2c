@@ -37,6 +37,7 @@ impl TableCleaner {
         }
     }
 
+    #[cfg(test)]
     pub fn new_with_db(retain_ms: u64, db_provider: DBProvider) -> Self {
         let info = vec![CleanInfo {
             table_name: BinanceTables::SpotKline.table_name(),

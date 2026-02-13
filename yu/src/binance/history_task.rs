@@ -193,14 +193,16 @@ where
         data_writer: Arc<dyn HistoryDataWriter<R, D> + Send + Sync>,
         task_name: String,
         symbol_type: SymbolType,
+        interval: Option<HistoryInterval>,
     ) -> Self {
+        let actual_interval = interval.unwrap_or_else(|| HistoryInterval::FiveMinutes);
         HistoryDataTask {
             kline_fetcher_factory: factory,
             exchange_dashboard,
             data_writer,
             task_name,
             symbol_type,
-            interval: HistoryInterval::FiveMinutes,
+            interval: actual_interval,
         }
     }
 
@@ -531,6 +533,7 @@ mod tests {
             data_writer,
             "test_refresh_spot_kline_normal".to_string(),
             SymbolType::Spot,
+            None,
         );
         let res: Result<(), LiError> = manager.initial_data().await;
 

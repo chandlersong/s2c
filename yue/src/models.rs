@@ -105,6 +105,17 @@ impl RequestInfo {
         Self::new_full_url(full, has_security, weight, rate_limit, request_timeout_mill_secs, rate_limit_timeout_secs)
     }
 
+    pub fn clone_with_weight(&mut self, new_weight: u32) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            has_security: self.has_security,
+            weight: new_weight,
+            rate_limit: self.rate_limit,
+            request_timeout_mill_secs: self.request_timeout_mill_secs,
+            rate_limit_timeout_secs: self.rate_limit_timeout_secs,
+        }
+    }
+
     // 如需获取内部 Url 的只读引用
     pub fn url(&self) -> &Url {
         &self.inner

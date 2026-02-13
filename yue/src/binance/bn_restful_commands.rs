@@ -227,6 +227,9 @@ pub static SWAP_FUNDING_RATE_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| {
 pub static SWAP_KLINE_HISTORY_COMMAND: LazyLock<RequestInfo> =
     LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_API, SWAP_KLINE_PATH, false, 5, get_bn_swap_limit(), None, Some(60 * 60)).unwrap());
 
+pub static SWAP_FIVE_MIN_KLINE_HISTORY_COMMAND: LazyLock<RequestInfo> =
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_API, SWAP_KLINE_PATH, false, 1, get_bn_swap_limit(), None, Some(60 * 60)).unwrap());
+
 /// 全局 RateLimiter，使用 OnceLock 延迟初始化
 
 pub fn execute_bn_get<'a, P, T, U>(info: &'a RequestInfo, param: Option<&'a P>, request_builder: T) -> YueRequest<'a, T, U, BinanceResponseHandler>

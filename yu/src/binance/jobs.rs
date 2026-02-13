@@ -1,4 +1,4 @@
-use crate::binance::binance_db_consts::BinanceTables::SpotKline;
+use crate::binance::binance_db_consts::BinanceTables::{SpotKline, SwapFundingRate, SwapKline};
 use crate::binance::binance_db_consts::ALL_BINANCE_TABLES;
 use crate::binance::bn_dashboard::{init_market_depth_dashboard, BinanceDashboard, MarketDepthDashBoard};
 use crate::binance::history_task::{DuckDBHistoryDataWriter, HistoryDataTask};
@@ -18,10 +18,13 @@ use std::sync::Arc;
 use yue::binance::bn_json_websocket::{StreamCommandRequest, SPOT_STREAM_WEBSOCKET, SPOT_WEBSOCKET, WS_SUBSCRIBE_COMMAND};
 use yue::binance::bn_models::common::SymbolType;
 use yue::binance::bn_models::spot_restful::BinanceKline;
-use yue::binance::bn_restful_commands::SPOT_KLINE_HISTORY_COMMAND;
+use yue::binance::bn_restful_commands::{
+    SPOT_KLINE_HISTORY_COMMAND, SWAP_FIVE_MIN_KLINE_HISTORY_COMMAND, SWAP_FUNDING_RATE_COMMAND, SWAP_KLINE_HISTORY_COMMAND,
+};
 use yue::binance::history_data::{CommonParam, SimpleHistoryFetcher};
 use yue::binance::order_book::{OrderBookService, Subscribe as OrderBookSubscribe};
 use yue::binance::websocket_handler::{BinanceSpotStreamHandler, SpotAccountStreamHandler};
+use yue::models::HistoryInterval;
 use yue::tools::SnowyFlakeWrapper;
 use yue::websocket::client::{SendTextMessage, SubscribeToEvents, WebSocketClient, WebSocketEvent};
 use yue::websocket::event_bus::{Subscribe, WsMessageBus};
@@ -270,18 +273,28 @@ async fn start_refresh_history_data(origin_dash_board: BinanceDashboard) -> Resu
     let update_dashboard_task = origin_dash_board.clone();
     let dash_board = Arc::new(origin_dash_board);
 
-    let base_spot_kline_fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
-    let spot_kline_fetcher: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonParam, BinanceKline> =
-        CloneHistoryFetcherFactory::new(base_spot_kline_fetcher);
+    let build_kline_task = |request_info, dash_board, data_writer, task_name: &str, symbol_type, interval| {
+        let base_fetcher = SimpleHistoryFetcher::new(request_info);
+        let fetcher_factory: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonParam, BinanceKline> =
+            CloneHistoryFetcherFactory::new(base_fetcher);
+        HistoryDataTask::<_, _, KlinePo, BinanceKline, BinanceDashboard>::new(
+            fetcher_factory,
+            dash_board,
+            data_writer,
+            task_name.to_string(),
+            symbol_type,
+            Some(interval),
+        )
+    };
 
     let spot_data_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SpotKline));
-
-    let spot_kline_task = HistoryDataTask::<_, _, KlinePo, BinanceKline, BinanceDashboard>::new(
-        spot_kline_fetcher,
+    let spot_kline_task = build_kline_task(
+        &SPOT_KLINE_HISTORY_COMMAND,
         dash_board.clone(),
         spot_data_writer,
-        "refresh spot kline data".to_string(),
+        "refresh spot kline data",
         SymbolType::Spot,
+        HistoryInterval::FiveMinutes,
     );
     spot_kline_task.initial_data().await?;
 
@@ -289,6 +302,38 @@ async fn start_refresh_history_data(origin_dash_board: BinanceDashboard) -> Resu
     let _ = CronActor::new("30 59 */6 * * * *", update_dashboard_task).start();
     //FUTURE: 支持不同的interval
     let _ = CronActor::new("01 */5 * * * * *", spot_kline_task).start();
+
+    let swap_data_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SwapKline));
+    let swap_initial_kline_task = build_kline_task(
+        &SWAP_KLINE_HISTORY_COMMAND,
+        dash_board.clone(),
+        swap_data_writer.clone(),
+        "refresh spot kline data",
+        SymbolType::Swap,
+        HistoryInterval::FiveMinutes,
+    );
+    swap_initial_kline_task.initial_data().await?;
+
+    let swap_update_kline_task = build_kline_task(
+        &SWAP_FIVE_MIN_KLINE_HISTORY_COMMAND,
+        dash_board.clone(),
+        swap_data_writer,
+        "refresh swap kline data",
+        SymbolType::Swap,
+        HistoryInterval::FiveMinutes,
+    );
+    let _ = CronActor::new("01 */5 * * * * *", swap_update_kline_task).start();
+
+    let funding_rate_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SwapFundingRate));
+    let funding_rate_task = build_kline_task(
+        &SWAP_FUNDING_RATE_COMMAND,
+        dash_board.clone(),
+        funding_rate_writer,
+        "refresh swap funding rate",
+        SymbolType::Swap,
+        HistoryInterval::OneHour,
+    );
+    let _ = CronActor::new("01 01 * * * * *", funding_rate_task).start();
     Ok(())
 }
 
