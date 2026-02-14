@@ -96,6 +96,7 @@ pub struct SpotCheckStrategy {
     interval: HistoryInterval,                  // Interval in seconds for each validation chunk
     ignore_symbols: Arc<RwLock<IgnoreSymbols>>, // 当gap超过这点时间，就不算missing。主要是防止下假币反复查询。
     data_retention_time: u64,                   // 数据保留时间，超过这个时间的数据，不进行检测
+    name: String,
 }
 
 ///
@@ -121,6 +122,7 @@ impl SpotCheckStrategy {
             interval: HistoryInterval::FiveMinutes, // 5分钟
             ignore_symbols: Arc::new(RwLock::new(IgnoreSymbols::default())),
             data_retention_time,
+            name: BN_SPOT_KLINE_CHECK.to_string(),
         }
     }
 
@@ -134,6 +136,7 @@ impl SpotCheckStrategy {
             interval: HistoryInterval::FiveMinutes, // 5分钟
             ignore_symbols: Arc::new(RwLock::new(IgnoreSymbols::default())),
             data_retention_time,
+            name: BN_SWAP_KLINE_CHECK.to_string(),
         }
     }
 
@@ -495,8 +498,8 @@ impl ValidationStrategy for SpotCheckStrategy {
         Ok(Some(result))
     }
 
-    fn name(&self) -> &'static str {
-        BN_SPOT_KLINE_CHECK
+    fn name(&self) -> String {
+        self.name.clone()
     }
 }
 

@@ -333,6 +333,7 @@ async fn start_refresh_history_data(origin_dash_board: BinanceDashboard) -> Resu
         SymbolType::Swap,
         HistoryInterval::OneHour,
     );
+    funding_rate_task.initial_data().await?;
     let _ = CronActor::new("01 01 * * * * *", funding_rate_task).start();
     Ok(())
 }

@@ -223,8 +223,8 @@ mod tests {
             }))
         }
 
-        fn name(&self) -> &'static str {
-            "gap"
+        fn name(&self) -> String {
+            "gap".to_string()
         }
     }
 
@@ -236,8 +236,8 @@ mod tests {
             Ok(None)
         }
 
-        fn name(&self) -> &'static str {
-            "noop"
+        fn name(&self) -> String {
+            "noop".to_string()
         }
     }
 

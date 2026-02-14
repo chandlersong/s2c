@@ -16,7 +16,7 @@ use tokio::time::sleep;
 pub trait ValidationStrategy: Send + Sync {
     async fn validate(&self) -> Result<Option<ValidationResult>, YuError>;
 
-    fn name(&self) -> &'static str;
+    fn name(&self) -> String;
 }
 
 #[derive(Clone)]

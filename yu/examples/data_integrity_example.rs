@@ -37,8 +37,8 @@ impl ValidationStrategy for CheckExampleStrategy {
         }))
     }
 
-    fn name(&self) -> &'static str {
-        "example"
+    fn name(&self) -> String {
+        "example".to_string()
     }
 }
 
