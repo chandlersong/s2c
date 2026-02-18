@@ -224,12 +224,26 @@ impl WebSocketHandler for BinanceSpotStreamHandler {
     }
 }
 
-pub struct AccountWebsocketInfo {
+/// 账户认证类型枚举
+///
+/// ## 设计思路
+/// - 支持币安 API 的两种主流签名认证方式
+/// - HMAC-SHA256：使用 secret_key 字符串进行 HMAC 签名
+/// - Ed25519：使用椭圆曲线签名，需要 SigningKey 私钥
+///
+/// ## 扩展点
+/// - 未来可添加 RSA 等其他签名方式
+/// - 可为每种认证方式添加特定配置（如签名算法版本）
+///
+/// ## 业务规范
+/// - HMAC 方式的 secret_key 必须是有效的 Base64 或 Hex 字符串
+/// - Ed25519 的 private_key 必须是有效的 32 字节签名密钥
+
+pub struct SpotStreamAccountWebsocketInfo {
     pub account_name: String,
     pub api_key: String,
     pub private_key: SigningKey,
 }
-
 /// Binance 账户流解析器（余额/订单事件）
 ///
 /// ## 设计思路和目的
@@ -252,13 +266,13 @@ pub struct AccountWebsocketInfo {
 /// - subscription_id 由 Binance 服务器分配，全局唯一
 /// - request_id 由本地生成，用于关联订阅请求和响应
 pub struct SpotAccountStreamHandler {
-    account_info_vec: Vec<AccountWebsocketInfo>,
+    account_info_vec: Vec<SpotStreamAccountWebsocketInfo>,
     id_to_account: RwLock<HashMap<u64, String>>,
     subscription_to_account: RwLock<HashMap<u64, String>>, // 运行期维护订阅ID与账户名关系，读多写少用RwLock
 }
 
 impl SpotAccountStreamHandler {
-    pub fn new(account_info_vec: Vec<AccountWebsocketInfo>) -> Self {
+    pub fn new(account_info_vec: Vec<SpotStreamAccountWebsocketInfo>) -> Self {
         Self {
             account_info_vec,
             id_to_account: RwLock::new(HashMap::new()),
@@ -596,12 +610,12 @@ mod tests {
         // 使用固定的签名密钥用于测试
         let signing_key_bytes = [0u8; 32];
         let account_infos = vec![
-            AccountWebsocketInfo {
+            SpotStreamAccountWebsocketInfo {
                 account_name: "acc_test_1".to_string(),
                 api_key: "key1".to_string(),
                 private_key: ed25519_dalek::SigningKey::from_bytes(&signing_key_bytes),
             },
-            AccountWebsocketInfo {
+            SpotStreamAccountWebsocketInfo {
                 account_name: "acc_test_2".to_string(),
                 api_key: "key2".to_string(),
                 private_key: ed25519_dalek::SigningKey::from_bytes(&signing_key_bytes),

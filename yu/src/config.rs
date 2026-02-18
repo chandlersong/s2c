@@ -3,37 +3,66 @@ use serde::Deserialize;
 use std::env;
 use std::path::Path;
 use std::sync::OnceLock;
-use yue::binance::websocket_handler::AccountWebsocketInfo;
+use yue::binance::websocket_handler::SpotStreamAccountWebsocketInfo;
 use yue::tools::load_ed25519_signing_key;
 
+/// 账户配置的认证类型枚举
+///
+/// ## 设计思路
+/// - 支持两种币安 API 认证方式：HMAC-SHA256 和 Ed25519
+/// - 使用 tagged enum 确保类型安全，不同认证方式的字段语义明确
+/// - 通过 serde tag 支持 YAML 配置文件中的 `type` 字段区分
+///
+/// ## 扩展点
+/// - 未来可添加其他认证方式（如 RSA），只需新增 enum 变体
+/// - 可为每种认证方式添加特定的配置参数
+///
+/// ## 业务规范
+/// - HMAC 方式：`value` 字段存储 secret_key（字符串）
+/// - Ed25519 方式：`value` 字段存储私钥文件路径
+/// - 所有 `account_name` 和 `api_key` 必须非空
 #[derive(Deserialize, Debug, Clone)]
-pub struct SpotWebSocketConfig {
-    pub accounts: Vec<AccountConfig>,
+#[serde(tag = "type")]
+pub enum AccountConfig {
+    HMAC {
+        account_name: String,
+        api_key: String,
+        api_secret: String,
+    },
+    Ed25519 {
+        account_name: String,
+        api_key: String,
+        key_path: String,
+    },
 }
 
-#[derive(Deserialize, Debug, Clone)]
-pub struct AccountConfig {
-    pub account_name: String,
-    pub api_key: String,
-    pub key_path: String,
-}
-
-impl Into<AccountWebsocketInfo> for AccountConfig {
-    fn into(self) -> AccountWebsocketInfo {
-        let private_key = load_ed25519_signing_key(self.key_path.as_ref()).expect("加载私钥失败");
-        AccountWebsocketInfo {
-            account_name: self.account_name.clone(),
-            api_key: self.api_key.clone(),
-            private_key: private_key,
+impl Into<SpotStreamAccountWebsocketInfo> for AccountConfig {
+    fn into(self) -> SpotStreamAccountWebsocketInfo {
+        match self {
+            AccountConfig::Ed25519 {
+                account_name,
+                api_key,
+                key_path,
+            } => {
+                let private_key = load_ed25519_signing_key(key_path.as_ref()).expect("加载私钥失败");
+                SpotStreamAccountWebsocketInfo {
+                    account_name,
+                    api_key,
+                    private_key,
+                }
+            }
+            _ => {
+                panic!("to SpotStreamAccountWebsocketInfo only support Ed25519 account");
+            }
         }
     }
 }
 
-// Binance WebSocket 配置结构体
+// Binance 配置结构体
 #[derive(Deserialize, Debug, Clone)]
-pub struct BinanceWebSocketConfig {
+pub struct BinanceConfig {
+    pub accounts: Option<Vec<AccountConfig>>,
     pub spot_stream: Option<SpotWebSocketStreamConfig>,
-    pub spot: Option<SpotWebSocketConfig>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -103,7 +132,7 @@ pub struct AppConfig {
     // Optional log level for the application. Example values: "off", "error", "warn", "info", "debug", "trace"
     #[serde(rename = "logLevel")]
     pub log_level: Option<String>,
-    pub binance_websocket: Option<BinanceWebSocketConfig>,
+    pub binance: Option<BinanceConfig>,
     pub data_integrity: Option<DataIntegrityConfig>,
 }
 
@@ -207,7 +236,7 @@ pub fn get_config() -> &'static AppConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::AppConfig;
+    use super::{AccountConfig, AppConfig};
     use config::Config;
 
     // 使用直接反序列化避免 OnceLock 缓存问题
@@ -218,17 +247,17 @@ mod tests {
             .build()
             .expect("Failed to build config");
 
-        let app_config: super::AppConfig = config_builder.try_deserialize().expect("Failed to deserialize config");
+        let app_config: AppConfig = config_builder.try_deserialize().expect("Failed to deserialize config");
         assert_eq!(app_config.get_data_retention_hours(), 99, "get_data_retention_hours 不正确");
         // 验证 spot_websocket 配置
 
         // 验证 binance_websocket 配置存在
-        assert!(app_config.binance_websocket.is_some(), "binance_websocket 配置应该存在");
+        assert!(app_config.binance.is_some(), "binance 配置应该存在");
 
-        let ws_config = app_config.binance_websocket.as_ref().unwrap();
-        assert!(ws_config.spot_stream.is_some(), "spot_stream 配置应该存在");
+        let binance_config = app_config.binance.as_ref().unwrap();
+        assert!(binance_config.spot_stream.is_some(), "spot_stream 配置应该存在");
 
-        let spot_stream_config = ws_config.spot_stream.as_ref().unwrap();
+        let spot_stream_config = binance_config.spot_stream.as_ref().unwrap();
 
         // 验证 trade 配置
         assert!(spot_stream_config.trade.is_some(), "trade 配置应该存在");
@@ -252,19 +281,37 @@ mod tests {
         assert_eq!(depth_config.update_speed, Some("100ms".to_string()), "update_speed 应该是 100ms");
         assert_eq!(depth_config.levels, Some(20), "levels 应该是 20");
 
-        let spot_ws_config = ws_config.spot.as_ref().unwrap();
+        let accounts = binance_config.accounts.as_ref().unwrap();
 
-        assert_eq!(spot_ws_config.accounts.len(), 2, "accounts 应该有 2 个");
+        assert_eq!(accounts.len(), 2, "accounts 应该有 2 个");
 
-        // 验证第一个账户
-        assert_eq!(spot_ws_config.accounts[0].account_name, "account1", "第一个账户名称应该是 account1");
-        assert_eq!(spot_ws_config.accounts[0].api_key, "test_api_key_1", "第一个账户 API Key 应该匹配");
-        assert_eq!(spot_ws_config.accounts[0].key_path, "test_secret_key_1", "第一个账户 Secret Key 应该匹配");
+        // 验证第一个账户（HMAC 类型）
+        match &accounts[0] {
+            AccountConfig::HMAC {
+                account_name,
+                api_key,
+                api_secret,
+            } => {
+                assert_eq!(account_name, "account1", "第一个账户名称应该是 account1");
+                assert_eq!(api_key, "test_api_key_1", "第一个账户 API Key 应该匹配");
+                assert_eq!(api_secret, "test_secret_key_1", "第一个账户 Secret Key 应该匹配");
+            }
+            _ => panic!("第一个账户应该是 HMAC 类型"),
+        }
 
-        // 验证第二个账户
-        assert_eq!(spot_ws_config.accounts[1].account_name, "account2", "第二个账户名称应该是 account2");
-        assert_eq!(spot_ws_config.accounts[1].api_key, "test_api_key_2", "第二个账户 API Key 应该匹配");
-        assert_eq!(spot_ws_config.accounts[1].key_path, "test_secret_key_2", "第二个账户 Secret Key 应该匹配");
+        // 验证第二个账户（Ed25519 类型）
+        match &accounts[1] {
+            AccountConfig::Ed25519 {
+                account_name,
+                api_key,
+                key_path,
+            } => {
+                assert_eq!(account_name, "account2", "第二个账户名称应该是 account2");
+                assert_eq!(api_key, "test_api_key_2", "第二个账户 API Key 应该匹配");
+                assert_eq!(key_path, "test_secret_key_2", "第二个账户私钥路径应该匹配");
+            }
+            _ => panic!("第二个账户应该是 Ed25519 类型"),
+        }
     }
 
     #[test]
@@ -274,10 +321,10 @@ mod tests {
             .build()
             .expect("Failed to build config");
 
-        let app_config: super::AppConfig = config_builder.try_deserialize().expect("Failed to deserialize config");
+        let app_config: AppConfig = config_builder.try_deserialize().expect("Failed to deserialize config");
 
         // 最小配置不应该包含 binance_websocket
-        assert!(app_config.binance_websocket.is_none(), "最小配置不应该包含 binance_websocket");
+        assert!(app_config.binance.is_none(), "最小配置不应该包含 binance_websocket");
 
         assert_eq!(app_config.get_data_retention_hours(), 100000, "get_data_retention_hours 默认值不正确");
         // 但应该包含基础配置
@@ -303,7 +350,7 @@ data_integrity:
             .build()
             .expect("Failed to build config");
 
-        let app_config: super::AppConfig = config_builder.try_deserialize().expect("Failed to deserialize config");
+        let app_config: AppConfig = config_builder.try_deserialize().expect("Failed to deserialize config");
 
         let di = app_config.data_integrity.expect("data_integrity should exist");
         assert_eq!(di.startup_check_timeout_ms, 5000);
@@ -325,7 +372,7 @@ logLevel: "info"
             .build()
             .expect("Failed to build config");
 
-        let app_config: super::AppConfig = config_builder.try_deserialize().expect("Failed to deserialize config");
+        let app_config: AppConfig = config_builder.try_deserialize().expect("Failed to deserialize config");
 
         let di = app_config.get_data_integrity_config();
         assert_eq!(di.startup_check_timeout_ms, 3_600_000);
@@ -346,7 +393,7 @@ logLevel: "info"
             database: None,
             data_retention_hours: Some(3),
             log_level: None,
-            binance_websocket: None,
+            binance: None,
             data_integrity: None,
         };
         let got = cfg.get_earliest_hour_time_ms(Some(utc_now));
@@ -363,7 +410,7 @@ logLevel: "info"
             database: None,
             data_retention_hours: Some(0),
             log_level: None,
-            binance_websocket: None,
+            binance: None,
             data_integrity: None,
         };
         let got = cfg.get_earliest_hour_time_ms(Some(utc_now));
@@ -380,7 +427,7 @@ logLevel: "info"
             database: None,
             data_retention_hours: Some(5),
             log_level: None,
-            binance_websocket: None,
+            binance: None,
             data_integrity: None,
         };
         let got = cfg.get_earliest_hour_time_ms(Some(utc_now));

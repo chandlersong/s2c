@@ -86,7 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = get_config();
 
     // 检查是否启用了 WebSocket 功能
-    let ws_config = match &config.binance_websocket {
+    let ws_config = match &config.binance {
         Some(ws) => ws,
         None => {
             info!("binance_websocket 配置未启用，跳过 WebSocket 任务");

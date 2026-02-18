@@ -292,12 +292,12 @@ pub struct SubscribeResponsePayload {
     pub status: Option<u16>,
     /// 响应结果
     #[serde(default)]
-    pub result: Option<ListenKeyResult>,
+    pub result: Option<Subscription>,
 }
 
 /// 监听密钥结果
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct ListenKeyResult {
+pub struct Subscription {
     /// 订阅ID
     #[serde(rename = "subscriptionId")]
     pub subscription_id: u64,

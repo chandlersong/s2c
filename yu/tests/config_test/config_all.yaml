@@ -8,15 +8,16 @@ data_integrity:
     max_retries: 10
 database:
   path: "test.db"
-binance_websocket:
-  spot:
-    accounts:
-      - account_name: "account1"
-        api_key: "test_api_key_1"
-        key_path: "test_secret_key_1"
-      - account_name: "account2"
-        api_key: "test_api_key_2"
-        key_path: "test_secret_key_2"
+binance:
+  accounts:
+    - account_name: "account1"
+      api_key: "test_api_key_1"
+      api_secret: "test_secret_key_1"
+      type: "HMAC"
+    - account_name: "account2"
+      api_key: "test_api_key_2"
+      key_path: "test_secret_key_2"
+      type: "Ed25519"
   spot_stream:
     trade:
       enabled: true

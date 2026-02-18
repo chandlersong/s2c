@@ -57,6 +57,8 @@ pub const SWAP_FUNDING_INFO_PATH: &str = "/fapi/v1/fundingInfo";
 pub const BALANCE_PATH: &str = "/papi/v1/balance";
 pub const SWAP_POSITION_PATH: &str = "/papi/v1/um/positionRisk";
 
+pub const SWAP_LISTEN_KEY_PATH: &str = "/fapi/v1/listenKey";
+
 /// 用于自动生成币安相关限流器静态变量和获取函数的宏
 macro_rules! define_rate_limiter {
     ($name:ident, $rate_const:ident, $fn_name:ident) => {
@@ -230,6 +232,9 @@ pub static SWAP_KLINE_HISTORY_COMMAND: LazyLock<RequestInfo> =
 pub static SWAP_FIVE_MIN_KLINE_HISTORY_COMMAND: LazyLock<RequestInfo> =
     LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_API, SWAP_KLINE_PATH, false, 1, get_bn_swap_limit(), None, Some(60 * 60)).unwrap());
 
+pub static SWAP_LISTEN_KEY_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| {
+    RequestInfo::from_base_path(BINANCE_SWAP_API, SWAP_LISTEN_KEY_PATH, false, 2, get_bn_swap_limit(), None, Some(60 * 60)).unwrap()
+});
 /// 全局 RateLimiter，使用 OnceLock 延迟初始化
 
 pub fn execute_bn_get<'a, P, T, U>(info: &'a RequestInfo, param: Option<&'a P>, request_builder: T) -> YueRequest<'a, T, U, BinanceResponseHandler>

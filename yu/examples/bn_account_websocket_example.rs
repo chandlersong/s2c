@@ -67,10 +67,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("WebSocket 客户端已启动（环境变量代理）");
 
     let acc_infos = get_config()
-        .binance_websocket
+        .binance
         .as_ref()
-        .and_then(|ws| ws.spot.as_ref())
-        .map(|spot| spot.accounts.iter().map(|acc| acc.clone().into()).collect())
+        .and_then(|ws| ws.accounts.as_ref())
+        .map(|accounts| {
+            accounts
+                .iter()
+                .filter_map(|acc| {
+                    if let yu::config::AccountConfig::Ed25519 { account_name, .. } = acc {
+                        info!("账户{}开始监听", account_name);
+                        Some(acc.clone().into())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
 
     let handler = SpotAccountStreamHandler::new(acc_infos);
