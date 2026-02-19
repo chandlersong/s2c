@@ -143,3 +143,11 @@ where
     }
     Ok(out)
 }
+
+/// 币安用户数据流 Listen Key 响应
+/// POST /api/v3/userDataStream 或 POST /fapi/v1/listenKey 的响应
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct ListenKeyResponse {
+    #[serde(rename = "listenKey")]
+    pub listen_key: String,
+}

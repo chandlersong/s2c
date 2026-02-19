@@ -139,10 +139,7 @@ mod http_clients_yue_request_tests {
         let result: serde_json::Value = YueRequest {
             info: &request_info,
             param: None,
-            request_builder: BNSecurityRequestBuilder {
-                api_key: "test_key".to_string(),
-                api_secret: "test_secret".to_string(),
-            },
+            request_builder: BNSecurityRequestBuilder::new("test_key".to_string(), "test_secret".to_string()),
             body: None,
             method: Method::GET,
             response_handler: JsonResponseHandler::new(),

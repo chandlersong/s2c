@@ -86,9 +86,15 @@ define_rate_limiter!(FUNDING_RATE_RATE_LIMITER, SWAP_FUNDING_PER_MINUTE, get_bn_
 
 #[derive(Clone)]
 pub struct BNSecurityRequestBuilder {
-    //PLAN: 用security的那个包来包裹一下，优先级低
-    pub api_key: String,
-    pub api_secret: String,
+    //FUTURE: 用security的那个包来包裹一下，优先级低
+    api_key: String,
+    api_secret: String,
+}
+
+impl BNSecurityRequestBuilder {
+    pub fn new(api_key: String, api_secret: String) -> Self {
+        Self { api_key, api_secret }
+    }
 }
 
 impl YueRequestBuilder for BNSecurityRequestBuilder {

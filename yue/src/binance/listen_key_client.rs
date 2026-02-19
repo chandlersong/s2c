@@ -1,21 +1,14 @@
-use crate::binance::bn_models::spot_restful::ListenKeyResponse;
+use crate::binance::bn_models::common::ListenKeyResponse;
+use crate::binance::bn_restful_commands::{BNSecurityRequestBuilder, SWAP_LISTEN_KEY_COMMAND, execute_bn_post, execute_bn_put};
+use crate::binance::history_data::CommonParam;
 use crate::errors::YueError;
-use crate::http_client::YueRequest;
 use crate::models::RequestInfo;
 use actix::{Actor, AsyncContext, Context, Handler, Message as ActixMessage};
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 use tokio::time::sleep;
-
-/// 获取新的 listen key
-#[derive(Clone)]
-pub struct GetListenKey;
-
-impl ActixMessage for GetListenKey {
-    type Result = Result<String, YueError>;
-}
 
 /// 手动续期 listen key
 #[derive(Clone)]
@@ -59,16 +52,30 @@ pub struct ListenKeyClient {
     pub renew_listen_key_request: RequestInfo,
     // 续期间隔（毫秒），默认 3600000ms = 60 分钟
     pub renew_interval_ms: u64,
+    api_key: String,
+    api_secret: String,
+    name: String,
 }
 
 impl ListenKeyClient {
     /// 创建新的 ListenKeyClient
-    pub fn new(apply_listen_key_request: RequestInfo, renew_listen_key_request: RequestInfo, renew_interval_ms: u64) -> Self {
+    pub fn new(
+        name: &str,
+        apply_listen_key_request: RequestInfo,
+        renew_listen_key_request: RequestInfo,
+        renew_interval_ms: Option<u64>,
+        api_key: &str,
+        api_secret: &str,
+    ) -> Self {
+        let actual_renew_interval_ms = renew_interval_ms.unwrap_or(55 * 60 * 1000); // 默认 55 分钟
         Self {
             listen_key: Arc::new(Mutex::new(String::new())),
             apply_listen_key_request,
             renew_listen_key_request,
-            renew_interval_ms,
+            renew_interval_ms: actual_renew_interval_ms,
+            api_key: api_key.to_string(),
+            api_secret: api_secret.to_string(),
+            name: name.to_string(),
         }
     }
 
@@ -88,53 +95,26 @@ impl ListenKeyClient {
     async fn fetch_new_listen_key(&self) -> Result<String, YueError> {
         info!("正在获取新的 listen key...");
 
-        let request = YueRequest {
-            info: &self.apply_listen_key_request,
-            param: None,
-            request_builder: crate::binance::bn_restful_commands::BNSecurityRequestBuilder {
-                api_key: "".to_string(),
-                api_secret: "".to_string(),
-            },
-            body: None,
-            method: reqwest::Method::POST,
-            response_handler: crate::binance::bn_restful_commands::BinanceResponseHandler::new(),
-            _phantom: std::marker::PhantomData,
-        };
-
-        let response: ListenKeyResponse = request.execute().await?;
-
+        let builder = BNSecurityRequestBuilder::new(self.api_key.to_string(), self.api_secret.to_string());
+        let create_response =
+            execute_bn_post::<CommonParam, BNSecurityRequestBuilder, ListenKeyResponse>(&self.apply_listen_key_request, None, None, builder)
+                .execute()
+                .await?;
         info!(
             "成功获取 listen key: {}",
-            response.listen_key.chars().take(20).collect::<String>() + "..."
+            create_response.listen_key.chars().take(20).collect::<String>() + "..."
         );
-        Ok(response.listen_key)
+        Ok(create_response.listen_key)
     }
 
     /// 发送 HTTP 请求续期 listen key
     async fn renew_current_listen_key(&self) -> Result<(), YueError> {
-        let listen_key = self.get_current_listen_key();
-
-        if listen_key.is_empty() {
-            warn!("listen key 为空，无法续期");
-            return Err(YueError::new("listen key 为空"));
-        }
-
-        info!("正在续期 listen key: {}", listen_key.chars().take(20).collect::<String>() + "...");
-
-        let request = YueRequest {
-            info: &self.renew_listen_key_request,
-            param: None,
-            request_builder: crate::binance::bn_restful_commands::BNSecurityRequestBuilder {
-                api_key: "".to_string(),
-                api_secret: "".to_string(),
-            },
-            body: None,
-            method: reqwest::Method::PUT,
-            response_handler: crate::binance::bn_restful_commands::BinanceResponseHandler::new(),
-            _phantom: std::marker::PhantomData,
-        };
-
-        let _: serde_json::Value = request.execute().await?;
+        let builder = BNSecurityRequestBuilder::new(self.api_key.to_string(), self.api_secret.to_string());
+        let renew_response =
+            execute_bn_put::<CommonParam, BNSecurityRequestBuilder, ListenKeyResponse>(&SWAP_LISTEN_KEY_COMMAND, None, None, builder)
+                .execute()
+                .await?;
+        println!("renew listen_key is {:?}", renew_response.listen_key);
 
         info!("成功续期 listen key");
         Ok(())
@@ -151,6 +131,9 @@ impl Actor for ListenKeyClient {
         let addr = ctx.address();
         let interval_duration = Duration::from_millis(self.renew_interval_ms);
 
+        let listen_key = self.get_current_listen_key();
+        info!("开始监听账户,账户为: {} ", self.name);
+
         tokio::spawn(async move {
             loop {
                 sleep(interval_duration).await;
@@ -164,20 +147,6 @@ impl Actor for ListenKeyClient {
                 }
             }
         });
-    }
-}
-
-impl Handler<GetListenKey> for ListenKeyClient {
-    type Result = Result<String, YueError>;
-
-    fn handle(&mut self, _msg: GetListenKey, _ctx: &mut Context<Self>) -> Self::Result {
-        let key = self.get_current_listen_key();
-
-        if key.is_empty() {
-            Err(YueError::new("listen key 未初始化，请先调用获取 listen key"))
-        } else {
-            Ok(key)
-        }
     }
 }
 
