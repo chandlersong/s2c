@@ -99,7 +99,7 @@ impl ActixMessage for SubscribeToEvents {
 }
 
 /// 内部命令，用于 Actor 和 Connection 之间通信
-enum InternalCommand {
+pub enum InternalCommand {
     /// 添加订阅者
     AddSubscriber(Recipient<WebSocketEvent>),
     /// 发送 WebSocket 消息
@@ -254,10 +254,10 @@ impl Handler<SubscribeToEvents> for WebSocketClient {
 
 /// WebSocket 连接管理器
 /// 负责：实际的 WebSocket 连接、重连、消息收发
-struct WebSocketConnection;
+pub struct WebSocketConnection;
 
 impl WebSocketConnection {
-    async fn run(
+    pub(crate) async fn run(
         url: String,
         reconnect_interval: Duration,
         proxy: Option<String>,

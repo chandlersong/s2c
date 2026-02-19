@@ -46,13 +46,14 @@ async fn main() -> Result<(), YuError> {
         api_secret,
     }) = account
     {
-        let _ = ListenKeyClient::new(
+        let _ = ListenKeyClient::swap(
             &account_name,
             SWAP_LISTEN_KEY_COMMAND.clone(),
             SWAP_LISTEN_KEY_COMMAND.clone(),
             None,
             &api_key,
             &api_secret,
+            app_config.proxy_url.clone(),
         )
         .start();
     }
