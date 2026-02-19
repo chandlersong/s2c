@@ -4,7 +4,7 @@ use li::tools::logs::setup_logger;
 use log::{info, LevelFilter};
 use std::collections::HashMap;
 use std::time::Duration;
-use yu::config::{get_config, AccountConfig};
+use yu::config::{get_config, SecurityType};
 use yu::errors::YuError;
 use yue::binance::bn_models::swap_account_stream::BinanceSwapAccountStreamResponse;
 use yue::binance::bn_restful_commands::SWAP_LISTEN_KEY_COMMAND;
@@ -43,32 +43,23 @@ async fn main() -> Result<(), YuError> {
     }
 
     // 从配置中安全获取第一个 HMAC 类型的账户
-    let account = app_config
-        .binance
-        .as_ref()
-        .unwrap()
-        .accounts
-        .as_ref()
-        .unwrap()
-        .iter()
-        .find_map(|a| match a {
-            AccountConfig::HMAC { .. } => Some(a.clone()), // 直接克隆并返回整个对象
-            _ => None,
-        });
+    let account = app_config.binance.as_ref().unwrap().accounts.as_ref().unwrap().iter().find_map(|a| {
+        if a.secret_type == SecurityType::HMAC {
+            info!("账户{}开始监听", a.account_name);
+            Some(a.clone())
+        } else {
+            None
+        }
+    });
 
-    if let Some(AccountConfig::HMAC {
-        account_name,
-        api_key,
-        api_secret,
-    }) = account
-    {
+    if let Some(acc) = account {
         let addr = ListenKeyClient::swap(
-            &account_name,
+            &acc.account_name,
             SWAP_LISTEN_KEY_COMMAND.clone(),
             SWAP_LISTEN_KEY_COMMAND.clone(),
             None,
-            &api_key,
-            &api_secret,
+            &acc.api_key,
+            &acc.value,
             app_config.proxy_url.clone(),
         )
         .start();

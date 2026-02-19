@@ -3,7 +3,7 @@ use crate::binance::binance_db_consts::ALL_BINANCE_TABLES;
 use crate::binance::bn_dashboard::{init_market_depth_dashboard, BinanceDashboard, MarketDepthDashBoard};
 use crate::binance::history_task::{DuckDBHistoryDataWriter, HistoryDataTask};
 use crate::binance::models::po::KlinePo;
-use crate::config::get_config;
+use crate::config::{get_config, AccountConfig, SecurityType};
 use crate::duck_db::DBProvider;
 use crate::errors::YuError;
 use crate::exchange::CloneHistoryFetcherFactory;
@@ -69,9 +69,9 @@ pub async fn start_spot_websocket_jobs() -> Result<(), YuError> {
         .map(|accounts| {
             accounts
                 .iter()
-                .filter_map(|acc| {
-                    if let crate::config::AccountConfig::Ed25519 { account_name, .. } = acc {
-                        info!("账户{}开始监听", account_name);
+                .filter_map(|acc: &AccountConfig| {
+                    if acc.secret_type == SecurityType::Ed25519 {
+                        info!("账户{}开始监听", acc.account_name);
                         Some(acc.clone().into())
                     } else {
                         None

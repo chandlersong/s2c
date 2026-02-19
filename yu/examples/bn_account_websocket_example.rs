@@ -3,7 +3,7 @@ use li::tools::logs::setup_logger;
 use log::{info, LevelFilter};
 use std::collections::HashMap;
 use yu::binance::jobs::initial_tables;
-use yu::config::get_config;
+use yu::config::{get_config, SecurityType};
 use yu::websocket::subscribers::AccountSyncActor;
 use yue::binance::bn_json_websocket::SPOT_WEBSOCKET;
 use yue::binance::bn_models::spot_websocket::BinanceSpotWebSocketResponse;
@@ -74,8 +74,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             accounts
                 .iter()
                 .filter_map(|acc| {
-                    if let yu::config::AccountConfig::Ed25519 { account_name, .. } = acc {
-                        info!("账户{}开始监听", account_name);
+                    if acc.secret_type == SecurityType::Ed25519 {
+                        info!("账户{}开始监听", acc.account_name);
                         Some(acc.clone().into())
                     } else {
                         None

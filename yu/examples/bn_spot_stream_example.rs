@@ -144,13 +144,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("✓ 请求 #2 已发送");
 
     loop {
+        info!("运行了90s，等待接收数据...");
         tokio::time::sleep(tokio::time::Duration::from_secs(90)).await;
     }
-
-    info!("\n========== 示例结束 ==========");
-    info!("提示: SPOT_WEBSOCKET 支持的方法包括:");
-    info!("  - trades: 成交查询");
-    info!("更多方法见: https://binance-docs.github.io/apidocs/spot/cn/");
-
-    Ok(())
 }

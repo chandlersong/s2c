@@ -6,48 +6,45 @@ use std::sync::OnceLock;
 use yue::binance::websocket_handler::SpotStreamAccountWebsocketInfo;
 use yue::tools::load_ed25519_signing_key;
 
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum SecurityType {
+    #[serde(rename = "HMAC")]
+    HMAC,
+    #[serde(rename = "Ed25519")]
+    Ed25519,
+}
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+pub enum AccountType {
+    #[serde(rename = "BinanceNormal")]
+    BinanceNormal, //币安一般账户
+    #[serde(rename = "BinancePortfolio")]
+    BinancePortfolio, //币安统一账户
+}
+
 /// 账户配置的认证类型枚举
 ///
 /// ## 设计思路
-/// - 支持两种币安 API 认证方式：HMAC-SHA256 和 Ed25519
-/// - 使用 tagged enum 确保类型安全，不同认证方式的字段语义明确
-/// - 通过 serde tag 支持 YAML 配置文件中的 `type` 字段区分
+/// - 想要把这个做成通用的。支持不同交易所。所以就这样来设计了。
 ///
-/// ## 扩展点
-/// - 未来可添加其他认证方式（如 RSA），只需新增 enum 变体
-/// - 可为每种认证方式添加特定的配置参数
-///
-/// ## 业务规范
-/// - HMAC 方式：`value` 字段存储 secret_key（字符串）
-/// - Ed25519 方式：`value` 字段存储私钥文件路径
-/// - 所有 `account_name` 和 `api_key` 必须非空
 #[derive(Deserialize, Debug, Clone)]
 #[serde(tag = "type")]
-pub enum AccountConfig {
-    HMAC {
-        account_name: String,
-        api_key: String,
-        api_secret: String,
-    },
-    Ed25519 {
-        account_name: String,
-        api_key: String,
-        key_path: String,
-    },
+pub struct AccountConfig {
+    pub account_name: String,
+    pub api_key: String,
+    pub value: String,
+    pub secret_type: SecurityType,
+    pub account_type: AccountType,
 }
 
 impl Into<SpotStreamAccountWebsocketInfo> for AccountConfig {
     fn into(self) -> SpotStreamAccountWebsocketInfo {
-        match self {
-            AccountConfig::Ed25519 {
-                account_name,
-                api_key,
-                key_path,
-            } => {
-                let private_key = load_ed25519_signing_key(key_path.as_ref()).expect("加载私钥失败");
+        match self.secret_type {
+            SecurityType::Ed25519 => {
+                let private_key = load_ed25519_signing_key(self.value.as_ref()).expect("加载私钥失败");
                 SpotStreamAccountWebsocketInfo {
-                    account_name,
-                    api_key,
+                    account_name: self.account_name.clone(),
+                    api_key: self.api_key.clone(),
                     private_key,
                 }
             }
@@ -236,7 +233,7 @@ pub fn get_config() -> &'static AppConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{AccountConfig, AppConfig};
+    use super::{AccountType, AppConfig, SecurityType};
     use config::Config;
 
     // 使用直接反序列化避免 OnceLock 缓存问题
@@ -285,33 +282,25 @@ mod tests {
 
         assert_eq!(accounts.len(), 2, "accounts 应该有 2 个");
 
+        let account_hmac = &accounts[0];
         // 验证第一个账户（HMAC 类型）
-        match &accounts[0] {
-            AccountConfig::HMAC {
-                account_name,
-                api_key,
-                api_secret,
-            } => {
-                assert_eq!(account_name, "account1", "第一个账户名称应该是 account1");
-                assert_eq!(api_key, "test_api_key_1", "第一个账户 API Key 应该匹配");
-                assert_eq!(api_secret, "test_secret_key_1", "第一个账户 Secret Key 应该匹配");
-            }
-            _ => panic!("第一个账户应该是 HMAC 类型"),
-        }
+        assert_eq!(account_hmac.account_name, "account1", "第一个账户名称应该是 account1");
+        assert_eq!(account_hmac.api_key, "test_api_key_1", "第一个账户 API Key 应该匹配");
+        assert_eq!(account_hmac.value, "test_secret_key_1", "第一个账户 Secret Key 应该匹配");
+        assert_eq!(account_hmac.secret_type, SecurityType::HMAC, "第一个账户 secret_type 应该匹配");
+        assert_eq!(account_hmac.account_type, AccountType::BinanceNormal, "第一个账户 saccount_type 应该匹配");
 
-        // 验证第二个账户（Ed25519 类型）
-        match &accounts[1] {
-            AccountConfig::Ed25519 {
-                account_name,
-                api_key,
-                key_path,
-            } => {
-                assert_eq!(account_name, "account2", "第二个账户名称应该是 account2");
-                assert_eq!(api_key, "test_api_key_2", "第二个账户 API Key 应该匹配");
-                assert_eq!(key_path, "test_secret_key_2", "第二个账户私钥路径应该匹配");
-            }
-            _ => panic!("第二个账户应该是 Ed25519 类型"),
-        }
+        let account_ed25519 = &accounts[1];
+        // 验证第一个账户（HMAC 类型）
+        assert_eq!(account_ed25519.account_name, "account2", "第二个账户名称应该是 account2");
+        assert_eq!(account_ed25519.api_key, "test_api_key_2", "第二个账户 API Key 应该匹配");
+        assert_eq!(account_ed25519.value, "test_secret_key_2", "第二个账户私钥路径应该匹配");
+        assert_eq!(account_ed25519.secret_type, SecurityType::Ed25519, "第二个账户 secret_type 应该匹配");
+        assert_eq!(
+            account_ed25519.account_type,
+            AccountType::BinancePortfolio,
+            "第二个账户 saccount_type 应该匹配"
+        );
     }
 
     #[test]
