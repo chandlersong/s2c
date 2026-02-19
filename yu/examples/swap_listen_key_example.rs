@@ -1,13 +1,29 @@
-use actix::Actor;
+use actix::{Actor, Handler};
+use li::subscribe_event_addr;
 use li::tools::logs::setup_logger;
 use log::{info, LevelFilter};
 use std::collections::HashMap;
 use std::time::Duration;
 use yu::config::{get_config, AccountConfig};
 use yu::errors::YuError;
+use yue::binance::bn_models::swap_account_stream::BinanceSwapAccountStreamResponse;
 use yue::binance::bn_restful_commands::SWAP_LISTEN_KEY_COMMAND;
 use yue::binance::listen_key_client::ListenKeyClient;
 use yue::http_client::init_http_client;
+
+struct SwapAccountPrinter;
+
+impl Actor for SwapAccountPrinter {
+    type Context = actix::Context<Self>;
+}
+
+impl Handler<BinanceSwapAccountStreamResponse> for SwapAccountPrinter {
+    type Result = ();
+
+    fn handle(&mut self, msg: BinanceSwapAccountStreamResponse, _: &mut Self::Context) -> Self::Result {
+        info!("received Binance SwapAccountStream:{:?}", msg);
+    }
+}
 
 #[actix::main]
 async fn main() -> Result<(), YuError> {
@@ -46,7 +62,7 @@ async fn main() -> Result<(), YuError> {
         api_secret,
     }) = account
     {
-        let _ = ListenKeyClient::swap(
+        let addr = ListenKeyClient::swap(
             &account_name,
             SWAP_LISTEN_KEY_COMMAND.clone(),
             SWAP_LISTEN_KEY_COMMAND.clone(),
@@ -56,6 +72,8 @@ async fn main() -> Result<(), YuError> {
             app_config.proxy_url.clone(),
         )
         .start();
+        let printer_addr = SwapAccountPrinter.start();
+        subscribe_event_addr!(addr, printer_addr, BinanceSwapAccountStreamResponse);
     }
 
     loop {

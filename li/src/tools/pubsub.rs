@@ -4,12 +4,12 @@ use actix::{Message as ActixMessage, Recipient};
 /// 泛型 E 表示要订阅的事件类型，必须实现 ActixMessage
 /// 这将原本的 SubscribeTask 抽象为更通用的形式，供其他订阅模式使用
 #[derive(Debug, Clone)]
-pub struct SubscribeEvent<E: ActixMessage>(pub Recipient<E>)
+pub struct SubscribeEvent<E: ActixMessage + Send>(pub Recipient<E>)
 where
     E: Send,
     <E as ActixMessage>::Result: Send;
 
-impl<E: ActixMessage> ActixMessage for SubscribeEvent<E>
+impl<E: ActixMessage + Send> ActixMessage for SubscribeEvent<E>
 where
     E: Send,
     <E as ActixMessage>::Result: Send,

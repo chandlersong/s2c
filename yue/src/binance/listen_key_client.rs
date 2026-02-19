@@ -5,6 +5,7 @@ use crate::binance::history_data::CommonParam;
 use crate::errors::YueError;
 use crate::models::RequestInfo;
 use crate::websocket::client::{InternalCommand, WebSocketConnection, WebSocketEvent};
+use crate::websocket::models::WebSocketTextMessage;
 use actix::{Actor, AsyncContext, Context, Handler, Message as ActixMessage, Recipient};
 use li::tools::SubscribeEvent;
 use log::{debug, error, info};
@@ -47,7 +48,7 @@ impl ActixMessage for RenewListenKey {
 /// - 可以支持多个订阅者监听 listen key 变化事件
 ///
 #[derive(Clone)]
-pub struct ListenKeyClient {
+pub struct ListenKeyClient<T: WebSocketTextMessage> {
     // 获取新 listen key 的请求信息
     pub apply_listen_key_request: RequestInfo,
     // 续期 listen key 的请求信息
@@ -59,16 +60,15 @@ pub struct ListenKeyClient {
     name: String,
     // WebSocket 基础 URL，例如 wss://fstream.binance.com/ws
     ws_base_url: String,
-    // 代理 URL（可选）
+    // 代理 URL（可选)
     proxy: Option<String>,
     // 重连间隔
     reconnect_interval: Duration,
     // 订阅者列表
-    subscribers: Vec<Recipient<BinanceSwapAccountStreamResponse>>,
+    subscribers: Vec<Recipient<T>>,
 }
 
-impl ListenKeyClient {
-    /// 创建新的 ListenKeyClient
+impl ListenKeyClient<BinanceSwapAccountStreamResponse> {
     pub fn swap(
         name: &str,
         apply_listen_key_request: RequestInfo,
@@ -92,11 +92,21 @@ impl ListenKeyClient {
             subscribers: Vec::new(),
         }
     }
+}
+
+impl<T: WebSocketTextMessage> ListenKeyClient<T> {
+    /// 创建新的 ListenKeyClient
 
     /// 设置 WebSocket 基础 URL
     pub fn with_ws_base_url(mut self, url: impl Into<String>) -> Self {
         self.ws_base_url = url.into();
         self
+    }
+
+    fn notify_subscribers(&self, event: T) {
+        for subscriber in self.subscribers.iter() {
+            subscriber.do_send(event.clone());
+        }
     }
 
     /// 设置代理 URL
@@ -166,7 +176,7 @@ impl ListenKeyClient {
     }
 }
 
-impl Actor for ListenKeyClient {
+impl<T: WebSocketTextMessage> Actor for ListenKeyClient<T> {
     type Context = Context<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
@@ -214,7 +224,7 @@ impl Actor for ListenKeyClient {
     }
 }
 
-impl Handler<RenewListenKey> for ListenKeyClient {
+impl<T: WebSocketTextMessage> Handler<RenewListenKey> for ListenKeyClient<T> {
     type Result = actix::ResponseActFuture<Self, Result<(), YueError>>;
 
     fn handle(&mut self, _msg: RenewListenKey, _ctx: &mut Context<Self>) -> Self::Result {
@@ -225,15 +235,23 @@ impl Handler<RenewListenKey> for ListenKeyClient {
     }
 }
 
-impl Handler<WebSocketEvent> for ListenKeyClient {
+impl<T: WebSocketTextMessage> Handler<WebSocketEvent> for ListenKeyClient<T>
+where
+    <T as ActixMessage>::Result: Send,
+{
     type Result = ();
 
     fn handle(&mut self, event: WebSocketEvent, _ctx: &mut Context<Self>) {
         match event {
             WebSocketEvent::Connected(_addr) => {}
-            WebSocketEvent::TextMessage(text) => {
-                info!("received text message: {}", text);
-            }
+            WebSocketEvent::TextMessage(text) => match T::from_text(&text) {
+                Ok(message) => {
+                    self.notify_subscribers(message);
+                }
+                Err(e) => {
+                    error!("解析 WebSocket 消息失败: {}. 原始消息: {}", e, text);
+                }
+            },
             WebSocketEvent::BinaryMessage(_) => {}
             WebSocketEvent::Reconnecting => {
                 info!("🔄 WebSocket 正在重新连接...");
@@ -248,10 +266,10 @@ impl Handler<WebSocketEvent> for ListenKeyClient {
     }
 }
 
-impl Handler<SubscribeEvent<BinanceSwapAccountStreamResponse>> for ListenKeyClient {
+impl<T: WebSocketTextMessage> Handler<SubscribeEvent<T>> for ListenKeyClient<T> {
     type Result = ();
 
-    fn handle(&mut self, msg: SubscribeEvent<BinanceSwapAccountStreamResponse>, _: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: SubscribeEvent<T>, _: &mut Self::Context) -> Self::Result {
         self.subscribers.push(msg.0);
         info!(
             "Subscriber registered for task listen key client:{} Total subscribers: {}",
