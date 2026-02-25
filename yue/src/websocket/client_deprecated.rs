@@ -110,6 +110,7 @@ pub enum InternalCommand {
 
 /// WebSocket 客户端 Actor
 /// 负责：订阅管理、消息发送的外部接口
+#[deprecated]
 pub struct WebSocketClient {
     url: String,
     reconnect_interval: Duration,

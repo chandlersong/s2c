@@ -1,6 +1,19 @@
-use actix::{Actor, Context, Handler};
+use actix::{Actor, Context, Handler, Message};
+use li::errors::LiError;
+use li::subscribe_event_addr;
+use li::websocket::client::{CommandMessage, WebSocketClient, WebSocketEvent};
+use li::websocket::models::WebSocketMessage;
 use log::info;
-use yue::websocket::client_deprecated::{SendTextMessage, SubscribeToEvents, WebSocketClient, WebSocketEvent};
+
+#[derive(Clone, Message)]
+#[rtype(result = "()")]
+struct TextMessage(String);
+
+impl WebSocketMessage for TextMessage {
+    fn from_text(text: &str) -> Result<Self, LiError> {
+        Ok(TextMessage(text.to_string()))
+    }
+}
 
 /// 消息处理器 Actor，订阅并处理 WebSocket 事件
 struct EventHandler {
@@ -25,12 +38,6 @@ impl Handler<WebSocketEvent> for EventHandler {
             }
             WebSocketEvent::Disconnected => {
                 info!("[{}] WebSocket 已断开", self.name);
-            }
-            WebSocketEvent::TextMessage(text) => {
-                info!("[{}] 收到文本消息: {}", self.name, text.chars().take(100).collect::<String>());
-            }
-            WebSocketEvent::BinaryMessage(data) => {
-                info!("[{}] 收到二进制消息: {} 字节", self.name, data.len());
             }
             WebSocketEvent::Reconnecting => {
                 info!("[{}] 正在重新连接...", self.name);
@@ -65,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// 示例 1: 从环境变量读取代理配置
 async fn run_example_with_env_proxy() -> Result<(), Box<dyn std::error::Error>> {
-    let client_addr = WebSocketClient::new_with_env_proxy("wss://stream.binance.com:9443/ws/btcusdt@ticker")
+    let client_addr = WebSocketClient::<TextMessage>::new_with_env_proxy("wss://stream.binance.com:9443/ws/btcusdt@ticker")
         .with_reconnect_interval(std::time::Duration::from_secs(10))
         .start();
 
@@ -76,10 +83,9 @@ async fn run_example_with_env_proxy() -> Result<(), Box<dyn std::error::Error>> 
         name: "Handler-EnvProxy".to_string(),
     };
     let handler_addr = handler.start();
-    let recipient = handler_addr.recipient::<WebSocketEvent>();
 
     // 发送订阅请求
-    client_addr.send(SubscribeToEvents { recipient }).await??;
+    subscribe_event_addr!(client_addr, handler_addr, WebSocketEvent);
 
     info!("EventHandler 已订阅事件");
 
@@ -92,7 +98,7 @@ async fn run_example_with_env_proxy() -> Result<(), Box<dyn std::error::Error>> 
 
 /// 示例 2: 显式设置代理
 async fn run_example_with_explicit_proxy() -> Result<(), Box<dyn std::error::Error>> {
-    let client_addr = WebSocketClient::new("wss://stream.binance.com:9443/ws/btcusdt@ticker")
+    let client_addr = WebSocketClient::<TextMessage>::new("wss://stream.binance.com:9443/ws/btcusdt@ticker")
         .with_proxy("http://127.0.0.1:7890")
         .with_reconnect_interval(std::time::Duration::from_secs(10))
         .start();
@@ -109,19 +115,8 @@ async fn run_example_with_explicit_proxy() -> Result<(), Box<dyn std::error::Err
         name: "Handler-Explicit-2".to_string(),
     };
     let handler2_addr = handler2.start();
-
-    // 两个处理器订阅同一个客户端
-    client_addr
-        .send(SubscribeToEvents {
-            recipient: handler1_addr.recipient::<WebSocketEvent>(),
-        })
-        .await??;
-
-    client_addr
-        .send(SubscribeToEvents {
-            recipient: handler2_addr.recipient::<WebSocketEvent>(),
-        })
-        .await??;
+    subscribe_event_addr!(client_addr, handler1_addr, WebSocketEvent);
+    subscribe_event_addr!(client_addr, handler2_addr, WebSocketEvent);
 
     info!("两个 EventHandlers 已订阅事件");
 
@@ -134,7 +129,7 @@ async fn run_example_with_explicit_proxy() -> Result<(), Box<dyn std::error::Err
 
 /// 示例 3: 直连（无代理）+ 演示发送消息
 async fn run_example_direct() -> Result<(), Box<dyn std::error::Error>> {
-    let client_addr = WebSocketClient::new("wss://stream.binance.com:9443/ws/btcusdt@ticker")
+    let client_addr = WebSocketClient::<TextMessage>::new("wss://stream.binance.com:9443/ws/btcusdt@ticker")
         .with_reconnect_interval(std::time::Duration::from_secs(10))
         .start();
 
@@ -146,11 +141,7 @@ async fn run_example_direct() -> Result<(), Box<dyn std::error::Error>> {
     };
     let handler_addr = handler.start();
 
-    client_addr
-        .send(SubscribeToEvents {
-            recipient: handler_addr.recipient::<WebSocketEvent>(),
-        })
-        .await??;
+    subscribe_event_addr!(client_addr, handler_addr, WebSocketEvent);
 
     info!("EventHandler 已订阅事件");
 
@@ -159,7 +150,7 @@ async fn run_example_direct() -> Result<(), Box<dyn std::error::Error>> {
 
     // 发送一条文本消息（演示）
     if let Ok(result) = client_addr
-        .send(SendTextMessage::new(r#"{"method":"SUBSCRIBE","params":["btcusdt@ticker"],"id":1}"#))
+        .send(CommandMessage::text(r#"{"method":"SUBSCRIBE","params":["btcusdt@ticker"],"id":1}"#))
         .await
     {
         match result {

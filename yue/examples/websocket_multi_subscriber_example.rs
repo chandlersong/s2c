@@ -4,22 +4,31 @@
 /// 1. 一个 WebSocketClient 可以有多个订阅者
 /// 2. 所有订阅者都能收到相同的事件
 /// 3. 订阅者可以在运行时动态添加
-use actix::{Actor, Context, Handler};
+use actix::{Actor, Context, Handler, Message};
+use li::errors::LiError;
+use li::websocket::client::{WebSocketClient, WebSocketEvent};
+use li::websocket::models::WebSocketMessage;
+use li::{subscribe_event, subscribe_event_addr};
 use log::info;
-use yue::websocket::client_deprecated::{SubscribeToEvents, WebSocketClient, WebSocketEvent};
+
+#[derive(Clone, Message)]
+#[rtype(result = "()")]
+struct TextMessage(String);
+
+impl WebSocketMessage for TextMessage {
+    fn from_text(text: &str) -> Result<Self, LiError> {
+        Ok(TextMessage(text.to_string()))
+    }
+}
 
 /// 第一个处理器 - 统计消息数量
 struct CounterHandler {
     name: String,
-    count: usize,
 }
 
 impl CounterHandler {
     fn new(name: &str) -> Self {
-        Self {
-            name: name.to_string(),
-            count: 0,
-        }
+        Self { name: name.to_string() }
     }
 }
 
@@ -34,14 +43,6 @@ impl Handler<WebSocketEvent> for CounterHandler {
         match event {
             WebSocketEvent::Connected(_addr) => {
                 info!("[{}] ✓ WebSocket 已连接", self.name);
-            }
-            WebSocketEvent::TextMessage(_) => {
-                self.count += 1;
-                info!("[{}] 📨 收到第 {} 条文本消息", self.name, self.count);
-            }
-            WebSocketEvent::BinaryMessage(_) => {
-                self.count += 1;
-                info!("[{}] 📦 收到第 {} 条二进制消息", self.name, self.count);
             }
             WebSocketEvent::Reconnecting => {
                 info!("[{}] 🔄 重新连接中...", self.name);
@@ -71,23 +72,11 @@ impl Actor for ContentHandler {
     type Context = Context<Self>;
 }
 
-impl Handler<WebSocketEvent> for ContentHandler {
+impl Handler<TextMessage> for ContentHandler {
     type Result = ();
 
-    fn handle(&mut self, event: WebSocketEvent, _ctx: &mut Self::Context) {
-        match event {
-            WebSocketEvent::Connected(_addr) => {
-                info!("[{}] 🟢 连接建立", self.name);
-            }
-            WebSocketEvent::TextMessage(text) => {
-                let preview = text.chars().take(80).collect::<String>();
-                info!("[{}] 内容预览: {}", self.name, preview);
-            }
-            WebSocketEvent::BinaryMessage(data) => {
-                info!("[{}] 二进制数据: {} 字节", self.name, data.len());
-            }
-            _ => {}
-        }
+    fn handle(&mut self, event: TextMessage, _ctx: &mut Self::Context) {
+        info!("[{}] 收到消息: {}", self.name, event.0);
     }
 }
 
@@ -99,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("========== 多订阅者示例 ==========");
 
     // 创建 WebSocket 客户端
-    let client_addr = WebSocketClient::new_with_env_proxy("wss://stream.binance.com:9443/ws/btcusdt@ticker")
+    let client_addr = WebSocketClient::<TextMessage>::new_with_env_proxy("wss://stream.binance.com:9443/ws/btcusdt@ticker")
         .with_proxy("http://127.0.0.1:7891")
         .start();
 
@@ -109,22 +98,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let counter1 = CounterHandler::new("计数器1");
     let counter1_addr = counter1.start();
 
-    client_addr
-        .send(SubscribeToEvents {
-            recipient: counter1_addr.recipient::<WebSocketEvent>(),
-        })
-        .await??;
+    subscribe_event_addr!(client_addr, counter1_addr, WebSocketEvent);
     info!("✓ 计数器1 已订阅");
 
     // 创建第二个订阅者 - 内容显示器
     let content = ContentHandler::new("内容显示");
     let content_addr = content.start();
 
-    client_addr
-        .send(SubscribeToEvents {
-            recipient: content_addr.recipient::<WebSocketEvent>(),
-        })
-        .await??;
+    subscribe_event_addr!(client_addr, content_addr, TextMessage);
     info!("✓ 内容显示 已订阅");
 
     // 等待 3 秒
@@ -134,12 +115,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 动态添加第三个订阅者
     let counter2 = CounterHandler::new("计数器2");
     let counter2_addr = counter2.start();
-
-    client_addr
-        .send(SubscribeToEvents {
-            recipient: counter2_addr.recipient::<WebSocketEvent>(),
-        })
-        .await??;
+    subscribe_event_addr!(client_addr, counter2_addr, WebSocketEvent);
     info!("✓ 计数器2 已订阅");
 
     // 再运行 5 秒
