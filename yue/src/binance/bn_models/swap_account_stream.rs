@@ -6,6 +6,8 @@ use crate::tools::string_to_decimal;
 use crate::tools::string_to_option_decimal;
 use crate::websocket::models::WebSocketTextMessage;
 use actix::Message as ActixMessage;
+use li::errors::LiError;
+use li::websocket::models::WebSocketMessage;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -32,6 +34,12 @@ pub enum BinanceSwapAccountStreamResponse {
 impl WebSocketTextMessage for BinanceSwapAccountStreamResponse {
     fn from_text(text: &str) -> Result<Self, YueError> {
         serde_json::from_str(text).map_err(|e| YueError::from(e))
+    }
+}
+
+impl WebSocketMessage for BinanceSwapAccountStreamResponse {
+    fn from_text(text: &str) -> Result<Self, LiError> {
+        serde_json::from_str(text).map_err(|e| LiError::from(e))
     }
 }
 

@@ -15,6 +15,7 @@ use tokio_tungstenite::tungstenite::http::Uri;
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 
 /// WebSocket 事件，发送给订阅者
+#[deprecated]
 #[derive(Clone, Debug)]
 pub enum WebSocketEvent {
     /// 连接成功，携带 WebSocketClient 的地址
@@ -98,6 +99,7 @@ impl ActixMessage for SubscribeToEvents {
     type Result = Result<(), YueError>;
 }
 
+#[deprecated]
 /// 内部命令，用于 Actor 和 Connection 之间通信
 pub enum InternalCommand {
     /// 添加订阅者
@@ -255,6 +257,8 @@ impl Handler<SubscribeToEvents> for WebSocketClient {
 
 /// WebSocket 连接管理器
 /// 负责：实际的 WebSocket 连接、重连、消息收发
+///
+#[deprecated]
 pub struct WebSocketConnection;
 
 impl WebSocketConnection {

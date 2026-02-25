@@ -60,7 +60,7 @@ impl CommandMessage {
 }
 
 /// 内部命令，用于 Actor 和 Connection 之间通信
-pub enum InternalCommand<C: Actor, M: WebSocketMessage> {
+pub enum ConnectionCommand<C: Actor, M: WebSocketMessage> {
     /// 添加订阅者
     AddEventSubscriber(Recipient<WebSocketEvent>),
 
@@ -78,7 +78,7 @@ pub struct WebSocketClient<M: WebSocketMessage> {
     reconnect_interval: Duration,
     proxy: Option<String>,
     /// 向内部连接发送命令
-    command_tx: Option<mpsc::UnboundedSender<InternalCommand<Self, M>>>,
+    command_tx: Option<mpsc::UnboundedSender<ConnectionCommand<Self, M>>>,
     /// 消息缓存
     /// 这个缓存，放在connection里面可能更加好一点。但是放在client里面，主要是为了以后的更改和去除。
     command_cache: Arc<Mutex<Vec<WsMessage>>>,
@@ -157,7 +157,7 @@ impl<M: WebSocketMessage> Actor for WebSocketClient<M> {
         let client_addr = ctx.address();
 
         // 将地址发送到连接管理器
-        let _ = command_tx.send(InternalCommand::SetClientAddr(client_addr));
+        let _ = command_tx.send(ConnectionCommand::SetClientAddr(client_addr));
 
         // 启动内部连接管理
         tokio::spawn(async move {
@@ -175,7 +175,7 @@ impl<M: WebSocketMessage> Handler<CommandMessage> for WebSocketClient<M> {
             if resend {
                 self.add_to_cache(message.clone());
             }
-            tx.send(InternalCommand::SendMessage(message))
+            tx.send(ConnectionCommand::SendMessage(message))
                 .map_err(|e| LiError::CustomError(format!("发送文本消息失败: {}", e)))
         } else {
             Err(LiError::CustomError("WebSocket 客户端未初始化".to_string()))
@@ -188,7 +188,7 @@ impl<M: WebSocketMessage> Handler<SubscribeEvent<WebSocketEvent>> for WebSocketC
 
     fn handle(&mut self, msg: SubscribeEvent<WebSocketEvent>, _ctx: &mut Self::Context) -> Self::Result {
         if let Some(ref tx) = self.command_tx {
-            tx.send(InternalCommand::AddEventSubscriber(msg.0))
+            tx.send(ConnectionCommand::AddEventSubscriber(msg.0))
                 .map_err(|e| error!("添加订阅者失败: {}", e))
                 .ok();
             info!("订阅请求已发送");
@@ -201,7 +201,7 @@ impl<M: WebSocketMessage> Handler<SubscribeEvent<M>> for WebSocketClient<M> {
 
     fn handle(&mut self, msg: SubscribeEvent<M>, _ctx: &mut Self::Context) -> Self::Result {
         if let Some(ref tx) = self.command_tx {
-            tx.send(InternalCommand::AddMessageSubscriber(msg.0))
+            tx.send(ConnectionCommand::AddMessageSubscriber(msg.0))
                 .map_err(|e| error!("添加订阅者失败: {}", e))
                 .ok();
             info!("订阅请求已发送");
@@ -227,11 +227,11 @@ where
     C::Context: actix::dev::ToEnvelope<C, CommandMessage>,
     M: WebSocketMessage,
 {
-    pub(crate) async fn run(
+    pub async fn run(
         url: String,
         reconnect_interval: Duration,
         proxy: Option<String>,
-        mut command_rx: mpsc::UnboundedReceiver<InternalCommand<C, M>>,
+        mut command_rx: mpsc::UnboundedReceiver<ConnectionCommand<C, M>>,
         message_cache: Arc<Mutex<Vec<WsMessage>>>,
     ) {
         let mut event_subscribers: Vec<Recipient<WebSocketEvent>> = Vec::new();
@@ -269,7 +269,7 @@ where
         proxy: &Option<String>,
         event_subscribers: &mut Vec<Recipient<WebSocketEvent>>,
         message_subscribers: &mut Vec<Recipient<M>>,
-        command_rx: &mut mpsc::UnboundedReceiver<InternalCommand<C, M>>,
+        command_rx: &mut mpsc::UnboundedReceiver<ConnectionCommand<C, M>>,
         initial_command: Option<Vec<WsMessage>>,
         client_addr: &mut Option<Addr<C>>,
     ) -> Result<(), LiError> {
@@ -308,7 +308,7 @@ where
                 // 处理来自 Actor 的命令
                 Some(command) = command_rx.recv() => {
                     match command {
-                        InternalCommand::AddEventSubscriber(recipient) => {
+                        ConnectionCommand::AddEventSubscriber(recipient) => {
                             event_subscribers.push(recipient.clone());
                             //添加订阅者的时候，给他发送Connected事件。
                             if let Some(addr) = client_addr.as_ref() {
@@ -316,17 +316,17 @@ where
                             }
                             info!("新的订阅者加入，当前订阅者数: {}", event_subscribers.len());
                         }
-                        InternalCommand::AddMessageSubscriber(recipient) => {
+                        ConnectionCommand::AddMessageSubscriber(recipient) => {
                             message_subscribers.push(recipient.clone());
                             info!("新的订阅者加入，当前订阅者数: {}", message_subscribers.len());
                         }
-                        InternalCommand::SendMessage(msg) => {
+                        ConnectionCommand::SendMessage(msg) => {
                             info!("发送消息到 WebSocket");
                             if let Err(e) = ws_tx.send(msg) {
                                 error!("消息入队失败: {}", e);
                             }
                         }
-                        InternalCommand::SetClientAddr(addr) => {
+                        ConnectionCommand::SetClientAddr(addr) => {
                             info!("WebSocketClient 地址已设置");
                             let was_none = client_addr.is_none();
                             *client_addr = Some(addr.clone());

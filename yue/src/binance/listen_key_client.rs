@@ -4,15 +4,17 @@ use crate::binance::bn_restful_commands::{BNSecurityRequestBuilder, SWAP_LISTEN_
 use crate::binance::history_data::CommonParam;
 use crate::errors::YueError;
 use crate::models::RequestInfo;
-use crate::websocket::client_deprecated::{InternalCommand, WebSocketConnection, WebSocketEvent};
-use crate::websocket::models::WebSocketTextMessage;
 use actix::{Actor, AsyncContext, Context, Handler, Message as ActixMessage, Recipient};
+use li::errors::LiError;
 use li::tools::SubscribeEvent;
+use li::websocket::client::{CommandMessage, ConnectionCommand, WebSocketClient, WebSocketConnection, WebSocketEvent};
+use li::websocket::models::WebSocketMessage;
 use log::{debug, error, info};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::sleep;
 
 /// 手动续期 listen key
@@ -48,7 +50,7 @@ impl ActixMessage for RenewListenKey {
 /// - 可以支持多个订阅者监听 listen key 变化事件
 ///
 #[derive(Clone)]
-pub struct ListenKeyClient<T: WebSocketTextMessage> {
+pub struct ListenKeyClient<M: WebSocketMessage> {
     // 获取新 listen key 的请求信息
     pub apply_listen_key_request: RequestInfo,
     // 续期 listen key 的请求信息
@@ -64,8 +66,8 @@ pub struct ListenKeyClient<T: WebSocketTextMessage> {
     proxy: Option<String>,
     // 重连间隔
     reconnect_interval: Duration,
-    // 订阅者列表
-    subscribers: Vec<Recipient<T>>,
+
+    command_tx: Option<mpsc::UnboundedSender<ConnectionCommand<Self, M>>>,
 }
 
 impl ListenKeyClient<BinanceSwapAccountStreamResponse> {
@@ -89,24 +91,18 @@ impl ListenKeyClient<BinanceSwapAccountStreamResponse> {
             ws_base_url: "wss://fstream.binance.com/ws/".to_string(),
             proxy,
             reconnect_interval: Duration::from_secs(5),
-            subscribers: Vec::new(),
+            command_tx: None,
         }
     }
 }
 
-impl<T: WebSocketTextMessage> ListenKeyClient<T> {
+impl<M: WebSocketMessage> ListenKeyClient<M> {
     /// 创建新的 ListenKeyClient
 
     /// 设置 WebSocket 基础 URL
     pub fn with_ws_base_url(mut self, url: impl Into<String>) -> Self {
         self.ws_base_url = url.into();
         self
-    }
-
-    fn notify_subscribers(&self, event: T) {
-        for subscriber in self.subscribers.iter() {
-            subscriber.do_send(event.clone());
-        }
     }
 
     /// 设置代理 URL
@@ -163,20 +159,22 @@ impl<T: WebSocketTextMessage> ListenKeyClient<T> {
     ///
     /// 启动一个 WebSocketConnection 连接。
     ///
-    async fn run_websocket_connection(url: String, recipient: Recipient<WebSocketEvent>, reconnect_interval: Duration, proxy: Option<String>) {
+    async fn run_websocket_connection(
+        url: String,
+        recipient: Recipient<WebSocketEvent>,
+        reconnect_interval: Duration,
+        proxy: Option<String>,
+        command_rx: UnboundedReceiver<ConnectionCommand<ListenKeyClient<M>, M>>,
+    ) {
         // 创建命令通道
-        let (command_tx, command_rx) = mpsc::unbounded_channel();
 
         let message_cache = Arc::new(Mutex::new(Vec::new()));
-        if let Err(e) = command_tx.send(InternalCommand::AddSubscriber(recipient)) {
-            error!("发送添加订阅者命令失败: {}", e);
-        }
         // 启动内部连接管理
-        WebSocketConnection::run(url, reconnect_interval, proxy, command_rx, message_cache).await;
+        WebSocketConnection::<Self, M>::run(url, reconnect_interval, proxy, command_rx, message_cache).await;
     }
 }
 
-impl<T: WebSocketTextMessage> Actor for ListenKeyClient<T> {
+impl<M: WebSocketMessage> Actor for ListenKeyClient<M> {
     type Context = Context<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
@@ -207,6 +205,8 @@ impl<T: WebSocketTextMessage> Actor for ListenKeyClient<T> {
         let base_url = self.ws_base_url.clone();
         let reconnect_interval = self.reconnect_interval.clone();
         let proxy = self.proxy.clone();
+        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        self.command_tx = Some(command_tx.clone());
         tokio::spawn(async move {
             /* FUTURE: listen key 刷新
              * 因为根据最新的说法，listen key 的有效期是 60 分钟，所以续期的间隔设置为 55 分钟，留出一些余量。
@@ -219,12 +219,12 @@ impl<T: WebSocketTextMessage> Actor for ListenKeyClient<T> {
                 return;
             }
             let ws_url = format!("{}{}", base_url, listen_key.unwrap());
-            Self::run_websocket_connection(ws_url, event_reception, reconnect_interval, proxy).await;
+            Self::run_websocket_connection(ws_url, event_reception, reconnect_interval, proxy, command_rx).await;
         });
     }
 }
 
-impl<T: WebSocketTextMessage> Handler<RenewListenKey> for ListenKeyClient<T> {
+impl<M: WebSocketMessage> Handler<RenewListenKey> for ListenKeyClient<M> {
     type Result = actix::ResponseActFuture<Self, Result<(), YueError>>;
 
     fn handle(&mut self, _msg: RenewListenKey, _ctx: &mut Context<Self>) -> Self::Result {
@@ -235,29 +235,19 @@ impl<T: WebSocketTextMessage> Handler<RenewListenKey> for ListenKeyClient<T> {
     }
 }
 
-impl<T: WebSocketTextMessage> Handler<WebSocketEvent> for ListenKeyClient<T>
-where
-    <T as ActixMessage>::Result: Send,
-{
+impl<M: WebSocketMessage> Handler<WebSocketEvent> for ListenKeyClient<M> {
     type Result = ();
 
     fn handle(&mut self, event: WebSocketEvent, _ctx: &mut Context<Self>) {
         match event {
-            WebSocketEvent::Connected(_addr) => {}
-            WebSocketEvent::TextMessage(text) => match T::from_text(&text) {
-                Ok(message) => {
-                    self.notify_subscribers(message);
-                }
-                Err(e) => {
-                    error!("解析 WebSocket 消息失败: {}. 原始消息: {}", e, text);
-                }
-            },
-            WebSocketEvent::BinaryMessage(_) => {}
+            WebSocketEvent::Connected(_addr) => {
+                info!("✅ WebSocket {} 已连接:", self.name);
+            }
             WebSocketEvent::Reconnecting => {
-                info!("🔄 WebSocket 正在重新连接...");
+                info!("🔄 WebSocket {} 正在重新连接...", self.name);
             }
             WebSocketEvent::Disconnected => {
-                info!("bb");
+                info!("❌ WebSocket {} 断开..", self.name);
             }
             WebSocketEvent::Error(err) => {
                 error!("❌ WebSocket 错误: {}", err);
@@ -266,15 +256,25 @@ where
     }
 }
 
-impl<T: WebSocketTextMessage> Handler<SubscribeEvent<T>> for ListenKeyClient<T> {
-    type Result = ();
+impl<M: WebSocketMessage> Handler<CommandMessage> for ListenKeyClient<M> {
+    type Result = Result<(), LiError>;
 
-    fn handle(&mut self, msg: SubscribeEvent<T>, _: &mut Self::Context) -> Self::Result {
-        self.subscribers.push(msg.0);
-        info!(
-            "Subscriber registered for task listen key client:{} Total subscribers: {}",
-            self.name,
-            self.subscribers.len()
-        );
+    ///
+    /// 因为Listen key默认不支持外部发消息，所以这里直接 panic，后续如果有需要，可以在这里加入对外部命令的处理逻辑。
+    ///
+    fn handle(&mut self, msg: CommandMessage, _ctx: &mut Context<Self>) -> Self::Result {
+        panic!("ListenKeyClient 不支持 CommandMessage");
+    }
+}
+
+impl<M: WebSocketMessage> Handler<SubscribeEvent<M>> for ListenKeyClient<M> {
+    type Result = ();
+    fn handle(&mut self, msg: SubscribeEvent<M>, _ctx: &mut Self::Context) -> Self::Result {
+        if let Some(ref tx) = self.command_tx {
+            tx.send(ConnectionCommand::AddMessageSubscriber(msg.0))
+                .map_err(|e| error!("添加订阅者失败: {}", e))
+                .ok();
+            info!("订阅请求已发送");
+        }
     }
 }
