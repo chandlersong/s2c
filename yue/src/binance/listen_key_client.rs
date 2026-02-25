@@ -4,7 +4,7 @@ use crate::binance::bn_restful_commands::{BNSecurityRequestBuilder, SWAP_LISTEN_
 use crate::binance::history_data::CommonParam;
 use crate::errors::YueError;
 use crate::models::RequestInfo;
-use crate::websocket::client::{InternalCommand, WebSocketConnection, WebSocketEvent};
+use crate::websocket::client_deprecated::{InternalCommand, WebSocketConnection, WebSocketEvent};
 use crate::websocket::models::WebSocketTextMessage;
 use actix::{Actor, AsyncContext, Context, Handler, Message as ActixMessage, Recipient};
 use li::tools::SubscribeEvent;

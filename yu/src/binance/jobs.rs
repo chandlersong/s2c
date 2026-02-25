@@ -26,7 +26,7 @@ use yue::binance::order_book::{OrderBookService, Subscribe as OrderBookSubscribe
 use yue::binance::websocket_handler::{BinanceSpotStreamHandler, SpotAccountStreamHandler};
 use yue::models::HistoryInterval;
 use yue::tools::SnowyFlakeWrapper;
-use yue::websocket::client::{SendTextMessage, SubscribeToEvents, WebSocketClient, WebSocketEvent};
+use yue::websocket::client_deprecated::{SendTextMessage, SubscribeToEvents, WebSocketClient, WebSocketEvent};
 use yue::websocket::event_bus::{Subscribe, WsMessageBus};
 
 ///
@@ -46,12 +46,23 @@ pub async fn start_bn_jobs() -> Result<(), YuError> {
     }
     info!("数据库创建表完成");
     start_refresh_history_data(dash_board.clone()).await?;
-    start_spot_websocket_jobs().await?;
+    start_monitor_account().await?;
     start_spot_websocket_stream_job().await?;
     Ok(())
 }
 
-pub async fn start_spot_websocket_jobs() -> Result<(), YuError> {
+///
+/// 开始监控币安的账户。大致分成两大类。
+///
+/// 1. 统一账户：专门的去监听
+/// 2. 一般账户：
+///    spot： spot的webstream
+///    swap： swap的webstream
+///
+///
+///
+///
+pub async fn start_monitor_account() -> Result<(), YuError> {
     let config = get_config();
     let mut client_builder = WebSocketClient::new(SPOT_WEBSOCKET);
 

@@ -12,7 +12,7 @@ use crate::binance::bn_models::spot_websocket::BinanceSpotWebSocketResponse;
 use crate::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamResponse;
 use crate::errors::YueError;
 use crate::tools::{SnowyFlakeWrapper, sign_ed25519};
-use crate::websocket::client::{SendTextMessage, WebSocketClient, WebSocketEvent};
+use crate::websocket::client_deprecated::{SendTextMessage, WebSocketClient, WebSocketEvent};
 use crate::websocket::event_bus::WebSocketHandler;
 use actix::{Actor, Addr, Handler};
 use ed25519_dalek::SigningKey;

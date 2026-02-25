@@ -1,5 +1,5 @@
 use crate::errors::YueError;
-use crate::websocket::client::{WebSocketClient, WebSocketEvent};
+use crate::websocket::client_deprecated::{WebSocketClient, WebSocketEvent};
 use actix::{Actor, Addr, Context, Handler, Message as ActixMessage, Recipient, Supervised};
 use log::{error, info, trace, warn};
 use std::fmt::Debug;

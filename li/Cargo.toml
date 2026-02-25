@@ -12,6 +12,9 @@ fern = { workspace = true }
 humantime = { workspace = true }
 actix = { workspace = true }
 actix-rt = { workspace = true }
+tokio-tungstenite = { workspace = true }
+tokio-native-tls = { workspace = true }
+futures-util = { workspace = true }
 teloxide = { version = "0.17.0", features = ["macros"]}
 aws-config = { version = "1.5.8" }
 aws-sdk-dynamodb = { version = "1.88.0"}

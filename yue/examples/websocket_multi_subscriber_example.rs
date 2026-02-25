@@ -6,7 +6,7 @@
 /// 3. 订阅者可以在运行时动态添加
 use actix::{Actor, Context, Handler};
 use log::info;
-use yue::websocket::client::{SubscribeToEvents, WebSocketClient, WebSocketEvent};
+use yue::websocket::client_deprecated::{SubscribeToEvents, WebSocketClient, WebSocketEvent};
 
 /// 第一个处理器 - 统计消息数量
 struct CounterHandler {

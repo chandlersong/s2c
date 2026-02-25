@@ -34,6 +34,9 @@ rs-snowflake = "0.6.0"
 config = { version = "0.15.16", features = ["yaml"] }
 actix = "0.13.5"
 actix-rt = "2.11.0"
+tokio-tungstenite = { version = "0.28.0", features = ["native-tls"] }
+tokio-native-tls = "0.3"
+futures-util = "0.3.30"
 ### DEV ####
 mockall = { version = "0.13.1" }
 

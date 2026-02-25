@@ -8,3 +8,4 @@ pub mod aws;
 pub mod errors;
 
 pub mod actix_jobs;
+pub mod websocket;

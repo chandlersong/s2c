@@ -14,7 +14,7 @@ use yue::binance::bn_json_websocket::{SPOT_STREAM_WEBSOCKET, StreamCommandReques
 use yue::binance::order_book::{OrderBookService, OrderBookSnapshotMsg, Subscribe};
 use yue::binance::websocket_handler::BinanceSpotStreamHandler;
 use yue::http_client::init_http_client;
-use yue::websocket::client::{SendTextMessage, SubscribeToEvents, WebSocketClient, WebSocketEvent};
+use yue::websocket::client_deprecated::{SendTextMessage, SubscribeToEvents, WebSocketClient, WebSocketEvent};
 use yue::websocket::event_bus::WsMessageBus;
 
 /// 打印订单簿快照的订阅者 Actor

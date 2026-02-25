@@ -17,7 +17,7 @@ use yu::websocket::subscribers::SpotStreamStorageActor;
 use yue::binance::bn_json_websocket::{StreamCommandRequest, SPOT_STREAM_WEBSOCKET, WS_SUBSCRIBE_COMMAND};
 use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamResponse;
 use yue::binance::websocket_handler::BinanceSpotStreamHandler;
-use yue::websocket::client::{SendTextMessage, SubscribeToEvents, WebSocketClient, WebSocketEvent};
+use yue::websocket::client_deprecated::{SendTextMessage, SubscribeToEvents, WebSocketClient, WebSocketEvent};
 use yue::websocket::event_bus::{Subscribe, WsMessageBus};
 
 /// 处理订阅消息的事件处理器

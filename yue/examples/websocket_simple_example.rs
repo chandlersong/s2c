@@ -4,9 +4,22 @@
 /// 1. 从环境变量读取代理配置
 /// 2. 创建 Actor 并订阅 WebSocket 事件
 /// 3. 处理各种事件类型
-use actix::{Actor, Context, Handler};
+use actix::{Actor, Addr, Context, Handler, Message};
+use li::errors::LiError;
+use li::subscribe_event_addr;
+use li::websocket::client::{WebSocketClient, WebSocketEvent};
+use li::websocket::models::WebSocketMessage;
 use log::info;
-use yue::websocket::client::{SubscribeToEvents, WebSocketClient, WebSocketEvent};
+
+#[derive(Clone, Message)]
+#[rtype(result = "()")]
+struct TextMessage(String);
+
+impl WebSocketMessage for TextMessage {
+    fn from_text(text: &str) -> Result<Self, LiError> {
+        Ok(TextMessage(text.to_string()))
+    }
+}
 
 /// 简单的事件处理器
 struct SimpleHandler;
@@ -22,12 +35,6 @@ impl Handler<WebSocketEvent> for SimpleHandler {
         match event {
             WebSocketEvent::Connected(_addr) => {
                 info!("✓ WebSocket 已连接");
-            }
-            WebSocketEvent::TextMessage(text) => {
-                info!("📨 收到文本: {}", text.chars().take(50).collect::<String>());
-            }
-            WebSocketEvent::BinaryMessage(data) => {
-                info!("📦 收到二进制: {} 字节", data.len());
             }
             WebSocketEvent::Reconnecting => {
                 info!("🔄 重新连接中...");
@@ -52,7 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 步骤 1: 创建 WebSocket 客户端
     // 自动从环境变量读取代理配置
-    let client_addr = WebSocketClient::new_with_env_proxy("wss://stream.binance.com:9443/ws/btcusdt@ticker")
+    let client_addr = WebSocketClient::<TextMessage>::new_with_env_proxy("wss://stream.binance.com:9443/ws/btcusdt@ticker")
         .with_proxy("http://127.0.0.1:7891")
         .start();
 
@@ -63,13 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let handler_addr = handler.start();
 
     info!("✓ 事件处理器已启动");
-
-    // 步骤 3: 订阅事件
-    client_addr
-        .send(SubscribeToEvents {
-            recipient: handler_addr.recipient::<WebSocketEvent>(),
-        })
-        .await??;
+    subscribe_event_addr!(client_addr, handler_addr, WebSocketEvent);
 
     info!("✓ 事件处理器已订阅");
     info!("等待 WebSocket 事件...\n");

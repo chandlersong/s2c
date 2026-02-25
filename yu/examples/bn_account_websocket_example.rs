@@ -8,7 +8,7 @@ use yu::websocket::subscribers::AccountSyncActor;
 use yue::binance::bn_json_websocket::SPOT_WEBSOCKET;
 use yue::binance::bn_models::spot_websocket::BinanceSpotWebSocketResponse;
 use yue::binance::websocket_handler::SpotAccountStreamHandler;
-use yue::websocket::client::{SubscribeToEvents, WebSocketClient, WebSocketEvent};
+use yue::websocket::client_deprecated::{SubscribeToEvents, WebSocketClient, WebSocketEvent};
 use yue::websocket::event_bus::{Subscribe, WsMessageBus};
 
 struct PrintActor {

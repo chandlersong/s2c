@@ -1,6 +1,6 @@
 use actix::{Actor, Context, Handler};
 use log::info;
-use yue::websocket::client::{SendTextMessage, SubscribeToEvents, WebSocketClient, WebSocketEvent};
+use yue::websocket::client_deprecated::{SendTextMessage, SubscribeToEvents, WebSocketClient, WebSocketEvent};
 
 /// 消息处理器 Actor，订阅并处理 WebSocket 事件
 struct EventHandler {
