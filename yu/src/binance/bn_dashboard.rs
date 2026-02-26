@@ -10,7 +10,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use yue::binance::history_data::{get_trading_spot_symbols, get_trading_swap_symbols, CONTRACT_TYPE_PERPETUAL};
 use yue::binance::order_book::{OrderBook, OrderBookSnapshotMsg};
-use yue::binance::websocket_handler::TradingSymbolRefresher;
+use yue::binance::websocket_actor::TradingSymbolRefresher;
 use yue::models::HistoryInterval;
 
 #[derive(Debug, Clone)]

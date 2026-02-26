@@ -6,9 +6,9 @@
 /// 3. 订阅者可以在运行时动态添加
 use actix::{Actor, Context, Handler, Message};
 use li::errors::LiError;
+use li::subscribe_event_addr;
 use li::websocket::client::{WebSocketClient, WebSocketEvent};
 use li::websocket::models::WebSocketMessage;
-use li::{subscribe_event, subscribe_event_addr};
 use log::info;
 
 #[derive(Clone, Message)]

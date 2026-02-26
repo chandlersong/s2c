@@ -2,6 +2,8 @@ use crate::binance::bn_models::common::map_depth_levels;
 use crate::models::Decimal;
 use crate::tools::string_to_decimal;
 use actix::Message as ActixMessage;
+use li::errors::LiError;
+use li::websocket::models::WebSocketMessage;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -24,6 +26,13 @@ pub enum BinanceSpotWebSocketStreamResponse {
     BookTicker(BookTickerStreamPayload),
     /// book depth增量
     DepthUpdate(DepthUpdateStreamPayload),
+    SubscriptionResult(SubscriptionResultStreamPayload),
+}
+
+impl WebSocketMessage for BinanceSpotWebSocketStreamResponse {
+    fn from_text(text: &str) -> Result<Self, LiError> {
+        serde_json::from_str(text).map_err(|e| LiError::from(e))
+    }
 }
 
 impl ActixMessage for BinanceSpotWebSocketStreamResponse {
@@ -34,6 +43,15 @@ impl BinanceSpotWebSocketStreamResponse {
     pub fn from_text(text: &str) -> Result<Self, serde_json::Error> {
         serde_json::from_str(text)
     }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct SubscriptionResultStreamPayload {
+    #[serde(rename = "id")]
+    pub id: u64,
+
+    #[serde(rename = "result")]
+    pub result: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]

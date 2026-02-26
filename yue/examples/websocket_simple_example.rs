@@ -4,7 +4,7 @@
 /// 1. 从环境变量读取代理配置
 /// 2. 创建 Actor 并订阅 WebSocket 事件
 /// 3. 处理各种事件类型
-use actix::{Actor, Addr, Context, Handler, Message};
+use actix::{Actor, Context, Handler, Message};
 use li::errors::LiError;
 use li::subscribe_event_addr;
 use li::websocket::client::{WebSocketClient, WebSocketEvent};
@@ -13,11 +13,11 @@ use log::info;
 
 #[derive(Clone, Message)]
 #[rtype(result = "()")]
-struct TextMessage(String);
+struct TextMessage();
 
 impl WebSocketMessage for TextMessage {
-    fn from_text(text: &str) -> Result<Self, LiError> {
-        Ok(TextMessage(text.to_string()))
+    fn from_text(_: &str) -> Result<Self, LiError> {
+        Ok(TextMessage {})
     }
 }
 

@@ -131,11 +131,6 @@ impl<M: WebSocketMessage> WebSocketClient<M> {
     pub fn clear_command_cache(&self) {
         self.command_cache.lock().unwrap().clear();
     }
-
-    #[cfg(test)]
-    fn cache_len(&self) -> usize {
-        self.command_cache.lock().unwrap().len()
-    }
 }
 
 impl<M: WebSocketMessage> Actor for WebSocketClient<M> {
@@ -328,13 +323,9 @@ where
                         }
                         ConnectionCommand::SetClientAddr(addr) => {
                             info!("WebSocketClient 地址已设置");
-                            let was_none = client_addr.is_none();
                             *client_addr = Some(addr.clone());
+                            Self::notify_subscribers(event_subscribers, WebSocketEvent::Connected(addr.clone().recipient())).await;
 
-                            // 如果之前地址为空且现在已连接，发送 Connected 事件
-                            if was_none {
-                                Self::notify_subscribers(event_subscribers, WebSocketEvent::Connected(addr.clone().recipient())).await;
-                            }
                         }
                 }
                 }

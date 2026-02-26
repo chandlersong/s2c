@@ -1,5 +1,5 @@
 ///
-/// 现在把所有和消息处理的东西放在这里，就是为了简单。不然很多类组合，反而很麻烦。
+/// 把一些需要特殊处理的放在这里。
 /// TODO
 /// 1. 把subscribe和translate给分开。只是基于功能单一原则。但是真实的来说，比较难弄，比如account的转换，需要维护订阅id和账户名的映射关系。
 ///
@@ -8,16 +8,15 @@
 use crate::binance::bn_json_websocket::{
     CommandRequest, StreamCommandRequest, USER_DATA_STREAM_SUBSCRIBE_SIGNATURE, WS_SUBSCRIBE_COMMAND, WS_UNSUBSCRIBE_COMMAND,
 };
-use crate::binance::bn_models::spot_websocket::BinanceSpotWebSocketResponse;
-use crate::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamResponse;
+use crate::binance::bn_models::spot_websocket::BinanceSpotAccountWebSocketResponse;
 use crate::errors::YueError;
 use crate::tools::{SnowyFlakeWrapper, sign_ed25519};
-use crate::websocket::client_deprecated::{SendTextMessage, WebSocketClient, WebSocketEvent};
-use crate::websocket::event_bus::WebSocketHandler;
-use actix::{Actor, Addr, Handler};
+use actix::{Actor, Handler, Recipient};
 use ed25519_dalek::SigningKey;
 use li::actix_jobs::TaskCompletionEvent;
+use li::tools::SubscribeEvent;
 use li::tools::time::unix_time_now_u64_utc;
+use li::websocket::client::{CommandMessage, WebSocketEvent};
 use log::{error, info, trace};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
@@ -58,7 +57,7 @@ pub struct KlineSubscribe {
     refresher: Arc<dyn TradingSymbolRefresher + Send + Sync>,
     kline_interval: String,
     subscribed: RwLock<HashSet<String>>, // 已订阅的symbol集合，使用大写存储便于比较
-    last_ws_addr: Option<Addr<WebSocketClient>>,
+    last_ws_addr: Option<Recipient<CommandMessage>>,
 }
 
 impl Actor for KlineSubscribe {
@@ -75,10 +74,10 @@ impl Handler<WebSocketEvent> for KlineSubscribe {
 
     fn handle(&mut self, msg: WebSocketEvent, _ctx: &mut Self::Context) -> Self::Result {
         match msg {
-            WebSocketEvent::Connected(addr) => {
-                self.last_ws_addr = Some(addr.clone());
+            WebSocketEvent::Connected(recipient) => {
+                self.last_ws_addr = Some(recipient.clone());
                 if let Some(req) = self.build_initial_subscribe() {
-                    match self.send_request(&addr, req) {
+                    match self.send_request(&recipient, req) {
                         Ok(_) => info!("✓ K线初始订阅已发送"),
                         Err(e) => error!("❌ 发送K线初始订阅失败: {}", e),
                     }
@@ -179,9 +178,9 @@ impl KlineSubscribe {
         (sub_req, unsub_req)
     }
 
-    fn send_request(&self, addr: &Addr<WebSocketClient>, req: StreamCommandRequest) -> Result<(), YueError> {
+    fn send_request(&self, addr: &Recipient<CommandMessage>, req: StreamCommandRequest) -> Result<(), YueError> {
         let payload = serde_json::to_string(&req)?;
-        addr.try_send(SendTextMessage::new_no_resend(payload))
+        addr.try_send(CommandMessage::text_no_resend(payload))
             .map_err(|e| YueError::new(&format!("发送K线订阅消息失败: {}", e)))
     }
 
@@ -198,29 +197,6 @@ impl KlineSubscribe {
             }
         }
         Ok(())
-    }
-}
-
-pub struct BinanceSpotStreamHandler;
-
-impl WebSocketHandler for BinanceSpotStreamHandler {
-    type Output = BinanceSpotWebSocketStreamResponse;
-
-    fn parse_text(&self, text: &str) -> Result<Self::Output, YueError> {
-        match BinanceSpotWebSocketStreamResponse::from_text(text) {
-            Ok(response) => {
-                trace!("✓ 成功解析币安现货行情: {:?}", response);
-                Ok(response)
-            }
-            Err(e) => {
-                let preview = if text.len() > 200 {
-                    format!("{}...", &text[..200])
-                } else {
-                    text.to_string()
-                };
-                Err(YueError::ParseError(format!("解析币安现货行情失败: {}\n消息预览: {}", e, preview)))
-            }
-        }
     }
 }
 
@@ -265,18 +241,20 @@ pub struct SpotStreamAccountWebsocketInfo {
 /// - account_name 大小写敏感，应保持一致性
 /// - subscription_id 由 Binance 服务器分配，全局唯一
 /// - request_id 由本地生成，用于关联订阅请求和响应
-pub struct SpotAccountStreamHandler {
+pub struct SpotAccountActor {
     account_info_vec: Vec<SpotStreamAccountWebsocketInfo>,
     id_to_account: RwLock<HashMap<u64, String>>,
     subscription_to_account: RwLock<HashMap<u64, String>>, // 运行期维护订阅ID与账户名关系，读多写少用RwLock
+    recipient: Vec<Recipient<BinanceSpotAccountWebSocketResponse>>,
 }
 
-impl SpotAccountStreamHandler {
+impl SpotAccountActor {
     pub fn new(account_info_vec: Vec<SpotStreamAccountWebsocketInfo>) -> Self {
         Self {
             account_info_vec,
             id_to_account: RwLock::new(HashMap::new()),
             subscription_to_account: RwLock::new(HashMap::new()),
+            recipient: vec![],
         }
     }
 
@@ -288,36 +266,10 @@ impl SpotAccountStreamHandler {
             .map_err(|_| YueError::ParseError("解析账户流失败: subscription 映射读锁获取失败".to_string()))?;
         Ok(guard.get(&subscription_id).cloned())
     }
-}
 
-impl WebSocketHandler for SpotAccountStreamHandler {
-    type Output = BinanceSpotWebSocketResponse;
-
-    ///对于和账户相关的流，各个消息的处理逻辑
-    /// 对于账户相关的信息。
-    /// OutboundAccountPosition
-    /// BalanceUpdate
-    /// ExecutionReport
-    /// 通过subscription_id找到对应的账户名，并填充到消息中
-    ///
-    /// SubscribeResponse:
-    /// 更新subscription_id和account_name的关系
-    ///
-    fn parse_text(&self, text: &str) -> Result<Self::Output, YueError> {
-        let parsed = match BinanceSpotWebSocketResponse::from_text(text) {
-            Ok(response) => response,
-            Err(e) => {
-                let preview = if text.len() > 200 {
-                    format!("{}...", &text[..200])
-                } else {
-                    text.to_string()
-                };
-                return Err(YueError::ParseError(format!("解析币安账户流失败: {}\n消息预览: {}", e, preview)));
-            }
-        };
-
-        match parsed {
-            BinanceSpotWebSocketResponse::SubscribeResponse(resp) => {
+    fn translate(&self, message: BinanceSpotAccountWebSocketResponse) -> Result<BinanceSpotAccountWebSocketResponse, YueError> {
+        match message {
+            BinanceSpotAccountWebSocketResponse::SubscribeResponse(resp) => {
                 if let (Some(id), Some(result)) = (resp.id, resp.result.clone()) {
                     let map = self.id_to_account.read().map_err(|_| YueError::new("获得id_to_account锁失败"))?;
                     if let Some(account_name) = map.get(&id) {
@@ -330,15 +282,15 @@ impl WebSocketHandler for SpotAccountStreamHandler {
                     }
                 }
                 trace!("✓ 成功解析币安账户订阅响应: {:?}", resp);
-                Ok(BinanceSpotWebSocketResponse::SubscribeResponse(resp))
+                Ok(BinanceSpotAccountWebSocketResponse::SubscribeResponse(resp))
             }
-            BinanceSpotWebSocketResponse::OutboundAccountPosition(mut payload) => {
+            BinanceSpotAccountWebSocketResponse::OutboundAccountPosition(mut payload) => {
                 let account_name = self.get_account_name(payload.subscription_id)?;
 
                 if let Some(name) = account_name {
                     payload.account_name = Some(name);
                     trace!("✓ 成功解析币安账户余额变动: {:?}", payload);
-                    Ok(BinanceSpotWebSocketResponse::OutboundAccountPosition(payload))
+                    Ok(BinanceSpotAccountWebSocketResponse::OutboundAccountPosition(payload))
                 } else {
                     Err(YueError::ParseError(format!(
                         "解析币安账户流失败: subscription_id={} 未找到账户映射",
@@ -346,13 +298,13 @@ impl WebSocketHandler for SpotAccountStreamHandler {
                     )))
                 }
             }
-            BinanceSpotWebSocketResponse::BalanceUpdate(mut payload) => {
+            BinanceSpotAccountWebSocketResponse::BalanceUpdate(mut payload) => {
                 let account_name = self.get_account_name(payload.subscription_id)?;
 
                 if let Some(name) = account_name {
                     payload.account_name = Some(name);
                     trace!("✓ 成功解析币安单资产余额更新: {:?}", payload);
-                    Ok(BinanceSpotWebSocketResponse::BalanceUpdate(payload))
+                    Ok(BinanceSpotAccountWebSocketResponse::BalanceUpdate(payload))
                 } else {
                     Err(YueError::ParseError(format!(
                         "解析币安账户流失败: subscription_id={} 未找到账户映射",
@@ -360,13 +312,13 @@ impl WebSocketHandler for SpotAccountStreamHandler {
                     )))
                 }
             }
-            BinanceSpotWebSocketResponse::ExecutionReport(mut payload) => {
+            BinanceSpotAccountWebSocketResponse::ExecutionReport(mut payload) => {
                 let account_name = self.get_account_name(payload.subscription_id)?;
 
                 if let Some(name) = account_name {
                     payload.account_name = Some(name);
                     trace!("✓ 成功解析币安订单执行报告: {:?}", payload);
-                    Ok(BinanceSpotWebSocketResponse::ExecutionReport(payload))
+                    Ok(BinanceSpotAccountWebSocketResponse::ExecutionReport(payload))
                 } else {
                     Err(YueError::ParseError(format!(
                         "解析币安账户流失败: subscription_id={} 未找到账户映射",
@@ -380,7 +332,7 @@ impl WebSocketHandler for SpotAccountStreamHandler {
     /// 这里通过account_info_vec，给websocket client发送信息。订阅账户信息。
     /// 然后把id和account_name的映射关系存储起来，方便后续消息处理时使用。
     ///
-    fn on_connect(&self, addr: &Addr<WebSocketClient>) -> Result<(), YueError> {
+    fn on_connect(&self, addr: &Recipient<CommandMessage>) -> Result<(), YueError> {
         {
             // 每次重连前清空旧的请求ID映射
             let mut map = self
@@ -412,7 +364,7 @@ impl WebSocketHandler for SpotAccountStreamHandler {
             };
 
             // 5. 发送 WebSocket 消息
-            let message = SendTextMessage::new_no_resend(serde_json::to_string(&command)?);
+            let message = CommandMessage::text_no_resend(serde_json::to_string(&command)?);
             match addr.try_send(message) {
                 Ok(_) => {
                     info!("✓ 已发送账户 {} 的订阅请求 (id={})", account_info.account_name, request_id);
@@ -437,58 +389,69 @@ impl WebSocketHandler for SpotAccountStreamHandler {
     }
 }
 
+impl Actor for SpotAccountActor {
+    type Context = actix::Context<Self>;
+
+    fn started(&mut self, ctx: &mut Self::Context) {
+        info!("✓ SpotAccountActor started");
+        ctx.set_mailbox_capacity(1000);
+    }
+}
+
+impl Handler<SubscribeEvent<BinanceSpotAccountWebSocketResponse>> for SpotAccountActor {
+    type Result = ();
+
+    fn handle(&mut self, msg: SubscribeEvent<BinanceSpotAccountWebSocketResponse>, _ctx: &mut Self::Context) -> Self::Result {
+        self.recipient.push(msg.0);
+    }
+}
+
+impl Handler<WebSocketEvent> for SpotAccountActor {
+    type Result = ();
+
+    fn handle(&mut self, msg: WebSocketEvent, _ctx: &mut Self::Context) -> Self::Result {
+        match msg {
+            WebSocketEvent::Connected(addr) => {
+                if let Err(e) = self.on_connect(&addr) {
+                    error!("❌ SpotAccountActor 连接后处理失败: {}", e);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Handler<BinanceSpotAccountWebSocketResponse> for SpotAccountActor {
+    type Result = ();
+
+    ///对于和账户相关的流，各个消息的处理逻辑
+    /// 对于账户相关的信息。
+    /// OutboundAccountPosition
+    /// BalanceUpdate
+    /// ExecutionReport
+    /// 通过subscription_id找到对应的账户名，并填充到消息中
+    ///
+    /// SubscribeResponse:
+    /// 更新subscription_id和account_name的关系
+    fn handle(&mut self, msg: BinanceSpotAccountWebSocketResponse, _ctx: &mut Self::Context) -> Self::Result {
+        if let Ok(message) = self.translate(msg) {
+            let recipients = self.recipient.clone();
+            tokio::spawn(async move {
+                for r in recipients.iter() {
+                    let _ = r.send(message.clone()).await;
+                }
+            });
+        };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_decimal::prelude::ToPrimitive;
-
-    #[test]
-    fn test_parse_trade_message() {
-        let parser = BinanceSpotStreamHandler {};
-        let trade_json = r#"{
-            "e":"trade",
-            "E":1234567890,
-            "s":"BTCUSDT",
-            "t":123456,
-            "p":"40000.00",
-            "q":"1.0",
-            "T":1234567890,
-            "m":false,
-            "M":false
-        }"#;
-
-        let result = parser.parse_text(trade_json);
-        assert!(result.is_ok(), "Failed to parse trade message: {:?}", result);
-
-        match result.unwrap() {
-            BinanceSpotWebSocketStreamResponse::Trade(trade) => {
-                assert_eq!(trade.symbol, "BTCUSDT");
-                assert_eq!(trade.trade_id, 123456);
-                assert!((trade.price.to_f64().unwrap() - 40000.00).abs() < 0.01);
-            }
-            _ => panic!("Expected Trade variant"),
-        }
-    }
-
-    #[test]
-    fn test_parse_invalid_json() {
-        let parser = BinanceSpotStreamHandler;
-        let invalid_json = r#"{\"invalid\": json}"#;
-
-        let result = parser.parse_text(invalid_json);
-        assert!(result.is_err(), "Should fail on invalid JSON");
-    }
-
-    #[test]
-    fn test_parse_empty_string() {
-        let parser = BinanceSpotStreamHandler;
-        let result = parser.parse_text("");
-        assert!(result.is_err(), "Should fail on empty string");
-    }
 
     #[test]
     fn test_parse_outbound_account_position() {
-        let parser = SpotAccountStreamHandler::new(vec![]);
+        let parser = SpotAccountActor::new(vec![]);
 
         // 手动插入 id -> account_name 映射
         {
@@ -497,7 +460,9 @@ mod tests {
         }
 
         let subscribe_json = r#"{"id":42,"status":200,"result":{"subscriptionId":123}}"#;
-        parser.parse_text(subscribe_json).expect("subscribe should build mapping");
+        parser
+            .translate(BinanceSpotAccountWebSocketResponse::from_text(subscribe_json).unwrap())
+            .expect("subscribe should build mapping");
         let json = r#"{
             "subscriptionId": 123,
             "event": {
@@ -519,10 +484,10 @@ mod tests {
             }
         }"#;
 
-        let result = parser.parse_text(json);
+        let result = parser.translate(BinanceSpotAccountWebSocketResponse::from_text(json).unwrap());
         assert!(result.is_ok(), "Failed to parse account position: {:?}", result);
         match result.unwrap() {
-            BinanceSpotWebSocketResponse::OutboundAccountPosition(payload) => {
+            BinanceSpotAccountWebSocketResponse::OutboundAccountPosition(payload) => {
                 assert_eq!(payload.subscription_id, 123);
                 assert_eq!(payload.event.event, "outboundAccountPosition");
                 assert_eq!(payload.event.balances.len(), 2);
@@ -534,12 +499,12 @@ mod tests {
 
     #[test]
     fn test_parse_subscribe_response() {
-        let parser = SpotAccountStreamHandler::new(vec![]);
+        let parser = SpotAccountActor::new(vec![]);
         let json = r#"{"id":1,"status":200,"result":{"subscriptionId":12345}}"#;
-        let result = parser.parse_text(json);
+        let result = parser.translate(BinanceSpotAccountWebSocketResponse::from_text(json).unwrap());
         assert!(result.is_ok(), "Failed to parse subscribe response: {:?}", result);
         match result.unwrap() {
-            BinanceSpotWebSocketResponse::SubscribeResponse(resp) => {
+            BinanceSpotAccountWebSocketResponse::SubscribeResponse(resp) => {
                 assert_eq!(resp.status, Some(200));
                 assert_eq!(resp.result.unwrap().subscription_id, 12345);
             }
@@ -548,16 +513,8 @@ mod tests {
     }
 
     #[test]
-    fn test_account_parser_invalid_json() {
-        let parser = SpotAccountStreamHandler::new(vec![]);
-        let invalid = "{";
-        let result = parser.parse_text(invalid);
-        assert!(result.is_err(), "Account parser should fail on invalid json");
-    }
-
-    #[test]
     fn test_account_event_with_account_mapping() {
-        let parser = SpotAccountStreamHandler::new(vec![]);
+        let parser = SpotAccountActor::new(vec![]);
 
         // 手动插入 id -> account_name 映射
         {
@@ -566,7 +523,9 @@ mod tests {
         }
 
         let subscribe_json = r#"{"id":1,"status":200,"result":{"subscriptionId":999}}"#;
-        parser.parse_text(subscribe_json).expect("subscribe response should parse");
+        parser
+            .translate(BinanceSpotAccountWebSocketResponse::from_text(subscribe_json).unwrap())
+            .expect("subscribe response should parse");
 
         let account_event = r#"{
             "subscriptionId": 999,
@@ -578,30 +537,15 @@ mod tests {
             }
         }"#;
 
-        let parsed = parser.parse_text(account_event).expect("account event should parse");
+        let parsed = parser
+            .translate(BinanceSpotAccountWebSocketResponse::from_text(account_event).unwrap())
+            .expect("account event should parse");
         match parsed {
-            BinanceSpotWebSocketResponse::OutboundAccountPosition(p) => {
+            BinanceSpotAccountWebSocketResponse::OutboundAccountPosition(p) => {
                 assert_eq!(p.account_name.as_deref(), Some("acc_a"));
             }
             _ => panic!("unexpected variant"),
         }
-    }
-
-    #[test]
-    fn test_account_event_missing_subscription_mapping() {
-        let parser = SpotAccountStreamHandler::new(vec![]);
-        let account_event = r#"{
-            "subscriptionId": 321,
-            "event": {
-                "e":"outboundAccountPosition",
-                "E":1690000000000,
-                "u":1690000000000,
-                "B":[{"a":"BTC","f":"1.5","l":"0.5"}]
-            }
-        }"#;
-
-        let parsed = parser.parse_text(account_event);
-        assert!(parsed.is_err());
     }
 
     #[test]
@@ -622,7 +566,7 @@ mod tests {
             },
         ];
 
-        let handler = SpotAccountStreamHandler::new(account_infos);
+        let handler = SpotAccountActor::new(account_infos);
 
         // 验证初始状态：id_to_account 为空
         {

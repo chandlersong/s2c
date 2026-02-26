@@ -3,7 +3,7 @@ use serde::Deserialize;
 use std::env;
 use std::path::Path;
 use std::sync::OnceLock;
-use yue::binance::websocket_handler::SpotStreamAccountWebsocketInfo;
+use yue::binance::websocket_actor::SpotStreamAccountWebsocketInfo;
 use yue::tools::load_ed25519_signing_key;
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]

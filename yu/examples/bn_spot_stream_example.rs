@@ -6,7 +6,9 @@
 /// 3. 处理订阅成功/失败的响应
 /// 4. 定时发送订阅和取消订阅请求
 use actix::{Actor, Context, Handler};
+use li::subscribe_event_addr;
 use li::tools::logs::setup_logger;
+use li::websocket::client::{CommandMessage, WebSocketClient};
 use log::{info, LevelFilter};
 use serde_json::to_string;
 use std::collections::HashMap;
@@ -16,9 +18,6 @@ use yu::duck_db::DBProvider;
 use yu::websocket::subscribers::SpotStreamStorageActor;
 use yue::binance::bn_json_websocket::{StreamCommandRequest, SPOT_STREAM_WEBSOCKET, WS_SUBSCRIBE_COMMAND};
 use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamResponse;
-use yue::binance::websocket_handler::BinanceSpotStreamHandler;
-use yue::websocket::client_deprecated::{SendTextMessage, SubscribeToEvents, WebSocketClient, WebSocketEvent};
-use yue::websocket::event_bus::{Subscribe, WsMessageBus};
 
 /// 处理订阅消息的事件处理器
 pub struct PrintSubscriberActor;
@@ -55,6 +54,9 @@ impl Handler<BinanceSpotWebSocketStreamResponse> for PrintSubscriberActor {
             BinanceSpotWebSocketStreamResponse::DepthUpdate(depth) => {
                 info!("PrintSubscriber received update depth: {:?}", depth);
             }
+            BinanceSpotWebSocketStreamResponse::SubscriptionResult(other) => {
+                info!("PrintSubscriber received subscribe result: {:?}", other);
+            }
         }
     }
 }
@@ -66,6 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     special_log.insert("yu".to_string(), LevelFilter::Trace);
     special_log.insert("li".to_string(), LevelFilter::Trace);
     special_log.insert("yue".to_string(), LevelFilter::Trace);
+    special_log.insert("bn_spot_stream_example".to_string(), LevelFilter::Trace);
     setup_logger(Some(LevelFilter::Warn), special_log).expect("TODO: panic message");
 
     info!("========== WebSocket 订阅消息示例 ==========");
@@ -101,26 +104,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     // 步骤 2: 创建事件处理器
-    let bus = WsMessageBus::new(BinanceSpotStreamHandler {}).start();
+
     info!("✓ WsMessageBus started");
     let printer = PrintSubscriberActor.start();
     let storage_actor = SpotStreamStorageActor::new(spot_config.clone(), DBProvider::default()).start();
 
-    bus.do_send(Subscribe {
-        subscriber: printer.clone().recipient(),
-    });
-    bus.do_send(Subscribe {
-        subscriber: storage_actor.clone().recipient(),
-    });
-
     info!("✓ 事件处理器已启动");
-
-    // 步骤 3: 订阅 WebSocket 事件
-    client_addr
-        .send(SubscribeToEvents {
-            recipient: bus.recipient::<WebSocketEvent>(),
-        })
-        .await??;
+    subscribe_event_addr!(client_addr, printer, BinanceSpotWebSocketStreamResponse);
+    subscribe_event_addr!(client_addr, storage_actor, BinanceSpotWebSocketStreamResponse);
 
     info!("✓ 事件处理器已订阅");
 
@@ -139,7 +130,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ],
         id: 0,
     };
-    client_addr.send(SendTextMessage::new(to_string(&command_request).unwrap())).await??;
+    client_addr.send(CommandMessage::text(to_string(&command_request).unwrap())).await??;
 
     info!("✓ 请求 #2 已发送");
 

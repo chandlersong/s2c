@@ -1,12 +1,13 @@
 use crate::models::Decimal;
 use crate::tools::{string_to_decimal, string_to_option_decimal};
 use actix::Message as ActixMessage;
+use li::websocket::models::WebSocketMessage;
 use serde::{Deserialize, Serialize};
 
 /// 现货账户流枚举，兼容余额、订单事件以及订阅响应。
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(untagged)]
-pub enum BinanceSpotWebSocketResponse {
+pub enum BinanceSpotAccountWebSocketResponse {
     /// 余额更新事件 outboundAccountPosition
     OutboundAccountPosition(AccountWebSocketPayLoad<OutboundAccountPositionPayload>),
     /// 单个资产余额变动事件 balanceUpdate
@@ -17,11 +18,17 @@ pub enum BinanceSpotWebSocketResponse {
     SubscribeResponse(SubscribeResponsePayload),
 }
 
-impl ActixMessage for BinanceSpotWebSocketResponse {
+impl WebSocketMessage for BinanceSpotAccountWebSocketResponse {
+    fn from_text(text: &str) -> Result<Self, li::errors::LiError> {
+        serde_json::from_str(text).map_err(|e| li::errors::LiError::from(e))
+    }
+}
+
+impl ActixMessage for BinanceSpotAccountWebSocketResponse {
     type Result = ();
 }
 
-impl BinanceSpotWebSocketResponse {
+impl BinanceSpotAccountWebSocketResponse {
     pub fn from_text(text: &str) -> Result<Self, serde_json::Error> {
         serde_json::from_str(text)
     }
@@ -330,9 +337,9 @@ mod tests {
             }
         }"#;
 
-        let result = BinanceSpotWebSocketResponse::from_text(json).expect("should parse outbound");
+        let result = BinanceSpotAccountWebSocketResponse::from_text(json).expect("should parse outbound");
         match result {
-            BinanceSpotWebSocketResponse::OutboundAccountPosition(p) => {
+            BinanceSpotAccountWebSocketResponse::OutboundAccountPosition(p) => {
                 assert_eq!(p.subscription_id, 123);
                 assert_eq!(p.event.event, "outboundAccountPosition");
                 assert_eq!(p.event.event_time, 1690000000000);
@@ -341,13 +348,13 @@ mod tests {
                 assert_eq!(p.event.balances[0].asset, "BTC");
                 assert_eq!(p.event.balances[1].asset, "USDT");
             }
-            BinanceSpotWebSocketResponse::BalanceUpdate(_) => {
+            BinanceSpotAccountWebSocketResponse::BalanceUpdate(_) => {
                 panic!("Matched BalanceUpdate instead of OutboundAccountPosition");
             }
-            BinanceSpotWebSocketResponse::SubscribeResponse(_) => {
+            BinanceSpotAccountWebSocketResponse::SubscribeResponse(_) => {
                 panic!("Matched SubscribeResponse instead of OutboundAccountPosition");
             }
-            BinanceSpotWebSocketResponse::ExecutionReport(_) => {
+            BinanceSpotAccountWebSocketResponse::ExecutionReport(_) => {
                 panic!("Matched ExecutionReport instead of OutboundAccountPosition");
             }
         }
@@ -416,9 +423,9 @@ mod tests {
             }
         }"#;
 
-        let result = BinanceSpotWebSocketResponse::from_text(json).expect("should parse executionReport");
+        let result = BinanceSpotAccountWebSocketResponse::from_text(json).expect("should parse executionReport");
         match result {
-            BinanceSpotWebSocketResponse::ExecutionReport(p) => {
+            BinanceSpotAccountWebSocketResponse::ExecutionReport(p) => {
                 assert_eq!(p.subscription_id, 456);
                 assert_eq!(p.event.event, "executionReport");
                 assert_eq!(p.event.symbol, "BTCUSDT");
@@ -433,9 +440,9 @@ mod tests {
     #[test]
     fn parse_subscribe_response() {
         let json = r#"{"id":1,"status":200,"result":{"subscriptionId":12345}}"#;
-        let result = BinanceSpotWebSocketResponse::from_text(json).expect("should parse subscribe response");
+        let result = BinanceSpotAccountWebSocketResponse::from_text(json).expect("should parse subscribe response");
         match result {
-            BinanceSpotWebSocketResponse::SubscribeResponse(p) => {
+            BinanceSpotAccountWebSocketResponse::SubscribeResponse(p) => {
                 assert_eq!(p.id, Some(1));
                 assert_eq!(p.status, Some(200));
                 assert_eq!(p.result.unwrap().subscription_id, 12345);
@@ -486,9 +493,9 @@ mod tests {
             }
         }"#;
 
-        let result = BinanceSpotWebSocketResponse::from_text(json).expect("should parse real execution report");
+        let result = BinanceSpotAccountWebSocketResponse::from_text(json).expect("should parse real execution report");
         match result {
-            BinanceSpotWebSocketResponse::ExecutionReport(p) => {
+            BinanceSpotAccountWebSocketResponse::ExecutionReport(p) => {
                 assert_eq!(p.event.event, "executionReport");
                 assert_eq!(p.event.symbol, "BFUSDUSDT");
                 assert_eq!(p.event.order_status, "NEW");
@@ -543,9 +550,9 @@ mod tests {
             }
         }"#;
 
-        let result = BinanceSpotWebSocketResponse::from_text(json).expect("should parse real filled execution report");
+        let result = BinanceSpotAccountWebSocketResponse::from_text(json).expect("should parse real filled execution report");
         match result {
-            BinanceSpotWebSocketResponse::ExecutionReport(p) => {
+            BinanceSpotAccountWebSocketResponse::ExecutionReport(p) => {
                 assert_eq!(p.event.event, "executionReport");
                 assert_eq!(p.event.symbol, "BFUSDUSDT");
                 assert_eq!(p.event.order_status, "FILLED");
@@ -570,9 +577,9 @@ mod tests {
             }
         }"#;
 
-        let result = BinanceSpotWebSocketResponse::from_text(json).expect("should parse balance update");
+        let result = BinanceSpotAccountWebSocketResponse::from_text(json).expect("should parse balance update");
         match result {
-            BinanceSpotWebSocketResponse::BalanceUpdate(p) => {
+            BinanceSpotAccountWebSocketResponse::BalanceUpdate(p) => {
                 assert_eq!(p.subscription_id, 0);
                 assert_eq!(p.event.event, "balanceUpdate");
                 assert_eq!(p.event.asset, "BFUSD");

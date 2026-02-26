@@ -7,11 +7,11 @@ use log::info;
 
 #[derive(Clone, Message)]
 #[rtype(result = "()")]
-struct TextMessage(String);
+struct TextMessage();
 
 impl WebSocketMessage for TextMessage {
-    fn from_text(text: &str) -> Result<Self, LiError> {
-        Ok(TextMessage(text.to_string()))
+    fn from_text(_: &str) -> Result<Self, LiError> {
+        Ok(TextMessage {})
     }
 }
 

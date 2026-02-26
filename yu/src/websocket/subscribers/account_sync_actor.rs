@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use actix::{Actor, AsyncContext, Context, Handler, Supervised};
 use log::{debug, error, info};
-use yue::binance::bn_models::spot_websocket::{AccountWebSocketPayLoad, BinanceSpotWebSocketResponse, ExecutionReportPayload};
+use yue::binance::bn_models::spot_websocket::{AccountWebSocketPayLoad, BinanceSpotAccountWebSocketResponse, ExecutionReportPayload};
 
 use crate::binance::models::po::SpotOrderPo;
 use crate::duck_db::DBProvider;
@@ -85,6 +85,7 @@ impl AccountSyncActor {
 
     fn write_orders_to_db(&self) -> Result<usize, YuError> {
         let conn = self.db.acquire()?;
+        conn.execute_batch("BEGIN")?;
         let mut stmt = conn.prepare(
             "INSERT OR REPLACE INTO bn_order_events_spot (
                 event, event_time, symbol, client_order_id, side, order_type,
@@ -163,6 +164,8 @@ impl AccountSyncActor {
                 record.pegged_price,
             ])?;
         }
+
+        conn.execute_batch("COMMIT")?;
         Ok(self.order_buffer.len())
     }
 }
@@ -189,13 +192,13 @@ impl Actor for AccountSyncActor {
 
 impl Supervised for AccountSyncActor {}
 
-impl Handler<BinanceSpotWebSocketResponse> for AccountSyncActor {
+impl Handler<BinanceSpotAccountWebSocketResponse> for AccountSyncActor {
     type Result = ();
 
-    fn handle(&mut self, msg: BinanceSpotWebSocketResponse, _ctx: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, msg: BinanceSpotAccountWebSocketResponse, _ctx: &mut Context<Self>) -> Self::Result {
         self.received_count += 1;
         match msg {
-            BinanceSpotWebSocketResponse::ExecutionReport(payload) => self.handle_execution_report(payload),
+            BinanceSpotAccountWebSocketResponse::ExecutionReport(payload) => self.handle_execution_report(payload),
             other => {
                 info!("收到非订单事件消息: {:?}", other);
             }

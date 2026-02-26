@@ -4,10 +4,10 @@ use crate::binance::bn_restful_commands::{BNSecurityRequestBuilder, SWAP_LISTEN_
 use crate::binance::history_data::CommonParam;
 use crate::errors::YueError;
 use crate::models::RequestInfo;
-use actix::{Actor, AsyncContext, Context, Handler, Message as ActixMessage, Recipient};
+use actix::{Actor, AsyncContext, Context, Handler, Message as ActixMessage};
 use li::errors::LiError;
 use li::tools::SubscribeEvent;
-use li::websocket::client::{CommandMessage, ConnectionCommand, WebSocketClient, WebSocketConnection, WebSocketEvent};
+use li::websocket::client::{CommandMessage, ConnectionCommand, WebSocketConnection, WebSocketEvent};
 use li::websocket::models::WebSocketMessage;
 use log::{debug, error, info};
 use std::sync::Arc;
@@ -161,7 +161,6 @@ impl<M: WebSocketMessage> ListenKeyClient<M> {
     ///
     async fn run_websocket_connection(
         url: String,
-        recipient: Recipient<WebSocketEvent>,
         reconnect_interval: Duration,
         proxy: Option<String>,
         command_rx: UnboundedReceiver<ConnectionCommand<ListenKeyClient<M>, M>>,
@@ -198,7 +197,6 @@ impl<M: WebSocketMessage> Actor for ListenKeyClient<M> {
             }
         });
 
-        let event_reception: Recipient<WebSocketEvent> = ctx.address().recipient();
         let api_key = self.api_key.clone();
         let api_secret = self.api_secret.clone();
         let request_info = self.apply_listen_key_request.clone();
@@ -219,7 +217,7 @@ impl<M: WebSocketMessage> Actor for ListenKeyClient<M> {
                 return;
             }
             let ws_url = format!("{}{}", base_url, listen_key.unwrap());
-            Self::run_websocket_connection(ws_url, event_reception, reconnect_interval, proxy, command_rx).await;
+            Self::run_websocket_connection(ws_url, reconnect_interval, proxy, command_rx).await;
         });
     }
 }
@@ -262,7 +260,7 @@ impl<M: WebSocketMessage> Handler<CommandMessage> for ListenKeyClient<M> {
     ///
     /// 因为Listen key默认不支持外部发消息，所以这里直接 panic，后续如果有需要，可以在这里加入对外部命令的处理逻辑。
     ///
-    fn handle(&mut self, msg: CommandMessage, _ctx: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, _msg: CommandMessage, _ctx: &mut Context<Self>) -> Self::Result {
         panic!("ListenKeyClient 不支持 CommandMessage");
     }
 }

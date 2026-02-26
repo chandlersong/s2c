@@ -6,16 +6,16 @@
 /// 3. 订阅 OrderBook 快照并打印
 /// 4. 自动处理订单簿的初始化和增量更新
 use actix::{Actor, Context, Handler};
+use li::subscribe_event_addr;
 use li::tools::logs::setup_logger;
+use li::websocket::client::{CommandMessage, WebSocketClient};
 use log::{LevelFilter, info};
 use serde_json::to_string;
 use std::collections::HashMap;
 use yue::binance::bn_json_websocket::{SPOT_STREAM_WEBSOCKET, StreamCommandRequest, WS_SUBSCRIBE_COMMAND};
+use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamResponse;
 use yue::binance::order_book::{OrderBookService, OrderBookSnapshotMsg, Subscribe};
-use yue::binance::websocket_handler::BinanceSpotStreamHandler;
 use yue::http_client::init_http_client;
-use yue::websocket::client_deprecated::{SendTextMessage, SubscribeToEvents, WebSocketClient, WebSocketEvent};
-use yue::websocket::event_bus::WsMessageBus;
 
 /// 打印订单簿快照的订阅者 Actor
 #[derive(Debug)]
@@ -113,23 +113,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("✓ WebSocket 客户端已启动");
 
     // 步骤 5: 创建消息总线，将 WebSocket 消息解析并分发
-    let bus = WsMessageBus::new(BinanceSpotStreamHandler {}).start();
+
     info!("✓ WsMessageBus 已启动");
 
     // 步骤 6: 将 OrderBookService 注册为 bus 的订阅者
     // 这样 OrderBookService 就能收到解析后的深度更新消息
-    bus.do_send(yue::websocket::event_bus::Subscribe {
-        subscriber: order_book_service.recipient(),
-    });
+    subscribe_event_addr!(client_addr, order_book_service, BinanceSpotWebSocketStreamResponse);
     info!("✓ OrderBookService 已订阅 WsMessageBus");
-
-    // 步骤 7: 将 bus 注册为 WebSocket 客户端的事件接收者
-    client_addr
-        .send(SubscribeToEvents {
-            recipient: bus.recipient::<WebSocketEvent>(),
-        })
-        .await??;
-    info!("✓ WsMessageBus 已订阅 WebSocket 事件");
 
     // 等待连接建立
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
@@ -141,7 +131,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         params: vec!["btcusdt@depth@100ms".to_string()],
         id: 1,
     };
-    client_addr.send(SendTextMessage::new(to_string(&subscribe_request)?)).await??;
+    client_addr.send(CommandMessage::text(to_string(&subscribe_request)?)).await??;
     info!("✓ 订阅请求已发送");
 
     info!("\n等待订单簿数据...");
@@ -161,7 +151,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         params: vec!["ethusdt@depth@100ms".to_string()],
         id: 2,
     };
-    client_addr.send(SendTextMessage::new(to_string(&subscribe_eth)?)).await??;
+    client_addr.send(CommandMessage::text(to_string(&subscribe_eth)?)).await??;
     info!("✓ ETHUSDT 订阅请求已发送");
 
     // 再运行 30 秒

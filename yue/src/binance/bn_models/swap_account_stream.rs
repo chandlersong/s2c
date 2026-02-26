@@ -1,10 +1,8 @@
 //! [swap account swap对象](https://developers.binance.com/docs/zh-CN/derivatives/usds-margined-futures/user-data-streams/Event-Order-Update)
 
-use crate::errors::YueError;
 use crate::models::Decimal;
 use crate::tools::string_to_decimal;
 use crate::tools::string_to_option_decimal;
-use crate::websocket::models::WebSocketTextMessage;
 use actix::Message as ActixMessage;
 use li::errors::LiError;
 use li::websocket::models::WebSocketMessage;
@@ -29,12 +27,6 @@ pub enum BinanceSwapAccountStreamResponse {
     AlgoUpdate(AlgoUpdatePayload),
     /// 兜底：未匹配到上述任何已知类型时，保留原始 JSON，便于调试或日志打印
     UnKnow(Value),
-}
-
-impl WebSocketTextMessage for BinanceSwapAccountStreamResponse {
-    fn from_text(text: &str) -> Result<Self, YueError> {
-        serde_json::from_str(text).map_err(|e| YueError::from(e))
-    }
 }
 
 impl WebSocketMessage for BinanceSwapAccountStreamResponse {
