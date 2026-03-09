@@ -16,6 +16,11 @@ pub const SPOT_WEBSOCKET: &str = "wss://ws-api.binance.com:443/ws-api/v3";
 pub const SPOT_STREAM_WEBSOCKET: &str = "wss://stream.testnet.binance.vision:9443/ws";
 #[cfg(not(any(feature = "binance-testnet", test)))]
 pub const SPOT_STREAM_WEBSOCKET: &str = "wss://stream.binance.com:9443/ws";
+
+pub const SWAP_WEBSOCKET: &str = "wss://fstream.binance.com/ws";
+pub const SWAP_STREAM_WEBSOCKET: &str = "wss://fstream.binance.com/stream";
+pub const PORTFOLIO_MARGIN_STREAM_WEBSOCKET: &str = "wss://fstream.binance.com/pm/ws";
+
 pub const SPOT_DATA_STREAM_WEBSOCKET: &str = "wss://data-stream.binance.vision";
 pub const WS_PING_COMMAND: &str = "ping";
 pub const WS_TIME_COMMAND: &str = "time";

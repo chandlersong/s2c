@@ -53,16 +53,7 @@ async fn main() -> Result<(), YuError> {
     });
 
     if let Some(acc) = account {
-        let addr = ListenKeyClient::swap(
-            &acc.account_name,
-            SWAP_LISTEN_KEY_COMMAND.clone(),
-            SWAP_LISTEN_KEY_COMMAND.clone(),
-            None,
-            &acc.api_key,
-            &acc.value,
-            app_config.proxy_url.clone(),
-        )
-        .start();
+        let addr = ListenKeyClient::swap(&acc.account_name, None, &acc.api_key, &acc.value, app_config.proxy_url.clone()).start();
         let printer_addr = SwapAccountPrinter.start();
         subscribe_event_addr!(addr, printer_addr, BinanceSwapAccountStreamResponse);
     }

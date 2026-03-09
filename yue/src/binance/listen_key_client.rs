@@ -1,6 +1,10 @@
+use crate::binance::bn_json_websocket::{PORTFOLIO_MARGIN_STREAM_WEBSOCKET, SWAP_WEBSOCKET};
 use crate::binance::bn_models::common::ListenKeyResponse;
+use crate::binance::bn_models::portfolio_account_websocket::BinancePortfolioWebSocketStreamResponse;
 use crate::binance::bn_models::swap_account_stream::BinanceSwapAccountStreamResponse;
-use crate::binance::bn_restful_commands::{BNSecurityRequestBuilder, SWAP_LISTEN_KEY_COMMAND, execute_bn_post, execute_bn_put};
+use crate::binance::bn_restful_commands::{
+    BNSecurityRequestBuilder, PAPI_LISTEN_KEY_COMMAND, SWAP_LISTEN_KEY_COMMAND, execute_bn_post, execute_bn_put,
+};
 use crate::binance::history_data::CommonParam;
 use crate::errors::YueError;
 use crate::models::RequestInfo;
@@ -71,24 +75,34 @@ pub struct ListenKeyClient<M: WebSocketMessage> {
 }
 
 impl ListenKeyClient<BinanceSwapAccountStreamResponse> {
-    pub fn swap(
-        name: &str,
-        apply_listen_key_request: RequestInfo,
-        renew_listen_key_request: RequestInfo,
-        renew_interval_ms: Option<u64>,
-        api_key: &str,
-        api_secret: &str,
-        proxy: Option<String>,
-    ) -> Self {
+    pub fn swap(name: &str, renew_interval_ms: Option<u64>, api_key: &str, api_secret: &str, proxy: Option<String>) -> Self {
         let actual_renew_interval_ms = renew_interval_ms.unwrap_or(55 * 60 * 1000); // 默认 55 分钟
         Self {
-            apply_listen_key_request,
-            renew_listen_key_request,
+            apply_listen_key_request: SWAP_LISTEN_KEY_COMMAND.clone(),
+            renew_listen_key_request: SWAP_LISTEN_KEY_COMMAND.clone(),
             renew_interval_ms: actual_renew_interval_ms,
             api_key: api_key.to_string(),
             api_secret: api_secret.to_string(),
             name: name.to_string(),
-            ws_base_url: "wss://fstream.binance.com/ws/".to_string(),
+            ws_base_url: SWAP_WEBSOCKET.to_string(),
+            proxy,
+            reconnect_interval: Duration::from_secs(5),
+            command_tx: None,
+        }
+    }
+}
+
+impl ListenKeyClient<BinancePortfolioWebSocketStreamResponse> {
+    pub fn portfolio(name: &str, renew_interval_ms: Option<u64>, api_key: &str, api_secret: &str, proxy: Option<String>) -> Self {
+        let actual_renew_interval_ms = renew_interval_ms.unwrap_or(55 * 60 * 1000); // 默认 55 分钟
+        Self {
+            apply_listen_key_request: PAPI_LISTEN_KEY_COMMAND.clone(),
+            renew_listen_key_request: PAPI_LISTEN_KEY_COMMAND.clone(),
+            renew_interval_ms: actual_renew_interval_ms,
+            api_key: api_key.to_string(),
+            api_secret: api_secret.to_string(),
+            name: name.to_string(),
+            ws_base_url: PORTFOLIO_MARGIN_STREAM_WEBSOCKET.to_string(),
             proxy,
             reconnect_interval: Duration::from_secs(5),
             command_tx: None,
@@ -216,7 +230,7 @@ impl<M: WebSocketMessage> Actor for ListenKeyClient<M> {
                 error!("获取 listen key 失败: {}", e);
                 return;
             }
-            let ws_url = format!("{}{}", base_url, listen_key.unwrap());
+            let ws_url = format!("{}/{}", base_url, listen_key.unwrap());
             Self::run_websocket_connection(ws_url, reconnect_interval, proxy, command_rx).await;
         });
     }

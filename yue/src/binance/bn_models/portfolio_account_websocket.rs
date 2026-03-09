@@ -1,12 +1,17 @@
 //! [统一账户stream对象](https://developers.binance.com/docs/zh-CN/derivatives/portfolio-margin/user-data-streams/Event-Conditional-Order-Trade-Update)
 
+use crate::binance::bn_models::swap_account_stream::BinanceSwapAccountStreamResponse;
 use crate::models::Decimal;
 use crate::tools::{string_to_decimal, string_to_option_decimal};
+use actix::Message;
+use li::errors::LiError;
+use li::websocket::models::WebSocketMessage;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// 统一账户信息的websocket推送
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, Message)]
+#[rtype(result = "()")]
 #[serde(untagged)]
 pub enum BinancePortfolioWebSocketStreamResponse {
     ConditionalOrderTradeUpdate(ConditionalOrderTradeUpdatePayload),
@@ -20,6 +25,12 @@ pub enum BinancePortfolioWebSocketStreamResponse {
     RiskLevelChange(RiskLevelChangePayload),
     BalanceUpdate(BalanceUpdatePayload),
     UnKnow(Value),
+}
+
+impl WebSocketMessage for BinancePortfolioWebSocketStreamResponse {
+    fn from_text(text: &str) -> Result<Self, LiError> {
+        serde_json::from_str(text).map_err(|e| LiError::from(e))
+    }
 }
 
 #[cfg(test)]

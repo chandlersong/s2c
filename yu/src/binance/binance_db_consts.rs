@@ -29,7 +29,7 @@ impl BinanceTables {
             BinanceTables::SpotKline => String::from(CREATE_SPOT_KLINE_TABLE),
             BinanceTables::SwapKline => String::from(CREATE_SWAP_KLINE_TABLE),
             BinanceTables::SwapFundingRate => String::from(CREATE_FUNDING_RATE_TABLE),
-            BinanceTables::SpotTrade => String::from(BN_TRADE_TABLE),
+            BinanceTables::SpotTrade => String::from(BN_SPOT_TRADE_TABLE),
             BinanceTables::SpotOrderEvents => String::from(CREATE_BN_ORDER_EVENTS_SPOT_TABLE),
         }
     }
@@ -166,7 +166,7 @@ CREATE TABLE IF NOT EXISTS bn_order_events_spot (
 CREATE INDEX IF NOT EXISTS idx_order_events_symbol_time ON bn_order_events_spot (symbol, event_time DESC)
 "#;
 
-const BN_TRADE_TABLE: &str = r#"
+const BN_SPOT_TRADE_TABLE: &str = r#"
     CREATE TABLE IF NOT EXISTS bn_spot_trade (
         id BIGINT NOT NULL PRIMARY KEY,
         event_time BIGINT NOT NULL,
