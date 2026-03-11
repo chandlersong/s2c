@@ -6,11 +6,12 @@ use log::{debug, error, info};
 use yue::binance::bn_models::spot_websocket::ExecutionReportPayload;
 
 use crate::binance::models::po::SpotOrderPo;
+use crate::binance::models::po::SwapOrderPo;
 use crate::duck_db::{DBProvider, CONNECTION_POOL};
 use crate::errors::YuError;
 use duckdb::{params, DuckdbConnectionManager};
 use r2d2::Pool;
-use yue::binance::bn_models::common::{PortfolioSpotOrderData, SpotOrderData};
+use yue::binance::bn_models::common::{PortfolioSpotOrderData, PortfolioSwapOrderData, SpotOrderData, SwapOrderData};
 use yue::binance::bn_restful_commands::{get_bn_funding_rate_limit, SWAP_FUNDING_RATE_PATH};
 
 pub(crate) static BINANCE_ACCOUNT_ACTOR: OnceLock<Addr<AccountSyncActor>> = OnceLock::new();
@@ -23,8 +24,10 @@ pub struct AccountSyncActor {
     db: DBProvider,
     config: AccountSyncConfig,
     order_buffer: Vec<SpotOrderPo>,
+    swap_order_buffer: Vec<SwapOrderPo>,
     received_count: u64,
     flushed_order: u64,
+    flushed_swap_order: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -50,8 +53,10 @@ impl AccountSyncActor {
             db,
             config: cfg,
             order_buffer: Vec::new(),
+            swap_order_buffer: Vec::new(),
             received_count: 0,
             flushed_order: 0,
+            flushed_swap_order: 0,
         }
     }
 
@@ -73,6 +78,16 @@ impl AccountSyncActor {
         }
     }
 
+    fn handle_swap_execution_report(&mut self, mut record: SwapOrderPo) {
+        record.symbol = record.symbol.to_ascii_uppercase();
+
+        self.swap_order_buffer.push(record);
+
+        if self.swap_order_buffer.len() >= self.batch_size() {
+            self.flush_swap_orders();
+        }
+    }
+
     fn flush_orders(&mut self) {
         if self.order_buffer.is_empty() {
             return;
@@ -88,6 +103,23 @@ impl AccountSyncActor {
             }
         }
         self.order_buffer.clear();
+    }
+
+    fn flush_swap_orders(&mut self) {
+        if self.swap_order_buffer.is_empty() {
+            return;
+        }
+        debug!("Flushing {} swap order records", self.swap_order_buffer.len());
+        match self.write_swap_orders_to_db() {
+            Ok(count) => {
+                self.flushed_swap_order += count as u64;
+                debug!("Flushed swap orders: {} (total {})", count, self.flushed_swap_order);
+            }
+            Err(e) => {
+                error!("Failed to flush swap orders: {:?}", e);
+            }
+        }
+        self.swap_order_buffer.clear();
     }
 
     fn write_orders_to_db(&self) -> Result<usize, YuError> {
@@ -140,6 +172,56 @@ impl AccountSyncActor {
         conn.execute_batch("COMMIT")?;
         Ok(self.order_buffer.len())
     }
+
+    fn write_swap_orders_to_db(&self) -> Result<usize, YuError> {
+        let conn = self.db.acquire()?;
+        conn.execute_batch("BEGIN")?;
+        let mut stmt = conn.prepare(
+            "INSERT OR REPLACE INTO bn_order_events_swap (
+                event, account_name, event_time, trade_time, symbol, client_order_id, side, order_type,
+                time_in_force, order_qty, order_price, avg_price, stop_price, execution_type,
+                order_status, order_id, last_filled_qty, executed_qty, last_filled_price,
+                commission_asset, commission_amount, trade_id, is_maker, is_reduce_only,
+                position_side, realized_pnl, stp_mode, gtd
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )?;
+
+        for record in &self.swap_order_buffer {
+            stmt.execute(params![
+                &record.event,
+                &record.account_name,
+                record.event_time,
+                record.trade_time,
+                &record.symbol,
+                &record.client_order_id,
+                &record.side,
+                &record.order_type,
+                &record.time_in_force,
+                record.order_qty,
+                record.order_price,
+                record.avg_price,
+                record.stop_price,
+                &record.execution_type,
+                &record.order_status,
+                record.order_id,
+                record.last_filled_qty,
+                record.executed_qty,
+                record.last_filled_price,
+                &record.commission_asset,
+                record.commission_amount,
+                record.trade_id,
+                record.is_maker,
+                record.is_reduce_only,
+                &record.position_side,
+                record.realized_pnl,
+                &record.stp_mode,
+                record.gtd,
+            ])?;
+        }
+
+        conn.execute_batch("COMMIT")?;
+        Ok(self.swap_order_buffer.len())
+    }
 }
 
 impl Actor for AccountSyncActor {
@@ -150,15 +232,17 @@ impl Actor for AccountSyncActor {
         let interval = self.flush_interval();
         ctx.run_interval(interval, |act, _ctx| {
             act.flush_orders();
+            act.flush_swap_orders();
         });
     }
 
     fn stopped(&mut self, _ctx: &mut Self::Context) {
         info!(
-            "AccountSyncActor for stopped. received={}, flushed_order={}",
-            self.received_count, self.flushed_order
+            "AccountSyncActor for stopped. received={}, flushed_order={}, flushed_swap_order={}",
+            self.received_count, self.flushed_order, self.flushed_swap_order
         );
         self.flush_orders();
+        self.flush_swap_orders();
     }
 }
 
@@ -181,6 +265,26 @@ impl Handler<PortfolioSpotOrderData> for AccountSyncActor {
         self.received_count += 1;
         let record = SpotOrderPo::from(msg);
         self.handle_execution_report(record)
+    }
+}
+
+impl Handler<SwapOrderData> for AccountSyncActor {
+    type Result = ();
+
+    fn handle(&mut self, msg: SwapOrderData, _ctx: &mut Context<Self>) -> Self::Result {
+        self.received_count += 1;
+        let record = SwapOrderPo::from(msg);
+        self.handle_swap_execution_report(record)
+    }
+}
+
+impl Handler<PortfolioSwapOrderData> for AccountSyncActor {
+    type Result = ();
+
+    fn handle(&mut self, msg: PortfolioSwapOrderData, _ctx: &mut Context<Self>) -> Self::Result {
+        self.received_count += 1;
+        let record = SwapOrderPo::from(msg);
+        self.handle_swap_execution_report(record)
     }
 }
 
