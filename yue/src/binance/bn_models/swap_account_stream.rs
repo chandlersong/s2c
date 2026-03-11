@@ -3,7 +3,7 @@
 use crate::models::Decimal;
 use crate::tools::string_to_decimal;
 use crate::tools::string_to_option_decimal;
-use actix::Message as ActixMessage;
+use actix::{Message as ActixMessage, Message};
 use li::errors::LiError;
 use li::websocket::models::WebSocketMessage;
 use serde::{Deserialize, Serialize};
@@ -278,7 +278,6 @@ pub struct MarginPosition {
     pub maintenance_margin: Decimal,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
 /// 订单交易更新推送
 /// [订单交易更新推送](https://developers.binance.com/docs/zh-CN/derivatives/usds-margined-futures/user-data-streams/Event-Order-Update)
 ///
@@ -333,6 +332,8 @@ pub struct MarginPosition {
 ///}
 /// ```
 ///
+#[derive(Debug, Deserialize, Serialize, Clone, Message)]
+#[rtype(result = "()")]
 pub struct OrderTradeUpdatePayload {
     /// 事件类型
     #[serde(rename = "e")]
