@@ -20,6 +20,7 @@ use serde_json::to_string;
 use std::sync::Arc;
 use yue::binance::bn_json_websocket::{StreamCommandRequest, SPOT_STREAM_WEBSOCKET, SPOT_WEBSOCKET, WS_SUBSCRIBE_COMMAND};
 use yue::binance::bn_models::common::{PortfolioSpotOrderData, SpotOrderData, SymbolType};
+use yue::binance::bn_models::portfolio_account_websocket::BinancePortfolioWebSocketStreamResponse;
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_models::spot_websocket::BinanceSpotAccountWebSocketResponse;
 use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamResponse;
@@ -27,7 +28,7 @@ use yue::binance::bn_restful_commands::{
     SPOT_KLINE_HISTORY_COMMAND, SWAP_FIVE_MIN_KLINE_HISTORY_COMMAND, SWAP_FUNDING_RATE_COMMAND, SWAP_KLINE_HISTORY_COMMAND,
 };
 use yue::binance::history_data::{CommonParam, SimpleHistoryFetcher};
-use yue::binance::listen_key_client::ListenKeyClient;
+use yue::binance::listen_key_client::{ListenKeyClient, PortfolioAccountAssignName};
 use yue::binance::order_book::{OrderBookService, Subscribe as OrderBookSubscribe};
 use yue::binance::websocket_actor::SpotAccountActor;
 use yue::models::HistoryInterval;
@@ -106,9 +107,9 @@ async fn start_monitor_portfolio_account(portfolio_account: Vec<AccountConfig>) 
     for acc in portfolio_account.iter() {
         info!("开始监听币安统一账户的swap交易,:{}", acc.account_name);
         let addr = ListenKeyClient::portfolio(&acc.account_name, None, &acc.api_key, &acc.value, config.proxy_url.clone()).start();
-        // let printer_addr = SwapAccountPrinter.start();
-        // subscribe_event_addr!(addr, printer_addr, BinanceSwapAccountStreamResponse);
-        subscribe_event_addr!(addr, get_account_addr(), PortfolioSpotOrderData);
+        let name_assign_addr = PortfolioAccountAssignName::new(&acc.account_name).start();
+        subscribe_event_addr!(addr, name_assign_addr.clone(), BinancePortfolioWebSocketStreamResponse);
+        subscribe_event_addr!(name_assign_addr, get_account_addr(), PortfolioSpotOrderData);
     }
 }
 
