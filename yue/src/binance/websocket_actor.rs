@@ -8,6 +8,7 @@
 use crate::binance::bn_json_websocket::{
     CommandRequest, StreamCommandRequest, USER_DATA_STREAM_SUBSCRIBE_SIGNATURE, WS_SUBSCRIBE_COMMAND, WS_UNSUBSCRIBE_COMMAND,
 };
+use crate::binance::bn_models::common::SpotOrderData;
 use crate::binance::bn_models::spot_websocket::BinanceSpotAccountWebSocketResponse;
 use crate::errors::YueError;
 use crate::tools::{SnowyFlakeWrapper, sign_ed25519};
@@ -245,7 +246,7 @@ pub struct SpotAccountActor {
     account_info_vec: Vec<SpotStreamAccountWebsocketInfo>,
     id_to_account: RwLock<HashMap<u64, String>>,
     subscription_to_account: RwLock<HashMap<u64, String>>, // 运行期维护订阅ID与账户名关系，读多写少用RwLock
-    recipient: Vec<Recipient<BinanceSpotAccountWebSocketResponse>>,
+    recipient: Vec<Recipient<SpotOrderData>>,
 }
 
 impl SpotAccountActor {
@@ -265,68 +266,6 @@ impl SpotAccountActor {
             .read()
             .map_err(|_| YueError::ParseError("解析账户流失败: subscription 映射读锁获取失败".to_string()))?;
         Ok(guard.get(&subscription_id).cloned())
-    }
-
-    fn translate(&self, message: BinanceSpotAccountWebSocketResponse) -> Result<BinanceSpotAccountWebSocketResponse, YueError> {
-        match message {
-            BinanceSpotAccountWebSocketResponse::SubscribeResponse(resp) => {
-                if let (Some(id), Some(result)) = (resp.id, resp.result.clone()) {
-                    let map = self.id_to_account.read().map_err(|_| YueError::new("获得id_to_account锁失败"))?;
-                    if let Some(account_name) = map.get(&id) {
-                        let mut guard = self
-                            .subscription_to_account
-                            .write()
-                            .map_err(|_| YueError::ParseError("解析账户流失败: subscription 映射写锁获取失败".to_string()))?;
-                        guard.insert(result.subscription_id, account_name.clone());
-                        info!("{} 账户订阅成功，subscription_id={}", account_name, result.subscription_id);
-                    }
-                }
-                trace!("✓ 成功解析币安账户订阅响应: {:?}", resp);
-                Ok(BinanceSpotAccountWebSocketResponse::SubscribeResponse(resp))
-            }
-            BinanceSpotAccountWebSocketResponse::OutboundAccountPosition(mut payload) => {
-                let account_name = self.get_account_name(payload.subscription_id)?;
-
-                if let Some(name) = account_name {
-                    payload.account_name = Some(name);
-                    trace!("✓ 成功解析币安账户余额变动: {:?}", payload);
-                    Ok(BinanceSpotAccountWebSocketResponse::OutboundAccountPosition(payload))
-                } else {
-                    Err(YueError::ParseError(format!(
-                        "解析币安账户流失败: subscription_id={} 未找到账户映射",
-                        payload.subscription_id
-                    )))
-                }
-            }
-            BinanceSpotAccountWebSocketResponse::BalanceUpdate(mut payload) => {
-                let account_name = self.get_account_name(payload.subscription_id)?;
-
-                if let Some(name) = account_name {
-                    payload.account_name = Some(name);
-                    trace!("✓ 成功解析币安单资产余额更新: {:?}", payload);
-                    Ok(BinanceSpotAccountWebSocketResponse::BalanceUpdate(payload))
-                } else {
-                    Err(YueError::ParseError(format!(
-                        "解析币安账户流失败: subscription_id={} 未找到账户映射",
-                        payload.subscription_id
-                    )))
-                }
-            }
-            BinanceSpotAccountWebSocketResponse::ExecutionReport(mut payload) => {
-                let account_name = self.get_account_name(payload.subscription_id)?;
-
-                if let Some(name) = account_name {
-                    payload.account_name = Some(name);
-                    trace!("✓ 成功解析币安订单执行报告: {:?}", payload);
-                    Ok(BinanceSpotAccountWebSocketResponse::ExecutionReport(payload))
-                } else {
-                    Err(YueError::ParseError(format!(
-                        "解析币安账户流失败: subscription_id={} 未找到账户映射",
-                        payload.subscription_id
-                    )))
-                }
-            }
-        }
     }
 
     /// 这里通过account_info_vec，给websocket client发送信息。订阅账户信息。
@@ -398,10 +337,10 @@ impl Actor for SpotAccountActor {
     }
 }
 
-impl Handler<SubscribeEvent<BinanceSpotAccountWebSocketResponse>> for SpotAccountActor {
+impl Handler<SubscribeEvent<SpotOrderData>> for SpotAccountActor {
     type Result = ();
 
-    fn handle(&mut self, msg: SubscribeEvent<BinanceSpotAccountWebSocketResponse>, _ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: SubscribeEvent<SpotOrderData>, _ctx: &mut Self::Context) -> Self::Result {
         self.recipient.push(msg.0);
     }
 }
@@ -434,119 +373,39 @@ impl Handler<BinanceSpotAccountWebSocketResponse> for SpotAccountActor {
     /// SubscribeResponse:
     /// 更新subscription_id和account_name的关系
     fn handle(&mut self, msg: BinanceSpotAccountWebSocketResponse, _ctx: &mut Self::Context) -> Self::Result {
-        if let Ok(message) = self.translate(msg) {
-            let recipients = self.recipient.clone();
-            tokio::spawn(async move {
-                for r in recipients.iter() {
-                    let _ = r.send(message.clone()).await;
+        match msg {
+            BinanceSpotAccountWebSocketResponse::SubscribeResponse(resp) => {
+                if let (Some(id), Some(result)) = (resp.id, resp.result.clone()) {
+                    let map = self.id_to_account.read().expect("获取id_to_account读锁失败");
+                    if let Some(account_name) = map.get(&id) {
+                        let mut guard = self.subscription_to_account.write().expect("获取subscription_to_account 写锁失败");
+                        guard.insert(result.subscription_id, account_name.clone());
+                        info!("{} 账户订阅成功，subscription_id={}", account_name, result.subscription_id);
+                    }
                 }
-            });
-        };
+                trace!("✓ 成功解析币安账户订阅响应: {:?}", resp);
+                ()
+            }
+            BinanceSpotAccountWebSocketResponse::ExecutionReport(report) => {
+                if let Some(account_name) = self.get_account_name(report.subscription_id).unwrap_or(None) {
+                    let data = report.clone();
+                    trace!("✓ 成功解析币安订单执行报告: {:?}", data);
+                    for recipient in &self.recipient {
+                        let _ = recipient.do_send(SpotOrderData::new(&account_name, data.event.clone()));
+                    }
+                } else {
+                    error!("❌ 解析币安账户流失败: subscription_id={} 未找到账户映射", report.subscription_id);
+                }
+            }
+            _ => {
+                //不需要处理
+            }
+        }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_parse_outbound_account_position() {
-        let parser = SpotAccountActor::new(vec![]);
-
-        // 手动插入 id -> account_name 映射
-        {
-            let mut map = parser.id_to_account.write().unwrap();
-            map.insert(42, "acc_test".to_string());
-        }
-
-        let subscribe_json = r#"{"id":42,"status":200,"result":{"subscriptionId":123}}"#;
-        parser
-            .translate(BinanceSpotAccountWebSocketResponse::from_text(subscribe_json).unwrap())
-            .expect("subscribe should build mapping");
-        let json = r#"{
-            "subscriptionId": 123,
-            "event": {
-                "e":"outboundAccountPosition",
-                "E":1690000000000,
-                "u":1690000000000,
-                "B":[
-                    {
-                        "a":"BTC",
-                        "f":"1.5",
-                        "l":"0.5"
-                    },
-                    {
-                        "a":"USDT",
-                        "f":"50000.0",
-                        "l":"0.0"
-                    }
-                ]
-            }
-        }"#;
-
-        let result = parser.translate(BinanceSpotAccountWebSocketResponse::from_text(json).unwrap());
-        assert!(result.is_ok(), "Failed to parse account position: {:?}", result);
-        match result.unwrap() {
-            BinanceSpotAccountWebSocketResponse::OutboundAccountPosition(payload) => {
-                assert_eq!(payload.subscription_id, 123);
-                assert_eq!(payload.event.event, "outboundAccountPosition");
-                assert_eq!(payload.event.balances.len(), 2);
-                assert_eq!(payload.account_name.as_deref(), Some("acc_test"));
-            }
-            _ => panic!("Expected OutboundAccountPosition variant"),
-        }
-    }
-
-    #[test]
-    fn test_parse_subscribe_response() {
-        let parser = SpotAccountActor::new(vec![]);
-        let json = r#"{"id":1,"status":200,"result":{"subscriptionId":12345}}"#;
-        let result = parser.translate(BinanceSpotAccountWebSocketResponse::from_text(json).unwrap());
-        assert!(result.is_ok(), "Failed to parse subscribe response: {:?}", result);
-        match result.unwrap() {
-            BinanceSpotAccountWebSocketResponse::SubscribeResponse(resp) => {
-                assert_eq!(resp.status, Some(200));
-                assert_eq!(resp.result.unwrap().subscription_id, 12345);
-            }
-            _ => panic!("Expected SubscribeResponse variant"),
-        }
-    }
-
-    #[test]
-    fn test_account_event_with_account_mapping() {
-        let parser = SpotAccountActor::new(vec![]);
-
-        // 手动插入 id -> account_name 映射
-        {
-            let mut map = parser.id_to_account.write().unwrap();
-            map.insert(1, "acc_a".to_string());
-        }
-
-        let subscribe_json = r#"{"id":1,"status":200,"result":{"subscriptionId":999}}"#;
-        parser
-            .translate(BinanceSpotAccountWebSocketResponse::from_text(subscribe_json).unwrap())
-            .expect("subscribe response should parse");
-
-        let account_event = r#"{
-            "subscriptionId": 999,
-            "event": {
-                "e":"outboundAccountPosition",
-                "E":1690000000000,
-                "u":1690000000000,
-                "B":[{"a":"BTC","f":"1.5","l":"0.5"}]
-            }
-        }"#;
-
-        let parsed = parser
-            .translate(BinanceSpotAccountWebSocketResponse::from_text(account_event).unwrap())
-            .expect("account event should parse");
-        match parsed {
-            BinanceSpotAccountWebSocketResponse::OutboundAccountPosition(p) => {
-                assert_eq!(p.account_name.as_deref(), Some("acc_a"));
-            }
-            _ => panic!("unexpected variant"),
-        }
-    }
 
     #[test]
     fn test_on_connect_builds_id_mapping() {

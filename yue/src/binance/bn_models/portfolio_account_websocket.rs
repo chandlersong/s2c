@@ -1,6 +1,5 @@
 //! [统一账户stream对象](https://developers.binance.com/docs/zh-CN/derivatives/portfolio-margin/user-data-streams/Event-Conditional-Order-Trade-Update)
 
-use crate::binance::bn_models::swap_account_stream::BinanceSwapAccountStreamResponse;
 use crate::models::Decimal;
 use crate::tools::{string_to_decimal, string_to_option_decimal};
 use actix::Message;
@@ -595,7 +594,9 @@ pub struct LiabilityChangePayload {
 /// ```
 ///
 ///
-#[derive(Debug, Deserialize, Serialize, Clone)]
+
+#[derive(Debug, Deserialize, Serialize, Clone, Message)]
+#[rtype(result = "()")]
 pub struct ExecutionReportPayload {
     #[serde(rename = "e")]
     pub event: String, // 事件类型，例如 "executionReport"
@@ -625,16 +626,16 @@ pub struct ExecutionReportPayload {
     pub price: Decimal, // 原始价格（Decimal，可选）
 
     #[serde(rename = "P", with = "string_to_option_decimal")]
-    pub stop_price: Option<Decimal>, // 止盈/止损触发价（Decimal，可选）
+    pub stop_price: Option<Decimal>, // 与 SpotOrderPo 保持一致
 
     #[serde(rename = "F", with = "string_to_option_decimal")]
-    pub iceberg_qty: Option<Decimal>, // 冰山订单数量（可选）
+    pub iceberg_qty: Option<Decimal>, // 可选
 
     #[serde(rename = "g")]
-    pub order_list_id: Option<i64>, // OrderListId（可选）
+    pub order_list_id: i64, // OrderListId
 
     #[serde(rename = "C")]
-    pub original_client_order_id: Option<String>, // 原始订单的自定义 ID（可选）
+    pub original_client_order_id: String, // 原始订单的自定义 ID
 
     #[serde(rename = "x")]
     pub execution_type: String, // 本次事件的执行类型（可选）
@@ -646,31 +647,31 @@ pub struct ExecutionReportPayload {
     pub reject_reason: Option<String>, // 拒单原因（可选）
 
     #[serde(rename = "i")]
-    pub order_id: u64, // 平台订单 ID（可选）
+    pub order_id: i64, // 平台订单 ID
 
     #[serde(rename = "l", with = "string_to_option_decimal")]
-    pub last_executed_qty: Option<Decimal>, // 本次成交数量（可选）
+    pub last_executed_qty: Option<Decimal>, // 与 SpotOrderPo 保持一致
 
     #[serde(rename = "z", with = "string_to_option_decimal")]
-    pub cumulative_filled_qty: Option<Decimal>, // 累计已成交数量（可选）
+    pub cumulative_filled_qty: Option<Decimal>, // 与 SpotOrderPo 保持一致
 
     #[serde(rename = "L", with = "string_to_option_decimal")]
-    pub last_executed_price: Option<Decimal>, // 本次成交价格（可选）
+    pub last_executed_price: Option<Decimal>, // 与 SpotOrderPo 保持一致
 
     #[serde(rename = "n", with = "string_to_option_decimal")]
-    pub commission_amount: Option<Decimal>, // 手续费金额（可选）
+    pub commission_amount: Option<Decimal>, // 与 SpotOrderPo 保持一致
 
     #[serde(rename = "N")]
     pub commission_asset: Option<String>, // 手续费资产（可选）
 
     #[serde(rename = "T")]
-    pub trade_time: u64, // 成交时间（可选）
+    pub trade_time: u64, // 成交时间
 
     #[serde(rename = "t")]
-    pub trade_id: i64, // 成交 ID（可选）
+    pub trade_id: i64, // 成交 ID
 
     #[serde(rename = "v")]
-    pub stp: Option<i64>, // STP 相关字段（可选，含义见文档）
+    pub stp: Option<i64>, // STP 相关字段（可选）
 
     #[serde(rename = "I")]
     pub update_id: Option<u64>, // updateId
@@ -679,25 +680,25 @@ pub struct ExecutionReportPayload {
     pub is_working: bool, // 是否仍在订单簿上（可选）
 
     #[serde(rename = "m")]
-    pub is_maker: Option<bool>, // 本次成交是否为挂单方（可选）
+    pub is_maker: bool, // 本次成交是否为挂单方（可选）
 
     #[serde(rename = "O")]
-    pub order_create_time: u64, // 订单创建时间（可选，重复字段）
+    pub order_create_time: u64, // 订单创建时间
 
-    #[serde(rename = "Z", with = "string_to_option_decimal")]
-    pub cumulative_quote_qty: Option<Decimal>, // 累计成交金额（可选）
+    #[serde(rename = "Z", with = "string_to_decimal")]
+    pub cumulative_quote_qty: Decimal, // 累计成交金额（保持非可选）
 
     #[serde(rename = "Y", with = "string_to_option_decimal")]
-    pub last_quote_qty: Option<Decimal>, // 本次成交金额（可选）
+    pub last_quote_qty: Option<Decimal>, // 与 SpotOrderPo 保持一致
 
     #[serde(rename = "Q", with = "string_to_option_decimal")]
-    pub quote_order_quantity: Option<Decimal>, // Quote Order Quantity,报价数量（可选）
+    pub quote_order_quantity: Option<Decimal>, // 与 SpotOrderPo 保持一致
 
     #[serde(rename = "W")]
-    pub working_time: Option<u64>, // 工作时间（可选）订单被添加到 order book 的时间
+    pub working_time: u64, // 工作时间（可选）订单被添加到 order book 的时间
 
     #[serde(rename = "V")]
-    pub self_trade_prevention_mode: Option<String>, // 自交易防护模式（可选）
+    pub self_trade_prevention_mode: String, // 自交易防护模式（可选）
 }
 
 ///

@@ -7,7 +7,6 @@ use std::time::Duration;
 use yu::config::{get_config, SecurityType};
 use yu::errors::YuError;
 use yue::binance::bn_models::swap_account_stream::BinanceSwapAccountStreamResponse;
-use yue::binance::bn_restful_commands::SWAP_LISTEN_KEY_COMMAND;
 use yue::binance::listen_key_client::ListenKeyClient;
 use yue::http_client::init_http_client;
 

@@ -3,9 +3,11 @@ use duckdb::appender_params_from_iter;
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
+use yue::binance::bn_models::common::{PortfolioSpotOrderData, SpotOrderData};
+use yue::binance::bn_models::portfolio_account_websocket as portfolio_ws;
 use yue::binance::bn_models::spot_restful::BinanceKline;
-use yue::binance::bn_models::spot_websocket::ExecutionReportPayload;
 use yue::binance::bn_models::spot_websocket_stream::{KlineData, TradeStreamPayload};
+use yue::binance::bn_models::swap_account_stream as swap_ws;
 use yue::tools::get_snow_flake_id_u64;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,127 +35,6 @@ impl From<TradeStreamPayload> for SpotStreamTradeRecordPo {
             trade_time: Some(payload.trade_time as i64),
             is_buyer_maker: Some(payload.is_buyer_maker),
             created_at: 0,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SpotOrderPo {
-    pub event: String,
-    pub event_time: i64,
-    pub symbol: String,
-    pub client_order_id: String,
-    pub side: String,
-    pub order_type: String,
-    pub time_in_force: String,
-    pub order_qty: f64,
-    pub order_price: f64,
-    pub stop_price: f64,
-    pub iceberg_qty: f64,
-    pub order_list_id: i64,
-    pub original_client_order_id: String,
-    pub execution_type: String,
-    pub order_status: String,
-    pub reject_reason: String,
-    pub order_id: i64,
-    pub last_executed_qty: f64,
-    pub cumulative_filled_qty: f64,
-    pub last_executed_price: f64,
-    pub commission_amount: f64,
-    pub commission_asset: Option<String>,
-    pub trade_time: i64,
-    pub trade_id: Option<i64>,
-    pub stp: Option<i64>,
-    pub order_creation_time: i64,
-    pub is_working: bool,
-    pub is_maker: bool,
-    pub is_best_match: bool,
-    pub order_create_time: i64,
-    pub cumulative_quote_qty: f64,
-    pub last_quote_qty: f64,
-    pub quote_order_quantity: f64,
-    pub working_time: i64,
-    pub self_trade_prevention_mode: String,
-    pub trailing_delta: Option<f64>,
-    pub trailing_time: Option<i64>,
-    pub strategy_id: Option<u64>,
-    pub strategy_type: Option<u64>,
-    pub prevented_quantity: Option<f64>,
-    pub last_prevented_quantity: Option<f64>,
-    pub trade_group_id: Option<u64>,
-    pub counter_order_id: Option<bool>,
-    pub counter_symbol: Option<String>,
-    pub prevented_execution_quantity: Option<f64>,
-    pub prevented_execution_price: Option<f64>,
-    pub prevented_execution_quote_qty: Option<f64>,
-    pub match_type: Option<String>,
-    pub allocation_id: Option<u64>,
-    pub working_floor: Option<String>,
-    pub used_sor: Option<bool>,
-    pub pegged_price_type: Option<String>,
-    pub pegged_offset_type: Option<String>,
-    pub pegged_offset_value: Option<u64>,
-    pub pegged_price: Option<f64>,
-}
-
-impl From<ExecutionReportPayload> for SpotOrderPo {
-    fn from(payload: ExecutionReportPayload) -> Self {
-        SpotOrderPo {
-            event: payload.event,
-            event_time: payload.event_time as i64,
-            symbol: payload.symbol,
-            client_order_id: payload.client_order_id,
-            side: payload.side,
-            order_type: payload.order_type,
-            time_in_force: payload.time_in_force,
-            order_qty: payload.order_qty.to_f64().unwrap_or(0.0),
-            order_price: payload.order_price.to_f64().unwrap_or(0.0),
-            stop_price: payload.stop_price.to_f64().unwrap_or(0.0),
-            iceberg_qty: payload.iceberg_qty.to_f64().unwrap_or(0.0),
-            order_list_id: payload.order_list_id,
-            original_client_order_id: payload.original_client_order_id,
-            execution_type: payload.execution_type,
-            order_status: payload.order_status,
-            reject_reason: payload.reject_reason,
-            order_id: payload.order_id,
-            last_executed_qty: payload.last_executed_qty.to_f64().unwrap_or(0.0),
-            cumulative_filled_qty: payload.cumulative_filled_qty.to_f64().unwrap_or(0.0),
-            last_executed_price: payload.last_executed_price.to_f64().unwrap_or(0.0),
-            commission_amount: payload.commission_amount.to_f64().unwrap_or(0.0),
-            commission_asset: payload.commission_asset,
-            trade_time: payload.trade_time as i64,
-            trade_id: payload.trade_id,
-            stp: payload.stp,
-            order_creation_time: payload.order_creation_time as i64,
-            is_working: payload.is_working,
-            is_maker: payload.is_maker,
-            is_best_match: payload.is_best_match,
-            order_create_time: payload.order_create_time as i64,
-            cumulative_quote_qty: payload.cumulative_quote_qty.to_f64().unwrap_or(0.0),
-            last_quote_qty: payload.last_quote_qty.to_f64().unwrap_or(0.0),
-            quote_order_quantity: payload.quote_order_quantity.to_f64().unwrap_or(0.0),
-            working_time: payload.working_time as i64,
-            self_trade_prevention_mode: payload.self_trade_prevention_mode,
-            trailing_delta: payload.trailing_delta.map(|d| d.to_f64().unwrap_or(0.0)),
-            trailing_time: payload.trailing_time.map(|t| t as i64),
-            strategy_id: payload.strategy_id,
-            strategy_type: payload.strategy_type,
-            prevented_quantity: payload.prevented_quantity.map(|p| p.to_f64().unwrap_or(0.0)),
-            last_prevented_quantity: payload.last_prevented_quantity.map(|p| p.to_f64().unwrap_or(0.0)),
-            trade_group_id: payload.trade_group_id,
-            counter_order_id: payload.counter_order_id,
-            counter_symbol: payload.counter_symbol,
-            prevented_execution_quantity: payload.prevented_execution_quantity.map(|p| p.to_f64().unwrap_or(0.0)),
-            prevented_execution_price: payload.prevented_execution_price.map(|p| p.to_f64().unwrap_or(0.0)),
-            prevented_execution_quote_qty: payload.prevented_execution_quote_qty.map(|p| p.to_f64().unwrap_or(0.0)),
-            match_type: payload.match_type,
-            allocation_id: payload.allocation_id,
-            working_floor: payload.working_floor,
-            used_sor: payload.used_sor,
-            pegged_price_type: payload.pegged_price_type,
-            pegged_offset_type: payload.pegged_offset_type,
-            pegged_offset_value: payload.pegged_offset_value,
-            pegged_price: payload.pegged_price.map(|p| p.to_f64().unwrap_or(0.0)),
         }
     }
 }
@@ -295,5 +176,211 @@ impl Display for KlinePo {
             self.taker_buy_quote_asset_volume,
             self.close_time
         )
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpotOrderPo {
+    pub event: String,
+    pub account_name: String,
+    pub event_time: i64,
+    pub symbol: String,
+    pub client_order_id: Option<String>,
+    pub side: String,
+    pub order_type: String,
+    pub time_in_force: String,
+    pub order_qty: f64,
+    pub order_price: f64,
+    pub stop_price: Option<f64>,
+    pub execution_type: String,
+    pub order_status: String,
+    pub reject_reason: Option<String>,
+    pub order_id: i64,
+    pub last_executed_qty: Option<f64>,
+    pub cumulative_filled_qty: Option<f64>,
+    pub last_executed_price: Option<f64>,
+    pub commission_amount: Option<f64>,
+    pub commission_asset: Option<String>,
+    pub trade_time: i64,
+    pub trade_id: i64,
+    pub is_maker: bool,
+    pub is_working: bool,
+    pub order_create_time: i64,
+    pub cumulative_quote_qty: f64,
+    pub last_quote_qty: Option<f64>,
+    pub quote_order_quantity: Option<f64>,
+}
+
+impl From<SpotOrderData> for SpotOrderPo {
+    fn from(data: SpotOrderData) -> Self {
+        let payload = data.data;
+
+        Self {
+            event: payload.event,
+            account_name: data.account_name,
+            event_time: payload.event_time as i64,
+            symbol: payload.symbol,
+            client_order_id: payload.client_order_id,
+            side: payload.side,
+            order_type: payload.order_type,
+            time_in_force: payload.time_in_force,
+            order_qty: payload.order_qty.to_f64().unwrap_or(0.0),
+            order_price: payload.order_price.to_f64().unwrap_or(0.0),
+            stop_price: payload.stop_price.and_then(|d| d.to_f64()),
+            execution_type: payload.execution_type,
+            order_status: payload.order_status,
+            reject_reason: payload.reject_reason,
+            order_id: payload.order_id,
+            last_executed_qty: payload.last_executed_qty.and_then(|d| d.to_f64()),
+            cumulative_filled_qty: payload.cumulative_filled_qty.and_then(|d| d.to_f64()),
+            last_executed_price: payload.last_executed_price.and_then(|d| d.to_f64()),
+            commission_amount: payload.commission_amount.and_then(|d| d.to_f64()),
+            commission_asset: payload.commission_asset,
+            trade_time: payload.trade_time as i64,
+            trade_id: payload.trade_id,
+            is_maker: payload.is_maker,
+            is_working: payload.is_working,
+            order_create_time: payload.order_create_time as i64,
+            cumulative_quote_qty: payload.cumulative_quote_qty.to_f64().unwrap_or(0.0),
+            last_quote_qty: payload.last_quote_qty.and_then(|d| d.to_f64()),
+            quote_order_quantity: payload.quote_order_quantity.and_then(|d| d.to_f64()),
+        }
+    }
+}
+
+impl From<PortfolioSpotOrderData> for SpotOrderPo {
+    fn from(data: PortfolioSpotOrderData) -> Self {
+        let payload = data.data;
+        Self {
+            event: payload.event,
+            account_name: data.account_name,
+            event_time: payload.event_time as i64,
+            symbol: payload.symbol,
+            client_order_id: payload.client_order_id,
+            side: payload.side,
+            order_type: payload.order_type,
+            time_in_force: payload.time_in_force,
+            order_qty: payload.quantity.to_f64().unwrap_or(0.0),
+            order_price: payload.price.to_f64().unwrap_or(0.0),
+            stop_price: payload.stop_price.and_then(|d| d.to_f64()),
+            execution_type: payload.execution_type,
+            order_status: payload.order_status,
+            reject_reason: payload.reject_reason,
+            order_id: payload.order_id,
+            last_executed_qty: payload.last_executed_qty.and_then(|d| d.to_f64()),
+            cumulative_filled_qty: payload.cumulative_filled_qty.and_then(|d| d.to_f64()),
+            last_executed_price: payload.last_executed_price.and_then(|d| d.to_f64()),
+            commission_amount: payload.commission_amount.and_then(|d| d.to_f64()),
+            commission_asset: payload.commission_asset,
+            trade_time: payload.trade_time as i64,
+            trade_id: payload.trade_id,
+            is_maker: payload.is_maker,
+            is_working: payload.is_working,
+            order_create_time: payload.order_create_time as i64,
+            cumulative_quote_qty: payload.cumulative_quote_qty.to_f64().unwrap_or(0.0),
+            last_quote_qty: payload.last_quote_qty.and_then(|d| d.to_f64()),
+            quote_order_quantity: payload.quote_order_quantity.and_then(|d| d.to_f64()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommonOrderTradeUpdatePo {
+    pub event: String,
+    pub event_time: i64,
+    pub trade_time: i64,
+    pub symbol: String,
+    pub client_order_id: Option<String>,
+    pub side: String,
+    pub order_type: String,
+    pub time_in_force: String,
+    pub order_qty: f64,
+    pub order_price: f64,
+    pub avg_price: Option<f64>,
+    pub stop_price: Option<f64>,
+    pub execution_type: String,
+    pub order_status: String,
+    pub order_id: i64,
+    pub last_filled_qty: Option<f64>,
+    pub executed_qty: Option<f64>,
+    pub last_filled_price: f64,
+    pub commission_asset: Option<String>,
+    pub commission_amount: f64,
+    pub trade_id: Option<i64>,
+    pub is_maker: Option<bool>,
+    pub is_reduce_only: bool,
+    pub position_side: String,
+    pub realized_pnl: f64,
+    pub stp_mode: String,
+    pub gtd: Option<i64>,
+}
+
+impl From<swap_ws::OrderTradeUpdatePayload> for CommonOrderTradeUpdatePo {
+    fn from(payload: swap_ws::OrderTradeUpdatePayload) -> Self {
+        let o = payload.order.expect("swap order payload missing order field");
+        Self {
+            event: payload.event,
+            event_time: payload.event_time as i64,
+            trade_time: payload.trade_time as i64,
+            symbol: o.symbol,
+            client_order_id: o.client_order_id,
+            side: o.side.unwrap_or_default(),
+            order_type: o.order_type,
+            time_in_force: o.time_in_force,
+            order_qty: o.quantity.to_f64().unwrap_or(0.0),
+            order_price: o.price.to_f64().unwrap_or(0.0),
+            avg_price: Some(o.avg_price.to_f64().unwrap_or(0.0)),
+            stop_price: Some(o.stop_price.to_f64().unwrap_or(0.0)),
+            execution_type: o.execution_type.unwrap_or_default(),
+            order_status: o.current_order_status.unwrap_or_default(),
+            order_id: o.order_id.unwrap_or_default() as i64,
+            last_filled_qty: Some(o.last_filled_qty.to_f64().unwrap_or(0.0)),
+            executed_qty: Some(o.executed_qty.to_f64().unwrap_or(0.0)),
+            last_filled_price: o.last_filled_price.to_f64().unwrap_or(0.0),
+            commission_asset: Some(o.fee_asset),
+            commission_amount: o.fee.to_f64().unwrap_or(0.0),
+            trade_id: Some(o.trade_id as i64),
+            is_maker: Some(o.is_maker),
+            is_reduce_only: o.is_reduce_only,
+            position_side: o.position_side,
+            realized_pnl: o.realized_pnl.to_f64().unwrap_or(0.0),
+            stp_mode: o.self_trade_prevention_mode.unwrap_or_default(),
+            gtd: o.gtd.map(|v| v as i64),
+        }
+    }
+}
+
+impl From<portfolio_ws::OrderTradeUpdatePayload> for CommonOrderTradeUpdatePo {
+    fn from(payload: portfolio_ws::OrderTradeUpdatePayload) -> Self {
+        let o = payload.order;
+        Self {
+            event: payload.event,
+            event_time: payload.event_time as i64,
+            trade_time: payload.trade_time as i64,
+            symbol: o.symbol,
+            client_order_id: o.client_order_id,
+            side: o.side,
+            order_type: o.order_type,
+            time_in_force: o.time_in_force,
+            order_qty: o.quantity.to_f64().unwrap_or(0.0),
+            order_price: o.price.to_f64().unwrap_or(0.0),
+            avg_price: o.avg_price.and_then(|v| v.to_f64()),
+            stop_price: o.stop_price.and_then(|v| v.to_f64()),
+            execution_type: o.execution_type,
+            order_status: o.current_order_status,
+            order_id: o.order_id as i64,
+            last_filled_qty: o.last_filled_qty.and_then(|v| v.to_f64()),
+            executed_qty: o.executed_qty.and_then(|v| v.to_f64()),
+            last_filled_price: o.last_filled_price.to_f64().unwrap_or(0.0),
+            commission_asset: Some(o.fee_asset),
+            commission_amount: o.fee.to_f64().unwrap_or(0.0),
+            trade_id: Some(o.trade_id),
+            is_maker: o.is_maker,
+            is_reduce_only: o.is_reduce_only,
+            position_side: o.position_side,
+            realized_pnl: o.realized_pnl.to_f64().unwrap_or(0.0),
+            stp_mode: o.stp_mode,
+            gtd: o.gtd.map(|v| v as i64),
+        }
     }
 }

@@ -8,6 +8,7 @@ use yu::binance::jobs::initial_tables;
 use yu::config::{get_config, SecurityType};
 use yu::websocket::subscribers::AccountSyncActor;
 use yue::binance::bn_json_websocket::SPOT_WEBSOCKET;
+use yue::binance::bn_models::common::SpotOrderData;
 use yue::binance::bn_models::spot_websocket::BinanceSpotAccountWebSocketResponse;
 use yue::binance::websocket_actor::SpotAccountActor;
 
@@ -91,8 +92,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     subscribe_event_addr!(client_addr, handler.clone(), BinanceSpotAccountWebSocketResponse);
     subscribe_event_addr!(client_addr, handler.clone(), WebSocketEvent);
-    subscribe_event_addr!(handler.clone(), account_sync_add, BinanceSpotAccountWebSocketResponse);
-    subscribe_event_addr!(handler.clone(), printer, BinanceSpotAccountWebSocketResponse);
+    subscribe_event_addr!(client_addr, printer, BinanceSpotAccountWebSocketResponse);
+    subscribe_event_addr!(handler.clone(), account_sync_add, SpotOrderData);
 
     tokio::signal::ctrl_c().await?;
     Ok(())

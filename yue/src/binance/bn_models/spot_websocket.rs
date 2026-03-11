@@ -1,6 +1,6 @@
 use crate::models::Decimal;
 use crate::tools::{string_to_decimal, string_to_option_decimal};
-use actix::Message as ActixMessage;
+use actix::{Message as ActixMessage, Message};
 use li::websocket::models::WebSocketMessage;
 use serde::{Deserialize, Serialize};
 
@@ -37,9 +37,6 @@ impl BinanceSpotAccountWebSocketResponse {
 pub struct AccountWebSocketPayLoad<T> {
     #[serde(rename = "subscriptionId")]
     pub subscription_id: u64,
-    //在经过parse之后，需要有个账户名的转换。所以写在这里，不会在序列化和反序列化的时候使用
-    #[serde(skip_deserializing, default)]
-    pub account_name: Option<String>,
 
     #[serde(rename = "event")]
     pub event: T,
@@ -96,7 +93,8 @@ pub struct BalanceUpdatePayload {
 }
 /// 订单执行报告载荷，对应 executionReport。
 /// [现货术语表](https://developers.binance.com/docs/zh-CN/binance-spot-api-docs/faqs/spot_glossary)
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, Message)]
+#[rtype(result = "()")]
 pub struct ExecutionReportPayload {
     // === 按示例顺序排列（必填或常见字段在前） ===
     /// 事件类型: executionReport
@@ -110,7 +108,7 @@ pub struct ExecutionReportPayload {
     pub symbol: String,
     /// 客户端订单ID
     #[serde(rename = "c")]
-    pub client_order_id: String,
+    pub client_order_id: Option<String>,
     /// 订单方向: BUY/SELL
     #[serde(rename = "S")]
     pub side: String,
@@ -129,13 +127,11 @@ pub struct ExecutionReportPayload {
     #[serde(with = "string_to_decimal")]
     pub order_price: Decimal,
     /// 止盈止损单触发价格（仅止盈/止损单出现）
-    #[serde(rename = "P")]
-    #[serde(default, with = "string_to_decimal")]
-    pub stop_price: Decimal,
+    #[serde(rename = "P", with = "string_to_option_decimal")]
+    pub stop_price: Option<Decimal>,
     /// 冰山订单数量（仅冰山单出现）
-    #[serde(rename = "F")]
-    #[serde(default, with = "string_to_decimal")]
-    pub iceberg_qty: Decimal,
+    #[serde(rename = "F", with = "string_to_option_decimal")]
+    pub iceberg_qty: Option<Decimal>,
     /// OCO订单 OrderListId（仅OCO出现）
     #[serde(rename = "g")]
     pub order_list_id: i64,
@@ -150,26 +146,22 @@ pub struct ExecutionReportPayload {
     pub order_status: String,
     /// 订单被拒绝的原因
     #[serde(rename = "r")]
-    pub reject_reason: String,
+    pub reject_reason: Option<String>,
     /// orderId
     #[serde(rename = "i")]
     pub order_id: i64,
     /// 订单末次成交量（仅TRADE出现）
-    #[serde(rename = "l")]
-    #[serde(with = "string_to_decimal")]
-    pub last_executed_qty: Decimal,
+    #[serde(rename = "l", with = "string_to_option_decimal")]
+    pub last_executed_qty: Option<Decimal>,
     /// 订单累计已成交量
-    #[serde(rename = "z")]
-    #[serde(with = "string_to_decimal")]
-    pub cumulative_filled_qty: Decimal,
+    #[serde(rename = "z", with = "string_to_option_decimal")]
+    pub cumulative_filled_qty: Option<Decimal>,
     /// 订单末次成交价格（仅TRADE出现）
-    #[serde(rename = "L")]
-    #[serde(with = "string_to_decimal")]
-    pub last_executed_price: Decimal,
+    #[serde(rename = "L", with = "string_to_option_decimal")]
+    pub last_executed_price: Option<Decimal>,
     /// 手续费数量（仅TRADE出现）
-    #[serde(rename = "n")]
-    #[serde(default, with = "string_to_decimal")]
-    pub commission_amount: Decimal,
+    #[serde(rename = "n", with = "string_to_option_decimal")]
+    pub commission_amount: Option<Decimal>,
     /// 手续费资产类别（仅TRADE出现）
     #[serde(rename = "N")]
     pub commission_asset: Option<String>,
@@ -178,7 +170,7 @@ pub struct ExecutionReportPayload {
     pub trade_time: u64,
     /// Trade ID（仅TRADE可能出现）
     #[serde(rename = "t")]
-    pub trade_id: Option<i64>,
+    pub trade_id: i64,
     /// 被阻止的交易Id（仅STP阻止出现）
     #[serde(rename = "v")]
     #[serde(default)]
@@ -199,17 +191,14 @@ pub struct ExecutionReportPayload {
     #[serde(rename = "O")]
     pub order_create_time: u64,
     /// 订单累计已成交金额
-    #[serde(rename = "Z")]
-    #[serde(default, with = "string_to_decimal")]
+    #[serde(rename = "Z", with = "string_to_decimal")]
     pub cumulative_quote_qty: Decimal,
     /// 订单末次成交金额（仅TRADE出现）
-    #[serde(rename = "Y")]
-    #[serde(default, with = "string_to_decimal")]
-    pub last_quote_qty: Decimal,
+    #[serde(rename = "Y", with = "string_to_option_decimal")]
+    pub last_quote_qty: Option<Decimal>,
     /// Quote Order Quantity（仅特定订单出现）
-    #[serde(rename = "Q")]
-    #[serde(default, with = "string_to_decimal")]
-    pub quote_order_quantity: Decimal,
+    #[serde(rename = "Q", with = "string_to_option_decimal")]
+    pub quote_order_quantity: Option<Decimal>,
     /// Working Time；订单被添加到 order book 的时间
     #[serde(rename = "W")]
     pub working_time: u64,
@@ -558,7 +547,7 @@ mod tests {
                 assert_eq!(p.event.order_status, "FILLED");
                 assert_eq!(p.event.execution_type, "TRADE");
                 assert_eq!(p.event.commission_asset, Some("USDT".to_string()));
-                assert_eq!(p.event.trade_id, Some(918961));
+                assert_eq!(p.event.trade_id, 918961);
             }
             _ => panic!("unexpected variant"),
         }

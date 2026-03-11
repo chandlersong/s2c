@@ -7,6 +7,7 @@ use crate::config::{get_config, AccountConfig, AccountType, SecurityType};
 use crate::duck_db::DBProvider;
 use crate::errors::YuError;
 use crate::exchange::CloneHistoryFetcherFactory;
+use crate::websocket::subscribers::account_sync_actor::{get_account_addr, BINANCE_ACCOUNT_ACTOR};
 use crate::websocket::subscribers::storage_subscriber::get_spot_stream_writer;
 use crate::websocket::subscribers::AccountSyncActor;
 use actix::Actor;
@@ -18,13 +19,12 @@ use rust_decimal::prelude::ToPrimitive;
 use serde_json::to_string;
 use std::sync::Arc;
 use yue::binance::bn_json_websocket::{StreamCommandRequest, SPOT_STREAM_WEBSOCKET, SPOT_WEBSOCKET, WS_SUBSCRIBE_COMMAND};
-use yue::binance::bn_models::common::SymbolType;
+use yue::binance::bn_models::common::{PortfolioSpotOrderData, SpotOrderData, SymbolType};
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_models::spot_websocket::BinanceSpotAccountWebSocketResponse;
 use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamResponse;
-use yue::binance::bn_models::swap_account_stream::AccountInfo;
 use yue::binance::bn_restful_commands::{
-    SPOT_KLINE_HISTORY_COMMAND, SWAP_FIVE_MIN_KLINE_HISTORY_COMMAND, SWAP_FUNDING_RATE_COMMAND, SWAP_KLINE_HISTORY_COMMAND, SWAP_LISTEN_KEY_COMMAND,
+    SPOT_KLINE_HISTORY_COMMAND, SWAP_FIVE_MIN_KLINE_HISTORY_COMMAND, SWAP_FUNDING_RATE_COMMAND, SWAP_KLINE_HISTORY_COMMAND,
 };
 use yue::binance::history_data::{CommonParam, SimpleHistoryFetcher};
 use yue::binance::listen_key_client::ListenKeyClient;
@@ -70,25 +70,23 @@ pub async fn start_bn_jobs() -> Result<(), YuError> {
 pub async fn start_monitor_account() -> Result<(), YuError> {
     let config = get_config();
 
-    let (binance_normal_infos, binance_portfolio_infos, other_acc_infos) = config
+    let (binance_normal_infos, binance_portfolio_infos) = config
         .binance
         .as_ref()
         .and_then(|ws| ws.accounts.as_ref())
         .map(|accounts| {
             let mut normal = Vec::new();
             let mut portfolio = Vec::new();
-            let mut other = Vec::new();
 
             for acc in accounts.iter().filter(|a| a.secret_type == SecurityType::Ed25519) {
                 let info = acc.clone(); // Into\<SpotStreamAccountWebsocketInfo\>
                 match acc.account_type {
                     AccountType::BinanceNormal => normal.push(info),
                     AccountType::BinancePortfolio => portfolio.push(info),
-                    _ => other.push(info),
                 }
             }
 
-            (normal, portfolio, other)
+            (normal, portfolio)
         })
         .unwrap_or_default();
 
@@ -110,6 +108,7 @@ async fn start_monitor_portfolio_account(portfolio_account: Vec<AccountConfig>) 
         let addr = ListenKeyClient::portfolio(&acc.account_name, None, &acc.api_key, &acc.value, config.proxy_url.clone()).start();
         // let printer_addr = SwapAccountPrinter.start();
         // subscribe_event_addr!(addr, printer_addr, BinanceSwapAccountStreamResponse);
+        subscribe_event_addr!(addr, get_account_addr(), PortfolioSpotOrderData);
     }
 }
 
@@ -145,9 +144,8 @@ async fn start_monitor_normal_account(normal_account: Vec<AccountConfig>) {
         let client_addr = client_builder.with_reconnect_interval(std::time::Duration::from_secs(5)).start();
         info!("✓ WebSocket 客户端已启动: {}", SPOT_WEBSOCKET);
         let spot_account_addr = SpotAccountActor::new(acc_infos).start();
-        let account_sync_add = AccountSyncActor::new(None).start();
         subscribe_event_addr!(client_addr, spot_account_addr.clone(), BinanceSpotAccountWebSocketResponse);
-        subscribe_event_addr!(spot_account_addr, account_sync_add, BinanceSpotAccountWebSocketResponse);
+        subscribe_event_addr!(spot_account_addr, get_account_addr(), SpotOrderData);
         info!("✓ WsMessageBus 订阅 WebSocketClient 事件");
     }
 
