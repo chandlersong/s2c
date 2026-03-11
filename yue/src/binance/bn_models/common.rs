@@ -155,7 +155,9 @@ pub struct ListenKeyResponse {
 }
 
 pub type SpotOrderData = AccountData<ExecutionReportPayload>;
+pub type SwapOrderData = AccountData<crate::binance::bn_models::swap_account_stream::OrderTradeUpdatePayload>;
 pub type PortfolioSpotOrderData = AccountData<crate::binance::bn_models::portfolio_account_websocket::ExecutionReportPayload>; // 先用同一个结构体占位，后续如果需要可以改成不同的结构体
+pub type PortfolioSwapOrderData = AccountData<crate::binance::bn_models::portfolio_account_websocket::OrderTradeUpdatePayload>; // 先用同一个结构体占位，后续如果需要可以改成不同的结构体
 #[derive(Debug, Serialize, Clone, Message)]
 #[rtype(result = "()")]
 pub struct AccountData<T: Clone + Message + DeserializeOwned> {

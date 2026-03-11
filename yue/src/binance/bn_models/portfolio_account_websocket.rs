@@ -748,7 +748,9 @@ pub struct ExecutionReportPayload {
 /// }
 /// ```
 ///
-#[derive(Debug, Deserialize, Serialize, Clone)]
+
+#[derive(Debug, Deserialize, Serialize, Clone, Message)]
+#[rtype(result = "()")]
 pub struct OrderTradeUpdatePayload {
     #[serde(rename = "e")]
     pub event: String, // 事件类型，例如 "ORDER_TRADE_UPDATE"

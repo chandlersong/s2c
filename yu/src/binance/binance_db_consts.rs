@@ -11,6 +11,7 @@ pub enum BinanceTables {
     SwapFundingRate,
     SpotTrade,
     SpotOrderEvents,
+    SwapOrderEvents,
 }
 
 impl BinanceTables {
@@ -21,6 +22,7 @@ impl BinanceTables {
             BinanceTables::SwapFundingRate => String::from("bn_swap_funding_rate"),
             BinanceTables::SpotTrade => String::from("bn_spot_trade"),
             BinanceTables::SpotOrderEvents => String::from("bn_order_events_spot"),
+            BinanceTables::SwapOrderEvents => String::from("bn_order_events_swap"),
         }
     }
 
@@ -31,6 +33,7 @@ impl BinanceTables {
             BinanceTables::SwapFundingRate => String::from(CREATE_FUNDING_RATE_TABLE),
             BinanceTables::SpotTrade => String::from(BN_SPOT_TRADE_TABLE),
             BinanceTables::SpotOrderEvents => String::from(CREATE_BN_ORDER_EVENTS_SPOT_TABLE),
+            BinanceTables::SwapOrderEvents => String::from(CREATE_BN_ORDER_EVENTS_SWAP_TABLE),
         }
     }
 
@@ -160,7 +163,43 @@ pub(crate) const ALL_BINANCE_TABLES: &[BinanceTables] = &[
     BinanceTables::SwapKline,
     BinanceTables::SwapFundingRate,
     BinanceTables::SpotOrderEvents,
+    BinanceTables::SwapOrderEvents,
     BinanceTables::SpotTrade,
 ];
 
 // K线表字段定义
+
+const CREATE_BN_ORDER_EVENTS_SWAP_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS bn_order_events_swap (
+    event TEXT NOT NULL,
+    account_name TEXT NOT NULL,
+    event_time BIGINT NOT NULL,
+    trade_time BIGINT NOT NULL,
+    symbol TEXT NOT NULL,
+    client_order_id TEXT,
+    side TEXT NOT NULL,
+    order_type TEXT NOT NULL,
+    time_in_force TEXT NOT NULL,
+    order_qty DOUBLE NOT NULL,
+    order_price DOUBLE NOT NULL,
+    avg_price DOUBLE,
+    stop_price DOUBLE,
+    execution_type TEXT NOT NULL,
+    order_status TEXT NOT NULL,
+    order_id BIGINT NOT NULL,
+    last_filled_qty DOUBLE,
+    executed_qty DOUBLE,
+    last_filled_price DOUBLE,
+    commission_asset TEXT,
+    commission_amount DOUBLE,
+    trade_id BIGINT,
+    is_maker BOOLEAN,
+    is_reduce_only BOOLEAN NOT NULL,
+    position_side TEXT NOT NULL,
+    realized_pnl DOUBLE NOT NULL,
+    stp_mode TEXT NOT NULL,
+    gtd BIGINT,
+    PRIMARY KEY (order_id, event_time)
+);
+CREATE INDEX IF NOT EXISTS idx_order_events_swap_symbol_time ON bn_order_events_swap (symbol, event_time DESC)
+"#;

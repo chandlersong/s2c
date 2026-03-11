@@ -3,11 +3,9 @@ use duckdb::appender_params_from_iter;
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
-use yue::binance::bn_models::common::{PortfolioSpotOrderData, SpotOrderData};
-use yue::binance::bn_models::portfolio_account_websocket as portfolio_ws;
+use yue::binance::bn_models::common::{PortfolioSpotOrderData, PortfolioSwapOrderData, SpotOrderData, SwapOrderData};
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_models::spot_websocket_stream::{KlineData, TradeStreamPayload};
-use yue::binance::bn_models::swap_account_stream as swap_ws;
 use yue::tools::get_snow_flake_id_u64;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -285,8 +283,9 @@ impl From<PortfolioSpotOrderData> for SpotOrderPo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CommonOrderTradeUpdatePo {
+pub struct SwapOrderPo {
     pub event: String,
+    pub account_name: String,
     pub event_time: i64,
     pub trade_time: i64,
     pub symbol: String,
@@ -315,11 +314,13 @@ pub struct CommonOrderTradeUpdatePo {
     pub gtd: Option<i64>,
 }
 
-impl From<swap_ws::OrderTradeUpdatePayload> for CommonOrderTradeUpdatePo {
-    fn from(payload: swap_ws::OrderTradeUpdatePayload) -> Self {
-        let o = payload.order.expect("swap order payload missing order field");
+impl From<SwapOrderData> for SwapOrderPo {
+    fn from(data: SwapOrderData) -> Self {
+        let payload = data.data;
+        let o = payload.order.expect("Order data must be present");
         Self {
             event: payload.event,
+            account_name: data.account_name,
             event_time: payload.event_time as i64,
             trade_time: payload.trade_time as i64,
             symbol: o.symbol,
@@ -350,11 +351,13 @@ impl From<swap_ws::OrderTradeUpdatePayload> for CommonOrderTradeUpdatePo {
     }
 }
 
-impl From<portfolio_ws::OrderTradeUpdatePayload> for CommonOrderTradeUpdatePo {
-    fn from(payload: portfolio_ws::OrderTradeUpdatePayload) -> Self {
+impl From<PortfolioSwapOrderData> for SwapOrderPo {
+    fn from(data: PortfolioSwapOrderData) -> Self {
+        let payload = data.data;
         let o = payload.order;
         Self {
             event: payload.event,
+            account_name: data.account_name,
             event_time: payload.event_time as i64,
             trade_time: payload.trade_time as i64,
             symbol: o.symbol,
