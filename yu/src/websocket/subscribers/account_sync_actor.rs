@@ -1,18 +1,15 @@
-use std::sync::{LazyLock, OnceLock};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use actix::{Actor, Addr, AsyncContext, Context, Handler, Supervised};
 use log::{debug, error, info};
-use yue::binance::bn_models::spot_websocket::ExecutionReportPayload;
 
 use crate::binance::models::po::SpotOrderPo;
 use crate::binance::models::po::SwapOrderPo;
-use crate::duck_db::{DBProvider, CONNECTION_POOL};
+use crate::duck_db::DBProvider;
 use crate::errors::YuError;
-use duckdb::{params, DuckdbConnectionManager};
-use r2d2::Pool;
+use duckdb::params;
 use yue::binance::bn_models::common::{PortfolioSpotOrderData, PortfolioSwapOrderData, SpotOrderData, SwapOrderData};
-use yue::binance::bn_restful_commands::{get_bn_funding_rate_limit, SWAP_FUNDING_RATE_PATH};
 
 pub(crate) static BINANCE_ACCOUNT_ACTOR: OnceLock<Addr<AccountSyncActor>> = OnceLock::new();
 

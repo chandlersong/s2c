@@ -1,7 +1,6 @@
 use crate::binance::bn_json_websocket::{PORTFOLIO_MARGIN_STREAM_WEBSOCKET, SWAP_WEBSOCKET};
-use crate::binance::bn_models::common::{AccountData, ListenKeyResponse, PortfolioSpotOrderData};
+use crate::binance::bn_models::common::{AccountData, ListenKeyResponse, PortfolioSpotOrderData, PortfolioSwapOrderData, SwapOrderData};
 use crate::binance::bn_models::portfolio_account_websocket::BinancePortfolioWebSocketStreamResponse;
-use crate::binance::bn_models::spot_websocket::{BinanceSpotAccountWebSocketResponse, ExecutionReportPayload};
 use crate::binance::bn_models::swap_account_stream::BinanceSwapAccountStreamResponse;
 use crate::binance::bn_restful_commands::{
     BNSecurityRequestBuilder, PAPI_LISTEN_KEY_COMMAND, SWAP_LISTEN_KEY_COMMAND, execute_bn_post, execute_bn_put,
@@ -31,9 +30,18 @@ impl ActixMessage for RenewListenKey {
 }
 
 #[derive(Clone)]
-struct NormalAccountAssignName {
-    recipient: Vec<Recipient<AccountData<ExecutionReportPayload>>>,
+pub struct NormalAccountAssignName {
+    recipient: Vec<Recipient<SwapOrderData>>,
     account_name: String,
+}
+
+impl NormalAccountAssignName {
+    pub fn new(account_name: &str) -> Self {
+        Self {
+            recipient: Vec::new(),
+            account_name: account_name.to_string(),
+        }
+    }
 }
 
 impl Actor for NormalAccountAssignName {
@@ -44,21 +52,21 @@ impl Actor for NormalAccountAssignName {
     }
 }
 
-impl Handler<SubscribeEvent<AccountData<ExecutionReportPayload>>> for NormalAccountAssignName {
+impl Handler<SubscribeEvent<SwapOrderData>> for NormalAccountAssignName {
     type Result = ();
-    fn handle(&mut self, msg: SubscribeEvent<AccountData<ExecutionReportPayload>>, _ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: SubscribeEvent<SwapOrderData>, _ctx: &mut Self::Context) -> Self::Result {
         info!("AssignAccountNameActor add new subscribe: {}", self.account_name);
         self.recipient.push(msg.0);
     }
 }
 
-impl Handler<BinanceSpotAccountWebSocketResponse> for NormalAccountAssignName {
+impl Handler<BinanceSwapAccountStreamResponse> for NormalAccountAssignName {
     type Result = ();
 
-    fn handle(&mut self, msg: BinanceSpotAccountWebSocketResponse, _ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: BinanceSwapAccountStreamResponse, _ctx: &mut Self::Context) -> Self::Result {
         match msg {
-            BinanceSpotAccountWebSocketResponse::ExecutionReport(report) => {
-                let message = AccountData::new(self.account_name.as_ref(), report.event);
+            BinanceSwapAccountStreamResponse::OrderTradeUpdate(order) => {
+                let message = AccountData::new(self.account_name.as_ref(), order);
                 for recipient in &self.recipient {
                     recipient.do_send(message.clone());
                 }
@@ -71,6 +79,7 @@ impl Handler<BinanceSpotAccountWebSocketResponse> for NormalAccountAssignName {
 #[derive(Clone)]
 pub struct PortfolioAccountAssignName {
     recipient: Vec<Recipient<PortfolioSpotOrderData>>,
+    swap_recipient: Vec<Recipient<PortfolioSwapOrderData>>,
     account_name: String,
 }
 
@@ -78,6 +87,7 @@ impl PortfolioAccountAssignName {
     pub fn new(account_name: &str) -> Self {
         Self {
             recipient: Vec::new(),
+            swap_recipient: vec![],
             account_name: account_name.to_string(),
         }
     }
@@ -99,6 +109,14 @@ impl Handler<SubscribeEvent<PortfolioSpotOrderData>> for PortfolioAccountAssignN
     }
 }
 
+impl Handler<SubscribeEvent<PortfolioSwapOrderData>> for PortfolioAccountAssignName {
+    type Result = ();
+    fn handle(&mut self, msg: SubscribeEvent<PortfolioSwapOrderData>, _ctx: &mut Self::Context) -> Self::Result {
+        info!("AssignAccountNameActor add new subscribe: {}", self.account_name);
+        self.swap_recipient.push(msg.0);
+    }
+}
+
 impl Handler<BinancePortfolioWebSocketStreamResponse> for PortfolioAccountAssignName {
     type Result = ();
 
@@ -107,6 +125,12 @@ impl Handler<BinancePortfolioWebSocketStreamResponse> for PortfolioAccountAssign
             BinancePortfolioWebSocketStreamResponse::ExecutionReport(report) => {
                 let message = AccountData::new(self.account_name.as_ref(), report);
                 for recipient in &self.recipient {
+                    recipient.do_send(message.clone());
+                }
+            }
+            BinancePortfolioWebSocketStreamResponse::OrderTradeUpdate(order_update) => {
+                let message = AccountData::new(self.account_name.as_ref(), order_update);
+                for recipient in &self.swap_recipient {
                     recipient.do_send(message.clone());
                 }
             }

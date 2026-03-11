@@ -7,9 +7,8 @@ use crate::config::{get_config, AccountConfig, AccountType, SecurityType};
 use crate::duck_db::DBProvider;
 use crate::errors::YuError;
 use crate::exchange::CloneHistoryFetcherFactory;
-use crate::websocket::subscribers::account_sync_actor::{get_account_addr, BINANCE_ACCOUNT_ACTOR};
+use crate::websocket::subscribers::account_sync_actor::get_account_addr;
 use crate::websocket::subscribers::storage_subscriber::get_spot_stream_writer;
-use crate::websocket::subscribers::AccountSyncActor;
 use actix::Actor;
 use li::actix_jobs::{AsyncRepeatTask, CronActor};
 use li::subscribe_event_addr;
@@ -19,16 +18,17 @@ use rust_decimal::prelude::ToPrimitive;
 use serde_json::to_string;
 use std::sync::Arc;
 use yue::binance::bn_json_websocket::{StreamCommandRequest, SPOT_STREAM_WEBSOCKET, SPOT_WEBSOCKET, WS_SUBSCRIBE_COMMAND};
-use yue::binance::bn_models::common::{PortfolioSpotOrderData, SpotOrderData, SymbolType};
+use yue::binance::bn_models::common::{PortfolioSpotOrderData, PortfolioSwapOrderData, SpotOrderData, SwapOrderData, SymbolType};
 use yue::binance::bn_models::portfolio_account_websocket::BinancePortfolioWebSocketStreamResponse;
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_models::spot_websocket::BinanceSpotAccountWebSocketResponse;
 use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamResponse;
+use yue::binance::bn_models::swap_account_stream::BinanceSwapAccountStreamResponse;
 use yue::binance::bn_restful_commands::{
     SPOT_KLINE_HISTORY_COMMAND, SWAP_FIVE_MIN_KLINE_HISTORY_COMMAND, SWAP_FUNDING_RATE_COMMAND, SWAP_KLINE_HISTORY_COMMAND,
 };
 use yue::binance::history_data::{CommonParam, SimpleHistoryFetcher};
-use yue::binance::listen_key_client::{ListenKeyClient, PortfolioAccountAssignName};
+use yue::binance::listen_key_client::{ListenKeyClient, NormalAccountAssignName, PortfolioAccountAssignName};
 use yue::binance::order_book::{OrderBookService, Subscribe as OrderBookSubscribe};
 use yue::binance::websocket_actor::SpotAccountActor;
 use yue::models::HistoryInterval;
@@ -110,6 +110,7 @@ async fn start_monitor_portfolio_account(portfolio_account: Vec<AccountConfig>) 
         let name_assign_addr = PortfolioAccountAssignName::new(&acc.account_name).start();
         subscribe_event_addr!(addr, name_assign_addr.clone(), BinancePortfolioWebSocketStreamResponse);
         subscribe_event_addr!(name_assign_addr, get_account_addr(), PortfolioSpotOrderData);
+        subscribe_event_addr!(name_assign_addr, get_account_addr(), PortfolioSwapOrderData);
     }
 }
 
@@ -153,8 +154,9 @@ async fn start_monitor_normal_account(normal_account: Vec<AccountConfig>) {
     for acc in normal_account.iter() {
         info!("开始监听币安普通账户的swap交易");
         let addr = ListenKeyClient::swap(&acc.account_name, None, &acc.api_key, &acc.value, config.proxy_url.clone()).start();
-        // let printer_addr = SwapAccountPrinter.start();
-        // subscribe_event_addr!(addr, printer_addr, BinanceSwapAccountStreamResponse);
+        let name_assign_addr = NormalAccountAssignName::new(acc.account_name.as_ref()).start();
+        subscribe_event_addr!(addr, name_assign_addr.clone(), BinanceSwapAccountStreamResponse);
+        subscribe_event_addr!(name_assign_addr, get_account_addr(), SwapOrderData);
     }
 }
 

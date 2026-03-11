@@ -768,7 +768,8 @@ pub struct OrderTradeUpdatePayload {
     pub order: OrderTradeInfo, // 订单信息（可选）
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, Message)]
+#[rtype(result = "()")]
 pub struct OrderTradeInfo {
     #[serde(rename = "s")]
     pub symbol: String, // 交易对（可选）
