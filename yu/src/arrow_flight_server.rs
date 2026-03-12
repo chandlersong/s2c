@@ -249,7 +249,7 @@ impl FlightService for DuckDBFlightServer {
 
                         let batch = convert_order_book_to_record_batch(&order_book, Some(20))?;
                         let schema = batch.schema();
-                        let flight_data_vec = flight_utils::batches_to_flight_data(&schema, vec![batch])
+                        let flight_data_vec = flight_utils::batches_to_flight_data(schema.as_ref(), vec![batch])
                             .map_err(|e| format!("Failed to convert batches to FlightData: {}", e))?;
 
                         for d in flight_data_vec {
@@ -280,14 +280,14 @@ impl FlightService for DuckDBFlightServer {
                         let mut stmt = conn.prepare(&sql).map_err(|e| format!("Prepare error: {}", e))?;
                         let mut arrow_result = stmt.query_arrow(params![]).map_err(|e| format!("Query arrow error: {}", e))?;
 
-                        let mut batches = Vec::new();
+                        let mut batches: Vec<RecordBatch> = Vec::new();
                         while let Some(batch) = arrow_result.next() {
                             batches.push(batch);
                         }
 
                         let schema = arrow_result.get_schema();
 
-                        let flight_data_vec = flight_utils::batches_to_flight_data(&schema, batches)
+                        let flight_data_vec = flight_utils::batches_to_flight_data(schema.as_ref(), batches)
                             .map_err(|e| format!("Failed to convert batches to FlightData: {}", e))?;
 
                         for d in flight_data_vec {
