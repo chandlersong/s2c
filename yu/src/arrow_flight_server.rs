@@ -450,7 +450,7 @@ mod tests {
             }
             let schema = arrow_result.get_schema();
             println!("Schema: {:?}", schema);
-            let flight_data_vec = flight_utils::batches_to_flight_data(&schema, batches).unwrap();
+            let flight_data_vec = flight_utils::batches_to_flight_data(schema.as_ref(), batches).unwrap();
             println!("{:?}", flight_data_vec);
             // // 输出Arrow Schema（Flight兼容格式）
         }
