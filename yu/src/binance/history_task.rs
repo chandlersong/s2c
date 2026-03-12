@@ -4,7 +4,7 @@ use crate::duck_db::DBProvider;
 use crate::errors::YuError;
 use crate::exchange::{ExchangeDashBoard, HistoryFetcherFactory};
 use async_trait::async_trait;
-use duckdb::{appender_params_from_iter, DropBehavior};
+use duckdb::DropBehavior;
 use li::actix_jobs::AsyncRepeatTask;
 use li::errors::LiError;
 use li::tools::time::{unix_2_readable, UnixTimeStamp};
@@ -13,10 +13,8 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use yue::binance::bn_models::common::{HistoryVo, SymbolType, ToQueryParams};
-use yue::binance::bn_models::swap_restful::FundingRate;
 use yue::binance::history_data::{HistoryFetcher, MuteHistoryParam};
 use yue::models::HistoryInterval;
-use yue::tools::SnowyFlakeWrapper;
 
 pub trait HistoryPO: Debug {
     type Source: HistoryVo;

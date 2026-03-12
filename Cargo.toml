@@ -37,7 +37,16 @@ actix-rt = "2.11.0"
 tokio-tungstenite = { version = "0.28.0", features = ["native-tls"] }
 tokio-native-tls = "0.3"
 futures-util = "0.3.30"
+
 ### DEV ####
 mockall = { version = "0.13.1" }
 
-
+# Arrow ecosystem - align versions workspace-wide to avoid multiple-arrow-version
+# type mismatches (e.g. duckdb or other crates pulling different arrow versions).
+arrow = { version = "56.2.0" , features = ["prettyprint"] }
+arrow-array = { version = "56.2.0", features = ['flight-sql'] }
+arrow-buffer = { version = "56.2.0" }
+arrow-data = { version = "56.2.0" }
+arrow-ipc = { version = "56.2.0" }
+arrow-schema = { version = "56.2.0" }
+arrow-flight = { version = "56.2.0" }
