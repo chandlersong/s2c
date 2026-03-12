@@ -2,7 +2,7 @@ use crate::binance::binance_db_consts::BinanceTables::{SpotKline, SwapFundingRat
 use crate::binance::binance_db_consts::ALL_BINANCE_TABLES;
 use crate::binance::bn_dashboard::{init_market_depth_dashboard, BinanceDashboard, MarketDepthDashBoard};
 use crate::binance::history_task::{DuckDBHistoryDataWriter, HistoryDataTask};
-use crate::binance::models::po::KlinePo;
+use crate::binance::models::po::{FundingRatePo, KlinePo};
 use crate::config::{get_config, AccountConfig, AccountType, SecurityType};
 use crate::duck_db::DBProvider;
 use crate::errors::YuError;
@@ -380,10 +380,10 @@ async fn start_refresh_history_data(origin_dash_board: BinanceDashboard) -> Resu
 
     let funding_rate_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SwapFundingRate));
     let funding_rate_fetcher = SimpleHistoryFetcher::new(&SWAP_FUNDING_RATE_COMMAND);
-    let fetcher_factory: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonParam, FundingRate> =
+    let funding_rate_fetcher_factory: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonParam, FundingRate> =
         CloneHistoryFetcherFactory::new(funding_rate_fetcher);
-    let funding_rate_task = HistoryDataTask::<_, _, KlinePo, FundingRate, BinanceDashboard>::new(
-        fetcher_factory,
+    let funding_rate_task = HistoryDataTask::<_, _, FundingRatePo, FundingRate, BinanceDashboard>::new(
+        funding_rate_fetcher_factory,
         dash_board,
         funding_rate_writer,
         "refresh swap funding rate".to_string(),

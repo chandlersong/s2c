@@ -113,53 +113,6 @@ impl<O: HistoryPO, D: ExchangeDashBoard<TradingSymbol = TradingSymbol>> HistoryD
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct FundingRatePo {
-    pub id: i64,
-    pub symbol: String,
-    pub funding_rate: f64,
-    pub funding_time: u64,
-    pub mark_price: Option<f64>,
-}
-
-impl<'a> From<&duckdb::Row<'a>> for FundingRatePo {
-    fn from(row: &duckdb::Row) -> Self {
-        FundingRatePo {
-            id: row.get(0).unwrap_or_default(),
-            symbol: row.get(1).unwrap_or_default(),
-            funding_rate: row.get(2).unwrap_or_default(),
-            funding_time: row.get(3).unwrap_or_default(),
-            mark_price: row.get(4).ok(), // 支持数据库字段为空
-        }
-    }
-}
-
-impl HistoryPO for FundingRatePo {
-    type Source = FundingRate;
-
-    fn from_source(symbol: Option<&str>, source: &Self::Source) -> Self {
-        let snow_flake = SnowyFlakeWrapper::new();
-        let id = snow_flake.next_id_u64() as i64;
-        FundingRatePo {
-            id,
-            symbol: symbol.expect("Symbol must be provided").to_string(),
-            funding_rate: source.funding_rate,
-            funding_time: source.funding_time,
-            mark_price: source.mark_price,
-        }
-    }
-
-    fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>> {
-        appender_params_from_iter(vec![
-            &self.id as &dyn duckdb::ToSql,
-            &self.symbol as &dyn duckdb::ToSql,
-            &self.funding_rate as &dyn duckdb::ToSql,
-            &self.funding_time as &dyn duckdb::ToSql,
-            &self.mark_price as &dyn duckdb::ToSql,
-        ])
-    }
-}
-
 /// 初始化的历史数据任务，每次启动的时候，都会调用
 /// NEXT：写一个实时更新的task
 #[derive(Clone)]
