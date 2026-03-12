@@ -24,6 +24,7 @@ use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_models::spot_websocket::BinanceSpotAccountWebSocketResponse;
 use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamResponse;
 use yue::binance::bn_models::swap_account_stream::BinanceSwapAccountStreamResponse;
+use yue::binance::bn_models::swap_restful::FundingRate;
 use yue::binance::bn_restful_commands::{
     SPOT_KLINE_HISTORY_COMMAND, SWAP_FIVE_MIN_KLINE_HISTORY_COMMAND, SWAP_FUNDING_RATE_COMMAND, SWAP_KLINE_HISTORY_COMMAND,
 };
@@ -378,13 +379,16 @@ async fn start_refresh_history_data(origin_dash_board: BinanceDashboard) -> Resu
     let _ = CronActor::new("01 */5 * * * * *", swap_update_kline_task).start();
 
     let funding_rate_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SwapFundingRate));
-    let funding_rate_task = build_kline_task(
-        &SWAP_FUNDING_RATE_COMMAND,
-        dash_board.clone(),
+    let funding_rate_fetcher = SimpleHistoryFetcher::new(&SWAP_FUNDING_RATE_COMMAND);
+    let fetcher_factory: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonParam, FundingRate> =
+        CloneHistoryFetcherFactory::new(funding_rate_fetcher);
+    let funding_rate_task = HistoryDataTask::<_, _, KlinePo, FundingRate, BinanceDashboard>::new(
+        fetcher_factory,
+        dash_board,
         funding_rate_writer,
-        "refresh swap funding rate",
+        "refresh swap funding rate".to_string(),
         SymbolType::Swap,
-        HistoryInterval::OneHour,
+        Some(HistoryInterval::OneHour),
     );
     funding_rate_task.initial_data().await?;
     let _ = CronActor::new("01 01 * * * * *", funding_rate_task).start();
