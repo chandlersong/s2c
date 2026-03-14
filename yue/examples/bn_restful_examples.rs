@@ -20,7 +20,6 @@ async fn main() {
     // 配置本地代理（如果需要）
     let proxy = Option::from("http://localhost:7891");
     init_http_client(proxy);
-
     // 测试API连接
     match execute_ping().await {
         Ok(_) => println!("成功连接到币安网络"),

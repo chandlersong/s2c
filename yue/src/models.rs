@@ -1,7 +1,15 @@
-use crate::http_client::DefaultRateLimiter;
+use governor::Jitter;
+use governor::RateLimiter;
+use governor::clock::DefaultClock;
+use governor::state::{InMemoryState, NotKeyed};
 use li::tools::time::unix_time_now_u64_utc;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::collections::HashMap;
+use std::num::NonZeroU32;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, RwLock};
+use std::time::Duration;
+use tokio::time::timeout;
 use url::Url;
 
 ///
@@ -48,6 +56,90 @@ impl<'de> Deserialize<'de> for EmptyObject {
             Ok(EmptyObject {})
         } else {
             Err(de::Error::custom("Expected an empty JSON object"))
+        }
+    }
+}
+
+pub type DefaultRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
+
+///
+/// 主要是参考币安的经验。这个HostInfo主要是和限流和地址相关信息。
+///
+/// 1. 主要提供方法。
+///
+/// 1. 获得host，直接把HostInfo转换成host，作为String输出
+/// 2. 提供更新max_limit和获得max_limit以u32形式的方法
+/// 3. 更新和获得limiter的方法。以及获得令牌的方法。
+///
+///
+#[derive(Debug, Clone)]
+pub struct HostInfo {
+    host: String,
+    max_limit: Arc<AtomicU32>,
+    limiter: Arc<RwLock<Arc<DefaultRateLimiter>>>,
+}
+
+impl AsRef<str> for HostInfo {
+    fn as_ref(&self) -> &str {
+        &self.host
+    }
+}
+
+impl<'a> From<&'a HostInfo> for &'a str {
+    fn from(value: &'a HostInfo) -> Self {
+        &value.host
+    }
+}
+
+impl HostInfo {
+    pub fn new<S: AsRef<str>>(host: S, max_limit: u32, limiter: DefaultRateLimiter) -> Self {
+        Self {
+            host: host.as_ref().to_string(),
+            max_limit: Arc::new(AtomicU32::new(max_limit)),
+            limiter: Arc::new(RwLock::new(Arc::new(limiter))),
+        }
+    }
+
+    pub fn host_as_str(&self) -> &str {
+        &self.host
+    }
+
+    pub fn set_max_limit(&self, v: u32) {
+        self.max_limit.store(v, Ordering::SeqCst);
+    }
+
+    pub fn get_max_limit(&self) -> u32 {
+        self.max_limit.load(Ordering::SeqCst)
+    }
+
+    pub fn set_limiter(&self, limiter: DefaultRateLimiter) {
+        if let Ok(mut guard) = self.limiter.write() {
+            *guard = Arc::new(limiter);
+        }
+    }
+
+    pub async fn acquire_limit_token(&self, weight: u32, timeout_secs: u64) -> Result<(), crate::errors::YueError> {
+        let timeout_duration = Duration::from_secs(timeout_secs);
+
+        let weight_nz = match NonZeroU32::new(weight) {
+            Some(w) => w,
+            None => return Err(crate::errors::YueError::new("权重必须为非零")),
+        };
+
+        // clone an Arc handle to the limiter so we don't hold the RwLock across .await
+        let limiter_cloned = {
+            let guard = self.limiter.read().map_err(|_| crate::errors::YueError::new("锁定限流器失败"))?;
+            guard.clone()
+        };
+
+        let jitter = Jitter::up_to(Duration::from_millis(500));
+
+        match timeout(timeout_duration, limiter_cloned.until_n_ready_with_jitter(weight_nz, jitter)).await {
+            Err(e) => Err(crate::errors::YueError::new(&format!("限流超时: {}", e))),
+            Ok(res) => match res {
+                Ok(_) => Ok(()),
+                Err(e) => Err(crate::errors::YueError::new(&format!("限流器内部错误: {:?}", e))),
+            },
         }
     }
 }
@@ -185,7 +277,9 @@ impl HistoryInterval {
 
 #[cfg(test)]
 mod tests {
-    use crate::models::HistoryInterval;
+    use crate::models::{DefaultRateLimiter, HistoryInterval, HostInfo};
+    use governor::Quota;
+    use std::num::NonZeroU32;
 
     /// 测试：HistoryInterval::get_close_unix_ms 在一分钟间隔下的对齐
     ///
@@ -239,5 +333,43 @@ mod tests {
         assert!(ts <= now_ms, "返回的时间不应在未来");
         assert_eq!(ts % (60 * 60 * 1000), 0, "应对齐到整小时");
         assert!(now_ms - ts < 60 * 60 * 1000, "差距应小于 1 小时");
+    }
+
+    #[tokio::test]
+    async fn test_hostinfo_basic_and_acquire() {
+        let quota = Quota::per_minute(NonZeroU32::new(100).unwrap());
+        let limiter = DefaultRateLimiter::direct(quota);
+
+        let host = HostInfo::new("https://api.test", 1000, limiter);
+
+        assert_eq!(host.host_as_str(), "https://api.test");
+        assert_eq!(host.get_max_limit(), 1000);
+
+        host.set_max_limit(500);
+        assert_eq!(host.get_max_limit(), 500);
+
+        // acquire should succeed for weight 1
+        let res = host.acquire_limit_token(1, 2).await;
+        assert!(res.is_ok(), "首次获取令牌应成功");
+    }
+
+    #[tokio::test]
+    async fn test_acquire_timeout_behavior() {
+        let quota = Quota::per_minute(NonZeroU32::new(1).unwrap());
+        let limiter = DefaultRateLimiter::direct(quota);
+
+        let host = HostInfo::new("https://api.test", 10, limiter);
+
+        // first acquire should succeed
+        let r1 = host.acquire_limit_token(1, 1).await;
+        assert!(r1.is_ok(), "第一次获取令牌应成功");
+
+        // second acquire with short timeout should fail due to token refill being long
+        let r2 = host.acquire_limit_token(1, 1).await;
+        assert!(r2.is_err(), "在短超时时间内第二次获取应失败");
+
+        // zero weight should return error
+        let r3 = host.acquire_limit_token(0, 1).await;
+        assert!(r3.is_err(), "权重为0应当报错");
     }
 }

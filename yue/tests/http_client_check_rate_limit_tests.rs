@@ -7,7 +7,8 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::task;
-    use yue::http_client::{DefaultRateLimiter, check_rate_limit};
+    use yue::http_client::check_rate_limit;
+    use yue::models::DefaultRateLimiter;
 
     fn get_test_rate_limiter(burst: u32) -> DefaultRateLimiter {
         let burst = NonZeroU32::new(burst).unwrap();

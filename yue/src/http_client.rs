@@ -1,5 +1,5 @@
 use crate::errors::YueError;
-use crate::models::RequestInfo;
+use crate::models::{DefaultRateLimiter, RequestInfo};
 use async_trait::async_trait;
 use backon::{Backoff, Retryable};
 use governor::clock::DefaultClock;
@@ -16,8 +16,6 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 pub(crate) static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
-
-pub type DefaultRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
 
 pub fn init_http_client(proxy: Option<&str>) -> &'static Client {
     HTTP_CLIENT.get_or_init(|| {
@@ -78,7 +76,7 @@ impl ClonableResponseCache {
 /// Trait：用于抽象 HTTP 响应处理逻辑，每个交易所可自定义实现
 #[async_trait]
 pub trait ResponseHandler<U>: Send + Sync + Clone {
-    async fn handle_response(&self, resp: ClonableResponseCache) -> Result<U, YueError>;
+    async fn handle_response(&self, resp: ClonableResponseCache, rate_limiter: Option<&DefaultRateLimiter>) -> Result<U, YueError>;
 }
 
 #[derive(Clone)]
@@ -104,6 +102,7 @@ impl YueRequestBuilder for NonAuthRequestBuilder {
 }
 
 /// 通用请求包装器，支持限流、重试和自定��响应处理
+#[deprecated]
 pub struct YueRequest<'a, T, U, H>
 where
     T: YueRequestBuilder + Clone,
@@ -141,7 +140,7 @@ where
         debug!("execute request: {:?}", request);
         let res = request.send().await?;
         let resp_cache = ClonableResponseCache::from_response(res).await;
-        let result = self.response_handler.handle_response(resp_cache.clone()).await;
+        let result = self.response_handler.handle_response(resp_cache.clone(), self.info.rate_limit).await;
         match result {
             Ok(val) => Ok(val),
             Err(e) => {

@@ -1,13 +1,14 @@
 use crate::binance::bn_models::common::ToQueryParams;
 use crate::errors::YueError;
-use crate::http_client::{ClonableResponseCache, DefaultRateLimiter, ResponseHandler, YueRequest, YueRequestBuilder};
-use crate::models::RequestInfo;
+use crate::http_client::{ClonableResponseCache, ResponseHandler, YueRequest, YueRequestBuilder};
+use crate::models::{DefaultRateLimiter, RequestInfo};
 use crate::tools::sign_hmac;
 use async_trait::async_trait;
 use governor::{Quota, RateLimiter};
 use reqwest::{Client, Method, RequestBuilder};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+
 use std::num::NonZeroU32;
 use std::sync::{LazyLock, OnceLock};
 // --- API and WebSocket Base URLs ---
@@ -132,7 +133,25 @@ impl<U> ResponseHandler<U> for BinanceResponseHandler
 where
     U: DeserializeOwned + Send + Sync,
 {
-    async fn handle_response(&self, res: ClonableResponseCache) -> Result<U, YueError> {
+    async fn handle_response(&self, res: ClonableResponseCache, rate_limiter: Option<&DefaultRateLimiter>) -> Result<U, YueError> {
+        // 打印所有响应 headers（名称和对应的值）。 对于非 UTF-8 的 header 值，会标记为 <non-utf8>
+        for (name, value) in res.headers.iter() {
+            match value.to_str() {
+                Ok(v) => println!("Response header {}: {}", name.as_str(), v),
+                Err(_) => println!("Response header {}: <non-utf8>", name.as_str()),
+            }
+        }
+
+        // 示例：如果传入了 rate_limiter，我们可以尝试用它来获取/消耗令牌
+        if let Some(_limiter) = rate_limiter {
+            // 注意：这里不能直接修改 limiter 的内部配额（governor 的 API 不支持动态修改 quota），
+            // 但可以通过请求更多令牌来消耗它 -- 下面只是示例性的非阻塞检查（不建议在生产代码中阻塞处理）
+            // 真实场景应当在发起请求前进行限流检查（perform_request_async 中已有检查），
+            // 这里展示如何访问 limiter 并在需要时记录或执行额外操作。
+            // e.g., limiter.check(); // 如果有类似的非阻塞方法
+            println!("BinanceResponseHandler received a rate_limiter reference");
+        }
+
         let result = serde_json::from_slice::<U>(&res.body)?;
         Ok(result)
     }
@@ -545,21 +564,22 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        // 创建HTTP客户端并发送请求
+        // 创建HTTP客户端并发送请求，使用 query API 确保 query 参数格式一致
         let client = reqwest::Client::new();
-        let url = format!("{}/api/v3/ticker/price?symbol=BTCUSDT", mock_server.uri());
-        let response = client.get(&url).send().await?;
+        let url = format!("{}/api/v3/ticker/price", mock_server.uri());
+        let response = client.get(&url).query(&[("symbol", "BTCUSDT")]).send().await?;
 
-        // 验证响应headers
+        // 验证响应headers（Content-Type 可能包含 charset，使用 starts_with 检查）
         assert_eq!(response.status(), 200);
-        assert_eq!(response.headers().get("Content-Type").unwrap(), "application/json");
+        let ct = response.headers().get("Content-Type").unwrap().to_str().unwrap();
+        assert!(ct.starts_with("application/json"));
         assert_eq!(response.headers().get("X-MBX-USED-WEIGHT").unwrap(), "1");
         assert_eq!(response.headers().get("Server").unwrap(), "nginx");
 
         // 创建BinanceResponseHandler并测试handle_response方法
         let handler = BinanceResponseHandler::new();
         let cache = ClonableResponseCache::from_response(response).await;
-        let result: serde_json::Value = handler.handle_response(cache).await?;
+        let result: serde_json::Value = handler.handle_response(cache, None).await?;
 
         // 验证解析结果
         assert_eq!(result["symbol"], "BTCUSDT");
@@ -606,7 +626,7 @@ mod tests {
         // 创建BinanceResponseHandler并测试handle_response方法
         let handler = BinanceResponseHandler::new();
         let cache = ClonableResponseCache::from_response(response).await;
-        let result: serde_json::Value = handler.handle_response(cache).await?;
+        let result: serde_json::Value = handler.handle_response(cache, None).await?;
 
         // 验证错误响应解析
         assert_eq!(result["code"], -1121);
@@ -674,7 +694,7 @@ mod tests {
         // 测试BinanceResponseHandler
         let handler = BinanceResponseHandler::new();
         let cache = ClonableResponseCache::from_response(response).await;
-        let result: serde_json::Value = handler.handle_response(cache).await?;
+        let result: serde_json::Value = handler.handle_response(cache, None).await?;
 
         // 验证复杂JSON结构解析
         assert!(result["symbols"].is_array());

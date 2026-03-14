@@ -10,7 +10,7 @@ mod http_clients_yue_request_tests {
     use yue::binance::bn_restful_commands::BNSecurityRequestBuilder;
     use yue::errors::YueError;
     use yue::http_client::{ClonableResponseCache, NonAuthRequestBuilder, ResponseHandler, YueRequest};
-    use yue::models::RequestInfo;
+    use yue::models::{DefaultRateLimiter, RequestInfo};
 
     #[derive(Clone)]
     pub struct JsonResponseHandler;
@@ -26,7 +26,7 @@ mod http_clients_yue_request_tests {
     where
         U: DeserializeOwned + Send + Sync,
     {
-        async fn handle_response(&self, resp: ClonableResponseCache) -> Result<U, YueError> {
+        async fn handle_response(&self, resp: ClonableResponseCache, _rate_limiter: Option<&DefaultRateLimiter>) -> Result<U, YueError> {
             if resp.status != reqwest::StatusCode::OK {
                 let body = String::from_utf8_lossy(&resp.body).to_string();
                 return Err(YueError::ExchangeRequestError {

@@ -4,5 +4,6 @@ pub mod bn_restful_commands;
 pub mod history_data;
 pub mod websocket_actor;
 
+mod http_client;
 pub mod listen_key_client;
 pub mod order_book;
