@@ -9,119 +9,107 @@ use governor::{
 use log::error;
 use rand;
 use reqwest::{Client, RequestBuilder, Response, StatusCode};
+use serde::Deserialize;
 use serde_json::Value;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time::{interval, sleep};
 
-const SAFETY_MARGIN: u32 = 200; // 留 200 weight 作为缓冲，防突发
-const REFRESH_INTERVAL_SECS: u64 = 6 * 3600; // 每6小时刷新一次 quota
-const MAX_RETRIES: u32 = 6;
-const BASE_DELAY_MS: u64 = 200; // 指数退避起始 1s
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum BinanceSecurityType {
+    #[serde(rename = "HMAC")]
+    HMAC,
+    #[serde(rename = "Ed25519")]
+    Ed25519,
+}
+
+pub struct BinanceSecurityInfo {
+    //FUTURE: 用security的那个包来包裹一下，优先级低
+    /// security_type是Hmac则api_security是字符串
+    /// security_type是Ed25519,则api_security是一个私钥的本地地址。
+    api_key: String,
+    api_secret: String,
+    security_type: BinanceSecurityType,
+}
 
 #[derive(Clone)]
 pub struct BinanceRestfulClient {
-    client: Client,
+    client: Arc<Client>,
+    max_retries: u16,
 }
 
 impl BinanceRestfulClient {
     /// 创建 limiter，立即从 exchangeInfo 获取限额并启动后台刷新任务
-    pub async fn new() -> Arc<Self> {
-        let client = Client::new();
-
-        // 初始 quota（用一个合理默认值，马上会被刷新覆盖）
-        let initial_quota = Quota::per_minute(NonZeroU32::new(1000).unwrap()).allow_burst(NonZeroU32::new(300).unwrap());
-
-        let this = Arc::new(Self { client });
-        this
+    pub async fn new(client: Arc<Client>) -> Arc<Self> {
+        Arc::new(Self { client, max_retries: 5 })
     }
 
-    /// 发送请求（带限流、重试、weight 监控）
-    pub async fn request(&self, builder: RequestBuilder, request_info: &RequestInfo) -> Result<Response, YueError> {
-        let mut attempt = 0u32;
-        // 放在循环外，是为了重试。如果放在循环里，那么重试去请求令牌桶。其他新请求就会去请求令牌桶。会产生令牌过多的问题。
-        // 比如说现在x-mbx-used-weight-1m是900，剩余100，如果重试放在循环里，有a线程在外面等着。
-        // 然后突然释放。
-        let host = request_info.host.clone();
-        host.acquire_limit_token(request_info.weight, request_info.request_timeout_mill_secs)
-            .await?;
-        loop {
-            // 2. 克隆并发送（因为 send 后 builder 不可重用）
-            let req = builder.try_clone().ok_or_else(|| YueError::new("无法克隆请求构建器"))?;
-            let result = req.send().await;
-
-            match result {
-                Ok(resp) => {
-                    let status = resp.status();
-
-                    // 处理 Binance 限流错误
-                    if status == StatusCode::TOO_MANY_REQUESTS || status.as_u16() == 418 {
-                        attempt += 1;
-                        if attempt > MAX_RETRIES {
-                            return Err(YueError::new(format!("超过最大重试次数 {} (429/418)", MAX_RETRIES).as_str()));
-                        }
-
-                        let wait_secs = if let Some(header) = resp.headers().get("retry-after") {
-                            header.to_str().ok().and_then(|s| s.parse::<u64>().ok()).unwrap_or(60)
-                        } else {
-                            // 指数退避 + jitter (使用 rand::random 避免不同版本 gen_range/随机 API 差异)
-                            let delay_ms = BASE_DELAY_MS * 2u64.pow(attempt.saturating_sub(1));
-                            let jitter = if delay_ms >= 4 {
-                                (rand::random::<u64>() % ((delay_ms / 4) + 1))
-                            } else {
-                                0
-                            };
-                            (delay_ms + jitter) / 1000 + 1 // 至少 1s
-                        };
-
-                        println!("[BinanceLimiter] 429/418 检测 (尝试 {}/{}), 等待 {}s", attempt, MAX_RETRIES, wait_secs);
-                        sleep(Duration::from_secs(wait_secs)).await;
-                        continue;
-                    }
-
-                    // 读取 used-weight 并保守等待（防超限）
-                    if let Some(used_str) = resp.headers().get("x-mbx-used-weight-1m") {
-                        if let Ok(used) = used_str.to_str().unwrap_or("0").parse::<u32>() {
-                            let current_limit = host.get_max_limit();
-                            if current_limit > 0 && used > current_limit.saturating_sub(SAFETY_MARGIN / 2) {
-                                // let now = chrono::Utc::now();
-                                // let wait_secs = 60 - now.second() as u64 + 5; // 等到下一分钟 + 5s 缓冲
-                                println!("[BinanceLimiter] 高使用率 {} / {}，强制等待 {}s 重置窗口", used, current_limit, 1);
-                                sleep(Duration::from_secs(500)).await;
-                            }
-                        }
-                    }
-
-                    return Ok(resp);
-                }
-
-                Err(err) if err.is_timeout() || err.is_connect() || err.is_request() => {
-                    // 网络 transient 错误 → 重试
-                    attempt += 1;
-                    if attempt > MAX_RETRIES {
-                        return Err(err.into());
-                    }
-
-                    let delay_ms = BASE_DELAY_MS * 2u64.pow(attempt.saturating_sub(1));
-                    let jitter = if delay_ms >= 5 {
-                        (rand::random::<u64>() % ((delay_ms / 5) + 1))
-                    } else {
-                        0
-                    };
-                    let wait = Duration::from_millis(delay_ms + jitter);
-
-                    println!(
-                        "[BinanceLimiter] 瞬时错误 (尝试 {}/{}): {}，重试等待 {:?}",
-                        attempt, MAX_RETRIES, err, wait
-                    );
-                    sleep(wait).await;
-                    continue;
-                }
-
-                Err(other) => return Err(other.into()),
-            }
-        }
+    ///
+    /// # 币安的http调用接口。对于币安的规则。
+    ///
+    ///  整个流程。
+    ///  1. 根据request_info中的host信息，获取令牌。如果超时，则报错。
+    ///  2. 判断是否要加上权限，如果有的就加上签名
+    ///  3. 发送请求。
+    ///  4. 判断是否超时。
+    ///
+    ///  需要注意的点：
+    ///  1. 如果请求http request和获取令牌的话，错误就重试，超过重试，再抛出error
+    ///  2. 其他的错误，直接发出。
+    ///
+    /// # 具体功能
+    /// ## 访问限制
+    /// 1. 如果返回的http status code为429，则表示调用过多，需要降低访问频率。
+    /// 2. 如果返回的http status code为418，则表示被封。
+    /// 3. 如果发生访问限制，调用request_info的host中block_all_request。阻止其他的线程继续查询。等到回复后调用allow_all_request放行。
+    /// 4. X-MBX-USED-WEIGHT是http的header。用来表示已经调用权重
+    ///
+    /// ### 429处理逻辑
+    /// 1. 等待随机的ms数，第一次等待100到200的随机毫秒，如果还是429，那么加100ms的随机秒数。
+    /// 2. 如果超过timeout。则报错。把表头的Retry-After写入到错误信息中抛出。
+    ///
+    /// ### 418处理逻辑
+    /// 1. 报错。把表头的Retry-After写入到错误信息中抛出。
+    ///
+    /// ### X-MBX-USED-WEIGHT表头的处理。
+    /// 1.可能有表头会显示如下。取值优先值按照其先后顺序。
+    ///  - x-mbx-used-weight-1m
+    ///  - x-mbx-used-weight-5m
+    ///  - x-mbx-used-weight
+    /// 2. 如果取到的值大于request_info的host的max_limit的少50，则等待100到300的随机值
+    ///
+    /// ## 接口鉴权
+    /// 1. 根据request_info中的has_security来判断是否要启用加密。
+    /// 2. 如果request_info为true，security为None，则报错。
+    /// 3. 如果security的security_type为HMAC，则使用tools中的sign_hmac方法处理
+    /// 4. 如果security的security_type为Ed25519，则使用tools中的sign_ed25519方法处理，通过load_ed25519_signing_key来加载私钥地址
+    /// 5，把apiKey放在请求的header中的是X-MBX-APIKEY
+    /// 6. 在queryParam里面加入一个新的signature=签名
+    ///
+    /// ### 签名算法
+    /// 1. 将参数格式化为 参数=取值 对并用 & 分隔每个参数对。
+    /// 2. 对字符串进行百分比编码（percent-encoded）。
+    /// #### 计算payload
+    /// query param是symbol=１２３４５６=SELL&type=LIMIT&timeInForce=GTC&quantity=1&price=0.2
+    /// 1. 加上必要的字段timestamp和recvWindow,recvWindow用
+    ///    例子：symbol=１２３４５６=SELL&type=LIMIT&timeInForce=GTC&quantity=1&price=0.2&timestamp=1668481559918&recvWindow=5000
+    /// 2. 对字符串进行百分比编码（percent-encoded）后，签名 payload 如下所示：
+    ///    例子：symbol=%EF%BC%91%EF%BC%92%EF%BC%93%EF%BC%94%EF%BC%95%EF%BC%96&side=SELL&type=LIMIT&timeInForce=GTC&quantity=1&price=0.2&timestamp=1668481559918&recvWindow=5000
+    /// 3. 根据相应的security_type的，调用相应的想法去加密
+    ///
+    /// 参考资料
+    /// - [接口鉴权](https://developers.binance.com/docs/zh-CN/binance-spot-api-docs/rest-api/request-security)
+    /// - [访问限制](https://developers.binance.com/docs/zh-CN/binance-spot-api-docs/rest-api/limits)
+    ///
+    pub async fn request(
+        &self,
+        builder: RequestBuilder,
+        request_info: &RequestInfo,
+        security: Option<BinanceSecurityInfo>,
+    ) -> Result<Response, YueError> {
+        todo!()
     }
 }
 
@@ -146,66 +134,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_request_returns_response_with_custom_headers() -> Result<(), Box<dyn std::error::Error>> {
-        let mock_server = MockServer::start().await;
-        let test_path = "/api/v3/ticker/price";
-
-        Mock::given(method("GET"))
-            .and(path(test_path))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({"symbol": "BTCUSDT", "price": "45000.00"}))
-                    .insert_header("Content-Type", "application/json; charset=utf-8")
-                    .insert_header("X-MBX-USED-WEIGHT-1M", "5")
-                    .insert_header("Server", "wiremock"),
-            )
-            .mount(&mock_server)
-            .await;
-
-        let request_info = RequestInfo::from_base_path(create_mock_host_info(&mock_server.uri()), test_path, false, 1, None, None)?;
-        let bn_client = BinanceRestfulClient::new().await;
-        let req = ReqwestClient::new().get(format!("{}{}", mock_server.uri(), test_path));
-
-        let resp = bn_client.request(req, &request_info).await?;
-
-        assert_eq!(resp.status().as_u16(), 200);
-        let headers = resp.headers();
-        assert!(headers.get("Content-Type").is_some());
-        assert_eq!(headers.get("X-MBX-USED-WEIGHT-1M").unwrap(), "5");
-        assert_eq!(headers.get("Server").unwrap(), "wiremock");
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_request_without_used_weight_header() -> Result<(), Box<dyn std::error::Error>> {
-        let mock_server = MockServer::start().await;
-        let test_path = "/api/v3/ping";
-
-        Mock::given(method("GET"))
-            .and(path(test_path))
-            .respond_with(ResponseTemplate::new(200).set_body_string("pong"))
-            .mount(&mock_server)
-            .await;
-
-        let request_info = RequestInfo::from_base_path(create_mock_host_info(&mock_server.uri()), test_path, false, 1, None, None)?;
-        let bn_client = BinanceRestfulClient::new().await;
-        let req = ReqwestClient::new().get(format!("{}{}", mock_server.uri(), test_path));
-
-        let resp = bn_client.request(req, &request_info).await?;
-
-        assert_eq!(resp.status().as_u16(), 200);
-        let headers = resp.headers();
-        assert!(headers.get("X-MBX-USED-WEIGHT-1M").is_none());
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn minimal_mock() {
         let mock_server = wiremock::MockServer::start().await;
 
-        wiremock::Mock::given(wiremock::matchers::any())
+        Mock::given(wiremock::matchers::any())
             .respond_with(wiremock::ResponseTemplate::new(200).set_body_string("OK"))
             .mount(&mock_server)
             .await;
