@@ -1,44 +1,115 @@
 use crate::binance::bn_models::common::ToQueryParams;
 use crate::errors::YueError;
 use crate::http_client::{ClonableResponseCache, ResponseHandler, YueRequest, YueRequestBuilder};
-use crate::models::{DefaultRateLimiter, RequestInfo};
+use crate::models::{DefaultRateLimiter, HostInfo, RequestInfo, create_share_rate_limiter};
 use crate::tools::sign_hmac;
 use async_trait::async_trait;
 use governor::{Quota, RateLimiter};
 use reqwest::{Client, Method, RequestBuilder};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use std::clone::Clone;
 
 use std::num::NonZeroU32;
-use std::sync::{LazyLock, OnceLock};
+use std::sync::{Arc, LazyLock, OnceLock};
+use url::Host;
 // --- API and WebSocket Base URLs ---
 // The active URL is determined by the Cargo features enabled at compile time.
 // Priority: test > binance-testnet > production (default)
 
-// For Unit Tests with WireMock
-#[cfg(test)]
-pub const BINANCE_SPOT_API: &str = "http://127.0.0.1:18080"; // WireMock server address
-
-// For Examples and Testnet Applications
-#[cfg(all(feature = "binance-testnet", not(test)))]
-pub const BINANCE_SPOT_API: &str = "https://testnet.binance.vision/";
-
-// For Production (Default)
+/// PLAN：这些做成配置项。比如一台server需要部署多个instance
+/// 然后经过测试，发觉比上限低一点，如果定格，容易被封
+static SPOT_RATE_PER_MINUTE: u32 = 1190;
+static SWAP_LIMITER_PER_MINUTE: u32 = 1200;
+static SWAP_FUNDING_PER_MINUTE: u32 = 95;
 #[cfg(not(any(feature = "binance-testnet", test)))]
-pub const BINANCE_SPOT_API: &str = "https://api.binance.com/";
+pub const BINANCE_SPOT_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
+    Arc::new(HostInfo::new(
+        "https://api.binance.com/",
+        SPOT_RATE_PER_MINUTE,
+        create_share_rate_limiter(SPOT_RATE_PER_MINUTE),
+    ))
+});
+
+#[cfg(all(feature = "binance-testnet", not(test)))]
+pub const BINANCE_SPOT_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
+    Arc::new(HostInfo::new(
+        "https://testnet.binance.vision/",
+        SPOT_RATE_PER_MINUTE,
+        create_share_rate_limiter(SPOT_RATE_PER_MINUTE),
+    ))
+});
+#[cfg(test)]
+pub const BINANCE_SPOT_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
+    Arc::new(HostInfo::new(
+        "http://127.0.0.1:18080/",
+        SPOT_RATE_PER_MINUTE,
+        create_share_rate_limiter(SPOT_RATE_PER_MINUTE),
+    ))
+});
 
 #[cfg(test)]
 pub const BINANCE_SWAP_API: &str = "http://127.0.0.1:18081"; // WireMock server address
-
-// For Examples and Testnet Applications
+#[cfg(test)]
+pub const BINANCE_SWAP_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
+    Arc::new(HostInfo::new(
+        "http://127.0.0.1:18081",
+        SWAP_LIMITER_PER_MINUTE,
+        create_share_rate_limiter(SWAP_LIMITER_PER_MINUTE),
+    ))
+});
 #[cfg(all(feature = "binance-testnet", not(test)))]
-pub const BINANCE_SWAP_API: &str = "https://testnet.binance.vision/";
+pub const BINANCE_SWAP_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
+    Arc::new(HostInfo::new(
+        "https://testnet.binance.vision/",
+        SWAP_LIMITER_PER_MINUTE,
+        create_share_rate_limiter(SWAP_LIMITER_PER_MINUTE),
+    ))
+});
 
-// For Production (Default)
 #[cfg(not(any(feature = "binance-testnet", test)))]
-pub const BINANCE_SWAP_API: &str = "https://fapi.binance.com/";
+pub const BINANCE_SWAP_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
+    Arc::new(HostInfo::new(
+        "https://fapi.binance.com/",
+        SWAP_LIMITER_PER_MINUTE,
+        create_share_rate_limiter(SWAP_LIMITER_PER_MINUTE),
+    ))
+});
 
-pub const BINANCE_PAPI_API: &str = "https://papi.binance.com/";
+#[cfg(test)]
+pub const BINANCE_FUNDING_RATE_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
+    Arc::new(HostInfo::new(
+        "http://127.0.0.1:18081",
+        SWAP_FUNDING_PER_MINUTE,
+        create_share_rate_limiter(SWAP_FUNDING_PER_MINUTE),
+    ))
+});
+#[cfg(all(feature = "binance-testnet", not(test)))]
+pub const BINANCE_FUNDING_RATE_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
+    Arc::new(HostInfo::new(
+        "https://testnet.binance.vision/",
+        SWAP_FUNDING_PER_MINUTE,
+        create_share_rate_limiter(SWAP_FUNDING_PER_MINUTE),
+    ))
+});
+
+#[cfg(not(any(feature = "binance-testnet", test)))]
+pub const BINANCE_FUNDING_RATE_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
+    Arc::new(HostInfo::new(
+        "https://fapi.binance.com/",
+        SWAP_FUNDING_PER_MINUTE,
+        create_share_rate_limiter(SWAP_FUNDING_PER_MINUTE),
+    ))
+});
+
+pub const BINANCE_PAPI_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
+    Arc::new(HostInfo::new(
+        "https://papi.binance.com/",
+        SWAP_LIMITER_PER_MINUTE,
+        create_share_rate_limiter(SWAP_LIMITER_PER_MINUTE),
+    ))
+});
+
 pub const PING_PATH: &str = "/api/v3/ping";
 pub const SPOT_EXCHANGE_INFO_PATH: &str = "/api/v3/exchangeInfo";
 pub const SPOT_SERVER_TIME_PATH: &str = "/api/v3/time";
@@ -75,12 +146,6 @@ macro_rules! define_rate_limiter {
         }
     };
 }
-
-/// PLAN：这些做成配置项。比如一台server需要部署多个instance
-/// 然后经过测试，发觉比上限低一点，如果定格，容易被封
-static SPOT_RATE_PER_MINUTE: u32 = 1190;
-static SWAP_LIMITER_PER_MINUTE: u32 = 1200;
-static SWAP_FUNDING_PER_MINUTE: u32 = 95;
 
 // 用宏自动生成币安现货、合约、资金费率限流器相关函数
 // 用法：define_rate_limiter!(静态变量名, 速率常量名, 函数名)
@@ -160,7 +225,7 @@ where
 /// Wrapper for Binance requests to enable retry with backon
 
 pub static PING_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, PING_PATH, false, 1, get_bn_spot_limit(), None, None).unwrap());
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_BASE.clone(), PING_PATH, false, 1, None, None).unwrap());
 
 ///币安当前有 1479 个交易对
 /// 时区: UTC
@@ -214,59 +279,47 @@ pub static PING_COMMAND: LazyLock<RequestInfo> =
 
 /// SPOT API
 pub static SPOT_EXCHANGE_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_EXCHANGE_INFO_PATH, false, 20, get_bn_spot_limit(), None, Some(10)).unwrap());
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_BASE.clone(), SPOT_EXCHANGE_INFO_PATH, false, 20, None, Some(10)).unwrap());
 
 pub static SERVER_TIME_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_SERVER_TIME_PATH, false, 1, get_bn_spot_limit(), None, Some(2)).unwrap());
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_BASE.clone(), SPOT_SERVER_TIME_PATH, false, 1, None, Some(2)).unwrap());
 
 pub static SPOT_KLINE_HISTORY_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_KLINE_PATH, false, 2, get_bn_spot_limit(), None, Some(60 * 60)).unwrap());
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_BASE.clone(), SPOT_KLINE_PATH, false, 2, None, Some(60 * 60)).unwrap());
 
 pub static SPOT_AVERAGE_PRICE_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_AVERAGE_PATH, false, 2, get_bn_spot_limit(), None, Some(2)).unwrap());
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_BASE.clone(), SPOT_AVERAGE_PATH, false, 2, None, Some(2)).unwrap());
 
 pub static SPOT_TICKER_24HR_ONE_SYMBOL_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_TICKER_24HR_PATH, false, 2, get_bn_spot_limit(), None, Some(2)).unwrap());
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_BASE.clone(), SPOT_TICKER_24HR_PATH, false, 2, None, Some(2)).unwrap());
 
 //请求交易对为1000的深度数据
 pub static SPOT_DEPTH_1000_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_API, SPOT_DEPTH, false, 50, get_bn_spot_limit(), None, Some(2)).unwrap());
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_BASE.clone(), SPOT_DEPTH, false, 50, None, Some(2)).unwrap());
 
 /// SWAP API
 
 pub static SWAP_EXCHANGE_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_API, SWAP_EXCHANGE_INFO_PATH, false, 20, get_bn_swap_limit(), None, Some(90)).unwrap());
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_BASE.clone(), SWAP_EXCHANGE_INFO_PATH, false, 20, None, Some(90)).unwrap());
 
-pub static SWAP_FUNDING_RATE_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| {
-    RequestInfo::from_base_path(
-        BINANCE_SWAP_API,
-        SWAP_FUNDING_RATE_PATH,
-        false,
-        1,
-        get_bn_funding_rate_limit(),
-        None,
-        Some(60 * 60),
-    )
-    .unwrap()
-});
+pub static SWAP_FUNDING_RATE_COMMAND: LazyLock<RequestInfo> =
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_FUNDING_RATE_BASE.clone(), SWAP_FUNDING_RATE_PATH, false, 1, None, Some(60 * 60)).unwrap());
 
 /**
 根据api。这个注释是动态的。如果所以专门写一个command用于处理,
 因为每次取1k，所有为5
 */
 pub static SWAP_KLINE_HISTORY_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_API, SWAP_KLINE_PATH, false, 5, get_bn_swap_limit(), None, Some(60 * 60)).unwrap());
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_BASE.clone(), SWAP_KLINE_PATH, false, 5, None, Some(60 * 60)).unwrap());
 
 pub static SWAP_FIVE_MIN_KLINE_HISTORY_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_API, SWAP_KLINE_PATH, false, 1, get_bn_swap_limit(), None, Some(60 * 60)).unwrap());
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_BASE.clone(), SWAP_KLINE_PATH, false, 1, None, Some(60 * 60)).unwrap());
 
-pub static SWAP_LISTEN_KEY_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| {
-    RequestInfo::from_base_path(BINANCE_SWAP_API, SWAP_LISTEN_KEY_PATH, false, 1, get_bn_swap_limit(), None, Some(60 * 60)).unwrap()
-});
+pub static SWAP_LISTEN_KEY_COMMAND: LazyLock<RequestInfo> =
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_BASE.clone(), SWAP_LISTEN_KEY_PATH, false, 1, None, Some(60 * 60)).unwrap());
 
-pub static PAPI_LISTEN_KEY_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| {
-    RequestInfo::from_base_path(BINANCE_PAPI_API, PAPI_LISTEN_KEY_PATH, false, 1, get_bn_swap_limit(), None, Some(60 * 60)).unwrap()
-});
+pub static PAPI_LISTEN_KEY_COMMAND: LazyLock<RequestInfo> =
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_PAPI_BASE.clone(), PAPI_LISTEN_KEY_PATH, false, 1, None, Some(60 * 60)).unwrap());
 
 /// 全局 RateLimiter，使用 OnceLock 延迟初始化
 
@@ -276,16 +329,7 @@ where
     T: YueRequestBuilder + Clone,
     U: DeserializeOwned + Send + Sync,
 {
-    let converted_param = param.map(|p| p.to_query_string());
-    YueRequest {
-        info,
-        param: converted_param,
-        request_builder,
-        body: None,
-        method: Method::GET,
-        response_handler: BinanceResponseHandler::new(),
-        _phantom: std::marker::PhantomData,
-    }
+    todo!()
 }
 
 pub fn execute_bn_post<'a, P, T, U>(
@@ -299,16 +343,7 @@ where
     T: YueRequestBuilder + Clone,
     U: DeserializeOwned + Send + Sync,
 {
-    let converted_param = param.map(|p| p.to_query_string());
-    YueRequest {
-        info,
-        param: converted_param,
-        request_builder,
-        body,
-        method: Method::POST,
-        response_handler: BinanceResponseHandler::new(),
-        _phantom: std::marker::PhantomData,
-    }
+    todo!()
 }
 
 pub fn execute_bn_put<'a, P, T, U>(
@@ -322,16 +357,7 @@ where
     T: YueRequestBuilder + Clone,
     U: DeserializeOwned + Send + Sync,
 {
-    let converted_param = param.map(|p| p.to_query_string());
-    YueRequest {
-        info,
-        param: converted_param,
-        request_builder,
-        body,
-        method: Method::POST,
-        response_handler: BinanceResponseHandler::new(),
-        _phantom: std::marker::PhantomData,
-    }
+    todo!()
 }
 
 /// Pure function for building request components. Easy to test.
@@ -342,6 +368,7 @@ mod tests {
     use crate::binance::bn_models::common::EmptyQueryParams;
     use crate::http_client::{ClonableResponseCache, NonAuthRequestBuilder, ResponseHandler, YueRequestBuilder, init_http_client};
     use crate::models::RequestInfo;
+    use crate::tools::create_mock_host_info;
     use reqwest::{Client, Method};
     use std::collections::BTreeMap;
     use wiremock::matchers::{method, path};
@@ -354,7 +381,7 @@ mod tests {
     #[test]
     fn test_compose_request_with_valid_security_info() {
         let client = Client::new();
-        let request_info = RequestInfo::from_base_path("https://example.com", "/api/v3/test", false, 1, get_bn_spot_limit(), None, None).unwrap();
+        let request_info = RequestInfo::from_base_path(create_mock_host_info("https://example.com"), "/api/v3/test", false, 1, None, None).unwrap();
         let builder = BNSecurityRequestBuilder {
             api_key: "test_api_key".to_string(),
             api_secret: "test_api_secret".to_string(),
@@ -374,7 +401,7 @@ mod tests {
     #[test]
     fn test_compose_request_without_security_info() {
         let client = Client::new();
-        let request_info = RequestInfo::from_base_path("https://example.com", "/api/v3/test", false, 1, get_bn_spot_limit(), None, None).unwrap();
+        let request_info = RequestInfo::from_base_path(create_mock_host_info("https://example.com"), "/api/v3/test", false, 1, None, None).unwrap();
         let builder = NonAuthRequestBuilder {};
 
         let result = builder.compose_request(&client, &request_info, None, Method::GET);
@@ -388,7 +415,7 @@ mod tests {
     #[test]
     fn test_compose_request_with_query_params() {
         let client = Client::new();
-        let request_info = RequestInfo::from_base_path("https://example.com", "/api/v3/test", false, 1, get_bn_spot_limit(), None, None).unwrap();
+        let request_info = RequestInfo::from_base_path(create_mock_host_info("https://example.com"), "/api/v3/test", false, 1, None, None).unwrap();
         let builder = BNSecurityRequestBuilder {
             api_key: "test_api_key".to_string(),
             api_secret: "test_api_secret".to_string(),
@@ -413,7 +440,7 @@ mod tests {
 
         // Create a test RequestInfo
         let test_path = "/api/v3/test";
-        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1, get_bn_spot_limit(), None, None)?;
+        let request_info = RequestInfo::from_base_path(create_mock_host_info(&mock_server.uri()), test_path, false, 1, None, None)?;
 
         // Setup the mock
         Mock::given(method("GET"))
@@ -439,7 +466,7 @@ mod tests {
         setup();
         let mock_server = MockServer::start().await;
         let test_path = "/api/v3/test";
-        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1, None, None, None)?;
+        let request_info = RequestInfo::from_base_path(create_mock_host_info(&mock_server.uri()), test_path, false, 1, None, None)?;
 
         // Setup mock with query parameters
         Mock::given(method("GET"))
@@ -469,7 +496,7 @@ mod tests {
         setup();
         let mock_server = MockServer::start().await;
         let test_path = "/api/v3/test";
-        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1, None, None, None)?;
+        let request_info = RequestInfo::from_base_path(create_mock_host_info(&mock_server.uri()), test_path, false, 1, None, None)?;
 
         // Setup mock expecting security headers
         Mock::given(method("GET"))

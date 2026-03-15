@@ -159,10 +159,22 @@ impl BinanceRestfulClient {
 #[cfg(test)]
 mod tests {
     use super::BinanceRestfulClient;
-    use crate::models::RequestInfo;
+    use crate::models::{DefaultRateLimiter, HostInfo, RequestInfo};
+    use governor::{Quota, RateLimiter};
     use reqwest::Client as ReqwestClient;
+    use std::num::NonZeroU32;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn create_mock_host_info(host: &str) -> Arc<HostInfo> {
+        // 初始 quota（用一个合理默认值，马上会被刷新覆盖）
+        let initial_quota = Quota::per_minute(NonZeroU32::new(1000).unwrap()).allow_burst(NonZeroU32::new(300).unwrap());
+
+        let limiter = Arc::new(RwLock::new(Arc::new(DefaultRateLimiter::direct(initial_quota))));
+        Arc::new(HostInfo::new(host, 0, limiter))
+    }
 
     #[tokio::test]
     async fn test_request_returns_response_with_custom_headers() -> Result<(), Box<dyn std::error::Error>> {
@@ -181,7 +193,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1, None, None, None)?;
+        let request_info = RequestInfo::from_base_path(create_mock_host_info(&mock_server.uri()), test_path, false, 1, None, None)?;
         let bn_client = BinanceRestfulClient::new().await;
         let req = ReqwestClient::new().get(format!("{}{}", mock_server.uri(), test_path));
 
@@ -207,7 +219,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let request_info = RequestInfo::from_base_path(&mock_server.uri(), test_path, false, 1, None, None, None)?;
+        let request_info = RequestInfo::from_base_path(create_mock_host_info(&mock_server.uri()), test_path, false, 1, None, None)?;
         let bn_client = BinanceRestfulClient::new().await;
         let req = ReqwestClient::new().get(format!("{}{}", mock_server.uri(), test_path));
 

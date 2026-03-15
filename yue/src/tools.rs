@@ -1,8 +1,10 @@
 use crate::errors::YueError;
+use crate::models::{DefaultRateLimiter, HostInfo};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use ed25519_dalek::SigningKey;
 use ed25519_dalek::ed25519::signature::SignerMut;
 use ed25519_dalek::pkcs8::DecodePrivateKey; // 带 pem 支持
+use governor::Quota;
 use hmac::digest::InvalidLength;
 use hmac::{Hmac, Mac};
 use log::error;
@@ -12,9 +14,10 @@ use serde::{Deserialize, Deserializer};
 use sha2::Sha256;
 use sonyflake::Sonyflake;
 use std::fs;
-use std::sync::{Mutex, OnceLock};
+use std::num::NonZeroU32;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{RwLock, broadcast, watch};
 use tokio::time;
 
 // 自定义反序列化函数，将字符串属性转换为数字
@@ -266,6 +269,14 @@ async fn frequency_reducer_output<V: Send + Clone + Sync>(
             };
         }
     }
+}
+#[cfg(test)]
+pub fn create_mock_host_info(host: &str) -> Arc<HostInfo> {
+    // 初始 quota（用一个合理默认值，马上会被刷新覆盖）
+    let initial_quota = Quota::per_minute(NonZeroU32::new(1000).unwrap()).allow_burst(NonZeroU32::new(300).unwrap());
+
+    let limiter = Arc::new(RwLock::new(Arc::new(DefaultRateLimiter::direct(initial_quota))));
+    Arc::new(HostInfo::new(host, 0, limiter))
 }
 
 #[cfg(test)]

@@ -1,14 +1,15 @@
-use governor::Jitter;
 use governor::RateLimiter;
 use governor::clock::DefaultClock;
 use governor::state::{InMemoryState, NotKeyed};
+use governor::{Jitter, Quota};
 use li::tools::time::unix_time_now_u64_utc;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::collections::HashMap;
 use std::num::NonZeroU32;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, RwLock};
 use std::time::Duration;
+use tokio::sync::RwLock;
 use tokio::time::timeout;
 use url::Url;
 
@@ -61,7 +62,7 @@ impl<'de> Deserialize<'de> for EmptyObject {
 }
 
 pub type DefaultRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
-
+pub type ShareRateLimiter = Arc<RwLock<Arc<DefaultRateLimiter>>>;
 ///
 /// 主要是参考币安的经验。这个HostInfo主要是和限流和地址相关信息。
 ///
@@ -76,7 +77,16 @@ pub type DefaultRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>
 pub struct HostInfo {
     host: String,
     max_limit: Arc<AtomicU32>,
-    limiter: Arc<RwLock<Arc<DefaultRateLimiter>>>,
+    limiter: ShareRateLimiter,
+}
+
+pub fn create_share_rate_limiter(bucket_size: u32) -> ShareRateLimiter {
+    Arc::new(RwLock::new(Arc::new(create_default_rate_limiter(bucket_size))))
+}
+
+pub fn create_default_rate_limiter(bucket_size: u32) -> DefaultRateLimiter {
+    let quota = Quota::per_minute(NonZeroU32::new(bucket_size).unwrap());
+    DefaultRateLimiter::direct(quota)
 }
 
 impl AsRef<str> for HostInfo {
@@ -92,11 +102,11 @@ impl<'a> From<&'a HostInfo> for &'a str {
 }
 
 impl HostInfo {
-    pub fn new<S: AsRef<str>>(host: S, max_limit: u32, limiter: DefaultRateLimiter) -> Self {
+    pub fn new<S: AsRef<str>>(host: S, max_limit: u32, limiter: Arc<RwLock<Arc<DefaultRateLimiter>>>) -> Self {
         Self {
             host: host.as_ref().to_string(),
             max_limit: Arc::new(AtomicU32::new(max_limit)),
-            limiter: Arc::new(RwLock::new(Arc::new(limiter))),
+            limiter,
         }
     }
 
@@ -112,10 +122,9 @@ impl HostInfo {
         self.max_limit.load(Ordering::SeqCst)
     }
 
-    pub fn set_limiter(&self, limiter: DefaultRateLimiter) {
-        if let Ok(mut guard) = self.limiter.write() {
-            *guard = Arc::new(limiter);
-        }
+    pub async fn set_limiter(&self, limiter: DefaultRateLimiter) {
+        let mut guard = self.limiter.write().await;
+        *guard = Arc::new(limiter);
     }
 
     pub async fn acquire_limit_token(&self, weight: u32, timeout_secs: u64) -> Result<(), crate::errors::YueError> {
@@ -128,7 +137,7 @@ impl HostInfo {
 
         // clone an Arc handle to the limiter so we don't hold the RwLock across .await
         let limiter_cloned = {
-            let guard = self.limiter.read().map_err(|_| crate::errors::YueError::new("锁定限流器失败"))?;
+            let guard = self.limiter.read().await; // tokio RwLock: await to acquire
             guard.clone()
         };
 
@@ -149,9 +158,9 @@ impl HostInfo {
 #[derive(Debug, Clone)]
 pub struct RequestInfo {
     inner: Url,
+    pub host: Arc<HostInfo>,
     pub has_security: bool,
     pub weight: u32,
-    pub rate_limit: Option<&'static DefaultRateLimiter>,
     pub request_timeout_mill_secs: u32,
     rate_limit_timeout_secs: u64,
 }
@@ -160,49 +169,48 @@ impl RequestInfo {
     // 直接从完整 URL 构建
     pub fn new_full_url<S: AsRef<str>>(
         full_url: S,
+        host: Arc<HostInfo>,
         has_security: bool,
         weight: u32,
-        rate_limit: Option<&'static DefaultRateLimiter>,
         request_timeout_mill_secs: Option<u32>,
         rate_limit_timeout_secs: Option<u64>,
     ) -> Result<Self, url::ParseError> {
         let inner = Url::parse(full_url.as_ref())?;
         Ok(Self {
             inner,
+            host,
             has_security,
             weight,
-            rate_limit,
             request_timeout_mill_secs: request_timeout_mill_secs.unwrap_or_else(|| 1000u32),
             rate_limit_timeout_secs: rate_limit_timeout_secs.unwrap_or_else(|| 2),
         })
     }
 
     // 从 base + path 构建（内部负责安全拼接）
-    pub fn from_base_path<B: AsRef<str>, P: AsRef<str>>(
-        base: B,
+    pub fn from_base_path<P: AsRef<str>>(
+        host: Arc<HostInfo>,
         path: P,
         has_security: bool,
         weight: u32,
-        rate_limit: Option<&'static DefaultRateLimiter>,
         request_timeout_mill_secs: Option<u32>,
         rate_limit_timeout_secs: Option<u64>,
     ) -> Result<Self, url::ParseError> {
-        let base = base.as_ref().trim_end_matches('/');
+        let base = host.host_as_str();
         let path = path.as_ref();
         let full = if path.starts_with('/') {
             format!("{base}{path}")
         } else {
             format!("{base}/{path}")
         };
-        Self::new_full_url(full, has_security, weight, rate_limit, request_timeout_mill_secs, rate_limit_timeout_secs)
+        Self::new_full_url(full, host, has_security, weight, request_timeout_mill_secs, rate_limit_timeout_secs)
     }
 
     pub fn clone_with_weight(&mut self, new_weight: u32) -> Self {
         Self {
             inner: self.inner.clone(),
+            host: self.host.clone(),
             has_security: self.has_security,
             weight: new_weight,
-            rate_limit: self.rate_limit,
             request_timeout_mill_secs: self.request_timeout_mill_secs,
             rate_limit_timeout_secs: self.rate_limit_timeout_secs,
         }
@@ -280,6 +288,8 @@ mod tests {
     use crate::models::{DefaultRateLimiter, HistoryInterval, HostInfo};
     use governor::Quota;
     use std::num::NonZeroU32;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
 
     /// 测试：HistoryInterval::get_close_unix_ms 在一分钟间隔下的对齐
     ///
@@ -338,7 +348,7 @@ mod tests {
     #[tokio::test]
     async fn test_hostinfo_basic_and_acquire() {
         let quota = Quota::per_minute(NonZeroU32::new(100).unwrap());
-        let limiter = DefaultRateLimiter::direct(quota);
+        let limiter = Arc::new(RwLock::new(Arc::new(DefaultRateLimiter::direct(quota))));
 
         let host = HostInfo::new("https://api.test", 1000, limiter);
 
@@ -356,7 +366,7 @@ mod tests {
     #[tokio::test]
     async fn test_acquire_timeout_behavior() {
         let quota = Quota::per_minute(NonZeroU32::new(1).unwrap());
-        let limiter = DefaultRateLimiter::direct(quota);
+        let limiter = Arc::new(RwLock::new(Arc::new(DefaultRateLimiter::direct(quota))));
 
         let host = HostInfo::new("https://api.test", 10, limiter);
 

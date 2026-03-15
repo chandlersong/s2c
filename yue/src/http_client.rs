@@ -125,30 +125,31 @@ where
     H: ResponseHandler<U> + 'a,
 {
     async fn perform_request_async(&self) -> Result<U, YueError> {
-        if let Some(limiter) = self.info.rate_limit {
-            check_rate_limit(self.info.weight, limiter, self.info.get_rate_limit_timeout()).await?;
-        }
-        let client = HTTP_CLIENT.get().ok_or(YueError::new("客户端没有初始化"))?;
-        let mut request = self
-            .request_builder
-            .compose_request(client, self.info, self.param.clone(), self.method.clone())?;
-        if self.method == Method::POST || self.method == Method::PUT {
-            if let Some(body) = self.body {
-                request = request.json(body);
-            }
-        }
-        debug!("execute request: {:?}", request);
-        let res = request.send().await?;
-        let resp_cache = ClonableResponseCache::from_response(res).await;
-        let result = self.response_handler.handle_response(resp_cache.clone(), self.info.rate_limit).await;
-        match result {
-            Ok(val) => Ok(val),
-            Err(e) => {
-                let body_str = String::from_utf8_lossy(&resp_cache.body).to_string();
-                error!("HTTP response error, status: {}, body: {}", resp_cache.status, body_str);
-                Err(e)
-            }
-        }
+        // if let Some(limiter) = self.info.has_security {
+        //     check_rate_limit(self.info.weight, limiter, self.info.get_rate_limit_timeout()).await?;
+        // }
+        // let client = HTTP_CLIENT.get().ok_or(YueError::new("客户端没有初始化"))?;
+        // let mut request = self
+        //     .request_builder
+        //     .compose_request(client, self.info, self.param.clone(), self.method.clone())?;
+        // if self.method == Method::POST || self.method == Method::PUT {
+        //     if let Some(body) = self.body {
+        //         request = request.json(body);
+        //     }
+        // }
+        // debug!("execute request: {:?}", request);
+        // let res = request.send().await?;
+        // let resp_cache = ClonableResponseCache::from_response(res).await;
+        // let result = self.response_handler.handle_response(resp_cache.clone(), self.info.rate_limit).await;
+        // match result {
+        //     Ok(val) => Ok(val),
+        //     Err(e) => {
+        //         let body_str = String::from_utf8_lossy(&resp_cache.body).to_string();
+        //         error!("HTTP response error, status: {}, body: {}", resp_cache.status, body_str);
+        //         Err(e)
+        //     }
+        // }
+        todo!()
     }
 
     pub async fn execute(&self) -> Result<U, YueError> {
