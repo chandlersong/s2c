@@ -1,5 +1,5 @@
 use crate::errors::YueError;
-use crate::models::{DefaultRateLimiter, RequestInfo};
+use crate::models::{DefaultRateLimiter, HostInfo, RequestInfo};
 use governor::{
     Jitter, Quota, RateLimiter,
     clock::DefaultClock,
@@ -18,66 +18,35 @@ use tokio::time::{interval, sleep};
 const SAFETY_MARGIN: u32 = 200; // 留 200 weight 作为缓冲，防突发
 const REFRESH_INTERVAL_SECS: u64 = 6 * 3600; // 每6小时刷新一次 quota
 const MAX_RETRIES: u32 = 6;
-const BASE_DELAY_MS: u64 = 1000; // 指数退避起始 1s
+const BASE_DELAY_MS: u64 = 200; // 指数退避起始 1s
 
 #[derive(Clone)]
 pub struct BinanceRestfulClient {
     client: Client,
-    limiter: Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock, NoOpMiddleware>>,
-    weight_limit: Arc<std::sync::atomic::AtomicU32>, // 原子更新 weight_limit
 }
 
 impl BinanceRestfulClient {
     /// 创建 limiter，立即从 exchangeInfo 获取限额并启动后台刷新任务
     pub async fn new() -> Arc<Self> {
         let client = Client::new();
-        let weight_limit = Arc::new(std::sync::atomic::AtomicU32::new(0));
 
         // 初始 quota（用一个合理默认值，马上会被刷新覆盖）
         let initial_quota = Quota::per_minute(NonZeroU32::new(1000).unwrap()).allow_burst(NonZeroU32::new(300).unwrap());
 
-        let limiter = Arc::new(RateLimiter::direct(initial_quota));
-
-        let this = Arc::new(Self {
-            client,
-            limiter,
-            weight_limit: weight_limit.clone(),
-        });
+        let this = Arc::new(Self { client });
         this
-    }
-
-    pub async fn check_rate_limit(weight: u32, limiter: &DefaultRateLimiter, timeout_secs: u64) -> Result<(), YueError> {
-        // 超时时间：timeout_secs 秒
-        let timeout_duration = Duration::from_secs(timeout_secs);
-        let weight = match NonZeroU32::new(weight) {
-            Some(w) => w,
-            None => return Err(YueError::new("权重必须为非零")),
-        };
-        let jitter = Jitter::up_to(Duration::from_millis(500));
-        // 优雅处理超时和 governor 错误
-        match tokio::time::timeout(timeout_duration, limiter.until_n_ready_with_jitter(weight, jitter)).await {
-            Err(e) => {
-                error!("获取令牌超时, timeout 时间:{}秒, 错误:{}", timeout_secs, e);
-                Err(YueError::new("限流超时"))
-            }
-            Ok(res) => match res {
-                Ok(_) => Ok(()),
-                Err(e) => {
-                    error!("限流器内部错误: {:?}", e);
-                    Err(YueError::new(&format!("限流器内部错误: {:?}", e)))
-                }
-            },
-        }
     }
 
     /// 发送请求（带限流、重试、weight 监控）
     pub async fn request(&self, builder: RequestBuilder, request_info: &RequestInfo) -> Result<Response, YueError> {
         let mut attempt = 0u32;
-
+        // 放在循环外，是为了重试。如果放在循环里，那么重试去请求令牌桶。其他新请求就会去请求令牌桶。会产生令牌过多的问题。
+        // 比如说现在x-mbx-used-weight-1m是900，剩余100，如果重试放在循环里，有a线程在外面等着。
+        // 然后突然释放。
+        let host = request_info.host.clone();
+        host.acquire_limit_token(request_info.weight, request_info.request_timeout_mill_secs)
+            .await?;
         loop {
-            // 1. governor 本地限流（消耗 endpoint_weight）
-            Self::check_rate_limit(request_info.weight, &self.limiter, request_info.get_rate_limit_timeout()).await?; // 30s 超时
-
             // 2. 克隆并发送（因为 send 后 builder 不可重用）
             let req = builder.try_clone().ok_or_else(|| YueError::new("无法克隆请求构建器"))?;
             let result = req.send().await;
@@ -114,12 +83,12 @@ impl BinanceRestfulClient {
                     // 读取 used-weight 并保守等待（防超限）
                     if let Some(used_str) = resp.headers().get("x-mbx-used-weight-1m") {
                         if let Ok(used) = used_str.to_str().unwrap_or("0").parse::<u32>() {
-                            let current_limit = self.weight_limit.load(std::sync::atomic::Ordering::Relaxed);
+                            let current_limit = host.get_max_limit();
                             if current_limit > 0 && used > current_limit.saturating_sub(SAFETY_MARGIN / 2) {
                                 // let now = chrono::Utc::now();
                                 // let wait_secs = 60 - now.second() as u64 + 5; // 等到下一分钟 + 5s 缓冲
                                 println!("[BinanceLimiter] 高使用率 {} / {}，强制等待 {}s 重置窗口", used, current_limit, 1);
-                                sleep(Duration::from_secs(1)).await;
+                                sleep(Duration::from_secs(500)).await;
                             }
                         }
                     }

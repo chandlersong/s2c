@@ -7,7 +7,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::time::timeout;
@@ -78,6 +78,7 @@ pub struct HostInfo {
     host: String,
     max_limit: Arc<AtomicU32>,
     limiter: ShareRateLimiter,
+    block: Arc<AtomicU8>, //0表示ok。1表示应该停止
 }
 
 pub fn create_share_rate_limiter(bucket_size: u32) -> ShareRateLimiter {
@@ -107,6 +108,7 @@ impl HostInfo {
             host: host.as_ref().to_string(),
             max_limit: Arc::new(AtomicU32::new(max_limit)),
             limiter,
+            block: Arc::new(AtomicU8::new(0)),
         }
     }
 
@@ -118,6 +120,18 @@ impl HostInfo {
         self.max_limit.store(v, Ordering::SeqCst);
     }
 
+    pub fn block_all_request(&self) {
+        self.block.store(1, Ordering::SeqCst);
+    }
+
+    pub fn allow_all_request(&self) {
+        self.block.store(0, Ordering::SeqCst);
+    }
+
+    pub fn is_allow_all_request(&self) -> bool {
+        self.block.load(Ordering::SeqCst) == 0
+    }
+
     pub fn get_max_limit(&self) -> u32 {
         self.max_limit.load(Ordering::SeqCst)
     }
@@ -127,13 +141,25 @@ impl HostInfo {
         *guard = Arc::new(limiter);
     }
 
-    pub async fn acquire_limit_token(&self, weight: u32, timeout_secs: u64) -> Result<(), crate::errors::YueError> {
-        let timeout_duration = Duration::from_secs(timeout_secs);
-
+    ///
+    /// 获取令牌的流程。
+    ///
+    /// 1. 判断weight是否合法。非零。
+    /// 2. 获令牌，获取成功就返回。
+    /// 3. 如果没有获取成功，就等待，直到获取成功或者超时。
+    /// 4. 最后如果block为0.那么可以获得令牌，如果为1.则拒绝获得令牌。
+    ///
+    pub async fn acquire_limit_token(&self, weight: u32, timeout_secs: u32) -> Result<(), crate::errors::YueError> {
+        // 1. 判断 weight 是否为非零
         let weight_nz = match NonZeroU32::new(weight) {
             Some(w) => w,
             None => return Err(crate::errors::YueError::new("权重必须为非零")),
         };
+
+        // 2. 如果当前 host 被阻塞，直接拒绝
+        if self.block.load(Ordering::SeqCst) != 0 {
+            return Err(crate::errors::YueError::new("Host 被阻塞，拒绝请求"));
+        }
 
         // clone an Arc handle to the limiter so we don't hold the RwLock across .await
         let limiter_cloned = {
@@ -141,12 +167,38 @@ impl HostInfo {
             guard.clone()
         };
 
+        // 3. 先尝试非阻塞获取（快速失败/成功）
+        // 使用带零超时的 until_n_ready_with_jitter 来确保即时获取会消费令牌，
+        // 避免依赖 governor 的 check_n 语义（有些版本可能只是检查不消费）。
         let jitter = Jitter::up_to(Duration::from_millis(500));
+        let immediate_try = timeout(Duration::from_millis(0), limiter_cloned.until_n_ready_with_jitter(weight_nz, jitter)).await;
+        if let Ok(Ok(_)) = immediate_try {
+            // 再次确认在返回前 host 未被设置为 block
+            if self.block.load(Ordering::SeqCst) != 0 {
+                return Err(crate::errors::YueError::new("Host 被阻塞，拒绝请求"));
+            }
+            return Ok(());
+        }
 
-        match timeout(timeout_duration, limiter_cloned.until_n_ready_with_jitter(weight_nz, jitter)).await {
-            Err(e) => Err(crate::errors::YueError::new(&format!("限流超时: {}", e))),
+        // 4. 若未立即获取成功，则等待直到超时
+        let timeout_duration = Duration::from_secs(timeout_secs as u64);
+
+        match timeout(
+            timeout_duration,
+            limiter_cloned.until_n_ready_with_jitter(weight_nz, Jitter::up_to(Duration::from_millis(500))),
+        )
+        .await
+        {
+            Err(_) => Err(crate::errors::YueError::new("限流超时")),
             Ok(res) => match res {
-                Ok(_) => Ok(()),
+                Ok(_) => {
+                    // 成功获取令牌后，再次检查 block 标志
+                    if self.block.load(Ordering::SeqCst) != 0 {
+                        Err(crate::errors::YueError::new("Host 被阻塞，拒绝请求"))
+                    } else {
+                        Ok(())
+                    }
+                }
                 Err(e) => Err(crate::errors::YueError::new(&format!("限流器内部错误: {:?}", e))),
             },
         }
@@ -162,7 +214,7 @@ pub struct RequestInfo {
     pub has_security: bool,
     pub weight: u32,
     pub request_timeout_mill_secs: u32,
-    rate_limit_timeout_secs: u64,
+    rate_limit_timeout_secs: u32,
 }
 
 impl RequestInfo {
@@ -173,7 +225,7 @@ impl RequestInfo {
         has_security: bool,
         weight: u32,
         request_timeout_mill_secs: Option<u32>,
-        rate_limit_timeout_secs: Option<u64>,
+        rate_limit_timeout_secs: Option<u32>,
     ) -> Result<Self, url::ParseError> {
         let inner = Url::parse(full_url.as_ref())?;
         Ok(Self {
@@ -193,7 +245,7 @@ impl RequestInfo {
         has_security: bool,
         weight: u32,
         request_timeout_mill_secs: Option<u32>,
-        rate_limit_timeout_secs: Option<u64>,
+        rate_limit_timeout_secs: Option<u32>,
     ) -> Result<Self, url::ParseError> {
         let base = host.host_as_str();
         let path = path.as_ref();
@@ -226,7 +278,7 @@ impl RequestInfo {
         self.inner.as_str()
     }
 
-    pub fn get_rate_limit_timeout(&self) -> u64 {
+    pub fn get_rate_limit_timeout(&self) -> u32 {
         self.rate_limit_timeout_secs
     }
 }
@@ -345,6 +397,14 @@ mod tests {
         assert!(now_ms - ts < 60 * 60 * 1000, "差距应小于 1 小时");
     }
 
+    /// 测试 HostInfo 的基本行为与限流令牌获取（基础场景）
+    ///
+    /// 目的：验证 HostInfo 的字段访问与基础限流获取行为。
+    /// 场景：
+    /// - 使用每分钟 100 个令牌的 quota
+    /// - 验证 host 字符串与 max_limit 的读写行为
+    /// - 初次调用 acquire_limit_token(1, 2) 应成功（令牌充足）
+    /// 期望：首次获取令牌返回 Ok
     #[tokio::test]
     async fn test_hostinfo_basic_and_acquire() {
         let quota = Quota::per_minute(NonZeroU32::new(100).unwrap());
@@ -363,6 +423,15 @@ mod tests {
         assert!(res.is_ok(), "首次获取令牌应成功");
     }
 
+    /// 测试限流超时行为
+    ///
+    /// 目的：验证在严格配额下，第二次快速请求会因为令牌未补满而超时失败。
+    /// 场景：
+    /// - 使用每分钟 1 个令牌的 quota（非常低的配额）
+    /// - 第一次调用 acquire_limit_token(1, 1) 应成功并消耗该令牌
+    /// - 第二次在短超时时间内再次调用应返回 Err（超时或拒绝）
+    /// - 当 weight 为 0 时，应当立即返回错误
+    /// 期望：第一次 Ok，第二次 Err，weight=0 Err
     #[tokio::test]
     async fn test_acquire_timeout_behavior() {
         let quota = Quota::per_minute(NonZeroU32::new(1).unwrap());
