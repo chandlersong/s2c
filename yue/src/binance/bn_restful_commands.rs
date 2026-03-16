@@ -12,7 +12,6 @@ use std::clone::Clone;
 
 use std::num::NonZeroU32;
 use std::sync::{Arc, LazyLock, OnceLock};
-use url::Host;
 // --- API and WebSocket Base URLs ---
 // The active URL is determined by the Cargo features enabled at compile time.
 // Priority: test > binance-testnet > production (default)

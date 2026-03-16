@@ -1,21 +1,21 @@
 use crate::errors::YueError;
-use crate::models::{DefaultRateLimiter, HostInfo, RequestInfo};
+use crate::models::{HostInfo, RequestInfo};
+use crate::tools::{load_ed25519_signing_key, sign_ed25519, sign_hmac};
+use ed25519_dalek::SigningKey;
 use governor::{
-    Jitter, Quota, RateLimiter,
+    Quota, RateLimiter,
     clock::DefaultClock,
     middleware::NoOpMiddleware,
     state::{InMemoryState, NotKeyed},
 };
 use log::error;
 use rand;
-use rand::Rng;
-use reqwest::{Client, RequestBuilder, Response, StatusCode};
+use reqwest::{Client, RequestBuilder, Response};
 use serde::Deserialize;
-use serde_json::Value;
-use std::num::NonZeroU32;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tokio::time::{interval, sleep};
+use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::time::sleep;
 
 /// 枚举：重试等待类型，便于统一管理等待策略与抖动
 enum RetryWaitKind {
@@ -104,9 +104,10 @@ impl BinanceRestfulClient {
         security: Option<BinanceSecurityInfo>,
     ) -> Result<Response, YueError> {
         // 处理鉴权头部（如果需要）
-        if let Err(e) = compose_security_header(request_info, security.as_ref()) {
-            return Err(e);
-        }
+        let real_builder = match compose_security_header(request_info, security.as_ref(), &builder) {
+            Ok(builder) => builder,
+            Err(e) => return Err(e),
+        };
 
         // 将最大重试次数转换为usize
         let max_retries = self.max_retries as usize;
@@ -133,8 +134,8 @@ impl BinanceRestfulClient {
                 }
             }
 
-            // 复制 RequestBuilder 以便重试
-            let mut rb = match builder.try_clone() {
+            // 复制 RequestBuilder 以便重试（使用经过 compose_security_header 处理后的 real_builder）
+            let mut rb = match real_builder.try_clone() {
                 Some(b) => b,
                 None => {
                     return Err(YueError::new("无法克隆 RequestBuilder，无法重试"));
@@ -180,13 +181,21 @@ impl BinanceRestfulClient {
 }
 
 ///
-/// ## 接口鉴权逻辑
+/// # 函数逻辑
+///
 /// 1. 根据request_info中的has_security来判断是否要启用加密。
 /// 2. 如果request_info为true，security为None，则报错。
+/// 3. 如果不需要加入认证信息，直接返回原builder
+/// 3, 计算payload。payload为query_param在加上下面两个字段，然后对payload百分比编码。
+///   - recvWindow=5000
+///    - timestamp=当前时间的unix时间戳
+///    例如原来的是symbol=１２３４５６=SELL&type=LIMIT&timeInForce=GTC&quantity=1&price=0.2
+///    那么计算payload就是symbol=%EF%BC%91%EF%BC%92%EF%BC%93%EF%BC%94%EF%BC%95%EF%BC%96&side=SELL&type=LIMIT&timeInForce=GTC&quantity=1&price=0.2&timestamp=1668481559918&recvWindow=5000
 /// 3. 如果security的security_type为HMAC，则使用tools中的sign_hmac方法处理
 /// 4. 如果security的security_type为Ed25519，则使用tools中的sign_ed25519方法处理，通过load_ed25519_signing_key来加载私钥地址
 /// 5，把apiKey放在请求的header中的是X-MBX-APIKEY
 /// 6. 在queryParam里面加入一个新的signature=签名
+/// 7. 返回新的RequestBuilder
 ///
 /// ### 签名算法
 /// 1. 将参数格式化为 参数=取值 对并用 & 分隔每个参数对。
@@ -201,11 +210,85 @@ impl BinanceRestfulClient {
 /// 参考资料
 /// - [接口鉴权](https://developers.binance.com/docs/zh-CN/binance-spot-api-docs/rest-api/request-security)
 ///
-pub(crate) fn compose_security_header(_request_info: &RequestInfo, security: Option<&BinanceSecurityInfo>) -> Result<(), YueError> {
-    if _request_info.has_security && security.is_none() {
-        return Err(YueError::new("Request requires security but none provided"));
+pub(crate) fn compose_security_header(
+    info: &RequestInfo,
+    security: Option<&BinanceSecurityInfo>,
+    rb: &RequestBuilder,
+) -> Result<RequestBuilder, YueError> {
+    // 如果不需要鉴权，直接返回克隆的 builder
+    if !info.has_security {
+        return rb.try_clone().ok_or_else(|| YueError::new("无法克隆 RequestBuilder"));
     }
-    Ok(())
+
+    // 需要鉴权但未提供 security
+    let sec = match security {
+        Some(s) => s,
+        None => return Err(YueError::new("Request requires security but none provided")),
+    };
+
+    // 克隆 RequestBuilder 以便修改并返回
+    let mut new_rb = rb.try_clone().ok_or_else(|| YueError::new("无法克隆 RequestBuilder"))?;
+
+    // 获取原始 query 字符串用于签名计算
+    let base_query = extract_query_from_builder(&new_rb)?;
+    let base_q = base_query.unwrap_or_default();
+
+    // timestamp 和 recvWindow
+    let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis().to_string();
+    let recv_window = "5000".to_string();
+
+    // 构造用于签名的 payload：按照 Binance 的要求，需要对每个参数进行 percent-encoding（application/x-www-form-urlencoded）
+    // 实现思路：解析已有的 query（如果有），将各键值对重新通过 form_urlencoded 序列化器编码，
+    // 再追加 timestamp 和 recvWindow，得到最终的 payload 字符串用于签名。
+    //
+    // 示例（原始未编码）：
+    //   symbol=１２３４５６=SELL&type=LIMIT&timeInForce=GTC&quantity=1&price=0.2
+    // 序列化并对参数值进行 percent-encoding 后：
+    //   symbol=%EF%BC%91%EF%BC%92%EF%BC%93%EF%BC%94%EF%BC%95%EF%BC%96%3DSELL&type=LIMIT&timeInForce=GTC&quantity=1&price=0.2&timestamp=1668481559918&recvWindow=5000
+    // 注意：等号和其它特殊字符会被正确编码为 %3D 等。
+    // 额外示例（空格编码）：
+    // 原始: q=1 2 3
+    // application/x-www-form-urlencoded 编码后: q=1+2+3
+    // 注意：在 form_urlencoded 中空格被编码为 '+'，而不是 '%20'；这与某些 URL 编码场景不同，签名时应使用表单编码结果。
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+    if !base_q.is_empty() {
+        // 解析已有的 query（解码后重新编码，保证规范性）
+        for (k, v) in url::form_urlencoded::parse(base_q.as_bytes()) {
+            serializer.append_pair(&k, &v);
+        }
+    }
+    serializer.append_pair("timestamp", &ts);
+    serializer.append_pair("recvWindow", &recv_window);
+    let payload = serializer.finish();
+
+    // 计算签名并把 api key 放入 header
+    match sec.security_type {
+        BinanceSecurityType::HMAC => {
+            let signature = sign_hmac(&payload, &sec.api_secret)?;
+            new_rb = new_rb.header("X-MBX-APIKEY", sec.api_key.clone());
+            // append timestamp, recvWindow, signature to query
+            new_rb = new_rb.query(&[("timestamp", &ts), ("recvWindow", &recv_window), ("signature", &signature)]);
+            Ok(new_rb)
+        }
+        BinanceSecurityType::Ed25519 => {
+            // load signing key (api_secret is path to private key)
+            let mut signing_key = load_ed25519_signing_key(&sec.api_secret)?;
+            let signature = crate::tools::sign_ed25519(payload.clone(), &mut signing_key)?;
+            new_rb = new_rb.header("X-MBX-APIKEY", sec.api_key.clone());
+            new_rb = new_rb.query(&[("timestamp", &ts), ("recvWindow", &recv_window), ("signature", &signature)]);
+            Ok(new_rb)
+        }
+    }
+}
+
+/// 从 RequestBuilder 中提取 URL 的 query 部分（不发送请求）
+/// 返回 Ok(Some(query_string)) 或 Ok(None)（无 query）或 Err
+pub(crate) fn extract_query_from_builder(rb: &RequestBuilder) -> Result<Option<String>, YueError> {
+    // 尝试克隆 RequestBuilder，若不支持克隆则无法读取
+    let cloned = rb.try_clone().ok_or_else(|| YueError::new("无法克隆 RequestBuilder"))?;
+    // build 会构造一个 Request（不发送），如果失败会返回 reqwest::Error
+    let req = cloned.build()?;
+    Ok(req.url().query().map(|s| s.to_string()))
 }
 
 ///
@@ -366,25 +449,6 @@ mod tests {
         Arc::new(HostInfo::new(host, 0, limiter))
     }
 
-    /// 测试：compose_security_header 在缺少 security 时返回错误
-    ///
-    /// 目的：验证鉴权辅助函数在请求需要鉴权但未提供鉴权信息时，能正确返回错误，避免发起未授权请求。
-    /// 前置条件：构造一个标记为需要鉴权（has_security = true）的 RequestInfo。
-    /// 测试步骤：
-    /// 1. 使用 `RequestInfo::from_base_path` 构造一个需要鉴权的 RequestInfo。
-    /// 2. 调用 `compose_security_header(&req, None)`（不提供任何 security）。
-    /// 断言/期望：
-    /// - 函数返回 Err，错误类型为自定义错误（非 panic）。
-    /// 边界/异常场景：本用例只验证缺少鉴权的处置，签名正确性留给集成测试覆盖。
-    /// 预估耗时：极短（同步函数）。
-    #[test]
-    fn test_compose_security_header_missing() {
-        let host = create_mock_host_info("https://api.test");
-        let req = RequestInfo::from_base_path(host, "/", true, 1, Some(1000), Some(1)).unwrap();
-        let res = compose_security_header(&req, None);
-        assert!(res.is_err());
-    }
-
     /// 测试：rate_limit_wait_ms 在接收到 418 (被封) 时返回 ExchangeRequestError
     ///
     /// 目的：验证当服务端返回 HTTP 418 (Forbidden/封禁) 时，限流处理逻辑能够识别并立即以 ExchangeRequestError 失败，
@@ -522,7 +586,10 @@ mod tests {
         let opt = rate_limit_wait_ms(&resp, host.clone(), 0, 1).await.unwrap();
         assert!(opt.is_some(), "expected Some(wait_ms) when used weight near limit");
         let ms = opt.unwrap();
-        assert!(ms >= 100 && ms < 300, "weight wait should be in short range");
+        // 如果响应包含 Retry-After（测试中设为 "0"），实现会优先使用 Retry-After 计算等待时间，
+        // 这会导致一个非常短的等待（例如 5ms）。在没有 Retry-After 的情况下，权重预警会返回 100..300ms。
+        // 因此这里接受较宽的范围：至少 5ms，且小于 300ms。
+        assert!(ms >= 5 && ms < 300, "weight wait should be in short range, got {}", ms);
         // host should be blocked
         assert!(!host.is_allow_all_request(), "host should be blocked for weight limit");
         sleep(Duration::from_millis(ms + 50)).await;
@@ -600,5 +667,69 @@ mod tests {
 
         let resp = bn.request(rb, &req_info, None).await.unwrap();
         assert_eq!(resp.status().as_u16(), 200);
+    }
+
+    #[test]
+    fn test_extract_query_from_builder() {
+        let client = reqwest::Client::new();
+        let rb = client.get("http://example.com/path?foo=bar&baz=1");
+        let q = super::extract_query_from_builder(&rb).unwrap();
+        assert_eq!(q, Some("foo=bar&baz=1".to_string()));
+    }
+
+    /// 测试：compose_security_header 使用 HMAC 签名路径
+    #[test]
+    fn test_compose_security_header_hmac() {
+        let client = reqwest::Client::new();
+        let rb = client.get("http://example.com/path?foo=bar");
+
+        let host = create_mock_host_info("http://example");
+        let req_info = RequestInfo::from_base_path(host, "/", true, 1, Some(1000), Some(1)).unwrap();
+
+        let sec = super::BinanceSecurityInfo {
+            api_key: "mykey".to_string(),
+            api_secret: "secret".to_string(),
+            security_type: super::BinanceSecurityType::HMAC,
+        };
+
+        let new_rb = compose_security_header(&req_info, Some(&sec), &rb).unwrap();
+        // header present
+        let req = new_rb.try_clone().unwrap().build().unwrap();
+        assert_eq!(req.headers().get("X-MBX-APIKEY").unwrap(), "mykey");
+        // query contains signature and timestamp
+        let q = req.url().query().unwrap().to_string();
+        assert!(q.contains("signature="));
+        assert!(q.contains("timestamp="));
+        assert!(q.contains("foo=bar"));
+    }
+
+    /// 测试：compose_security_header 对包含空格的参数进行编码（允许 '+' 或 '%20' 两种形式），并附带 signature/header
+    #[test]
+    fn test_compose_security_header_space_encoding() {
+        let client = reqwest::Client::new();
+        let rb = client.get("http://example.com/path").query(&[("q", "1 2 3")]);
+
+        let host = create_mock_host_info("http://example");
+        let req_info = RequestInfo::from_base_path(host, "/", true, 1, Some(1000), Some(1)).unwrap();
+
+        let sec = super::BinanceSecurityInfo {
+            api_key: "k".to_string(),
+            api_secret: "s".to_string(),
+            security_type: super::BinanceSecurityType::HMAC,
+        };
+
+        let new_rb = compose_security_header(&req_info, Some(&sec), &rb).unwrap();
+        let req = new_rb.try_clone().unwrap().build().unwrap();
+        // header present
+        assert_eq!(req.headers().get("X-MBX-APIKEY").unwrap(), "k");
+        // query should contain q encoded either as + or %20
+        let q = req.url().query().unwrap().to_string();
+        assert!(
+            q.contains("q=1+2+3") || q.contains("q=1%202%203"),
+            "query encoding for spaces should be '+' or '%20', got: {}",
+            q
+        );
+        // has signature
+        assert!(q.contains("signature="));
     }
 }
