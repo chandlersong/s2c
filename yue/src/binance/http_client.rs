@@ -112,71 +112,76 @@ impl BinanceRestfulClient {
         // 将最大重试次数转换为usize
         let max_retries = self.max_retries as usize;
 
-        // 尝试多次（包含第一次）
-        for attempt in 0..=max_retries {
-            // 1. 先获取令牌
+        // 我们将两类重试（acquire token 和 send request）分开实现，但共享同一个重试预算。
+        // attempts_made 表示已经发生的失败尝试次数（用于判断是否超出重试预算），初始为 0。
+        let mut attempts_made: usize = 0;
+
+        // 1) 获取令牌阶段（失败会消耗共享重试预算）
+        loop {
             match request_info
                 .host
                 .acquire_limit_token(request_info.weight, request_info.get_rate_limit_timeout())
                 .await
             {
-                Ok(_) => { /* got token */ }
+                Ok(_) => break, // 获取成功，进入下一阶段
                 Err(e) => {
-                    error!("Acquire token failed: {:?}, attempt {}", e, attempt);
-                    if attempt < max_retries {
-                        // 随机短等待后重试
-                        let wait_ms = retry_wait_ms(RetryWaitKind::AcquireToken, attempt);
-                        sleep(Duration::from_millis(wait_ms)).await;
-                        continue;
-                    } else {
+                    error!("Acquire token failed: {:?}, attempts_made {}", e, attempts_made);
+                    if attempts_made >= max_retries {
                         return Err(e);
                     }
+                    // 使用 per-kind 的退避策略，但计数使用共享 attempts_made
+                    let wait_ms = retry_wait_ms(RetryWaitKind::AcquireToken, attempts_made);
+                    attempts_made = attempts_made.saturating_add(1);
+                    sleep(Duration::from_millis(wait_ms)).await;
+                    continue;
                 }
             }
+        }
 
+        // 2) 发送请求阶段（失败或限流会消耗共享重试预算）
+        loop {
             // 复制 RequestBuilder 以便重试（使用经过 compose_security_header 处理后的 real_builder）
             let mut rb = match real_builder.try_clone() {
                 Some(b) => b,
-                None => {
-                    return Err(YueError::new("无法克隆 RequestBuilder，无法重试"));
-                }
+                None => return Err(YueError::new("无法克隆 RequestBuilder，无法重试")),
             };
 
             // 设置请求超时
             rb = rb.timeout(Duration::from_millis(request_info.request_timeout_mill_secs as u64));
 
             // 发送请求
-            let send_res = rb.send().await;
-
-            match send_res {
+            match rb.send().await {
                 Err(e) => {
-                    error!("HTTP request error: {:?}, attempt {}", e, attempt);
-                    if attempt < max_retries {
-                        // 退避等待后重试
-                        let wait_ms = retry_wait_ms(RetryWaitKind::SendError, attempt);
-                        sleep(Duration::from_millis(wait_ms)).await;
-                        continue;
-                    } else {
+                    error!("HTTP request error: {:?}, attempts_made {}", e, attempts_made);
+                    if attempts_made >= max_retries {
                         return Err(YueError::RequestError(e));
                     }
+                    let wait_ms = retry_wait_ms(RetryWaitKind::SendError, attempts_made);
+                    attempts_made = attempts_made.saturating_add(1);
+                    sleep(Duration::from_millis(wait_ms)).await;
+                    continue;
                 }
                 Ok(resp) => {
-                    // 统一处理 418/429：由 rate_limit_wait_ms 决定是否需要等待或返回错误
-                    match rate_limit_wait_ms(&resp, request_info.host.clone(), attempt, max_retries).await {
+                    // 统一处理 418/429/weight：由 rate_limit_wait_ms 决定是否需要等待或返回错误
+                    match rate_limit_wait_ms(&resp, request_info.host.clone(), attempts_made, max_retries).await {
                         Err(e) => return Err(e),
                         Ok(Some(wait_ms)) => {
-                            // rate_limit_wait_ms 已安排后台任务放行 host，调用方只需等待并重试
+                            // 如果需要限流等待，等待并且计入一次失败尝试，然后重试发送
+                            if attempts_made >= max_retries {
+                                return Err(YueError::new("exhausted retries due to rate limit"));
+                            }
+                            attempts_made = attempts_made.saturating_add(1);
                             sleep(Duration::from_millis(wait_ms)).await;
                             continue;
                         }
-                        Ok(None) => { /* 无需等待，继续处理 */ }
+                        Ok(None) => {
+                            // 成功返回
+                            return Ok(resp);
+                        }
                     }
-                    return Ok(resp);
                 }
             }
         }
-
-        Err(YueError::new("unreachable: exhausted retries"))
     }
 }
 
@@ -693,5 +698,51 @@ mod tests {
         );
         // has signature
         assert!(q.contains("signature="));
+    }
+
+    /// 测试：共享重试预算 —— 首次获取令牌失败一次（消耗一次重试），随后发送请求触发限流并消耗剩余重试预算，最终失败。
+    ///
+    /// 目的：验证 acquire token 与 send request 两个阶段各自独立，但共享同一重试预算（self.max_retries）。
+    /// 前置条件：
+    /// - 设置客户端 max_retries = 2；
+    /// - 初始将 host block（使得第一次 acquire 失败并消耗一次重试）；
+    /// - WireMock 配置对同一路径返回 429（Retry-After=0），模拟 send 阶段被限流。
+    /// 测试步骤：
+    /// 1. host.block_all_request()；
+    /// 2. 在短暂延时后允许 host（host.allow_all_request()），使得 acquire 在消耗一次后成功；
+    /// 3. 发起 request：第一次 send 收到 429（消耗第二次重试），第二次 send 仍为 429，此时重试预算耗尽，request 返回 Err。
+    /// 断言/期望：
+    /// - request 返回 Err；错误信息应指示重试耗尽或限流导致的失败。
+    /// 预估耗时：通常小于 500ms（含安全 margin）。
+    #[tokio::test]
+    async fn test_shared_retry_budget_acquire_then_send_exhausted() {
+        let mock_server = wiremock::MockServer::start().await;
+
+        // mock server always returns 429 with Retry-After: 0
+        Mock::given(wiremock::matchers::any())
+            .respond_with(ResponseTemplate::new(429).append_header("Retry-After", "0").set_body_string("too many"))
+            .mount(&mock_server)
+            .await;
+
+        let client = Arc::new(reqwest::Client::new());
+        let bn = BinanceRestfulClient::new_with_retries(client.clone(), 2).await;
+
+        let host = create_mock_host_info(&mock_server.uri());
+        // 初始阻塞，使得第一次 acquire 会失败
+        host.block_all_request();
+
+        let req_info = RequestInfo::from_base_path(host.clone(), "/test", false, 1, Some(1000), Some(1)).unwrap();
+        let rb = client.get(req_info.as_ref().as_str());
+
+        // 在很短的延时后放行 host，让 acquire 在消耗一次后成功
+        let host_for_task = host.clone();
+        tokio::spawn(async move {
+            sleep(Duration::from_millis(20)).await;
+            host_for_task.allow_all_request();
+        });
+
+        // 执行 request：应最终失败（重试预算被耗尽）
+        let res = bn.request(rb, &req_info, None).await;
+        assert!(res.is_err(), "expected request to fail due to exhausted shared retry budget");
     }
 }
