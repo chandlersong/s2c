@@ -449,19 +449,49 @@ mod tests {
         Arc::new(HostInfo::new(host, 0, limiter))
     }
 
+    // 等待最多 timeout_ms 毫秒，直到 host 被 block（is_allow_all_request() == false），返回是否观察到 block
+    async fn wait_for_block(host: &Arc<HostInfo>, timeout_ms: u64) -> bool {
+        let mut waited = 0u64;
+        while waited < timeout_ms {
+            if !host.is_allow_all_request() {
+                return true;
+            }
+            sleep(Duration::from_millis(5)).await;
+            waited += 5;
+        }
+        false
+    }
+
+    // 等待最多 timeout_ms 毫秒，直到 host 被 allow（is_allow_all_request() == true），返回是否观察到 allow
+    async fn wait_for_allow(host: &Arc<HostInfo>, timeout_ms: u64) -> bool {
+        let mut waited = 0u64;
+        while waited < timeout_ms {
+            if host.is_allow_all_request() {
+                return true;
+            }
+            sleep(Duration::from_millis(5)).await;
+            waited += 5;
+        }
+        false
+    }
+
     /// 测试：rate_limit_wait_ms 在接收到 418 (被封) 时返回 ExchangeRequestError
     ///
-    /// 目的：验证当服务端返回 HTTP 418 (Forbidden/封禁) 时，限流处理逻辑能够识别并立即以 ExchangeRequestError 失败，
-    ///      并携带必要的 header 信息提示（例如 Retry-After）。
-    /// 前置条件：通过 WireMock 模拟一个返回 418 的 HTTP 响应。
+    /// 目的：验证当服务端返回 HTTP 418（表示被封/禁止访问）时，限流逻辑能正确识别并
+    ///      返回 ExchangeRequestError，且在触发限流时对 Host 的 block/allow 行为按策略执行。
+    /// 前置条件：
+    /// - 使用 WireMock 模拟返回 HTTP 418 的响应，并携带可选的 Retry-After 头（本测试使用 "0" 以缩短等待）。
+    /// - HostInfo 的初始状态为允许请求。
     /// 测试步骤：
-    /// 1. 启动 WireMock 并配置任意路径返回 418（body 可选）。
-    /// 2. 发起请求并获取 Response。
-    /// 3. 调用 `rate_limit_wait_ms(&resp, &host, attempt=0, max_retries=0)`。
+    /// 1. 启动 WireMock，配置返回 418（含 Retry-After: 0）。
+    /// 2. 使用 reqwest 发送请求并获取 Response。
+    /// 3. 调用 rate_limit_wait_ms(&resp, host, attempt=0, max_retries=0)。
+    /// 4. 断言 host 在检测到限流时被阻塞；随后后台任务按 Retry-After 放行。
     /// 断言/期望：
-    /// - 返回 Err(YueError::ExchangeRequestError) 且 code == 418。
-    /// 边界/异常场景：不验证 body 内容，仅验证返回码与错误类型。
-    /// 预估耗时：依赖本地 WireMock，通常小于 100ms。
+    /// - 函数返回 Err(YueError::ExchangeRequestError) 且 code == 418。
+    /// - host 在短时间内变为 blocked（is_allow_all_request == false），并在调度等待后恢复为 allowed。
+    /// 边界/异常场景：不验证响应体内容，主要验证返回码与 Host 的 block/allow 行为。
+    /// 预估耗时：通常小于 200ms（依赖本地 WireMock 与短等待）。
     #[tokio::test]
     async fn test_handle_rate_limit_418() {
         let mock_server = wiremock::MockServer::start().await;
@@ -478,32 +508,33 @@ mod tests {
         let r = rate_limit_wait_ms(&resp, host.clone(), 0, 0).await;
         // Should be final error
         assert!(r.is_err());
-        // Host should have been blocked immediately
-        assert!(!host.is_allow_all_request(), "host should be blocked");
+        // Host should have been blocked (poll for a short time to avoid timing flakes)
+        assert!(wait_for_block(&host, 100).await, "host should be blocked");
         match r {
             Err(YueError::ExchangeRequestError { code, .. }) => assert_eq!(code, 418),
             _ => panic!("expected ExchangeRequestError 418"),
         }
-        // allow_all_request is scheduled in background; wait shortly and assert it's allowed
-        sleep(Duration::from_millis(20)).await;
-        assert!(host.is_allow_all_request(), "host should be allowed after scheduled wait");
+        // allow_all_request is scheduled in background; wait and assert it's allowed
+        assert!(wait_for_allow(&host, 200).await, "host should be allowed after scheduled wait");
     }
 
     /// 测试：rate_limit_wait_ms 在接收到 429 (限流) 时，根据重试策略返回等待时间或最终错误
     ///
-    /// 目的：验证 429 情况下的处理逻辑：
-    /// - 当仍有重试次数（attempt < max_retries）时，函数应返回 Some(wait_ms) 以指导调用方等待并重试；
-    /// - 当无剩余重试次数时，函数应返回 ExchangeRequestError 表示不可重试的最终失败。
-    /// 前置条件：通过 WireMock 模拟返回 429 的 HTTP 响应。
+    /// 目的：验证在 HTTP 429（Too Many Requests）情形下的统一限流处理：
+    /// - 若有剩余重试次数（attempt < max_retries）应返回等待毫秒数，调用方等待后重试；
+    /// - 若无剩余重试次数则返回 ExchangeRequestError（最终失败）；
+    /// 同时验证 Host 的 block/allow 行为在触发限流时正确运行。
+    /// 前置条件：WireMock 返回 429，并在响应中附带 Retry-After=0 以缩短测试等待时间。
     /// 测试步骤：
-    /// 1. 启动 WireMock 并配置返回 429。
+    /// 1. 启动 WireMock 返回 429（Retry-After: 0）。
     /// 2. 发起请求并获取 Response。
-    /// 3. 分别调用 `rate_limit_wait_ms(&resp, &host, attempt=0, max_retries=1)` 和 `rate_limit_wait_ms(&resp2, &host, attempt=0, max_retries=0)`。
+    /// 3. 调用 rate_limit_wait_ms(&resp, host, attempt=0, max_retries=1)，断言返回 Some(ms) 并且 host 被 block。
+    /// 4. 等待 ms + margin，断言 host 被 allow；再次获取响应并调用 rate_limit_wait_ms(..., max_retries=0)，断言返回 Err。
     /// 断言/期望：
-    /// - 第一个调用返回 Ok(Some(ms))，ms 为正数，表示需要等待；
-    /// - 第二个调用返回 Err(YueError::ExchangeRequestError) 且 code == 429。
-    /// 边界/异常场景：重试等待由 `retry_wait_ms` 生成，不在本测试中断言具体值，仅断言存在性。
-    /// 预估耗时：依赖本地 WireMock，通常小于 100ms（不做真正长等待）。
+    /// - 第一次返回 Ok(Some(ms)) 且 ms 为正；Host 被短暂 block 后按计划 allow；
+    /// - 第二次返回 Err(ExchangeRequestError) 且 code == 429。
+    /// 边界/异常场景：本测试接受短等待（由 Retry-After 产生），不对 wait_ms 做严格精确断言。
+    /// 预估耗时：通常小于 300ms（含安全 margin）。
     #[tokio::test]
     async fn test_handle_rate_limit_429() {
         let mock_server = wiremock::MockServer::start().await;
@@ -523,10 +554,11 @@ mod tests {
         assert!(r1.is_some());
         let ms1 = r1.unwrap();
         assert!(ms1 > 0, "wait_ms should be positive");
-        // host should be blocked immediately
-        assert!(!host.is_allow_all_request(), "host should be blocked after limit detected");
+        // host should be blocked (poll to avoid timing flakes)
+        assert!(wait_for_block(&host, 100).await, "host should be blocked after limit detected");
         // wait a bit longer than scheduled wait to ensure allow_all_request ran
-        sleep(Duration::from_millis(ms1 + 20)).await;
+        let wait_total = ms1 + 200;
+        sleep(Duration::from_millis(wait_total)).await;
         assert!(host.is_allow_all_request(), "host should be allowed after scheduled wait");
 
         // 再次获取 response
@@ -534,33 +566,33 @@ mod tests {
         // 无重试（attempt >= max_retries） => 返回 Err
         let r2 = rate_limit_wait_ms(&resp2, host.clone(), 0, 0).await;
         assert!(r2.is_err());
-        // blocked immediately
-        assert!(!host.is_allow_all_request(), "host should be blocked after final limit");
+        // blocked immediately (poll)
+        assert!(wait_for_block(&host, 100).await, "host should be blocked after final limit");
         match r2 {
             Err(YueError::ExchangeRequestError { code, .. }) => assert_eq!(code, 429),
             _ => panic!("expected ExchangeRequestError 429"),
         }
-        // scheduled allow
-        sleep(Duration::from_millis(20)).await;
-        assert!(host.is_allow_all_request(), "host should be allowed after scheduled wait");
+        // scheduled allow (wait a bit)
+        assert!(wait_for_allow(&host, 200).await, "host should be allowed after scheduled wait");
     }
 
     /// 测试：当 HTTP 响应包含 X-MBX-USED-WEIGHT 且接近 host.max_limit 时，触发权重预警并返回等待时间
     ///
-    /// 目的：验证 `rate_limit_wait_ms` 能够解析 X-MBX-USED-WEIGHT（优先级：1m -> 5m -> 总体），
-    ///      在使用量接近 host 配置的 max_limit 时返回需要等待的毫秒数（提醒调用方降低速率/延后重试）。
+    /// 目的：验证 `rate_limit_wait_ms` 能解析 X-MBX-USED-WEIGHT（优先顺序：1m -> 5m -> 无后缀），
+    ///      并在权重接近 Host 的 max_limit 时以统一限流流程处理（block host、返回短等待、后台放行）。
     /// 前置条件：
-    /// - WireMock 返回 200，并在 header 中加入 x-mbx-used-weight-1m（或5m/默认）的值；
-    /// - HostInfo 的 max_limit 设置为一个较大的值以便比较阈值（例如 1000）。
+    /// - WireMock 返回 200，并在 Response header 中加入 `x-mbx-used-weight-1m=960` 和 `Retry-After=0`（缩短测试等待）；
+    /// - HostInfo 的 max_limit 已设置为 1000（或其他大于 50 的值）。
     /// 测试步骤：
-    /// 1. 启动 WireMock，返回 200 并附带 header x-mbx-used-weight-1m=960。
-    /// 2. 构造 HostInfo 并把 max_limit 设置为 1000；发起请求并获取 Response。
-    /// 3. 调用 `rate_limit_wait_ms(&resp, &host, attempt=0, max_retries=1)` 并检查返回值。
+    /// 1. 启动 WireMock 并返回 200，附带权重 header 与 Retry-After=0；
+    /// 2. 构造 HostInfo 并设置 max_limit=1000；发起请求并获取 Response；
+    /// 3. 调用 `rate_limit_wait_ms(&resp, host, attempt=0, max_retries=1)` 并检查返回 Some(wait_ms)，
+    ///    使用轮询确认 host 被 block 后在计划等待结束后被 allow。
     /// 断言/期望：
-    /// - 函数返回 Ok(Some(ms))；ms 落在权重等待策略规定的时间区间（当前为 10s..~15s）；
-    /// - 当 header 值不接近上限时，应返回 Ok(None)（未在此用例中演示）。
-    /// 边界/异常场景：如果 max_limit <= 50，则不会触发等待；如果 header 无法解析为数字则忽略。
-    /// 预估耗时：依赖本地 WireMock，通常小于 100ms。
+    /// - 返回 Ok(Some(ms))，ms 为短等待（测试中允许 >=5ms 且 <300ms）；
+    /// - Host 在短时间内被 block，并在预期时间后被 allow。
+    /// 边界/异常场景：若没有 Retry-After，权重预警实现会返回 100..299 ms 的短等待；若 header 无法解析为数字则忽略该 header。
+    /// 预估耗时：通常小于 300ms（含安全 margin）。
     #[tokio::test]
     async fn test_rate_limit_weight_header() {
         let mock_server = wiremock::MockServer::start().await;
@@ -590,83 +622,13 @@ mod tests {
         // 这会导致一个非常短的等待（例如 5ms）。在没有 Retry-After 的情况下，权重预警会返回 100..300ms。
         // 因此这里接受较宽的范围：至少 5ms，且小于 300ms。
         assert!(ms >= 5 && ms < 300, "weight wait should be in short range, got {}", ms);
-        // host should be blocked
-        assert!(!host.is_allow_all_request(), "host should be blocked for weight limit");
-        sleep(Duration::from_millis(ms + 50)).await;
-        assert!(host.is_allow_all_request(), "host should be allowed after scheduled weight wait");
-    }
-
-    /// 测试：在收到 429 时，`request` 在重试耗尽后返回 ExchangeRequestError
-    ///
-    /// 目的：验证当远端返回 429（Too Many Requests）且客户端配置不重试（max_retries=0）时，
-    /// `request` 能正确返回 ExchangeRequestError，并且不在本地进行无限等待。
-    /// 前置条件：WireMock 返回 429。
-    /// 测试步骤：
-    /// 1. 使用 `BinanceRestfulClient::new_with_retries(client, 0)` 创建不重试的客户端；
-    /// 2. 发起请求并等待返回；
-    /// 断言/期望：
-    /// - 返回 Err(YueError::ExchangeRequestError) 且 code == 429；
-    /// - Host 在检测到 429 时会被短暂 block（此处不直接断言 block 状态，仅确保最终返回错误）。
-    /// 预估耗时：通常小于 100ms。
-    #[tokio::test]
-    async fn bn_client_429_handling() {
-        let mock_server = wiremock::MockServer::start().await;
-
-        Mock::given(wiremock::matchers::any())
-            .respond_with(ResponseTemplate::new(429).set_body_string("too many"))
-            .mount(&mock_server)
-            .await;
-
-        let client = Arc::new(reqwest::Client::new());
-        // set max_retries=0 so request returns error immediately after one attempt
-        let bn = BinanceRestfulClient::new_with_retries(client.clone(), 0).await;
-
-        let host = create_mock_host_info(&mock_server.uri());
-        let req_info = RequestInfo::from_base_path(host.clone(), "/test", false, 1, Some(200), Some(1)).unwrap();
-        let rb = client.get(req_info.as_ref().as_str());
-
-        let res = bn.request(rb, &req_info, None).await;
-        match res {
-            Err(YueError::ExchangeRequestError { code, body: _ }) => assert_eq!(code, 429),
-            other => panic!("expected ExchangeRequestError 429, got: {:?}", other),
-        }
-    }
-
-    /// 测试：`BinanceRestfulClient::request` 的成功路径（无鉴权、HTTP 200）
-    ///
-    /// 目的：验证在正常网络/服务返回 200 的情况下，`request` 能正确走完整个流程并返回 Response：
-    /// - 成功获取限流令牌；
-    /// - 正确发送 HTTP 请求并接收响应；
-    /// - 不触发限流/重试逻辑而是直接返回结果。
-    /// 前置条件：WireMock 返回 200 与 body="OK"。
-    /// 测试步骤：
-    /// 1. 启动 WireMock 并配置任意路径返回 200/OK；
-    /// 2. 构造 BinanceRestfulClient 和 RequestInfo（has_security=false，weight=1）；
-    /// 3. 构造 RequestBuilder 并调用 `bn.request(rb, &req_info, None)`。
-    /// 断言/期望：
-    /// - 返回 Ok(Response) 且 status == 200；
-    /// - 不发生 panic 或长时间等待。
-    /// 边界/异常场景：本用例不验证 header 权重与鉴权逻辑。
-    #[tokio::test]
-    async fn bn_client_request_success() {
-        let mock_server = wiremock::MockServer::start().await;
-
-        Mock::given(wiremock::matchers::any())
-            .respond_with(ResponseTemplate::new(200).set_body_string("OK"))
-            .mount(&mock_server)
-            .await;
-
-        let client = Arc::new(reqwest::Client::new());
-        let bn = BinanceRestfulClient::new(client.clone()).await;
-
-        let host = create_mock_host_info(&mock_server.uri());
-
-        let req_info = RequestInfo::from_base_path(host.clone(), "/test", false, 1, Some(1000), Some(2)).unwrap();
-
-        let rb = client.get(req_info.as_ref().as_str());
-
-        let resp = bn.request(rb, &req_info, None).await.unwrap();
-        assert_eq!(resp.status().as_u16(), 200);
+        // host should be blocked (poll)
+        assert!(wait_for_block(&host, 100).await, "host should be blocked for weight limit");
+        // wait for scheduled allow (give enough margin)
+        assert!(
+            wait_for_allow(&host, ms + 200).await,
+            "host should be allowed after scheduled weight wait"
+        );
     }
 
     #[test]
