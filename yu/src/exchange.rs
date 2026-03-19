@@ -1,12 +1,12 @@
 use std::sync::{Arc, RwLock};
-use yue::binance::bn_models::common::{HistoryVo, ToQueryParams};
+use yue::binance::bn_models::common::{HistoryVo, ToRequestBuilder};
 use yue::binance::history_data::{HistoryFetcher, MuteHistoryParam};
 use yue::models::HistoryInterval;
 
 /// 主要处理各个交易所的数据的更新操作，
 /// 不保存任何交易所的具体操作
 pub trait HistoryFetcherFactory: Clone {
-    type Param: MuteHistoryParam + ToQueryParams + Send + Sync + Clone;
+    type Param: MuteHistoryParam + ToRequestBuilder + Send + Sync + Clone;
     type Output: HistoryVo + Clone;
     type Fetcher: HistoryFetcher<Self::Param, Self::Output> + Send + Sync + 'static;
     fn create_fetcher(&self) -> Self::Fetcher;
@@ -16,7 +16,7 @@ pub trait HistoryFetcherFactory: Clone {
 pub struct CloneHistoryFetcherFactory<T, P, O>
 where
     T: HistoryFetcher<P, O> + Clone + Send,
-    P: MuteHistoryParam + ToQueryParams + Send + Sync + Clone,
+    P: MuteHistoryParam + ToRequestBuilder + Send + Sync + Clone,
     O: HistoryVo + Clone,
 {
     base: T,
@@ -26,7 +26,7 @@ where
 impl<T, P, O> CloneHistoryFetcherFactory<T, P, O>
 where
     T: HistoryFetcher<P, O> + Clone + Send,
-    P: MuteHistoryParam + ToQueryParams + Send + Sync + Clone,
+    P: MuteHistoryParam + ToRequestBuilder + Send + Sync + Clone,
     O: HistoryVo + Clone,
 {
     pub fn new(base: T) -> Self {
@@ -40,7 +40,7 @@ where
 impl<T, P, O> HistoryFetcherFactory for CloneHistoryFetcherFactory<T, P, O>
 where
     T: HistoryFetcher<P, O> + Clone + Send + Sync + 'static,
-    P: MuteHistoryParam + ToQueryParams + Send + Sync + Clone,
+    P: MuteHistoryParam + ToRequestBuilder + Send + Sync + Clone,
     O: HistoryVo + Clone + Send,
 {
     type Param = P;

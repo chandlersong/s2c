@@ -28,7 +28,7 @@ use yue::binance::bn_models::swap_restful::FundingRate;
 use yue::binance::bn_restful_commands::{
     SPOT_KLINE_HISTORY_COMMAND, SWAP_FIVE_MIN_KLINE_HISTORY_COMMAND, SWAP_FUNDING_RATE_COMMAND, SWAP_KLINE_HISTORY_COMMAND,
 };
-use yue::binance::history_data::{CommonParam, SimpleHistoryFetcher};
+use yue::binance::history_data::{CommonRequestBuilder, SimpleHistoryFetcher};
 use yue::binance::listen_key_client::{ListenKeyClient, NormalAccountAssignName, PortfolioAccountAssignName};
 use yue::binance::order_book::{OrderBookService, Subscribe as OrderBookSubscribe};
 use yue::binance::websocket_actor::SpotAccountActor;
@@ -329,7 +329,7 @@ async fn start_refresh_history_data(origin_dash_board: BinanceDashboard) -> Resu
 
     let build_kline_task = |request_info, dash_board, data_writer, task_name: &str, symbol_type, interval| {
         let base_fetcher = SimpleHistoryFetcher::new(request_info);
-        let fetcher_factory: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonParam, BinanceKline> =
+        let fetcher_factory: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonRequestBuilder, BinanceKline> =
             CloneHistoryFetcherFactory::new(base_fetcher);
         HistoryDataTask::<_, _, KlinePo, BinanceKline, BinanceDashboard>::new(
             fetcher_factory,
@@ -380,7 +380,7 @@ async fn start_refresh_history_data(origin_dash_board: BinanceDashboard) -> Resu
 
     let funding_rate_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SwapFundingRate));
     let funding_rate_fetcher = SimpleHistoryFetcher::new(&SWAP_FUNDING_RATE_COMMAND);
-    let funding_rate_fetcher_factory: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonParam, FundingRate> =
+    let funding_rate_fetcher_factory: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonRequestBuilder, FundingRate> =
         CloneHistoryFetcherFactory::new(funding_rate_fetcher);
     let funding_rate_task = HistoryDataTask::<_, _, FundingRatePo, FundingRate, BinanceDashboard>::new(
         funding_rate_fetcher_factory,

@@ -1,8 +1,8 @@
+use crate::binance::bn_models::common::ToRequestBuilder;
 use crate::binance::bn_models::spot_restful::Depth;
 use crate::binance::bn_models::spot_websocket_stream::{BinanceSpotWebSocketStreamResponse, DepthUpdateStreamPayload};
-use crate::binance::bn_restful_commands::{SPOT_DEPTH_1000_COMMAND, execute_bn_get};
-use crate::binance::history_data::CommonParam;
-use crate::http_client::NonAuthRequestBuilder;
+use crate::binance::bn_restful_commands::{SPOT_DEPTH_1000_COMMAND, execute_json_request};
+use crate::binance::history_data::CommonRequestBuilder;
 use actix::{Actor, ActorFutureExt, Addr, AsyncContext, Context, Handler, Message as ActixMessage, Recipient, WrapFuture};
 use log::{debug, error, info, trace, warn};
 use rust_decimal::Decimal;
@@ -134,12 +134,9 @@ impl Handler<InitRequest> for InitActor {
 
         let fut = async move {
             // 构造请求参数
-            let params = CommonParam::symbol_and_limit(symbol_for_async.clone(), 1000);
+            let params = CommonRequestBuilder::symbol_and_limit(symbol_for_async.clone(), 1000);
 
-            match execute_bn_get::<CommonParam, NonAuthRequestBuilder, Depth>(&SPOT_DEPTH_1000_COMMAND, Some(&params), NonAuthRequestBuilder {})
-                .execute()
-                .await
-            {
+            match execute_json_request::<Depth>(&SPOT_DEPTH_1000_COMMAND, params.to_request_builder(&SPOT_DEPTH_1000_COMMAND), None).await {
                 Ok(depth) => {
                     debug!("成功获取 {} 的Depth数据, lastUpdateId={}", symbol_for_async, depth.last_update_id);
                     Some((symbol_for_async, depth))

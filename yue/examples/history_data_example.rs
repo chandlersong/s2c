@@ -4,7 +4,7 @@ use log::{LevelFilter, debug, error, info};
 use yue::binance::bn_models::common::HistoryVo;
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_restful_commands::{SPOT_KLINE_HISTORY_COMMAND, SWAP_KLINE_HISTORY_COMMAND};
-use yue::binance::history_data::{CommonParam, HistoryFetcher, SimpleHistoryFetcher};
+use yue::binance::history_data::{CommonRequestBuilder, HistoryFetcher, SimpleHistoryFetcher};
 use yue::errors::YueError;
 use yue::http_client::init_http_client;
 use yue::models::HistoryInterval;
@@ -86,7 +86,7 @@ async fn main() {
     println!("Now (ms) = {}, start_time (ms) = {}", now_ms, start_ms);
     let symbol = "BTCUSDT";
     let spot_kline_fetch = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
-    let base_param = CommonParam::new(symbol.to_string(), 1000, HistoryInterval::FiveMinutes);
+    let base_param = CommonRequestBuilder::new(symbol.to_string(), 1000, HistoryInterval::FiveMinutes);
     let spot_btc: Result<(Vec<BinanceKline>, u16), YueError> = spot_kline_fetch
         .get_all_kline_data(base_param, Some(HistoryInterval::FiveMinutes), Some(start_ms), Some(end_ms))
         .await;
@@ -94,7 +94,7 @@ async fn main() {
     print_kline_result(&spot_btc, Some(HistoryInterval::FiveMinutes));
 
     let swap_kline_fetch = SimpleHistoryFetcher::new(&SWAP_KLINE_HISTORY_COMMAND);
-    let base_param = CommonParam::new(symbol.to_string(), 1000, HistoryInterval::OneHour);
+    let base_param = CommonRequestBuilder::new(symbol.to_string(), 1000, HistoryInterval::OneHour);
     let swap_btc: Result<(Vec<BinanceKline>, u16), YueError> = swap_kline_fetch
         .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), Some(start_ms), None)
         .await;

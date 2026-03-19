@@ -1,14 +1,14 @@
-use crate::binance::bn_models::common::{EmptyQueryParams, ExchangeInfoTrait, HistoryVo, SymbolInfoTrait, ToQueryParams};
+use crate::binance::bn_models::common::{ExchangeInfoTrait, HistoryVo, SymbolInfoTrait, ToRequestBuilder};
 use crate::binance::bn_models::spot_restful::ExchangeInfo;
 use crate::binance::bn_models::swap_restful::SwapExchangeInfo;
-use crate::binance::bn_restful_commands::{PING_COMMAND, SPOT_EXCHANGE_COMMAND, SWAP_EXCHANGE_COMMAND, execute_bn_get};
+use crate::binance::bn_restful_commands::{PING_COMMAND, SPOT_EXCHANGE_COMMAND, SWAP_EXCHANGE_COMMAND, execute_json_request};
 use crate::errors::YueError;
-use crate::http_client::NonAuthRequestBuilder;
+use crate::http_client::{HTTP_CLIENT, get_http_client};
 use crate::models::{EmptyObject, HistoryInterval, RequestInfo};
 use async_trait::async_trait;
-use backon::{BackoffBuilder, ExponentialBuilder, Retryable};
 use li::tools::time::{ONE_MILL_SECOND_MS, unix_2_readable};
 use log::debug;
+use reqwest::RequestBuilder;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -33,7 +33,7 @@ pub struct TradingSymbolInfo {
     pub on_board_time: Option<u64>,
 }
 
-pub trait MuteHistoryParam: ToQueryParams {
+pub trait MuteHistoryParam: ToRequestBuilder {
     fn initial(symbol: String, limit: u32, interval: HistoryInterval) -> Self;
     fn create_new(&self, start_time: Option<u64>, end_time: Option<u64>, interval: Option<HistoryInterval>) -> Self;
 
@@ -41,7 +41,7 @@ pub trait MuteHistoryParam: ToQueryParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct CommonParam {
+pub struct CommonRequestBuilder {
     pub symbol: String,
     pub interval: Option<HistoryInterval>,
     pub start_time: Option<u64>,
@@ -49,7 +49,7 @@ pub struct CommonParam {
     pub limit: Option<u32>,
 }
 
-impl CommonParam {
+impl CommonRequestBuilder {
     pub fn new(symbol: String, limit: u32, interval: HistoryInterval) -> Self {
         Self {
             symbol,
@@ -81,9 +81,31 @@ impl CommonParam {
     }
 }
 
-impl MuteHistoryParam for CommonParam {
+impl ToRequestBuilder for CommonRequestBuilder {
+    fn to_request_builder(&self, request_info: &RequestInfo) -> RequestBuilder {
+        let client = get_http_client();
+        let res = client.get(request_info.as_ref().as_str());
+        let mut params = vec![];
+        params.push(("symbol", self.symbol.clone()));
+        if let Some(interval) = self.interval.as_ref() {
+            params.push(("interval", interval.as_ref().to_string()));
+        }
+        if let Some(start) = self.start_time {
+            params.push(("startTime", start.to_string()));
+        }
+        if let Some(end) = self.end_time {
+            params.push(("endTime", end.to_string()));
+        }
+        if let Some(limit) = self.limit {
+            params.push(("limit", limit.to_string()));
+        }
+        res.query(&params)
+    }
+}
+
+impl MuteHistoryParam for CommonRequestBuilder {
     fn initial(symbol: String, limit: u32, interval: HistoryInterval) -> Self {
-        CommonParam {
+        CommonRequestBuilder {
             symbol,
             interval: Some(interval),
             start_time: None,
@@ -93,8 +115,7 @@ impl MuteHistoryParam for CommonParam {
     }
     fn create_new(&self, start_time: Option<u64>, end_time: Option<u64>, interval: Option<HistoryInterval>) -> Self {
         let actual_interval = interval.or_else(|| self.interval.clone());
-
-        CommonParam {
+        CommonRequestBuilder {
             symbol: self.symbol.clone(),
             interval: actual_interval,
             start_time,
@@ -108,30 +129,10 @@ impl MuteHistoryParam for CommonParam {
     }
 }
 
-impl ToQueryParams for CommonParam {
-    fn to_query_string(&self) -> String {
-        let mut params = vec![];
-        params.push(format!("symbol={}", self.symbol));
-        if let Some(interval) = self.interval.as_ref() {
-            params.push(format!("interval={}", interval.as_ref()));
-        }
-        if let Some(start) = self.start_time {
-            params.push(format!("startTime={}", start));
-        }
-        if let Some(end) = self.end_time {
-            params.push(format!("endTime={}", end));
-        }
-        if let Some(limit) = self.limit {
-            params.push(format!("limit={}", limit));
-        }
-        params.join("&")
-    }
-}
-
 pub async fn execute_ping() -> Result<(), YueError> {
-    let _ = execute_bn_get::<EmptyQueryParams, NonAuthRequestBuilder, EmptyObject>(&PING_COMMAND, None, NonAuthRequestBuilder {})
-        .execute()
-        .await?;
+    let client = HTTP_CLIENT.get().ok_or(YueError::new("客户端没有初始化"))?;
+    let rb = client.get(PING_COMMAND.as_ref().as_str());
+    let _ = execute_json_request::<EmptyObject>(&PING_COMMAND, rb, None).await?;
     Ok(())
 }
 
@@ -167,11 +168,9 @@ where
 
 /// 获取现货交易对信息
 pub async fn get_trading_spot_symbols(status: Option<&str>) -> Result<Vec<TradingSymbolInfo>, YueError> {
-    get_trading_symbols(
-        execute_bn_get::<EmptyQueryParams, NonAuthRequestBuilder, ExchangeInfo>(&SPOT_EXCHANGE_COMMAND, None, NonAuthRequestBuilder {}).execute(),
-        status,
-    )
-    .await
+    let client = HTTP_CLIENT.get().ok_or(YueError::new("客户端没有初始化"))?;
+    let rb = client.get(SPOT_EXCHANGE_COMMAND.as_ref().as_str());
+    get_trading_symbols(execute_json_request::<ExchangeInfo>(&SPOT_EXCHANGE_COMMAND, rb, None), status).await
 }
 
 pub const CONTRACT_TYPE_PERPETUAL: &str = "PERPETUAL";
@@ -181,11 +180,9 @@ pub const CONTRACT_TYPE_PERPETUAL: &str = "PERPETUAL";
 /// CURRENT_QUARTER：为下一季
 /// NEXT_QUARTER：当前季度合约
 pub async fn get_trading_swap_symbols(status: Option<&str>, type_filter: Option<&str>) -> Result<Vec<TradingSymbolInfo>, YueError> {
-    let all = get_trading_symbols(
-        execute_bn_get::<EmptyQueryParams, NonAuthRequestBuilder, SwapExchangeInfo>(&SWAP_EXCHANGE_COMMAND, None, NonAuthRequestBuilder {}).execute(),
-        status,
-    )
-    .await?;
+    let client = HTTP_CLIENT.get().ok_or(YueError::new("客户端没有初始化"))?;
+    let rb = client.get(SPOT_EXCHANGE_COMMAND.as_ref().as_str());
+    let all = get_trading_symbols(execute_json_request::<SwapExchangeInfo>(&SWAP_EXCHANGE_COMMAND, rb, None), status).await?;
     if let Some(filter) = type_filter {
         Ok(all.into_iter().filter(|s| s.symbol_type == filter).collect())
     } else {
@@ -196,7 +193,7 @@ pub async fn get_trading_swap_symbols(status: Option<&str>, type_filter: Option<
 #[async_trait]
 pub trait HistoryFetcher<T, O>
 where
-    T: MuteHistoryParam + ToQueryParams + Send + Sync,
+    T: MuteHistoryParam + ToRequestBuilder + Send + Sync,
     O: HistoryVo,
 {
     async fn get_all_kline_data(
@@ -224,7 +221,7 @@ impl SimpleHistoryFetcher {
 #[async_trait]
 impl<'a, T, O> HistoryFetcher<T, O> for SimpleHistoryFetcher
 where
-    T: MuteHistoryParam + ToQueryParams + Send + Sync + 'static,
+    T: MuteHistoryParam + ToRequestBuilder + Send + Sync + 'static,
     O: HistoryVo + Send + Sync + 'static,
 {
     /// 获取指定交易对和时间间隔的K线数据
@@ -254,7 +251,6 @@ where
         end_time: Option<u64>,
     ) -> Result<(Vec<O>, u16), YueError> {
         let mut res: Vec<O> = Vec::new();
-        let request_builder = NonAuthRequestBuilder {};
         let retry_count = AtomicU16::new(0);
         let symbol = base_param.get_symbol();
 
@@ -300,21 +296,8 @@ where
 
             // 将调整好的 adjusted_end_time 传入请求参数，保证服务端返回的数据不超过期望的 endTime
             let params = base_param.create_new(current_start_time, Some(adjusted_end_time), interval.clone());
-            let retry_policy = ExponentialBuilder::default()
-                .with_jitter()
-                .with_factor(1.5)
-                .with_max_times(10)
-                .with_min_delay(std::time::Duration::from_millis(100))
-                .with_max_delay(std::time::Duration::from_secs(10))
-                .build();
 
-            let klines: Vec<O> = execute_bn_get::<T, NonAuthRequestBuilder, Vec<O>>(&self.request_info, Some(&params), request_builder.clone())
-                .into_retryable()
-                .retry(retry_policy)
-                .notify(|_err, _dur| {
-                    retry_count.fetch_add(1, Ordering::SeqCst);
-                })
-                .await?;
+            let klines: Vec<O> = execute_json_request::<Vec<O>>(&self.request_info, params.to_request_builder(&self.request_info), None).await?;
 
             if klines.is_empty() {
                 break;
@@ -367,7 +350,7 @@ where
 mod tests {
     use crate::binance::bn_models::spot_restful::BinanceKline;
     use crate::binance::bn_restful_commands::SPOT_KLINE_HISTORY_COMMAND;
-    use crate::binance::history_data::{CommonParam, HistoryFetcher, SimpleHistoryFetcher};
+    use crate::binance::history_data::{CommonRequestBuilder, HistoryFetcher, SimpleHistoryFetcher};
     use crate::errors::YueError;
     use crate::http_client::init_http_client;
     use crate::models::HistoryInterval;
@@ -431,7 +414,7 @@ mod tests {
             .mount(&mock_server)
             .await;
         let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
-        let base_param = CommonParam::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
+        let base_param = CommonRequestBuilder::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
         let kline_res: Result<(Vec<BinanceKline>, u16), YueError> =
             fetcher.get_all_kline_data(base_param, Some(HistoryInterval::OneHour), None, None).await;
         assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
@@ -506,7 +489,7 @@ mod tests {
             .await;
 
         let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
-        let base_param = CommonParam::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
+        let base_param = CommonRequestBuilder::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
         let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher
             .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), Some(1609459200000), Some(close_time))
             .await;
@@ -534,7 +517,7 @@ mod tests {
             .mount(&mock_server)
             .await;
         let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
-        let base_param = CommonParam::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
+        let base_param = CommonRequestBuilder::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
         let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher
             .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), Some(1609459200000), None)
             .await;
@@ -596,7 +579,7 @@ mod tests {
             .await;
 
         let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
-        let base_param = CommonParam::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
+        let base_param = CommonRequestBuilder::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
         let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher
             .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), Some(1609459200000), Some(close_time))
             .await;
@@ -646,7 +629,7 @@ mod tests {
             .await;
 
         let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
-        let base_param = CommonParam::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
+        let base_param = CommonRequestBuilder::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
         let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher
             .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), Some(1609459200000), None)
             .await;
@@ -698,7 +681,7 @@ mod tests {
             .await;
 
         let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
-        let base_param = CommonParam::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
+        let base_param = CommonRequestBuilder::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
 
         // start_time: 2021-01-01 00:00:00
         // end_time: 2021-01-02 12:30:45 (这会被调整到2021-01-02 12:00:00的下一个interval，即2021-01-02 13:00:00)

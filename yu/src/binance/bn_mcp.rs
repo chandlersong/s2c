@@ -8,10 +8,10 @@ use rmcp::{schemars, serde_json, RoleServer};
 use rmcp::{ErrorData as McpError, ServerHandler};
 use rmcp_macros::{tool, tool_handler, tool_router};
 use serde::{Deserialize, Serialize};
+use yue::binance::bn_models::common::ToRequestBuilder;
 use yue::binance::bn_models::spot_restful::Ticker24hr;
-use yue::binance::bn_restful_commands::execute_bn_get;
-use yue::binance::history_data::CommonParam;
-use yue::http_client::NonAuthRequestBuilder;
+use yue::binance::bn_restful_commands::{execute_json_request, SPOT_TICKER_24HR_ONE_SYMBOL_COMMAND};
+use yue::binance::history_data::CommonRequestBuilder;
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct SymbolRequest {
@@ -38,13 +38,12 @@ impl BinanceSpot {
 
     #[tool(description = "24 hour price change statistics for one symbol", name = "price_change_24h")]
     async fn price_change_24h(&self, Parameters(SymbolRequest { symbol }): Parameters<SymbolRequest>) -> Result<CallToolResult, McpError> {
-        let ticker_24h_param = CommonParam::only_symbol(symbol.clone());
-        let result = execute_bn_get::<CommonParam, NonAuthRequestBuilder, Ticker24hr>(
-            &yue::binance::bn_restful_commands::SPOT_TICKER_24HR_ONE_SYMBOL_COMMAND,
-            Some(&ticker_24h_param),
-            NonAuthRequestBuilder {},
+        let ticker_24h_param = CommonRequestBuilder::only_symbol(symbol.clone());
+        let result = execute_json_request::<Ticker24hr>(
+            &SPOT_TICKER_24HR_ONE_SYMBOL_COMMAND,
+            ticker_24h_param.to_request_builder(&SPOT_TICKER_24HR_ONE_SYMBOL_COMMAND),
+            None,
         )
-        .execute()
         .await;
         match result {
             Ok(ticker) => {

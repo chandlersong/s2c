@@ -2,11 +2,10 @@ use crate::binance::bn_json_websocket::{PORTFOLIO_MARGIN_STREAM_WEBSOCKET, SWAP_
 use crate::binance::bn_models::common::{AccountData, ListenKeyResponse, PortfolioSpotOrderData, PortfolioSwapOrderData, SwapOrderData};
 use crate::binance::bn_models::portfolio_account_websocket::BinancePortfolioWebSocketStreamResponse;
 use crate::binance::bn_models::swap_account_stream::BinanceSwapAccountStreamResponse;
-use crate::binance::bn_restful_commands::{
-    BNSecurityRequestBuilder, PAPI_LISTEN_KEY_COMMAND, SWAP_LISTEN_KEY_COMMAND, execute_bn_post, execute_bn_put,
-};
-use crate::binance::history_data::CommonParam;
+use crate::binance::bn_restful_commands::{PAPI_LISTEN_KEY_COMMAND, SWAP_LISTEN_KEY_COMMAND, execute_json_request};
+use crate::binance::http_client::{BinanceSecurityInfo, BinanceSecurityType};
 use crate::errors::YueError;
+use crate::http_client::get_http_client;
 use crate::models::RequestInfo;
 use actix::{Actor, AsyncContext, Context, Handler, Message as ActixMessage, Recipient};
 use li::errors::LiError;
@@ -259,23 +258,21 @@ impl<M: WebSocketMessage> ListenKeyClient<M> {
     /// 发送 HTTP 请求获取新的 listen key
     async fn fetch_new_listen_key(api_key: &str, api_secret: &str, request_info: &RequestInfo) -> Result<String, YueError> {
         info!("正在获取新的 listen key...");
-
-        let builder = BNSecurityRequestBuilder::new(api_key.to_string(), api_secret.to_string());
-        let create_response = execute_bn_post::<CommonParam, BNSecurityRequestBuilder, ListenKeyResponse>(request_info, None, None, builder)
-            .execute()
-            .await?;
+        let client = get_http_client();
+        let rb = client.post(request_info.as_ref().as_str());
+        let security_info = BinanceSecurityInfo::new(api_key, api_secret, BinanceSecurityType::HMAC);
+        let create_response = execute_json_request::<ListenKeyResponse>(request_info, rb, Some(security_info)).await?;
         Ok(create_response.listen_key)
     }
 
     /// 发送 HTTP 请求续期 listen key
     async fn renew_current_listen_key(&self) -> Result<(), YueError> {
-        let builder = BNSecurityRequestBuilder::new(self.api_key.to_string(), self.api_secret.to_string());
-        let renew_response =
-            execute_bn_put::<CommonParam, BNSecurityRequestBuilder, ListenKeyResponse>(&SWAP_LISTEN_KEY_COMMAND, None, None, builder)
-                .execute()
-                .await?;
+        info!("正在获取新的 listen key...");
+        let client = get_http_client();
+        let rb = client.put(self.renew_listen_key_request.as_str());
+        let security_info = BinanceSecurityInfo::new(&self.api_key, &self.api_secret, BinanceSecurityType::HMAC);
+        let renew_response = execute_json_request::<ListenKeyResponse>(&SWAP_LISTEN_KEY_COMMAND, rb, Some(security_info)).await?;
         println!("renew listen_key is {:?}", renew_response.listen_key);
-
         info!("成功续期 listen key");
         Ok(())
     }

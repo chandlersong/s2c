@@ -12,7 +12,7 @@ use log::{debug, error, info};
 use std::fmt::Debug;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use yue::binance::bn_models::common::{HistoryVo, SymbolType, ToQueryParams};
+use yue::binance::bn_models::common::{HistoryVo, SymbolType, ToRequestBuilder};
 use yue::binance::history_data::{HistoryFetcher, MuteHistoryParam};
 use yue::models::HistoryInterval;
 
@@ -117,7 +117,7 @@ impl<O: HistoryPO, D: ExchangeDashBoard<TradingSymbol = TradingSymbol>> HistoryD
 pub struct HistoryDataTask<F, P, R, V, D>
 where
     F: HistoryFetcherFactory<Param = P, Output = V>,
-    P: MuteHistoryParam + ToQueryParams + Clone + Send + Sync,
+    P: MuteHistoryParam + ToRequestBuilder + Clone + Send + Sync,
     V: HistoryVo + Clone,
     R: HistoryPO + Clone,
     D: ExchangeDashBoard<TradingSymbol = TradingSymbol> + Send + Sync,
@@ -133,7 +133,7 @@ where
 impl<F, P, R, V, D> HistoryDataTask<F, P, R, V, D>
 where
     F: HistoryFetcherFactory<Param = P, Output = V> + Clone + Send + Sync + 'static,
-    P: MuteHistoryParam + ToQueryParams + Clone + Send + Sync + 'static,
+    P: MuteHistoryParam + ToRequestBuilder + Clone + Send + Sync + 'static,
     V: HistoryVo + Clone + Send + Sync + 'static,
     R: HistoryPO<Source = V> + Clone + Send + Sync + 'static,
     D: ExchangeDashBoard<TradingSymbol = TradingSymbol> + Send + Sync,
@@ -274,7 +274,7 @@ where
 impl<F, P, R, V, D> AsyncRepeatTask for HistoryDataTask<F, P, R, V, D>
 where
     F: HistoryFetcherFactory<Param = P, Output = V> + Clone + Send + Sync + Unpin + 'static,
-    P: MuteHistoryParam + ToQueryParams + Clone + Send + Sync + 'static,
+    P: MuteHistoryParam + ToRequestBuilder + Clone + Send + Sync + 'static,
     V: HistoryVo + Clone + Send + Sync + Clone + 'static,
     R: HistoryPO<Source = V> + Send + Sync + Clone + 'static,
     D: ExchangeDashBoard<TradingSymbol = TradingSymbol> + Send + Sync + Clone + 'static,
@@ -381,7 +381,7 @@ mod tests {
     use std::sync::Arc;
     use yue::binance::bn_models::common::SymbolType;
     use yue::binance::bn_models::spot_restful::BinanceKline;
-    use yue::binance::history_data::{CommonParam, HistoryFetcher, MuteHistoryParam};
+    use yue::binance::history_data::{CommonRequestBuilder, HistoryFetcher, MuteHistoryParam};
     use yue::errors::YueError;
     use yue::models::HistoryInterval;
 
@@ -396,10 +396,10 @@ mod tests {
         }
 
         #[async_trait]
-        impl HistoryFetcher<CommonParam, BinanceKline> for HistoryFetcher {
+        impl HistoryFetcher<CommonRequestBuilder, BinanceKline> for HistoryFetcher {
             async fn get_all_kline_data(
                 &self,
-                param: CommonParam,
+                param: CommonRequestBuilder,
                 interval: Option<HistoryInterval>,
                 start_time: Option<u64>,
                 end_time: Option<u64>,
@@ -411,7 +411,7 @@ mod tests {
     struct MockHistoryFetcherFactory {}
 
     impl HistoryFetcherFactory for MockHistoryFetcherFactory {
-        type Param = CommonParam;
+        type Param = CommonRequestBuilder;
         type Output = BinanceKline;
         type Fetcher = MockHistoryFetcher;
         fn create_fetcher(&self) -> Self::Fetcher {
@@ -421,8 +421,8 @@ mod tests {
 
     fn create_mock_history_fetch_for_test_refresh_spot_kline_normal() -> MockHistoryFetcher {
         let mut fetcher = MockHistoryFetcher::new();
-        let btc_param = CommonParam::initial("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
-        let eth_param = CommonParam::initial("ETHUSDT".to_string(), 1000, HistoryInterval::OneHour);
+        let btc_param = CommonRequestBuilder::initial("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
+        let eth_param = CommonRequestBuilder::initial("ETHUSDT".to_string(), 1000, HistoryInterval::OneHour);
         fetcher
             .expect_get_all_kline_data()
             .with(
@@ -478,7 +478,7 @@ mod tests {
 
         let factory = MockHistoryFetcherFactory {};
         let data_writer = Arc::new(DuckDBHistoryDataWriter::new(db_provider.clone(), SpotKline));
-        let manager: HistoryDataTask<MockHistoryFetcherFactory, CommonParam, KlinePo, BinanceKline, BinanceDashboard> = HistoryDataTask::new(
+        let manager: HistoryDataTask<MockHistoryFetcherFactory, CommonRequestBuilder, KlinePo, BinanceKline, BinanceDashboard> = HistoryDataTask::new(
             factory,
             dash_board,
             data_writer,

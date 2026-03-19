@@ -1,7 +1,8 @@
 use crate::binance::bn_models::spot_websocket::ExecutionReportPayload;
-use crate::models::Decimal;
+use crate::models::{Decimal, RequestInfo};
 use actix::Message;
 use li::tools::time::{UnixTimeStamp, unix_time_now_u64_utc};
+use reqwest::RequestBuilder;
 use serde::de::{DeserializeOwned, Error};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
@@ -9,17 +10,9 @@ use std::fmt::Display;
 use std::str::FromStr;
 
 // 查询参数trait定义
-pub trait ToQueryParams {
-    fn to_query_string(&self) -> String;
+pub trait ToRequestBuilder {
+    fn to_request_builder(&self, request_info: &RequestInfo) -> RequestBuilder;
 }
-
-// BTreeMap实现ToQueryParams
-impl ToQueryParams for std::collections::BTreeMap<&str, String> {
-    fn to_query_string(&self) -> String {
-        self.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<String>>().join("&")
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 pub enum SymbolType {
     Spot,   //现货
@@ -43,14 +36,6 @@ impl Display for SymbolType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s: &'static str = (*self).into();
         write!(f, "{}", s)
-    }
-}
-
-pub struct EmptyQueryParams;
-
-impl ToQueryParams for EmptyQueryParams {
-    fn to_query_string(&self) -> String {
-        String::new()
     }
 }
 

@@ -1,11 +1,14 @@
+use li::tools::logs::setup_logger_all;
 use li::tools::time::{unix_2_readable, unix_time_now_u64_utc};
-use std::collections::BTreeMap;
-use yue::binance::bn_models::common::{EmptyQueryParams, ServerTime};
+use log::LevelFilter;
+use yue::binance::bn_models::common::{ServerTime, ToRequestBuilder};
 use yue::binance::bn_models::spot_restful::{BinanceKline, Depth, Ticker24hr};
-use yue::binance::bn_restful_commands::SPOT_KLINE_HISTORY_COMMAND;
-use yue::binance::bn_restful_commands::{SERVER_TIME_COMMAND, execute_bn_get};
-use yue::binance::history_data::{CommonParam, execute_ping};
-use yue::http_client::{NonAuthRequestBuilder, init_http_client};
+use yue::binance::bn_restful_commands::{SERVER_TIME_COMMAND, execute_json_request};
+use yue::binance::bn_restful_commands::{SPOT_DEPTH_1000_COMMAND, SPOT_KLINE_HISTORY_COMMAND, SPOT_TICKER_24HR_ONE_SYMBOL_COMMAND};
+use yue::binance::history_data::{CommonRequestBuilder, execute_ping};
+
+use yue::http_client::{get_http_client, init_http_client};
+use yue::models::HistoryInterval;
 
 ///
 /// 币安REST API示例 - 无需API密钥
@@ -20,6 +23,7 @@ async fn main() {
     // 配置本地代理（如果需要）
     let proxy = Option::from("http://localhost:7891");
     init_http_client(proxy);
+    let _ = setup_logger_all(Some(LevelFilter::Debug));
     // 测试API连接
     match execute_ping().await {
         Ok(_) => println!("成功连接到币安网络"),
@@ -28,12 +32,10 @@ async fn main() {
             return;
         }
     }
-    let request_builder = NonAuthRequestBuilder {};
+    let client = get_http_client();
+    let rb = client.get(SERVER_TIME_COMMAND.as_ref().as_str());
     // 获取服务器时间
-    match execute_bn_get::<EmptyQueryParams, NonAuthRequestBuilder, ServerTime>(&SERVER_TIME_COMMAND, None, request_builder.clone())
-        .execute()
-        .await
-    {
+    match execute_json_request::<ServerTime>(&SERVER_TIME_COMMAND, rb, None).await {
         Ok(server_time) => {
             let server_time = server_time.time;
             let local_time = unix_time_now_u64_utc();
@@ -44,17 +46,13 @@ async fn main() {
         Err(e) => println!("获取服务器时间失败: {}", e),
     }
 
+    let request_builder = CommonRequestBuilder::new("BTCUSDT".to_string(), 5, HistoryInterval::FiveMinutes);
     // 获取BTCUSDT 5分钟K线范例
-    let mut params = std::collections::BTreeMap::new();
-    params.insert("symbol", "BTCUSDT".to_string());
-    params.insert("interval", "5m".to_string());
-    params.insert("limit", "5".to_string()); // 只取5根K线做演示
-    match execute_bn_get::<BTreeMap<&str, String>, NonAuthRequestBuilder, Vec<BinanceKline>>(
+    match execute_json_request::<Vec<BinanceKline>>(
         &SPOT_KLINE_HISTORY_COMMAND,
-        Some(&params),
-        request_builder.clone(),
+        request_builder.to_request_builder(&SPOT_KLINE_HISTORY_COMMAND),
+        None,
     )
-    .execute()
     .await
     {
         Ok(klines) => {
@@ -73,13 +71,12 @@ async fn main() {
         Err(e) => println!("获取K线失败: {}", e),
     }
 
-    let ticker_24h_param = CommonParam::only_symbol("BTCUSDT".to_string());
-    match execute_bn_get::<CommonParam, NonAuthRequestBuilder, Ticker24hr>(
-        &yue::binance::bn_restful_commands::SPOT_TICKER_24HR_ONE_SYMBOL_COMMAND,
-        Some(&ticker_24h_param),
-        request_builder.clone(),
+    let ticker_24h_param = CommonRequestBuilder::only_symbol("BTCUSDT".to_string());
+    match execute_json_request::<Ticker24hr>(
+        &SPOT_TICKER_24HR_ONE_SYMBOL_COMMAND,
+        ticker_24h_param.to_request_builder(&SPOT_TICKER_24HR_ONE_SYMBOL_COMMAND),
+        None,
     )
-    .execute()
     .await
     {
         Ok(ticker) => {
@@ -94,15 +91,8 @@ async fn main() {
         }
     }
 
-    let depth_param = CommonParam::symbol_and_limit("BTCUSDT".to_string(), 1000);
-    match execute_bn_get::<CommonParam, NonAuthRequestBuilder, Depth>(
-        &yue::binance::bn_restful_commands::SPOT_DEPTH_1000_COMMAND,
-        Some(&depth_param),
-        request_builder.clone(),
-    )
-    .execute()
-    .await
-    {
+    let depth_param = CommonRequestBuilder::symbol_and_limit("BTCUSDT".to_string(), 1000);
+    match execute_json_request::<Depth>(&SPOT_DEPTH_1000_COMMAND, depth_param.to_request_builder(&SPOT_DEPTH_1000_COMMAND), None).await {
         Ok(depth) => {
             println!("BTCUSDT 24小时价格变动:");
             println!(

@@ -16,7 +16,7 @@ use yue::binance::bn_models::common::SymbolType;
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_models::spot_websocket_stream::{BinanceSpotWebSocketStreamResponse, KlineData, KlineStreamPayload};
 use yue::binance::bn_restful_commands::{SPOT_KLINE_HISTORY_COMMAND, SWAP_KLINE_HISTORY_COMMAND};
-use yue::binance::history_data::{CommonParam, HistoryFetcher, MuteHistoryParam, SimpleHistoryFetcher};
+use yue::binance::history_data::{CommonRequestBuilder, HistoryFetcher, MuteHistoryParam, SimpleHistoryFetcher};
 use yue::errors::YueError;
 use yue::models::HistoryInterval;
 
@@ -543,7 +543,7 @@ impl RepairStrategy for KlineGapRepairStrategy {
                 return Err(format!("KlineGapRepairStrategy does not support symbol type: {:?}", self.symbol_type));
             }
         };
-        let fetch_factory: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonParam, BinanceKline> =
+        let fetch_factory: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonRequestBuilder, BinanceKline> =
             CloneHistoryFetcherFactory::new(kline_fetcher);
         let writer = get_spot_stream_writer();
 
@@ -573,7 +573,7 @@ impl RepairStrategy for KlineGapRepairStrategy {
                         let _permit = sem_clone.acquire().await;
 
                         let fetcher = factory.create_fetcher();
-                        let param = <CommonParam as MuteHistoryParam>::initial(symbol.clone(), 1000, HistoryInterval::FiveMinutes);
+                        let param = <CommonRequestBuilder as MuteHistoryParam>::initial(symbol.clone(), 1000, HistoryInterval::FiveMinutes);
                         let fetch_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher
                             .get_all_kline_data(param, Some(HistoryInterval::FiveMinutes), Some(start_time), Some(end_time))
                             .await;

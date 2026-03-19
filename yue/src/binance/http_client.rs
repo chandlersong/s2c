@@ -1,16 +1,9 @@
 use crate::errors::YueError;
 use crate::models::{HostInfo, RequestInfo};
-use crate::tools::{load_ed25519_signing_key, sign_ed25519, sign_hmac};
-use ed25519_dalek::SigningKey;
-use governor::{
-    Quota, RateLimiter,
-    clock::DefaultClock,
-    middleware::NoOpMiddleware,
-    state::{InMemoryState, NotKeyed},
-};
+use crate::tools::{load_ed25519_signing_key, sign_hmac};
 use log::error;
 use rand;
-use reqwest::{Client, RequestBuilder, Response};
+use reqwest::{RequestBuilder, Response};
 use serde::Deserialize;
 use std::sync::Arc;
 use std::time::Duration;
@@ -65,21 +58,30 @@ pub struct BinanceSecurityInfo {
     security_type: BinanceSecurityType,
 }
 
+impl BinanceSecurityInfo {
+    pub fn new(api_key: &str, api_secret: &str, security_type: BinanceSecurityType) -> Self {
+        Self {
+            api_key: api_key.to_string(),
+            api_secret: api_secret.to_string(),
+            security_type,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct BinanceRestfulClient {
-    client: Arc<Client>,
     max_retries: u16,
 }
 
 impl BinanceRestfulClient {
     /// 创建 limiter，立即从 exchangeInfo 获取限额并启动后台刷新任务
-    pub async fn new(client: Arc<Client>) -> Arc<Self> {
-        Arc::new(Self { client, max_retries: 5 })
+    pub async fn new() -> Arc<Self> {
+        Arc::new(Self { max_retries: 5 })
     }
 
     /// 可配置重试次数的构造函数（用于测试）
-    pub async fn new_with_retries(client: Arc<Client>, max_retries: u16) -> Arc<Self> {
-        Arc::new(Self { client, max_retries })
+    pub async fn new_with_retries(max_retries: u16) -> Arc<Self> {
+        Arc::new(Self { max_retries })
     }
 
     ///
@@ -434,17 +436,19 @@ async fn rate_limit_wait_ms(resp: &Response, host: Arc<HostInfo>, attempt: usize
 
 #[cfg(test)]
 mod tests {
-    use super::BinanceRestfulClient;
+    use super::{BinanceRestfulClient, BinanceSecurityInfo, BinanceSecurityType};
     use super::{compose_security_header, rate_limit_wait_ms};
     use crate::errors::YueError;
-    use crate::models::{DefaultRateLimiter, HostInfo, RequestInfo};
+    use crate::models::{DefaultRateLimiter, HostInfo, RequestInfo, create_share_rate_limiter};
     use governor::Quota;
+    use serde_json::json;
     use std::num::NonZeroU32;
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::RwLock;
     use tokio::time::sleep;
-    use wiremock::{Mock, ResponseTemplate};
+    use wiremock::matchers::{header, method, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn create_mock_host_info(host: &str) -> Arc<HostInfo> {
         // 初始 quota（用一个合理默认值，马上会被刷新覆盖）
@@ -725,7 +729,7 @@ mod tests {
             .await;
 
         let client = Arc::new(reqwest::Client::new());
-        let bn = BinanceRestfulClient::new_with_retries(client.clone(), 2).await;
+        let bn = BinanceRestfulClient::new_with_retries(2).await;
 
         let host = create_mock_host_info(&mock_server.uri());
         // 初始阻塞，使得第一次 acquire 会失败
@@ -744,5 +748,68 @@ mod tests {
         // 执行 request：应最终失败（重试预算被耗尽）
         let res = bn.request(rb, &req_info, None).await;
         assert!(res.is_err(), "expected request to fail due to exhausted shared retry budget");
+    }
+
+    #[tokio::test]
+    async fn test_bn_post_signed_example() {
+        let mock_server = MockServer::start().await;
+
+        // mock：要求是 POST，包含 X-MBX-APIKEY 头，且 query 包含 symbol=BTCUSDT
+        Mock::given(method("POST"))
+            .and(header("X-MBX-APIKEY", "test_key"))
+            .and(query_param("symbol", "BTCUSDT"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ok": true, "action": "post"})))
+            .mount(&mock_server)
+            .await;
+
+        // 构造 HostInfo 和 RequestInfo
+        let limiter = create_share_rate_limiter(1000);
+        let host = Arc::new(HostInfo::new(mock_server.uri(), 1000, limiter));
+        let req_info = RequestInfo::from_base_path(host.clone(), "/api/v3/test_post", true, 1, Some(2000), Some(1)).unwrap();
+
+        let client = reqwest::Client::new();
+        let rb = client
+            .post(req_info.as_ref().as_str())
+            .query(&[("symbol", "BTCUSDT")])
+            .json(&json!({"foo":"bar","qty":1}));
+
+        let sec = BinanceSecurityInfo::new("test_key", "secret", BinanceSecurityType::HMAC);
+        let bn = BinanceRestfulClient::new().await;
+
+        let resp = bn.request(rb, &req_info, Some(sec)).await.expect("request failed");
+        assert_eq!(resp.status().as_u16(), 200);
+        let v: serde_json::Value = resp.json().await.expect("invalid json");
+        assert_eq!(v["ok"], json!(true));
+        assert_eq!(v["action"], json!("post"));
+    }
+
+    /// 示例测试：使用 BinanceRestfulClient 发起带 HMAC 签名的 PUT 请求（参数放在 query）
+    #[tokio::test]
+    async fn test_bn_put_signed_example() {
+        let mock_server = MockServer::start().await;
+
+        // mock：要求是 PUT，包含 X-MBX-APIKEY 头，且 query 包含 symbol=BTCUSDT
+        Mock::given(method("PUT"))
+            .and(header("X-MBX-APIKEY", "test_key"))
+            .and(query_param("symbol", "BTCUSDT"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ok": true, "action": "put"})))
+            .mount(&mock_server)
+            .await;
+
+        let limiter = create_share_rate_limiter(1000);
+        let host = Arc::new(HostInfo::new(mock_server.uri(), 1000, limiter));
+        let req_info = RequestInfo::from_base_path(host.clone(), "/api/v3/test_put", true, 1, Some(2000), Some(1)).unwrap();
+
+        let client = reqwest::Client::new();
+        let rb = client.put(req_info.as_ref().as_str()).query(&[("symbol", "BTCUSDT")]);
+
+        let sec = BinanceSecurityInfo::new("test_key", "secret", BinanceSecurityType::HMAC);
+        let bn = BinanceRestfulClient::new().await;
+
+        let resp = bn.request(rb, &req_info, Some(sec)).await.expect("request failed");
+        assert_eq!(resp.status().as_u16(), 200);
+        let v: serde_json::Value = resp.json().await.expect("invalid json");
+        assert_eq!(v["ok"], json!(true));
+        assert_eq!(v["action"], json!("put"));
     }
 }
