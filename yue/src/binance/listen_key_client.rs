@@ -17,12 +17,11 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::UnboundedReceiver;
-use tokio::time::sleep;
-
 /// 手动续期 listen key
 #[derive(Clone)]
 pub struct RenewListenKey;
+use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::time::sleep;
 
 impl ActixMessage for RenewListenKey {
     type Result = Result<(), YueError>;

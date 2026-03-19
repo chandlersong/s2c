@@ -257,7 +257,11 @@ where
 {
     let client = BinanceRestfulClient::new().await;
     let response = client.request(request_builder, info, security).await?;
-    let res = response.json().await?;
+    // Read raw bytes first and then deserialize with serde_json so that
+    // JSON parse errors are returned as serde_json::Error (mapped to YueError::SerdeError)
+    // instead of being wrapped only inside reqwest::Error.
+    let bytes = response.bytes().await?;
+    let res = serde_json::from_slice::<U>(&bytes)?;
     Ok(res)
 }
 
