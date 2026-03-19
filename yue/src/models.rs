@@ -233,7 +233,7 @@ impl RequestInfo {
             host,
             has_security,
             weight,
-            request_timeout_mill_secs: request_timeout_mill_secs.unwrap_or_else(|| 1000u32),
+            request_timeout_mill_secs: request_timeout_mill_secs.unwrap_or_else(|| 1000u32) * 1000u32,
             rate_limit_timeout_secs: rate_limit_timeout_secs.unwrap_or_else(|| 2),
         })
     }
@@ -244,7 +244,7 @@ impl RequestInfo {
         path: P,
         has_security: bool,
         weight: u32,
-        request_timeout_mill_secs: Option<u32>,
+        request_timeout_secs: Option<u32>,
         rate_limit_timeout_secs: Option<u32>,
     ) -> Result<Self, url::ParseError> {
         let base = host.host_as_str();
@@ -254,7 +254,7 @@ impl RequestInfo {
         } else {
             format!("{base}/{path}")
         };
-        Self::new_full_url(full, host, has_security, weight, request_timeout_mill_secs, rate_limit_timeout_secs)
+        Self::new_full_url(full, host, has_security, weight, request_timeout_secs, rate_limit_timeout_secs)
     }
 
     pub fn clone_with_weight(&mut self, new_weight: u32) -> Self {

@@ -204,7 +204,7 @@ pub static PING_COMMAND: LazyLock<RequestInfo> =
 
 /// SPOT API
 pub static SPOT_EXCHANGE_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_BASE.clone(), SPOT_EXCHANGE_INFO_PATH, false, 20, None, Some(10)).unwrap());
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_BASE.clone(), SPOT_EXCHANGE_INFO_PATH, false, 20, None, Some(90)).unwrap());
 
 pub static SERVER_TIME_COMMAND: LazyLock<RequestInfo> =
     LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_BASE.clone(), SPOT_SERVER_TIME_PATH, false, 1, None, Some(2)).unwrap());
@@ -261,8 +261,18 @@ where
     // JSON parse errors are returned as serde_json::Error (mapped to YueError::SerdeError)
     // instead of being wrapped only inside reqwest::Error.
     let bytes = response.bytes().await?;
-    let res = serde_json::from_slice::<U>(&bytes)?;
-    Ok(res)
+    // 尝试反序列化；如果失败，则打印响应 body 以便调试，并返回 serde 错误
+    match serde_json::from_slice::<U>(&bytes) {
+        Ok(res) => Ok(res),
+        Err(e) => {
+            // 打印到 stderr，避免调试信息混入正常输出
+            eprintln!(
+                "execute_json_request - failed to parse JSON, response body: {}",
+                String::from_utf8_lossy(&bytes)
+            );
+            Err(e.into())
+        }
+    }
 }
 
 #[cfg(test)]
