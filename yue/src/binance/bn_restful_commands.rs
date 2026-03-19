@@ -225,7 +225,7 @@ pub static SPOT_DEPTH_1000_COMMAND: LazyLock<RequestInfo> =
 /// SWAP API
 
 pub static SWAP_EXCHANGE_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SPOT_BASE.clone(), SWAP_EXCHANGE_INFO_PATH, false, 20, None, Some(90)).unwrap());
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_BASE.clone(), SWAP_EXCHANGE_INFO_PATH, false, 20, None, Some(90)).unwrap());
 
 pub static SWAP_FUNDING_RATE_COMMAND: LazyLock<RequestInfo> =
     LazyLock::new(|| RequestInfo::from_base_path(BINANCE_FUNDING_RATE_BASE.clone(), SWAP_FUNDING_RATE_PATH, false, 1, None, Some(60 * 60)).unwrap());
