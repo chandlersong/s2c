@@ -1,7 +1,7 @@
 use crate::errors::YueError;
 use crate::models::{HostInfo, RequestInfo};
 use crate::tools::{load_ed25519_signing_key, sign_hmac};
-use log::error;
+use log::{debug, error};
 use rand;
 use reqwest::{RequestBuilder, Response};
 use serde::Deserialize;
@@ -90,11 +90,13 @@ impl BinanceRestfulClient {
     ///  整个流程。
     ///  1. 根据request_info中的host信息，获取令牌。如果超时，则报错。
     ///  2. 判断是否要加上权限，如果有的就加上签名
+    ///  3, 不停的获取令牌，如果错误，就等待，知道获取token
+    ///  4，判断host是否可以访问，如果不可以，就等待。通过host的is_block来获取
     ///  3. 发送请求。
     ///  4. 判断是否超时。
     ///
     ///  需要注意的点：
-    ///  1. 如果请求http request和获取令牌的话，错误就重试，超过重试，再抛出error
+    ///  1. 如果请求http request 错误就重试，超过重试，再抛出error
     ///  2，所有的重试都是相互独立的。且共享重试次数。
     ///  3. 其他的错误，直接发出。
     ///
@@ -118,7 +120,9 @@ impl BinanceRestfulClient {
         // attempts_made 表示已经发生的失败尝试次数（用于判断是否超出重试预算），初始为 0。
         let mut attempts_made: usize = 0;
 
-        // 1) 获取令牌阶段（失败会消耗共享重试预算）
+        // 1) 获取令牌阶段（无限次重试，不消耗共享重试预算）
+        // 按用户要求：获取令牌应无限重试等待，直到成功为止
+        let mut acquire_attempts: usize = 0;
         loop {
             match request_info
                 .host
@@ -127,17 +131,29 @@ impl BinanceRestfulClient {
             {
                 Ok(_) => break, // 获取成功，进入下一阶段
                 Err(e) => {
-                    error!("Acquire token failed: {:?}, attempts_made {}", e, attempts_made);
-                    if attempts_made >= max_retries {
-                        return Err(e);
-                    }
-                    // 使用 per-kind 的退避策略，但计数使用共享 attempts_made
-                    let wait_ms = retry_wait_ms(RetryWaitKind::AcquireToken, attempts_made);
-                    attempts_made = attempts_made.saturating_add(1);
+                    debug!(
+                        "Acquire token failed: {:?}, acquire_attempts {}. Will retry indefinitely.",
+                        e, acquire_attempts
+                    );
+                    // 无限重试：使用 AcquireToken 类型的抖动等待，但不消耗共享重试预算
+                    let wait_ms = retry_wait_ms(RetryWaitKind::AcquireToken, acquire_attempts);
+                    acquire_attempts = acquire_attempts.saturating_add(1);
                     sleep(Duration::from_millis(wait_ms)).await;
                     continue;
                 }
             }
+        }
+
+        // 1.a) 获得令牌后，若 host 仍处于 blocked 状态，则无限等待直到允许（按用户要求）
+        let mut blocked_wait_attempts: usize = 0;
+        while request_info.host.is_block() {
+            error!(
+                "Host is blocked after acquiring token, waiting until allowed. attempt={}",
+                blocked_wait_attempts
+            );
+            let wait_ms = retry_wait_ms(RetryWaitKind::AcquireToken, blocked_wait_attempts);
+            blocked_wait_attempts = blocked_wait_attempts.saturating_add(1);
+            sleep(Duration::from_millis(wait_ms)).await;
         }
 
         // 2) 发送请求阶段（失败或限流会消耗共享重试预算）
@@ -458,11 +474,11 @@ mod tests {
         Arc::new(HostInfo::new(host, 0, limiter))
     }
 
-    // 等待最多 timeout_ms 毫秒，直到 host 被 block（is_allow_all_request() == false），返回是否观察到 block
+    // 等待最多 timeout_ms 毫秒，直到 host 被 block（is_block() == true），返回是否观察到 block
     async fn wait_for_block(host: &Arc<HostInfo>, timeout_ms: u64) -> bool {
         let mut waited = 0u64;
         while waited < timeout_ms {
-            if !host.is_allow_all_request() {
+            if host.is_block() {
                 return true;
             }
             sleep(Duration::from_millis(5)).await;
@@ -471,11 +487,11 @@ mod tests {
         false
     }
 
-    // 等待最多 timeout_ms 毫秒，直到 host 被 allow（is_allow_all_request() == true），返回是否观察到 allow
+    // 等待最多 timeout_ms 毫秒，直到 host 被 allow（is_block() == false），返回是否观察到 allow
     async fn wait_for_allow(host: &Arc<HostInfo>, timeout_ms: u64) -> bool {
         let mut waited = 0u64;
         while waited < timeout_ms {
-            if host.is_allow_all_request() {
+            if !host.is_block() {
                 return true;
             }
             sleep(Duration::from_millis(5)).await;
@@ -568,7 +584,8 @@ mod tests {
         // wait a bit longer than scheduled wait to ensure allow_all_request ran
         let wait_total = ms1 + 200;
         sleep(Duration::from_millis(wait_total)).await;
-        assert!(host.is_allow_all_request(), "host should be allowed after scheduled wait");
+        // After scheduled wait host should be allowed (is_block == false)
+        assert!(!host.is_block(), "host should be allowed after scheduled wait");
 
         // 再次获取 response
         let resp2 = client.get(&url).send().await.unwrap();

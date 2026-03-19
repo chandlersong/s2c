@@ -128,8 +128,8 @@ impl HostInfo {
         self.block.store(0, Ordering::SeqCst);
     }
 
-    pub fn is_allow_all_request(&self) -> bool {
-        self.block.load(Ordering::SeqCst) == 0
+    pub fn is_block(&self) -> bool {
+        self.block.load(Ordering::SeqCst) == 1
     }
 
     pub fn get_max_limit(&self) -> u32 {
