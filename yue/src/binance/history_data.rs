@@ -181,7 +181,7 @@ pub const CONTRACT_TYPE_PERPETUAL: &str = "PERPETUAL";
 /// NEXT_QUARTER：当前季度合约
 pub async fn get_trading_swap_symbols(status: Option<&str>, type_filter: Option<&str>) -> Result<Vec<TradingSymbolInfo>, YueError> {
     let client = HTTP_CLIENT.get().ok_or(YueError::new("客户端没有初始化"))?;
-    let rb = client.get(SPOT_EXCHANGE_COMMAND.as_ref().as_str());
+    let rb = client.get(SWAP_EXCHANGE_COMMAND.as_ref().as_str());
     let all = get_trading_symbols(execute_json_request::<SwapExchangeInfo>(&SWAP_EXCHANGE_COMMAND, rb, None), status).await?;
     if let Some(filter) = type_filter {
         Ok(all.into_iter().filter(|s| s.symbol_type == filter).collect())
