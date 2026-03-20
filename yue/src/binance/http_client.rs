@@ -525,7 +525,7 @@ async fn rate_limit_wait_ms(
     let retry_after_header = resp.headers().get("Retry-After").and_then(|v| v.to_str().ok()).map(|s| s.to_string());
     let wait_ms = if let Some(ref v) = retry_after_header {
         if let Ok(val) = v.trim().parse::<u64>() {
-            val.saturating_mul(1000) + 5
+            val.saturating_mul(1000) + 30000 //多等30s，等那个恢复
         } else {
             if is_funding_rate {
                 retry_wait_ms(RetryWaitKind::FundingRate, attempt)
