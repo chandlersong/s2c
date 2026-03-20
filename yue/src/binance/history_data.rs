@@ -155,23 +155,9 @@ pub fn extract_trading_symbols<S: SymbolInfoTrait>(symbols: &[S], status: Option
         .collect()
 }
 
-/// 统一异步获取交易对信息
-async fn get_trading_symbols<E, S, F>(fetch: F, status: Option<&str>) -> Result<Vec<TradingSymbolInfo>, YueError>
-where
-    E: ExchangeInfoTrait<SymbolInfo = S>,
-    S: SymbolInfoTrait,
-    F: Future<Output = Result<E, YueError>>,
-{
-    let exchange_info = fetch.await?;
-    Ok(extract_trading_symbols(exchange_info.symbols(), status))
-}
-
 /// 获取现货交易对信息
-pub async fn get_trading_spot_symbols(status: Option<&str>) -> Result<Vec<TradingSymbolInfo>, YueError> {
-    let client = HTTP_CLIENT.get().ok_or(YueError::new("客户端没有初始化"))?;
-    let rb = client.get(SPOT_EXCHANGE_COMMAND.as_ref().as_str());
-
-    get_trading_symbols(execute_json_request::<ExchangeInfo>(&SPOT_EXCHANGE_COMMAND, rb, None), status).await
+pub async fn get_trading_spot_symbols(exchange: ExchangeInfo, status: Option<&str>) -> Result<Vec<TradingSymbolInfo>, YueError> {
+    Ok(extract_trading_symbols(&exchange.symbols, status))
 }
 
 pub const CONTRACT_TYPE_PERPETUAL: &str = "PERPETUAL";
@@ -180,10 +166,12 @@ pub const CONTRACT_TYPE_PERPETUAL: &str = "PERPETUAL";
 /// PERPETUAL 为永续
 /// CURRENT_QUARTER：为下一季
 /// NEXT_QUARTER：当前季度合约
-pub async fn get_trading_swap_symbols(status: Option<&str>, type_filter: Option<&str>) -> Result<Vec<TradingSymbolInfo>, YueError> {
-    let client = HTTP_CLIENT.get().ok_or(YueError::new("客户端没有初始化"))?;
-    let rb = client.get(SWAP_EXCHANGE_COMMAND.as_ref().as_str());
-    let all = get_trading_symbols(execute_json_request::<SwapExchangeInfo>(&SWAP_EXCHANGE_COMMAND, rb, None), status).await?;
+pub async fn get_trading_swap_symbols(
+    exchange: SwapExchangeInfo,
+    status: Option<&str>,
+    type_filter: Option<&str>,
+) -> Result<Vec<TradingSymbolInfo>, YueError> {
+    let all = extract_trading_symbols(exchange.symbols(), status);
     if let Some(filter) = type_filter {
         Ok(all.into_iter().filter(|s| s.symbol_type == filter).collect())
     } else {

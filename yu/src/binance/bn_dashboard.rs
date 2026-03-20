@@ -8,9 +8,14 @@ use log::{error, info};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
-use yue::binance::history_data::{get_trading_spot_symbols, get_trading_swap_symbols, CONTRACT_TYPE_PERPETUAL};
+use yue::binance::bn_models::spot_restful::ExchangeInfo;
+use yue::binance::bn_models::swap_restful::SwapExchangeInfo;
+use yue::binance::bn_restful_commands::{execute_json_request, SPOT_EXCHANGE_COMMAND, SWAP_EXCHANGE_COMMAND};
+use yue::binance::history_data::{get_trading_spot_symbols, get_trading_swap_symbols, TradingSymbolInfo, CONTRACT_TYPE_PERPETUAL};
 use yue::binance::order_book::{OrderBook, OrderBookSnapshotMsg};
 use yue::binance::websocket_actor::TradingSymbolRefresher;
+use yue::errors::YueError;
+use yue::http_client::get_http_client;
 use yue::models::HistoryInterval;
 
 #[derive(Debug, Clone)]
@@ -62,6 +67,59 @@ impl BinanceDashboard {
             swap_symbols: Arc::new(RwLock::new(swap_symbol)),
             data_retention_hours,
             debug_mood: false,
+        }
+    }
+
+    async fn query_spot_exchange_info() -> Result<ExchangeInfo, YueError> {
+        let client = get_http_client();
+        let rb = client.get(SPOT_EXCHANGE_COMMAND.as_ref().as_str());
+        execute_json_request::<ExchangeInfo>(&SPOT_EXCHANGE_COMMAND, rb, None).await
+    }
+
+    async fn query_swap_exchange_info() -> Result<SwapExchangeInfo, YueError> {
+        let client = get_http_client();
+        let rb = client.get(SWAP_EXCHANGE_COMMAND.as_ref().as_str());
+        execute_json_request::<SwapExchangeInfo>(&SWAP_EXCHANGE_COMMAND, rb, None).await
+    }
+
+    fn refresh_trading_symbol(
+        &self,
+        spot_res: Result<Vec<TradingSymbolInfo>, YueError>,
+        swap_res: Result<Vec<TradingSymbolInfo>, YueError>,
+    ) -> Result<(), LiError> {
+        match (spot_res, swap_res) {
+            (Ok(spot_symbols), Ok(swap_symbols)) => {
+                let trading_spot_symbols: Vec<TradingSymbol> = spot_symbols
+                    .iter()
+                    .map(|sym| TradingSymbol {
+                        symbol: sym.symbol.clone(),
+                        on_board_time: None,
+                        quote_asset: sym.quote_asset.clone(),
+                        status: sym.status.clone(),
+                    })
+                    .collect();
+                let trading_swap_symbols: Vec<TradingSymbol> = swap_symbols
+                    .iter()
+                    .map(|sym| TradingSymbol {
+                        symbol: sym.symbol.clone(),
+                        on_board_time: sym.on_board_time,
+                        quote_asset: sym.quote_asset.clone(),
+                        status: sym.status.clone(),
+                    })
+                    .collect();
+
+                *self.spot_symbols.write().unwrap() = trading_spot_symbols;
+                *self.swap_symbols.write().unwrap() = trading_swap_symbols;
+                Ok(())
+            }
+            (Err(e), _) => {
+                error!("Error fetching trading spot symbols: {:?}", e);
+                Err(LiError::CustomError(format!("获取现货交易对失败: {}", e)))
+            }
+            (_, Err(e)) => {
+                error!("Error fetching trading swap symbols: {:?}", e);
+                Err(LiError::CustomError(format!("获取合约交易对失败: {}", e)))
+            }
         }
     }
 }
@@ -173,44 +231,19 @@ impl AsyncRepeatTask for BinanceDashboard {
     /// 2, status会不会出现上下架的操作。这点需要能够对接telegram
     ///
     async fn execute(&self) -> Result<(), LiError> {
-        let (spot_res, swap_res) = tokio::join!(
-            get_trading_spot_symbols(None),
-            get_trading_swap_symbols(None, Some(CONTRACT_TYPE_PERPETUAL))
-        );
+        let (spot_exchange, swap_exchange) = tokio::join!(Self::query_spot_exchange_info(), Self::query_swap_exchange_info());
 
-        match (spot_res, swap_res) {
-            (Ok(spot_symbols), Ok(swap_symbols)) => {
-                let trading_spot_symbols: Vec<TradingSymbol> = spot_symbols
-                    .iter()
-                    .map(|sym| TradingSymbol {
-                        symbol: sym.symbol.clone(),
-                        on_board_time: None,
-                        quote_asset: sym.quote_asset.clone(),
-                        status: sym.status.clone(),
-                    })
-                    .collect();
-                let trading_swap_symbols: Vec<TradingSymbol> = swap_symbols
-                    .iter()
-                    .map(|sym| TradingSymbol {
-                        symbol: sym.symbol.clone(),
-                        on_board_time: sym.on_board_time,
-                        quote_asset: sym.quote_asset.clone(),
-                        status: sym.status.clone(),
-                    })
-                    .collect();
-
-                *self.spot_symbols.write().unwrap() = trading_spot_symbols;
-                *self.swap_symbols.write().unwrap() = trading_swap_symbols;
+        match (spot_exchange, swap_exchange) {
+            (Ok(spot), Ok(swap)) => {
+                let spot_res = get_trading_spot_symbols(spot, None).await;
+                let swap_res = get_trading_swap_symbols(swap, None, Some(CONTRACT_TYPE_PERPETUAL)).await;
+                if let Err(e) = self.refresh_trading_symbol(spot_res, swap_res) {
+                    return Err(LiError::CustomError(format!("刷新交易符号失败: {}", e)));
+                };
                 Ok(())
             }
-            (Err(e), _) => {
-                error!("Error fetching trading spot symbols: {:?}", e);
-                Err(LiError::CustomError(format!("获取现货交易对失败: {}", e)))
-            }
-            (_, Err(e)) => {
-                error!("Error fetching trading swap symbols: {:?}", e);
-                Err(LiError::CustomError(format!("获取合约交易对失败: {}", e)))
-            }
+            (Err(e), _) => Err(LiError::CustomError(format!("获取现货交易所信息失败: {}", e))),
+            (_, Err(e)) => Err(LiError::CustomError(format!("获取永续交易所信息失败: {}", e))),
         }
     }
 

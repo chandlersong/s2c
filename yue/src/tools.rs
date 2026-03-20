@@ -6,8 +6,6 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use ed25519_dalek::SigningKey;
 use ed25519_dalek::ed25519::signature::SignerMut;
 use ed25519_dalek::pkcs8::DecodePrivateKey; // 带 pem 支持
-#[cfg(test)]
-use governor::Quota;
 use hmac::digest::InvalidLength;
 use hmac::{Hmac, Mac};
 use log::error;
@@ -18,13 +16,9 @@ use sha2::Sha256;
 use sonyflake::Sonyflake;
 use std::fs;
 #[cfg(test)]
-use std::num::NonZeroU32;
-#[cfg(test)]
 use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
-#[cfg(test)]
-use tokio::sync::RwLock;
 use tokio::sync::{broadcast, watch};
 use tokio::time;
 
