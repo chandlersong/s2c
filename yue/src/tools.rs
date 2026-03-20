@@ -1,7 +1,8 @@
 use crate::errors::YueError;
-use crate::models::create_share_rate_limiter;
 #[cfg(test)]
-use crate::models::{DefaultRateLimiter, HostInfo};
+use crate::models::HostInfo;
+#[cfg(test)]
+use crate::models::create_share_rate_limiter;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use ed25519_dalek::SigningKey;
 use ed25519_dalek::ed25519::signature::SignerMut;

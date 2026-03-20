@@ -343,13 +343,7 @@ impl HistoryInterval {
 
 #[cfg(test)]
 mod tests {
-    use crate::models::{DefaultRateLimiter, HistoryInterval, HostInfo, create_share_rate_limiter};
-    use governor::Jitter;
-    use governor::Quota;
-    use std::num::NonZeroU32;
-    use std::sync::Arc;
-    use std::time::Duration;
-    use tokio::sync::RwLock;
+    use crate::models::{HistoryInterval, HostInfo, create_share_rate_limiter};
 
     /// 测试：HistoryInterval::get_close_unix_ms 在一分钟间隔下的对齐
     ///
