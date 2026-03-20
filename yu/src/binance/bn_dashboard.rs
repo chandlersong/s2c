@@ -21,12 +21,13 @@ pub struct TradingSymbol {
     pub status: String,
 }
 
-//NEXT：把这些存入数据库
+//FUTURE：把这些存入数据库
 #[derive(Clone)]
 pub struct BinanceDashboard {
     spot_symbols: Arc<RwLock<Vec<TradingSymbol>>>,
     swap_symbols: Arc<RwLock<Vec<TradingSymbol>>>,
     data_retention_hours: u64,
+    debug_mood: bool,
 }
 
 impl BinanceDashboard {
@@ -35,6 +36,23 @@ impl BinanceDashboard {
             spot_symbols: Arc::new(RwLock::new(vec![])),
             swap_symbols: Arc::new(RwLock::new(vec![])),
             data_retention_hours,
+            debug_mood: false,
+        }
+    }
+
+    ///
+    /// 主要本地的初始化的request的访问很长。所以写了一个debug模式。
+    /// 所有的改动，手工调用
+    /// Mock目录：
+    /// 1. 各个的exchange info的update。从本地直接读取文件。
+    ///
+    #[deprecated]
+    pub fn debug_mode(data_retention_hours: u64) -> Self {
+        BinanceDashboard {
+            spot_symbols: Arc::new(RwLock::new(vec![])),
+            swap_symbols: Arc::new(RwLock::new(vec![])),
+            data_retention_hours,
+            debug_mood: true,
         }
     }
 
@@ -43,6 +61,7 @@ impl BinanceDashboard {
             spot_symbols: Arc::new(RwLock::new(spot_symbol)),
             swap_symbols: Arc::new(RwLock::new(swap_symbol)),
             data_retention_hours,
+            debug_mood: false,
         }
     }
 }

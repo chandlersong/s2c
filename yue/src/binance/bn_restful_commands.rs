@@ -1,14 +1,12 @@
 use crate::errors::YueError;
-use crate::models::{DefaultRateLimiter, HostInfo, RequestInfo, create_share_rate_limiter};
-use governor::{Quota, RateLimiter};
+use crate::models::{HostInfo, RequestInfo, create_share_rate_limiter};
 use reqwest::RequestBuilder;
 use serde::de::DeserializeOwned;
 use std::clone::Clone;
 
 use crate::binance::http_client::{BinanceRestfulClient, BinanceSecurityInfo};
 use log::error;
-use std::num::NonZeroU32;
-use std::sync::{Arc, LazyLock, OnceLock};
+use std::sync::{Arc, LazyLock};
 // --- API and WebSocket Base URLs ---
 // The active URL is determined by the Cargo features enabled at compile time.
 // Priority: test > binance-testnet > production (default)

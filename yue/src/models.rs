@@ -136,6 +136,40 @@ impl HostInfo {
         self.max_limit.load(Ordering::SeqCst)
     }
 
+    /// 尝试查询当前限流器大致可用的令牌数量（近似值）。
+    ///
+    /// 说明：governor 提供了 `check_n`/`check` 之类的非消耗性检查方法，用于判断是否有足够的令牌
+    /// 可用于 n 个权重而不实际消耗它们。该方法通过从 `max_check` 向下逐步调用 `check_n`，返回第一个
+    /// 被判定为可用的 n 值，作为近似的可用令牌数量。该方法的时间复杂度为 O(max_check)；对于较大
+    /// 的上界可以考虑使用二分法优化。
+    ///
+    /// 参数：
+    /// - `max_check`：要检测的最大令牌数上界（通常设置为限流桶大小或一个合理的上限），必须 >= 1。
+    /// 返回：估算的可用令牌数（0 表示不足以满足 1 个权重）
+    pub async fn get_available_tokens(&self, max_check: u32) -> u32 {
+        if max_check == 0 {
+            return 0;
+        }
+
+        // 读取 limiter 的 Arc 引用（不在 await 期间持有 guard 的引用）
+        let limiter_cloned = {
+            let guard = self.limiter.read().await;
+            guard.clone()
+        };
+
+        // 从 max_check 向下查找第一个 check_n 成功的值
+        // 使用 NonZeroU32 创建参数
+        for n in (1..=max_check).rev() {
+            if let Some(nz) = NonZeroU32::new(n) {
+                // check_n 是非消耗性的（只判断是否可用），不会实际消费令牌
+                if limiter_cloned.check_n(nz).is_ok() {
+                    return n;
+                }
+            }
+        }
+        0
+    }
+
     pub async fn set_limiter(&self, limiter: DefaultRateLimiter) {
         let mut guard = self.limiter.write().await;
         *guard = Arc::new(limiter);
@@ -338,9 +372,11 @@ impl HistoryInterval {
 #[cfg(test)]
 mod tests {
     use crate::models::{DefaultRateLimiter, HistoryInterval, HostInfo};
+    use governor::Jitter;
     use governor::Quota;
     use std::num::NonZeroU32;
     use std::sync::Arc;
+    use std::time::Duration;
     use tokio::sync::RwLock;
 
     /// 测试：HistoryInterval::get_close_unix_ms 在一分钟间隔下的对齐
@@ -450,5 +486,37 @@ mod tests {
         // zero weight should return error
         let r3 = host.acquire_limit_token(0, 1).await;
         assert!(r3.is_err(), "权重为0应当报错");
+    }
+
+    /// 测试：get_available_tokens 能够近似返回当前可用的令牌数量
+    #[tokio::test]
+    async fn test_get_available_tokens() {
+        let quota = Quota::per_minute(NonZeroU32::new(5).unwrap());
+        let limiter = Arc::new(RwLock::new(Arc::new(DefaultRateLimiter::direct(quota))));
+        let host = HostInfo::new("https://api.test", 100, limiter.clone());
+
+        // 刚创建时应该有一些令牌（<=5），但至少能满足1
+        let avail = host.get_available_tokens(5).await;
+        assert!(avail >= 1 && avail <= 5, "available tokens should be between 1 and 5, got {}", avail);
+
+        // 消耗所有 5 个令牌：直接通过 limiter 消耗以保证测试稳定性（不依赖超时路径）
+        for _ in 0..5 {
+            let guard = limiter.read().await;
+            let inner = guard.clone();
+            // 直接等待直到可用并消耗 1 个令牌（不使用 jitter 以提升可预测性）
+            inner
+                .until_n_ready_with_jitter(NonZeroU32::new(1).unwrap(), Jitter::up_to(Duration::from_millis(0)))
+                .await
+                .unwrap();
+        }
+
+        // 立即检查可用令牌应不超过之前的值（消耗后不会增加）
+        let avail2 = host.get_available_tokens(5).await;
+        assert!(
+            avail2 <= avail,
+            "after consuming tokens, available should not increase: before={}, after={}",
+            avail,
+            avail2
+        );
     }
 }

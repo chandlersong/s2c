@@ -448,12 +448,20 @@ async fn rate_limit_wait_ms(resp: &Response, host: Arc<HostInfo>, attempt: usize
     // 1) block host
     // 2) compute wait_ms (prefer Retry-After header interpreted as unix timestamp in sec or ms)
     // 3) spawn background task to allow_all_request after wait_ms
+    // Before blocking, try to get an approximate available token count for logging/diagnostics.
+    // Use a reasonable upper bound (min of host.max_limit and 1000) to avoid O(n) explosion.
+    let max_check = std::cmp::min(host.get_max_limit(), 1000);
+    let avail_tokens = host.get_available_tokens(max_check).await;
+    debug!(
+        "rate limit detected for host {} , approx available tokens: {}",
+        host.host_as_str(),
+        avail_tokens
+    );
+
     host.block_all_request();
 
     // Try parse Retry-After if present
     let retry_after_header = resp.headers().get("Retry-After").and_then(|v| v.to_str().ok()).map(|s| s.to_string());
-    let now_ms = li::tools::time::unix_time_now_u64_utc();
-
     let wait_ms = if let Some(ref v) = retry_after_header {
         if let Ok(val) = v.trim().parse::<u64>() {
             val.saturating_mul(1000) + 5
