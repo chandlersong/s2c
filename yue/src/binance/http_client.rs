@@ -465,7 +465,9 @@ async fn rate_limit_wait_ms(resp: &Response, host: Arc<HostInfo>, attempt: usize
         retry_wait_ms(RetryWaitKind::TooManyRequests, attempt)
     };
     error!(
-        "too many requests, http status {} is x-mbx-used-weight is {:?}, retry after: {} s, wait ms is {} ms",
+        "too many requests for {},host block status is {}, http status {} is x-mbx-used-weight is {:?}, retry after: {} s, wait ms is {} ms",
+        host.host_as_str(),
+        host.is_block(),
         status,
         weight_hdr,
         retry_after_header.clone().unwrap_or_default(),
