@@ -456,8 +456,7 @@ async fn rate_limit_wait_ms(resp: &Response, host: Arc<HostInfo>, attempt: usize
 
     let wait_ms = if let Some(ref v) = retry_after_header {
         if let Ok(val) = v.trim().parse::<u64>() {
-            let t_ms = val.saturating_mul(1000);
-            if t_ms > now_ms { t_ms - now_ms + 5 } else { 5 }
+            val.saturating_mul(1000) + 5
         } else {
             retry_wait_ms(RetryWaitKind::TooManyRequests, attempt)
         }
