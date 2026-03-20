@@ -18,6 +18,8 @@ enum RetryWaitKind {
     SendError,
     /// 收到 429 时的等待（基于 attempt 增加基数）
     TooManyRequests,
+    ///
+    FundingRate,
 }
 
 /// 统一计算等待毫秒数。`attempt` 用于对 TooManyRequests 类型进行累进等待。
@@ -35,6 +37,12 @@ fn retry_wait_ms(kind: RetryWaitKind, attempt: usize) -> u64 {
             // 从 10s 开始，每次重试增加 5s，并加上 0..5s 随机抖动
             // 计算：10_000 ms + attempt*5_000 ms + jitter(0..5_000)
             let base = 10_000u64 + (attempt as u64) * 5_000u64;
+            base + (rand::random::<u64>() % 5_000u64)
+        }
+        RetryWaitKind::FundingRate => {
+            // 从 60s 开始，每次重试增加 30s，并加上 0..5s 随机抖动
+            // 计算：10_000 ms + attempt*5_000 ms + jitter(0..5_000)
+            let base = 60_000u64 + (attempt as u64) * 30_000u64;
             base + (rand::random::<u64>() % 5_000u64)
         }
     }
@@ -227,7 +235,7 @@ impl BinanceRestfulClient {
                 }
                 Ok(resp) => {
                     // 统一处理 418/429/weight：由 rate_limit_wait_ms 决定是否需要等待或返回错误
-                    match rate_limit_wait_ms(&resp, request_info.host.clone(), attempts_made, max_retries).await {
+                    match rate_limit_wait_ms(&resp, request_info.host.clone(), attempts_made, max_retries, request_info).await {
                         Err(e) => return Err(e),
                         Ok(Some(wait_ms)) => {
                             // 如果需要限流等待，等待并且计入一次失败尝试，然后重试发送
@@ -378,6 +386,7 @@ pub(crate) fn extract_query_from_builder(rb: &RequestBuilder) -> Result<Option<S
 ///   - http status code是否为429。
 ///   - X-MBX-USED-WEIGHT的逻辑
 ///   - http status code是否为418。
+///   - http status code为403
 /// 2. 如果检查需要减少访问，则采用后面的通用操作
 ///
 /// ## 判断需要限流之后是否需要处理。
@@ -417,7 +426,13 @@ pub(crate) fn extract_query_from_builder(rb: &RequestBuilder) -> Result<Option<S
 /// - status 429: 若 attempt < max_retries 则返回 Ok(Some(wait_ms)) 表示调用方需等待并重试，
 ///             否则返回 Err(ExchangeRequestError)
 /// - 其他状态: 返回 Ok(None)
-async fn rate_limit_wait_ms(resp: &Response, host: Arc<HostInfo>, attempt: usize, max_retries: usize) -> Result<Option<u64>, YueError> {
+async fn rate_limit_wait_ms(
+    resp: &Response,
+    host: Arc<HostInfo>,
+    attempt: usize,
+    max_retries: usize,
+    request_info: &RequestInfo,
+) -> Result<Option<u64>, YueError> {
     let status = resp.status().as_u16();
 
     // Determine if any limit condition applies (429 status, 418 status, or weight header threshold)
@@ -431,32 +446,22 @@ async fn rate_limit_wait_ms(resp: &Response, host: Arc<HostInfo>, attempt: usize
     let is_weight_limit = match weight_hdr {
         Some(val) => {
             let max_limit = host.get_max_limit();
-            max_limit > 50 && val > max_limit.saturating_sub(50)
+            // 使用 max_limit 的 10% 作为阈值，至少为 1
+            let margin = std::cmp::max(1, (max_limit as f32 * 0.9) as u32);
+            // 触发逻辑：当已用权重 val 小于 margin（即超过 max_limit 的 10%）时视为权重限制
+            val >= margin
         }
         None => false,
     };
 
     let is_429 = status == 429;
     let is_418 = status == 418;
-
+    // 判断是否为 funding rate 的特殊 403（只对 swap funding rate 路径生效）
+    let is_funding_rate = status == 403 && request_info.url().path() == crate::binance::bn_restful_commands::SWAP_FUNDING_RATE_PATH;
     // If no limit condition, continue
-    if !is_429 && !is_418 && !is_weight_limit {
+    if !is_429 && !is_418 && !is_weight_limit && !is_funding_rate {
         return Ok(None);
     }
-
-    // At this point we detected a limit condition. Uniform handling:
-    // 1) block host
-    // 2) compute wait_ms (prefer Retry-After header interpreted as unix timestamp in sec or ms)
-    // 3) spawn background task to allow_all_request after wait_ms
-    // Before blocking, try to get an approximate available token count for logging/diagnostics.
-    // Use a reasonable upper bound (min of host.max_limit and 1000) to avoid O(n) explosion.
-    let max_check = std::cmp::min(host.get_max_limit(), 1000);
-    let avail_tokens = host.get_available_tokens(max_check).await;
-    debug!(
-        "rate limit detected for host {} , approx available tokens: {}",
-        host.host_as_str(),
-        avail_tokens
-    );
 
     host.block_all_request();
 
@@ -466,19 +471,29 @@ async fn rate_limit_wait_ms(resp: &Response, host: Arc<HostInfo>, attempt: usize
         if let Ok(val) = v.trim().parse::<u64>() {
             val.saturating_mul(1000) + 5
         } else {
-            retry_wait_ms(RetryWaitKind::TooManyRequests, attempt)
+            if is_funding_rate {
+                retry_wait_ms(RetryWaitKind::FundingRate, attempt)
+            } else {
+                retry_wait_ms(RetryWaitKind::TooManyRequests, attempt)
+            }
         }
     } else {
-        retry_wait_ms(RetryWaitKind::TooManyRequests, attempt)
+        if is_funding_rate {
+            retry_wait_ms(RetryWaitKind::FundingRate, attempt)
+        } else {
+            retry_wait_ms(RetryWaitKind::TooManyRequests, attempt)
+        }
     };
+    let is_more_than_10 = host.get_available_tokens(10).await;
     error!(
-        "too many requests for {},host block status is {}, http status {} is x-mbx-used-weight is {:?}, retry after: {} s, wait ms is {} ms",
+        "too many requests for {},host block status is {}, http status {} is x-mbx-used-weight is {:?}, retry after: {} s, wait ms is {} ms,token 剩余是否为10:{}",
         host.host_as_str(),
         host.is_block(),
         status,
         weight_hdr,
         retry_after_header.clone().unwrap_or_default(),
-        wait_ms
+        wait_ms,
+        is_more_than_10
     );
     // schedule allow_all_request in background
     let host_for_task = host.clone();
@@ -503,6 +518,11 @@ async fn rate_limit_wait_ms(resp: &Response, host: Arc<HostInfo>, attempt: usize
             Some(r) => format!("418 blocked, Retry-After={:?} s", r),
             None => "418 blocked".to_string(),
         }
+    } else if is_funding_rate {
+        match retry_after_header {
+            Some(r) => format!("403 funding rate, Retry-After={:?} s", r),
+            None => "403 funding rate".to_string(),
+        }
     } else {
         // weight limit
         match weight_hdr {
@@ -516,6 +536,8 @@ async fn rate_limit_wait_ms(resp: &Response, host: Arc<HostInfo>, attempt: usize
             429
         } else if is_418 {
             418
+        } else if is_funding_rate {
+            403
         } else {
             429
         },
@@ -603,7 +625,8 @@ mod tests {
         let resp = client.get(&url).send().await.unwrap();
 
         let host = create_mock_host_info(&mock_server.uri());
-        let r = rate_limit_wait_ms(&resp, host.clone(), 0, 0).await;
+        let req_info = RequestInfo::from_base_path(host.clone(), "/test", false, 1, Some(1), Some(1)).unwrap();
+        let r = rate_limit_wait_ms(&resp, host.clone(), 0, 0, &req_info).await;
         // Should be final error
         assert!(r.is_err());
         // Host should have been blocked (poll for a short time to avoid timing flakes)
@@ -647,8 +670,9 @@ mod tests {
 
         let host = create_mock_host_info(&mock_server.uri());
 
+        let req_info = RequestInfo::from_base_path(host.clone(), "/test", false, 1, Some(1), Some(1)).unwrap();
         // 有重试（attempt < max_retries） => 返回 Ok(Some(ms)) 表示需要等待
-        let r1 = rate_limit_wait_ms(&resp, host.clone(), 0, 1).await.unwrap();
+        let r1 = rate_limit_wait_ms(&resp, host.clone(), 0, 1, &req_info).await.unwrap();
         assert!(r1.is_some());
         let ms1 = r1.unwrap();
         assert!(ms1 > 0, "wait_ms should be positive");
@@ -663,7 +687,7 @@ mod tests {
         // 再次获取 response
         let resp2 = client.get(&url).send().await.unwrap();
         // 无重试（attempt >= max_retries） => 返回 Err
-        let r2 = rate_limit_wait_ms(&resp2, host.clone(), 0, 0).await;
+        let r2 = rate_limit_wait_ms(&resp2, host.clone(), 0, 0, &req_info).await;
         assert!(r2.is_err());
         // blocked immediately (poll)
         assert!(wait_for_block(&host, 100).await, "host should be blocked after final limit");
@@ -714,7 +738,9 @@ mod tests {
         // 设置 host 的 max_limit 为 1000 来触发接近上限逻辑
         host.set_max_limit(1000);
 
-        let opt = rate_limit_wait_ms(&resp, host.clone(), 0, 1).await.unwrap();
+        let req_info = RequestInfo::from_base_path(host.clone(), "/test", false, 1, Some(1), Some(1)).unwrap();
+
+        let opt = rate_limit_wait_ms(&resp, host.clone(), 0, 1, &req_info).await.unwrap();
         assert!(opt.is_some(), "expected Some(wait_ms) when used weight near limit");
         let ms = opt.unwrap();
         // 如果响应包含 Retry-After（测试中设为 "0"），实现会优先使用 Retry-After 计算等待时间，
