@@ -484,7 +484,7 @@ async fn rate_limit_wait_ms(
             retry_wait_ms(RetryWaitKind::TooManyRequests, attempt)
         }
     };
-    let is_more_than_10 = host.get_available_tokens(10).await;
+    let is_more_than_10 = host.get_available_tokens(host.get_max_limit()).await;
     error!(
         "too many requests for {},host block status is {}, http status {} is x-mbx-used-weight is {:?}, retry after: {} s, wait ms is {} ms,token 剩余是否为10:{}",
         host.host_as_str(),
