@@ -155,6 +155,9 @@ impl BinanceRestfulClient {
             {
                 Ok(state_snapshot) => {
                     if let Some(s) = state_snapshot {
+                        if let Some(value) = Self::check_host_block(request_info, total_timeout_ms, cumulative_waited_ms).await {
+                            return value;
+                        }
                         if s.remaining_burst_capacity() < (request_info.host.get_max_limit() as f64 * 0.1) as u32 {
                             if let Some(value) = Self::wait_for_acquire_token(total_timeout_ms, cumulative_waited_ms, acquire_attempts).await {
                                 return value;
