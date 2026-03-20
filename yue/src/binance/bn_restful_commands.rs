@@ -6,6 +6,7 @@ use serde::de::DeserializeOwned;
 use std::clone::Clone;
 
 use crate::binance::http_client::{BinanceRestfulClient, BinanceSecurityInfo};
+use log::error;
 use std::num::NonZeroU32;
 use std::sync::{Arc, LazyLock, OnceLock};
 // --- API and WebSocket Base URLs ---
@@ -129,24 +130,6 @@ pub const SWAP_LISTEN_KEY_PATH: &str = "/fapi/v1/listenKey";
 
 pub const PAPI_LISTEN_KEY_PATH: &str = "/papi/v1/listenKey";
 
-/// 用于自动生成币安相关限流器静态变量和获取函数的宏
-macro_rules! define_rate_limiter {
-    ($name:ident, $rate_const:ident, $fn_name:ident) => {
-        static $name: OnceLock<DefaultRateLimiter> = OnceLock::new();
-        /// 获取 RateLimiter 的静态引用，由宏自动生成
-        pub fn $fn_name() -> Option<&'static DefaultRateLimiter> {
-            Some($name.get_or_init(|| {
-                RateLimiter::direct(Quota::per_minute(NonZeroU32::new($rate_const).unwrap()).allow_burst(NonZeroU32::new($rate_const).unwrap()))
-            }))
-        }
-    };
-}
-
-// 用宏自动生成币安现货、合约、资金费率限流器相关函数
-// 用法：define_rate_limiter!(静态变量名, 速率常量名, 函数名)
-define_rate_limiter!(SPOT_RATE_LIMITER, SPOT_RATE_PER_MINUTE, get_bn_spot_limit);
-define_rate_limiter!(SWAP_RATE_LIMITER, SWAP_LIMITER_PER_MINUTE, get_bn_swap_limit);
-define_rate_limiter!(FUNDING_RATE_RATE_LIMITER, SWAP_FUNDING_PER_MINUTE, get_bn_funding_rate_limit);
 /// Wrapper for Binance requests to enable retry with backon
 
 pub static PING_COMMAND: LazyLock<RequestInfo> =
@@ -235,10 +218,10 @@ pub static SWAP_FUNDING_RATE_COMMAND: LazyLock<RequestInfo> =
 因为每次取1k，所有为5
 */
 pub static SWAP_KLINE_HISTORY_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_BASE.clone(), SWAP_KLINE_PATH, false, 5, None, Some(60 * 60)).unwrap());
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_BASE.clone(), SWAP_KLINE_PATH, false, 10, None, Some(60 * 60)).unwrap());
 
 pub static SWAP_FIVE_MIN_KLINE_HISTORY_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_BASE.clone(), SWAP_KLINE_PATH, false, 1, None, Some(60 * 60)).unwrap());
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_BASE.clone(), SWAP_KLINE_PATH, false, 2, None, Some(60 * 60)).unwrap());
 
 pub static SWAP_LISTEN_KEY_COMMAND: LazyLock<RequestInfo> =
     LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_BASE.clone(), SWAP_LISTEN_KEY_PATH, false, 1, None, Some(60 * 60)).unwrap());
@@ -266,7 +249,7 @@ where
         Ok(res) => Ok(res),
         Err(e) => {
             // 打印到 stderr，避免调试信息混入正常输出
-            eprintln!(
+            error!(
                 "execute_json_request - failed to parse JSON, response body: {}",
                 String::from_utf8_lossy(&bytes)
             );

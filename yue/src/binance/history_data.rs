@@ -170,6 +170,7 @@ where
 pub async fn get_trading_spot_symbols(status: Option<&str>) -> Result<Vec<TradingSymbolInfo>, YueError> {
     let client = HTTP_CLIENT.get().ok_or(YueError::new("客户端没有初始化"))?;
     let rb = client.get(SPOT_EXCHANGE_COMMAND.as_ref().as_str());
+
     get_trading_symbols(execute_json_request::<ExchangeInfo>(&SPOT_EXCHANGE_COMMAND, rb, None), status).await
 }
 

@@ -92,13 +92,14 @@ impl BinanceRestfulClient {
     ///  2. 判断是否要加上权限，如果有的就加上签名
     ///  3, 不停的获取令牌，如果错误，就等待，知道获取token
     ///  4，判断host是否可以访问，如果不可以，就等待。通过host的is_block来获取
-    ///  3. 发送请求。
-    ///  4. 判断是否超时。
+    ///  5. 发送请求。
+    ///  6. 判断请求是否触发等待超时。
     ///
     ///  需要注意的点：
     ///  1. 如果请求http request 错误就重试，超过重试，再抛出error
-    ///  2，所有的重试都是相互独立的。且共享重试次数。
+    ///  2，所有的重试都是相互独立的。
     ///  3. 其他的错误，直接发出。
+    ///  4. 所有等待的点，都不能超过request_info中的request_timeout_mill_secs
     ///
     ///
     pub async fn request(
@@ -120,8 +121,16 @@ impl BinanceRestfulClient {
         // attempts_made 表示已经发生的失败尝试次数（用于判断是否超出重试预算），初始为 0。
         let mut attempts_made: usize = 0;
 
+        // 累计等待时间（毫秒），用于确保所有等待（包括 acquire/blocked/send/rate-limit 等）
+        // 的总计不超过 request_info.request_timeout_mill_secs
+        let total_timeout_ms = request_info.request_timeout_mill_secs as u64;
+        let mut cumulative_waited_ms: u64 = 0;
+
+        // helper: we will inline remaining/to_sleep calculation at each sleep point to avoid
+        // closure borrow issues (we need to mutate cumulative_waited_ms after await).
+
         // 1) 获取令牌阶段（无限次重试，不消耗共享重试预算）
-        // 按用户要求：获取令牌应无限重试等待，直到成功为止
+        // 按用户要求：获取令牌应无限重试等待，直到成功为止。但现在加入总等待时长限制
         let mut acquire_attempts: usize = 0;
         loop {
             match request_info
@@ -132,28 +141,53 @@ impl BinanceRestfulClient {
                 Ok(_) => break, // 获取成功，进入下一阶段
                 Err(e) => {
                     debug!(
-                        "Acquire token failed: {:?}, acquire_attempts {}. Will retry indefinitely.",
+                        "Acquire token failed: {:?}, acquire_attempts {}. Will retry until total timeout.",
                         e, acquire_attempts
                     );
                     // 无限重试：使用 AcquireToken 类型的抖动等待，但不消耗共享重试预算
                     let wait_ms = retry_wait_ms(RetryWaitKind::AcquireToken, acquire_attempts);
                     acquire_attempts = acquire_attempts.saturating_add(1);
-                    sleep(Duration::from_millis(wait_ms)).await;
+
+                    // decide actual sleep duration respecting total timeout
+                    let remaining = total_timeout_ms.saturating_sub(cumulative_waited_ms);
+                    if remaining == 0 {
+                        return Err(YueError::new("total wait time exceeded request timeout"));
+                    }
+                    let to_sleep = if wait_ms >= remaining { remaining } else { wait_ms };
+                    // perform sleep
+                    sleep(Duration::from_millis(to_sleep)).await;
+                    cumulative_waited_ms = cumulative_waited_ms.saturating_add(to_sleep);
+
+                    // if we slept the remaining time, then total timeout reached
+                    if cumulative_waited_ms >= total_timeout_ms {
+                        return Err(YueError::new("total wait time exceeded request timeout while acquiring token"));
+                    }
                     continue;
                 }
             }
         }
 
-        // 1.a) 获得令牌后，若 host 仍处于 blocked 状态，则无限等待直到允许（按用户要求）
+        // 1.a) 获得令牌后，若 host 仍处于 blocked 状态，则无限等待直到允许（按用户要求），但受总等待时长限制
         let mut blocked_wait_attempts: usize = 0;
         while request_info.host.is_block() {
-            error!(
+            debug!(
                 "Host is blocked after acquiring token, waiting until allowed. attempt={}",
                 blocked_wait_attempts
             );
             let wait_ms = retry_wait_ms(RetryWaitKind::AcquireToken, blocked_wait_attempts);
             blocked_wait_attempts = blocked_wait_attempts.saturating_add(1);
-            sleep(Duration::from_millis(wait_ms)).await;
+
+            let remaining = total_timeout_ms.saturating_sub(cumulative_waited_ms);
+            if remaining == 0 {
+                return Err(YueError::new("total wait time exceeded request timeout"));
+            }
+            let to_sleep = if wait_ms >= remaining { remaining } else { wait_ms };
+            sleep(Duration::from_millis(to_sleep)).await;
+            cumulative_waited_ms = cumulative_waited_ms.saturating_add(to_sleep);
+
+            if cumulative_waited_ms >= total_timeout_ms {
+                return Err(YueError::new("total wait time exceeded request timeout while waiting for host unblocked"));
+            }
         }
 
         // 2) 发送请求阶段（失败或限流会消耗共享重试预算）
@@ -175,8 +209,20 @@ impl BinanceRestfulClient {
                         return Err(YueError::RequestError(e));
                     }
                     let wait_ms = retry_wait_ms(RetryWaitKind::SendError, attempts_made);
+
+                    // decide sleep respecting total timeout
+                    let remaining = total_timeout_ms.saturating_sub(cumulative_waited_ms);
+                    if remaining == 0 {
+                        return Err(YueError::new("total wait time exceeded request timeout"));
+                    }
+                    let to_sleep = if wait_ms >= remaining { remaining } else { wait_ms };
                     attempts_made = attempts_made.saturating_add(1);
-                    sleep(Duration::from_millis(wait_ms)).await;
+                    sleep(Duration::from_millis(to_sleep)).await;
+                    cumulative_waited_ms = cumulative_waited_ms.saturating_add(to_sleep);
+
+                    if cumulative_waited_ms >= total_timeout_ms {
+                        return Err(YueError::new("total wait time exceeded request timeout after send error"));
+                    }
                     continue;
                 }
                 Ok(resp) => {
@@ -188,8 +234,20 @@ impl BinanceRestfulClient {
                             if attempts_made >= max_retries {
                                 return Err(YueError::new("exhausted retries due to rate limit"));
                             }
+
+                            // decide sleep respecting total timeout
+                            let remaining = total_timeout_ms.saturating_sub(cumulative_waited_ms);
+                            if remaining == 0 {
+                                return Err(YueError::new("total wait time exceeded request timeout"));
+                            }
+                            let to_sleep = if wait_ms >= remaining { remaining } else { wait_ms };
                             attempts_made = attempts_made.saturating_add(1);
-                            sleep(Duration::from_millis(wait_ms)).await;
+                            sleep(Duration::from_millis(to_sleep)).await;
+                            cumulative_waited_ms = cumulative_waited_ms.saturating_add(to_sleep);
+
+                            if cumulative_waited_ms >= total_timeout_ms {
+                                return Err(YueError::new("total wait time exceeded request timeout after rate limit"));
+                            }
                             continue;
                         }
                         Ok(None) => {
@@ -406,7 +464,13 @@ async fn rate_limit_wait_ms(resp: &Response, host: Arc<HostInfo>, attempt: usize
     } else {
         retry_wait_ms(RetryWaitKind::TooManyRequests, attempt)
     };
-
+    error!(
+        "too many requests, http status {} is x-mbx-used-weight is {:?}, retry after: {} s, wait ms is {} ms",
+        status,
+        weight_hdr,
+        retry_after_header.clone().unwrap_or_default(),
+        wait_ms
+    );
     // schedule allow_all_request in background
     let host_for_task = host.clone();
     tokio::spawn(async move {
@@ -422,12 +486,12 @@ async fn rate_limit_wait_ms(resp: &Response, host: Arc<HostInfo>, attempt: usize
     // Final error
     let body = if is_429 {
         match retry_after_header {
-            Some(r) => format!("429 Too Many Requests, Retry-After={:?}", r),
+            Some(r) => format!("429 Too Many Requests, Retry-After={:?} s", r),
             None => "429 Too Many Requests".to_string(),
         }
     } else if is_418 {
         match retry_after_header {
-            Some(r) => format!("418 blocked, Retry-After={:?}", r),
+            Some(r) => format!("418 blocked, Retry-After={:?} s", r),
             None => "418 blocked".to_string(),
         }
     } else {
