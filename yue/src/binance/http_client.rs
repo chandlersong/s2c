@@ -27,8 +27,10 @@ enum RetryWaitKind {
 fn retry_wait_ms(kind: RetryWaitKind, attempt: usize) -> u64 {
     match kind {
         RetryWaitKind::AcquireToken => {
-            // 50..149
-            (rand::random::<u64>() % 100) + 50
+            // 随机 20s 到 50s（毫秒），包含端点
+            // 生成范围：20_000 ..= 50_000
+            let jitter = rand::random::<u64>() % 30_001u64; // 0 ..= 30_000
+            20_000u64 + jitter
         }
         RetryWaitKind::SendError => {
             // 100..199
@@ -176,30 +178,12 @@ impl BinanceRestfulClient {
         }
 
         // 1.a) 获得令牌后，若 host 仍处于 blocked 状态，则无限等待直到允许（按用户要求），但受总等待时长限制
-        let mut blocked_wait_attempts: usize = 0;
-        while request_info.host.is_block() {
-            debug!(
-                "Host is blocked after acquiring token, waiting until allowed. attempt={}",
-                blocked_wait_attempts
-            );
-            let wait_ms = retry_wait_ms(RetryWaitKind::AcquireToken, blocked_wait_attempts);
-            blocked_wait_attempts = blocked_wait_attempts.saturating_add(1);
-
-            let remaining = total_timeout_ms.saturating_sub(cumulative_waited_ms);
-            if remaining == 0 {
-                return Err(YueError::new("total wait time exceeded request timeout"));
-            }
-            let to_sleep = if wait_ms >= remaining { remaining } else { wait_ms };
-            sleep(Duration::from_millis(to_sleep)).await;
-            cumulative_waited_ms = cumulative_waited_ms.saturating_add(to_sleep);
-
-            if cumulative_waited_ms >= total_timeout_ms {
-                return Err(YueError::new("total wait time exceeded request timeout while waiting for host unblocked"));
-            }
-        }
 
         // 2) 发送请求阶段（失败或限流会消耗共享重试预算）
         loop {
+            if let Some(value) = Self::check_host_block(request_info, total_timeout_ms, cumulative_waited_ms).await {
+                return value;
+            }
             // 复制 RequestBuilder 以便重试（使用经过 compose_security_header 处理后的 real_builder）
             let mut rb = match real_builder.try_clone() {
                 Some(b) => b,
@@ -275,6 +259,37 @@ impl BinanceRestfulClient {
                 }
             }
         }
+    }
+
+    async fn check_host_block(
+        request_info: &RequestInfo,
+        total_timeout_ms: u64,
+        mut cumulative_waited_ms: u64,
+    ) -> Option<Result<Response, YueError>> {
+        let mut blocked_wait_attempts: usize = 0;
+        while request_info.host.is_block() {
+            debug!(
+                "Host is blocked after acquiring token, waiting until allowed. attempt={}",
+                blocked_wait_attempts
+            );
+            let wait_ms = retry_wait_ms(RetryWaitKind::AcquireToken, blocked_wait_attempts);
+            blocked_wait_attempts = blocked_wait_attempts.saturating_add(1);
+
+            let remaining = total_timeout_ms.saturating_sub(cumulative_waited_ms);
+            if remaining == 0 {
+                return Some(Err(YueError::new("total wait time exceeded request timeout")));
+            }
+            let to_sleep = if wait_ms >= remaining { remaining } else { wait_ms };
+            sleep(Duration::from_millis(to_sleep)).await;
+            cumulative_waited_ms = cumulative_waited_ms.saturating_add(to_sleep);
+
+            if cumulative_waited_ms >= total_timeout_ms {
+                return Some(Err(YueError::new(
+                    "total wait time exceeded request timeout while waiting for host unblocked",
+                )));
+            }
+        }
+        None
     }
 
     async fn wait_for_acquire_token(
@@ -584,13 +599,10 @@ mod tests {
     use super::{BinanceRestfulClient, BinanceSecurityInfo, BinanceSecurityType};
     use super::{compose_security_header, rate_limit_wait_ms};
     use crate::errors::YueError;
-    use crate::models::{DefaultRateLimiter, HostInfo, RequestInfo, create_share_rate_limiter};
-    use governor::Quota;
+    use crate::models::{HostInfo, RequestInfo, create_share_rate_limiter};
     use serde_json::json;
-    use std::num::NonZeroU32;
     use std::sync::Arc;
     use std::time::Duration;
-    use tokio::sync::RwLock;
     use tokio::time::sleep;
     use wiremock::matchers::{header, method, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};

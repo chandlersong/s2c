@@ -352,11 +352,6 @@ async fn start_refresh_history_data(origin_dash_board: BinanceDashboard) -> Resu
     );
     spot_kline_task.initial_data().await?;
 
-    //PLAN： 更新交易所时间表达式进入Config
-    let _ = CronActor::new("30 59 */6 * * * *", update_dashboard_task).start();
-    //FUTURE: 支持不同的interval
-    let _ = CronActor::new("01 */5 * * * * *", spot_kline_task).start();
-
     let swap_data_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SwapKline));
     let swap_initial_kline_task = build_kline_task(
         &SWAP_KLINE_HISTORY_COMMAND,
@@ -376,7 +371,6 @@ async fn start_refresh_history_data(origin_dash_board: BinanceDashboard) -> Resu
         SymbolType::Swap,
         HistoryInterval::FiveMinutes,
     );
-    let _ = CronActor::new("01 */5 * * * * *", swap_update_kline_task).start();
 
     let funding_rate_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SwapFundingRate));
     let funding_rate_fetcher = SimpleHistoryFetcher::new(&SWAP_FUNDING_RATE_COMMAND);
@@ -391,6 +385,11 @@ async fn start_refresh_history_data(origin_dash_board: BinanceDashboard) -> Resu
         Some(HistoryInterval::OneHour),
     );
     funding_rate_task.initial_data().await?;
+    //PLAN： 更新交易所时间表达式进入Config
+    let _ = CronActor::new("30 59 */6 * * * *", update_dashboard_task).start();
+    //FUTURE: 支持不同的interval
+    let _ = CronActor::new("01 */5 * * * * *", spot_kline_task).start();
+    let _ = CronActor::new("01 */5 * * * * *", swap_update_kline_task).start();
     let _ = CronActor::new("01 01 * * * * *", funding_rate_task).start();
     Ok(())
 }
