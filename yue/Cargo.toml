@@ -22,7 +22,7 @@ async-trait = { workspace = true }
 tokio-tungstenite = { workspace = true }
 tokio-native-tls = { workspace = true }
 futures-util = { workspace = true }
-governor = { version = "0.10.0", features = ["std"] }
+governor = { version = "0.10.4", features = ["std"] }
 
 moka = { version = "0.12.10", features = ["future"] }
 

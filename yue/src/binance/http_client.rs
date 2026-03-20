@@ -1,6 +1,7 @@
 use crate::errors::YueError;
 use crate::models::{HostInfo, RequestInfo};
 use crate::tools::{load_ed25519_signing_key, sign_hmac};
+use governor::middleware::StateSnapshot;
 use log::{debug, error};
 use rand;
 use reqwest::{RequestBuilder, Response};
@@ -139,6 +140,7 @@ impl BinanceRestfulClient {
 
         // 1) 获取令牌阶段（无限次重试，不消耗共享重试预算）
         // 按用户要求：获取令牌应无限重试等待，直到成功为止。但现在加入总等待时长限制
+        let mut acquire_state_snapshot: Option<StateSnapshot> = None;
         let mut acquire_attempts: usize = 0;
         loop {
             match request_info
@@ -146,30 +148,28 @@ impl BinanceRestfulClient {
                 .acquire_limit_token(request_info.weight, request_info.get_rate_limit_timeout())
                 .await
             {
-                Ok(_) => break, // 获取成功，进入下一阶段
+                Ok(state_snapshot) => {
+                    if let Some(s) = state_snapshot {
+                        if s.remaining_burst_capacity() > (request_info.host.get_max_limit() as f64 * 0.9) as u32 {
+                            if let Some(value) = Self::wait_for_acquire_token(total_timeout_ms, cumulative_waited_ms, acquire_attempts).await {
+                                return value;
+                            }
+                            acquire_attempts = acquire_attempts.saturating_add(1);
+                            continue;
+                        }
+                        acquire_state_snapshot = Some(s)
+                    }
+                    break;
+                } // 获取成功，进入下一阶段
                 Err(e) => {
                     debug!(
                         "Acquire token failed: {:?}, acquire_attempts {}. Will retry until total timeout.",
                         e, acquire_attempts
                     );
-                    // 无限重试：使用 AcquireToken 类型的抖动等待，但不消耗共享重试预算
-                    let wait_ms = retry_wait_ms(RetryWaitKind::AcquireToken, acquire_attempts);
+                    if let Some(value) = Self::wait_for_acquire_token(total_timeout_ms, cumulative_waited_ms, acquire_attempts).await {
+                        return value;
+                    }
                     acquire_attempts = acquire_attempts.saturating_add(1);
-
-                    // decide actual sleep duration respecting total timeout
-                    let remaining = total_timeout_ms.saturating_sub(cumulative_waited_ms);
-                    if remaining == 0 {
-                        return Err(YueError::new("total wait time exceeded request timeout"));
-                    }
-                    let to_sleep = if wait_ms >= remaining { remaining } else { wait_ms };
-                    // perform sleep
-                    sleep(Duration::from_millis(to_sleep)).await;
-                    cumulative_waited_ms = cumulative_waited_ms.saturating_add(to_sleep);
-
-                    // if we slept the remaining time, then total timeout reached
-                    if cumulative_waited_ms >= total_timeout_ms {
-                        return Err(YueError::new("total wait time exceeded request timeout while acquiring token"));
-                    }
                     continue;
                 }
             }
@@ -235,7 +235,16 @@ impl BinanceRestfulClient {
                 }
                 Ok(resp) => {
                     // 统一处理 418/429/weight：由 rate_limit_wait_ms 决定是否需要等待或返回错误
-                    match rate_limit_wait_ms(&resp, request_info.host.clone(), attempts_made, max_retries, request_info).await {
+                    match rate_limit_wait_ms(
+                        &resp,
+                        request_info.host.clone(),
+                        attempts_made,
+                        max_retries,
+                        request_info,
+                        acquire_state_snapshot.as_ref(),
+                    )
+                    .await
+                    {
                         Err(e) => return Err(e),
                         Ok(Some(wait_ms)) => {
                             // 如果需要限流等待，等待并且计入一次失败尝试，然后重试发送
@@ -266,6 +275,31 @@ impl BinanceRestfulClient {
                 }
             }
         }
+    }
+
+    async fn wait_for_acquire_token(
+        total_timeout_ms: u64,
+        mut cumulative_waited_ms: u64,
+        acquire_attempts: usize,
+    ) -> Option<Result<Response, YueError>> {
+        // 无限重试：使用 AcquireToken 类型的抖动等待，但不消耗共享重试预算
+        let wait_ms = retry_wait_ms(RetryWaitKind::AcquireToken, acquire_attempts);
+
+        // decide actual sleep duration respecting total timeout
+        let remaining = total_timeout_ms.saturating_sub(cumulative_waited_ms);
+        if remaining == 0 {
+            return Some(Err(YueError::new("total wait time exceeded request timeout")));
+        }
+        let to_sleep = if wait_ms >= remaining { remaining } else { wait_ms };
+        // perform sleep
+        sleep(Duration::from_millis(to_sleep)).await;
+        cumulative_waited_ms = cumulative_waited_ms.saturating_add(to_sleep);
+
+        // if we slept the remaining time, then total timeout reached
+        if cumulative_waited_ms >= total_timeout_ms {
+            return Some(Err(YueError::new("total wait time exceeded request timeout while acquiring token")));
+        }
+        None
     }
 }
 
@@ -432,6 +466,7 @@ async fn rate_limit_wait_ms(
     attempt: usize,
     max_retries: usize,
     request_info: &RequestInfo,
+    last_state_snapshot: Option<&StateSnapshot>,
 ) -> Result<Option<u64>, YueError> {
     let status = resp.status().as_u16();
 
@@ -484,16 +519,15 @@ async fn rate_limit_wait_ms(
             retry_wait_ms(RetryWaitKind::TooManyRequests, attempt)
         }
     };
-    let is_more_than_10 = host.get_available_tokens(host.get_max_limit()).await;
     error!(
-        "too many requests for {},host block status is {}, http status {} is x-mbx-used-weight is {:?}, retry after: {} s, wait ms is {} ms,token 剩余是否为10:{}",
+        "too many requests for {},host block status is {}, http status {} is x-mbx-used-weight is {:?}, retry after: {} s, wait ms is {} ms,token 剩余是:{}",
         host.host_as_str(),
         host.is_block(),
         status,
         weight_hdr,
         retry_after_header.clone().unwrap_or_default(),
         wait_ms,
-        is_more_than_10
+        last_state_snapshot.map(|s| s.remaining_burst_capacity() as i32).unwrap_or(-1)
     );
     // schedule allow_all_request in background
     let host_for_task = host.clone();
@@ -563,9 +597,7 @@ mod tests {
 
     fn create_mock_host_info(host: &str) -> Arc<HostInfo> {
         // 初始 quota（用一个合理默认值，马上会被刷新覆盖）
-        let initial_quota = Quota::per_minute(NonZeroU32::new(1000).unwrap()).allow_burst(NonZeroU32::new(300).unwrap());
-
-        let limiter = Arc::new(RwLock::new(Arc::new(DefaultRateLimiter::direct(initial_quota))));
+        let limiter = create_share_rate_limiter(300);
         Arc::new(HostInfo::new(host, 0, limiter))
     }
 
@@ -626,7 +658,7 @@ mod tests {
 
         let host = create_mock_host_info(&mock_server.uri());
         let req_info = RequestInfo::from_base_path(host.clone(), "/test", false, 1, Some(1), Some(1)).unwrap();
-        let r = rate_limit_wait_ms(&resp, host.clone(), 0, 0, &req_info).await;
+        let r = rate_limit_wait_ms(&resp, host.clone(), 0, 0, &req_info, None).await;
         // Should be final error
         assert!(r.is_err());
         // Host should have been blocked (poll for a short time to avoid timing flakes)
@@ -672,7 +704,7 @@ mod tests {
 
         let req_info = RequestInfo::from_base_path(host.clone(), "/test", false, 1, Some(1), Some(1)).unwrap();
         // 有重试（attempt < max_retries） => 返回 Ok(Some(ms)) 表示需要等待
-        let r1 = rate_limit_wait_ms(&resp, host.clone(), 0, 1, &req_info).await.unwrap();
+        let r1 = rate_limit_wait_ms(&resp, host.clone(), 0, 1, &req_info, None).await.unwrap();
         assert!(r1.is_some());
         let ms1 = r1.unwrap();
         assert!(ms1 > 0, "wait_ms should be positive");
@@ -687,7 +719,7 @@ mod tests {
         // 再次获取 response
         let resp2 = client.get(&url).send().await.unwrap();
         // 无重试（attempt >= max_retries） => 返回 Err
-        let r2 = rate_limit_wait_ms(&resp2, host.clone(), 0, 0, &req_info).await;
+        let r2 = rate_limit_wait_ms(&resp2, host.clone(), 0, 0, &req_info, None).await;
         assert!(r2.is_err());
         // blocked immediately (poll)
         assert!(wait_for_block(&host, 100).await, "host should be blocked after final limit");
@@ -740,7 +772,7 @@ mod tests {
 
         let req_info = RequestInfo::from_base_path(host.clone(), "/test", false, 1, Some(1), Some(1)).unwrap();
 
-        let opt = rate_limit_wait_ms(&resp, host.clone(), 0, 1, &req_info).await.unwrap();
+        let opt = rate_limit_wait_ms(&resp, host.clone(), 0, 1, &req_info, None).await.unwrap();
         assert!(opt.is_some(), "expected Some(wait_ms) when used weight near limit");
         let ms = opt.unwrap();
         // 如果响应包含 Retry-After（测试中设为 "0"），实现会优先使用 Retry-After 计算等待时间，

@@ -1,4 +1,5 @@
 use crate::errors::YueError;
+use crate::models::create_share_rate_limiter;
 #[cfg(test)]
 use crate::models::{DefaultRateLimiter, HostInfo};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
@@ -280,9 +281,7 @@ async fn frequency_reducer_output<V: Send + Clone + Sync>(
 #[cfg(test)]
 pub fn create_mock_host_info(host: &str) -> Arc<HostInfo> {
     // 初始 quota（用一个合理默认值，马上会被刷新覆盖）
-    let initial_quota = Quota::per_minute(NonZeroU32::new(1000).unwrap()).allow_burst(NonZeroU32::new(300).unwrap());
-
-    let limiter = Arc::new(RwLock::new(Arc::new(DefaultRateLimiter::direct(initial_quota))));
+    let limiter = create_share_rate_limiter(300);
     Arc::new(HostInfo::new(host, 0, limiter))
 }
 
