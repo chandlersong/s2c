@@ -145,6 +145,9 @@ impl BinanceRestfulClient {
         let mut acquire_state_snapshot: Option<StateSnapshot> = None;
         let mut acquire_attempts: usize = 0;
         loop {
+            if let Some(value) = Self::check_host_block(request_info, total_timeout_ms, cumulative_waited_ms).await {
+                return value;
+            }
             match request_info
                 .host
                 .acquire_limit_token(request_info.weight, request_info.get_rate_limit_timeout())
