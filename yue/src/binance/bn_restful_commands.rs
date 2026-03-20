@@ -13,9 +13,9 @@ use std::sync::{Arc, LazyLock};
 
 /// PLAN：这些做成配置项。比如一台server需要部署多个instance
 /// 然后经过测试，发觉比上限低一点，如果定格，容易被封
-static SPOT_RATE_PER_MINUTE: u32 = 1190;
-static SWAP_LIMITER_PER_MINUTE: u32 = 1200;
-static SWAP_FUNDING_PER_MINUTE: u32 = 95;
+pub static SPOT_RATE_PER_MINUTE: u32 = 1190;
+pub static SWAP_LIMITER_PER_MINUTE: u32 = 1200;
+pub static SWAP_FUNDING_PER_MINUTE: u32 = 95;
 #[cfg(not(any(feature = "binance-testnet", test)))]
 pub const BINANCE_SPOT_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
     Arc::new(HostInfo::new(

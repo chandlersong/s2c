@@ -144,6 +144,11 @@ impl HostInfo {
         *guard = Arc::new(limiter);
     }
 
+    pub async fn refresh_rate_limit(&self, rate_limit: u32) {
+        self.set_limiter(create_default_rate_limiter(rate_limit)).await;
+        self.set_max_limit(rate_limit);
+    }
+
     ///
     /// 获取令牌的流程。
     ///

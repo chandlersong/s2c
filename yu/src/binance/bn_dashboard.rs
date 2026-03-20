@@ -5,12 +5,18 @@ use async_trait::async_trait;
 use li::actix_jobs::AsyncRepeatTask;
 use li::errors::LiError;
 use log::{error, info};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use yue::binance::bn_models::spot_restful::ExchangeInfo;
 use yue::binance::bn_models::swap_restful::SwapExchangeInfo;
-use yue::binance::bn_restful_commands::{execute_json_request, SPOT_EXCHANGE_COMMAND, SWAP_EXCHANGE_COMMAND};
+use yue::binance::bn_restful_commands::{
+    execute_json_request, BINANCE_SPOT_BASE, BINANCE_SWAP_BASE, SPOT_EXCHANGE_COMMAND, SPOT_RATE_PER_MINUTE, SWAP_EXCHANGE_COMMAND,
+};
 use yue::binance::history_data::{get_trading_spot_symbols, get_trading_swap_symbols, TradingSymbolInfo, CONTRACT_TYPE_PERPETUAL};
 use yue::binance::order_book::{OrderBook, OrderBookSnapshotMsg};
 use yue::binance::websocket_actor::TradingSymbolRefresher;
@@ -82,6 +88,26 @@ impl BinanceDashboard {
         execute_json_request::<SwapExchangeInfo>(&SWAP_EXCHANGE_COMMAND, rb, None).await
     }
 
+    async fn refresh_rate_limit(spot_exchange: &ExchangeInfo, swap_exchange: &SwapExchangeInfo) {
+        let spot_request_limit = spot_exchange
+            .rate_limits
+            .iter()
+            .filter(|r| r.rate_limit_type == "REQUEST_WEIGHT" && r.interval == "MINUTE")
+            .map(|r| r.limit)
+            .next()
+            .unwrap_or(SPOT_RATE_PER_MINUTE as i32);
+        let swap_request_limit = swap_exchange
+            .rate_limits
+            .iter()
+            .filter(|r| r.rate_limit_type == "REQUEST_WEIGHT" && r.interval == "MINUTE")
+            .map(|r| r.limit)
+            .next()
+            .unwrap_or(SPOT_RATE_PER_MINUTE as i32);
+        info!("refresh spot rate limit {},swap rate limit {}", spot_request_limit, swap_request_limit);
+        BINANCE_SPOT_BASE.clone().refresh_rate_limit(spot_request_limit as u32).await;
+        BINANCE_SWAP_BASE.clone().refresh_rate_limit(swap_request_limit as u32).await;
+    }
+
     fn refresh_trading_symbol(
         &self,
         spot_res: Result<Vec<TradingSymbolInfo>, YueError>,
@@ -121,6 +147,12 @@ impl BinanceDashboard {
                 Err(LiError::CustomError(format!("获取合约交易对失败: {}", e)))
             }
         }
+    }
+
+    pub fn read_spot_exchange_info_from_file_sync<P: AsRef<Path>, E: DeserializeOwned>(path: P) -> Result<E, YueError> {
+        let s = fs::read_to_string(path)?; // std::io::Error -> YueError::IoError
+        let info: E = serde_json::from_str(&s)?; // serde_json::Error -> YueError::SerdeError
+        Ok(info)
     }
 }
 
@@ -231,7 +263,14 @@ impl AsyncRepeatTask for BinanceDashboard {
     /// 2, status会不会出现上下架的操作。这点需要能够对接telegram
     ///
     async fn execute(&self) -> Result<(), LiError> {
-        let (spot_exchange, swap_exchange) = tokio::join!(Self::query_spot_exchange_info(), Self::query_swap_exchange_info());
+        let (spot_exchange, swap_exchange) = if self.debug_mood {
+            let spot = Self::read_spot_exchange_info_from_file_sync("path");
+            let swap = Self::read_spot_exchange_info_from_file_sync("path");
+            (spot, swap)
+        } else {
+            let (spot_exchange, swap_exchange) = tokio::join!(Self::query_spot_exchange_info(), Self::query_swap_exchange_info());
+            (spot_exchange, swap_exchange)
+        };
 
         match (spot_exchange, swap_exchange) {
             (Ok(spot), Ok(swap)) => {
