@@ -275,7 +275,8 @@ impl AsyncRepeatTask for BinanceDashboard {
         match (spot_exchange, swap_exchange) {
             (Ok(spot), Ok(swap)) => {
                 // refresh limit
-                Self::refresh_rate_limit(&spot, &swap).await;
+                //TODO：能正常下载后，再把这个功能加上。
+                // Self::refresh_rate_limit(&spot, &swap).await;
                 // refresh symbol
                 let spot_res = get_trading_spot_symbols(spot, None).await;
                 let swap_res = get_trading_swap_symbols(swap, None, Some(CONTRACT_TYPE_PERPETUAL)).await;
