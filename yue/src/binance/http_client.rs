@@ -23,34 +23,40 @@ enum RetryWaitKind {
     TooManyRequests,
     ///
     FundingRate,
+
+    TooManyWeight,
 }
 
 /// 统一计算等待毫秒数。`attempt` 用于对 TooManyRequests 类型进行累进等待。
 fn retry_wait_ms(kind: RetryWaitKind, attempt: usize) -> u64 {
-    match kind {
+    let jitter = match kind {
         RetryWaitKind::AcquireToken => {
             // 随机 20s 到 50s（毫秒），包含端点
             // 生成范围：20_000 ..= 50_000
-            let jitter = rand::random::<u64>() % 30_001u64; // 0 ..= 30_000
-            20_000u64 + jitter
+            Jitter::new(Duration::from_secs(20), Duration::from_secs(30))
         }
         RetryWaitKind::SendError => {
-            // 100..199
-            (rand::random::<u64>() % 100) + 100
+            let interval = 100 * attempt;
+            Jitter::new(Duration::from_millis(100), Duration::from_millis(interval as u64))
         }
         RetryWaitKind::TooManyRequests => {
             // 从 10s 开始，每次重试增加 5s，并加上 0..5s 随机抖动
             // 计算：10_000 ms + attempt*5_000 ms + jitter(0..5_000)
-            let base = 10_000u64 + (attempt as u64) * 5_000u64;
-            base + (rand::random::<u64>() % 5_000u64)
+            let interval = 10 * attempt;
+            Jitter::new(Duration::from_secs(10), Duration::from_millis(interval as u64))
         }
         RetryWaitKind::FundingRate => {
             // 从 60s 开始，每次重试增加 30s，并加上 0..5s 随机抖动
             // 计算：10_000 ms + attempt*5_000 ms + jitter(0..5_000)
-            let base = 60_000u64 + (attempt as u64) * 30_000u64;
-            base + (rand::random::<u64>() % 5_000u64)
+            let interval = 30_000 * attempt;
+            Jitter::new(Duration::from_secs(30), Duration::from_millis(interval as u64))
         }
-    }
+        RetryWaitKind::TooManyWeight => {
+            let interval = 10_000 * attempt;
+            Jitter::new(Duration::from_secs(10), Duration::from_millis(interval as u64))
+        }
+    };
+    (jitter + Duration::ZERO).as_millis() as u64
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
@@ -161,13 +167,6 @@ impl BinanceRestfulClient {
                     YueError::Timeout(_) => return Err(e),
                     _ => continue,
                 },
-            };
-
-            //如果请求太多，这里先卡一下。
-            if let Some(s) = acquire_state_snapshot.clone() {
-                if s.remaining_burst_capacity() < (request_info.host.get_max_limit() as f64 * 0.1) as u32 {
-                    continue;
-                }
             };
 
             // 复制 RequestBuilder 以便重试（使用经过 compose_security_header 处理后的 real_builder）
@@ -431,7 +430,7 @@ async fn rate_limit_wait_ms(
         Some(val) => {
             let max_limit = host.get_max_limit();
             // 使用 max_limit 的 10% 作为阈值，至少为 1
-            let margin = std::cmp::max(1, (max_limit as f32 * 0.9) as u32);
+            let margin = std::cmp::max(1, (max_limit as f32 * 0.95) as u32);
             // 触发逻辑：当已用权重 val 小于 margin（即超过 max_limit 的 10%）时视为权重限制
             val >= margin
         }
@@ -462,21 +461,26 @@ async fn rate_limit_wait_ms(
     } else {
         if is_funding_rate {
             retry_wait_ms(RetryWaitKind::FundingRate, attempt)
+        } else if is_weight_limit {
+            retry_wait_ms(RetryWaitKind::TooManyWeight, attempt)
         } else {
             retry_wait_ms(RetryWaitKind::TooManyRequests, attempt)
         }
     };
     let reopen_timestamp = unix_time_now_u64_utc() + wait_ms;
-    error!(
-        "too many requests for {},host will reopen at {}, http status {} is x-mbx-used-weight is {:?}, retry after: {} s, wait ms is {} ms,token 剩余是:{}",
-        host.host_as_str(),
-        unix_2_readable(&reopen_timestamp),
-        status,
-        weight_hdr,
-        retry_after_header.clone().unwrap_or_default(),
-        wait_ms,
-        last_state_snapshot.map(|s| s.remaining_burst_capacity() as i32).unwrap_or(-1)
-    );
+    if is_418 || is_429 || is_funding_rate {
+        //TooManyWeight其实很容易发生
+        error!(
+            "too many requests for {},host will reopen at {}, http status {} is x-mbx-used-weight is {:?}, retry after: {} s, wait ms is {} ms,token 剩余是:{}",
+            host.host_as_str(),
+            unix_2_readable(&reopen_timestamp),
+            status,
+            weight_hdr,
+            retry_after_header.clone().unwrap_or_default(),
+            wait_ms,
+            last_state_snapshot.map(|s| s.remaining_burst_capacity() as i32).unwrap_or(-1)
+        );
+    }
     //为了等待的久一点。
     let jitter = Jitter::up_to(Duration::from_secs(90));
     request_info.host.waiting_for_open(Some(reopen_timestamp), Some(jitter)).await;
