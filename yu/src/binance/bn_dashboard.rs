@@ -274,6 +274,9 @@ impl AsyncRepeatTask for BinanceDashboard {
 
         match (spot_exchange, swap_exchange) {
             (Ok(spot), Ok(swap)) => {
+                // refresh limit
+                Self::refresh_rate_limit(&spot, &swap).await;
+                // refresh symbol
                 let spot_res = get_trading_spot_symbols(spot, None).await;
                 let swap_res = get_trading_swap_symbols(swap, None, Some(CONTRACT_TYPE_PERPETUAL)).await;
                 if let Err(e) = self.refresh_trading_symbol(spot_res, swap_res) {
