@@ -1,7 +1,7 @@
 use crate::binance::bn_models::common::{ExchangeInfoTrait, HistoryVo, SymbolInfoTrait, ToRequestBuilder};
 use crate::binance::bn_models::spot_restful::ExchangeInfo;
 use crate::binance::bn_models::swap_restful::SwapExchangeInfo;
-use crate::binance::bn_restful_commands::{PING_COMMAND, SPOT_EXCHANGE_COMMAND, SWAP_EXCHANGE_COMMAND, execute_json_request};
+use crate::binance::bn_restful_commands::{PING_COMMAND, execute_json_request};
 use crate::errors::YueError;
 use crate::http_client::{HTTP_CLIENT, get_http_client};
 use crate::models::{EmptyObject, HistoryInterval, RequestInfo};

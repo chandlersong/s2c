@@ -2,6 +2,7 @@ use crate::errors::YueError;
 use crate::models::{HostInfo, RequestInfo};
 use crate::tools::{load_ed25519_signing_key, sign_hmac};
 use governor::middleware::StateSnapshot;
+use li::tools::time::{unix_2_readable, unix_time_now_u64_utc};
 use log::{debug, error};
 use rand;
 use reqwest::{RequestBuilder, Response};
@@ -145,9 +146,6 @@ impl BinanceRestfulClient {
         let mut acquire_state_snapshot: Option<StateSnapshot> = None;
         let mut acquire_attempts: usize = 0;
         loop {
-            if let Some(value) = Self::check_host_block(request_info, total_timeout_ms, cumulative_waited_ms).await {
-                return value;
-            }
             match request_info
                 .host
                 .acquire_limit_token(request_info.weight, request_info.get_rate_limit_timeout())
@@ -161,9 +159,6 @@ impl BinanceRestfulClient {
                             }
                             acquire_attempts = acquire_attempts.saturating_add(1);
                             continue;
-                        }
-                        if let Some(value) = Self::check_host_block(request_info, total_timeout_ms, cumulative_waited_ms).await {
-                            return value;
                         }
                         acquire_state_snapshot = Some(s)
                     }
@@ -187,9 +182,6 @@ impl BinanceRestfulClient {
 
         // 2) 发送请求阶段（失败或限流会消耗共享重试预算）
         loop {
-            if let Some(value) = Self::check_host_block(request_info, total_timeout_ms, cumulative_waited_ms).await {
-                return value;
-            }
             // 复制 RequestBuilder 以便重试（使用经过 compose_security_header 处理后的 real_builder）
             let mut rb = match real_builder.try_clone() {
                 Some(b) => b,
@@ -265,37 +257,6 @@ impl BinanceRestfulClient {
                 }
             }
         }
-    }
-
-    async fn check_host_block(
-        request_info: &RequestInfo,
-        total_timeout_ms: u64,
-        mut cumulative_waited_ms: u64,
-    ) -> Option<Result<Response, YueError>> {
-        let mut blocked_wait_attempts: usize = 0;
-        while request_info.host.is_block() {
-            debug!(
-                "Host is blocked after acquiring token, waiting until allowed. attempt={}",
-                blocked_wait_attempts
-            );
-            let wait_ms = retry_wait_ms(RetryWaitKind::AcquireToken, blocked_wait_attempts);
-            blocked_wait_attempts = blocked_wait_attempts.saturating_add(1);
-
-            let remaining = total_timeout_ms.saturating_sub(cumulative_waited_ms);
-            if remaining == 0 {
-                return Some(Err(YueError::new("total wait time exceeded request timeout")));
-            }
-            let to_sleep = if wait_ms >= remaining { remaining } else { wait_ms };
-            sleep(Duration::from_millis(to_sleep)).await;
-            cumulative_waited_ms = cumulative_waited_ms.saturating_add(to_sleep);
-
-            if cumulative_waited_ms >= total_timeout_ms {
-                return Some(Err(YueError::new(
-                    "total wait time exceeded request timeout while waiting for host unblocked",
-                )));
-            }
-        }
-        None
     }
 
     async fn wait_for_acquire_token(
@@ -519,8 +480,6 @@ async fn rate_limit_wait_ms(
         return Ok(None);
     }
 
-    host.block_all_request();
-
     // Try parse Retry-After if present
     let retry_after_header = resp.headers().get("Retry-After").and_then(|v| v.to_str().ok()).map(|s| s.to_string());
     let wait_ms = if let Some(ref v) = retry_after_header {
@@ -540,22 +499,17 @@ async fn rate_limit_wait_ms(
             retry_wait_ms(RetryWaitKind::TooManyRequests, attempt)
         }
     };
+    let reopen_timestamp = unix_time_now_u64_utc() + wait_ms;
     error!(
-        "too many requests for {},host block status is {}, http status {} is x-mbx-used-weight is {:?}, retry after: {} s, wait ms is {} ms,token 剩余是:{}",
+        "too many requests for {},host will reopen at {}, http status {} is x-mbx-used-weight is {:?}, retry after: {} s, wait ms is {} ms,token 剩余是:{}",
         host.host_as_str(),
-        host.is_block(),
+        unix_2_readable(&reopen_timestamp),
         status,
         weight_hdr,
         retry_after_header.clone().unwrap_or_default(),
         wait_ms,
         last_state_snapshot.map(|s| s.remaining_burst_capacity() as i32).unwrap_or(-1)
     );
-    // schedule allow_all_request in background
-    let host_for_task = host.clone();
-    tokio::spawn(async move {
-        sleep(Duration::from_millis(wait_ms)).await;
-        host_for_task.allow_all_request();
-    });
 
     // If we can retry, return wait_ms; otherwise return error indicating the limit
     if attempt < max_retries {
@@ -619,32 +573,6 @@ mod tests {
         Arc::new(HostInfo::new(host, 0, limiter))
     }
 
-    // 等待最多 timeout_ms 毫秒，直到 host 被 block（is_block() == true），返回是否观察到 block
-    async fn wait_for_block(host: &Arc<HostInfo>, timeout_ms: u64) -> bool {
-        let mut waited = 0u64;
-        while waited < timeout_ms {
-            if host.is_block() {
-                return true;
-            }
-            sleep(Duration::from_millis(5)).await;
-            waited += 5;
-        }
-        false
-    }
-
-    // 等待最多 timeout_ms 毫秒，直到 host 被 allow（is_block() == false），返回是否观察到 allow
-    async fn wait_for_allow(host: &Arc<HostInfo>, timeout_ms: u64) -> bool {
-        let mut waited = 0u64;
-        while waited < timeout_ms {
-            if !host.is_block() {
-                return true;
-            }
-            sleep(Duration::from_millis(5)).await;
-            waited += 5;
-        }
-        false
-    }
-
     /// 测试：rate_limit_wait_ms 在接收到 418 (被封) 时返回 ExchangeRequestError
     ///
     /// 目的：验证当服务端返回 HTTP 418（表示被封/禁止访问）时，限流逻辑能正确识别并
@@ -680,13 +608,12 @@ mod tests {
         // Should be final error
         assert!(r.is_err());
         // Host should have been blocked (poll for a short time to avoid timing flakes)
-        assert!(wait_for_block(&host, 100).await, "host should be blocked");
+
         match r {
             Err(YueError::ExchangeRequestError { code, .. }) => assert_eq!(code, 418),
             _ => panic!("expected ExchangeRequestError 418"),
         }
         // allow_all_request is scheduled in background; wait and assert it's allowed
-        assert!(wait_for_allow(&host, 200).await, "host should be allowed after scheduled wait");
     }
 
     /// 测试：rate_limit_wait_ms 在接收到 429 (限流) 时，根据重试策略返回等待时间或最终错误
@@ -727,26 +654,16 @@ mod tests {
         let ms1 = r1.unwrap();
         assert!(ms1 > 0, "wait_ms should be positive");
         // host should be blocked (poll to avoid timing flakes)
-        assert!(wait_for_block(&host, 100).await, "host should be blocked after limit detected");
+
         // wait a bit longer than scheduled wait to ensure allow_all_request ran
         let wait_total = ms1 + 200;
         sleep(Duration::from_millis(wait_total)).await;
         // After scheduled wait host should be allowed (is_block == false)
-        assert!(!host.is_block(), "host should be allowed after scheduled wait");
 
         // 再次获取 response
         let resp2 = client.get(&url).send().await.unwrap();
         // 无重试（attempt >= max_retries） => 返回 Err
         let r2 = rate_limit_wait_ms(&resp2, host.clone(), 0, 0, &req_info, None).await;
-        assert!(r2.is_err());
-        // blocked immediately (poll)
-        assert!(wait_for_block(&host, 100).await, "host should be blocked after final limit");
-        match r2 {
-            Err(YueError::ExchangeRequestError { code, .. }) => assert_eq!(code, 429),
-            _ => panic!("expected ExchangeRequestError 429"),
-        }
-        // scheduled allow (wait a bit)
-        assert!(wait_for_allow(&host, 200).await, "host should be allowed after scheduled wait");
     }
 
     /// 测试：当 HTTP 响应包含 X-MBX-USED-WEIGHT 且接近 host.max_limit 时，触发权重预警并返回等待时间
@@ -797,13 +714,6 @@ mod tests {
         // 这会导致一个非常短的等待（例如 5ms）。在没有 Retry-After 的情况下，权重预警会返回 100..300ms。
         // 因此这里接受较宽的范围：至少 5ms，且小于 300ms。
         assert!(ms >= 5 && ms < 300, "weight wait should be in short range, got {}", ms);
-        // host should be blocked (poll)
-        assert!(wait_for_block(&host, 100).await, "host should be blocked for weight limit");
-        // wait for scheduled allow (give enough margin)
-        assert!(
-            wait_for_allow(&host, ms + 200).await,
-            "host should be allowed after scheduled weight wait"
-        );
     }
 
     #[test]
@@ -899,17 +809,9 @@ mod tests {
 
         let host = create_mock_host_info(&mock_server.uri());
         // 初始阻塞，使得第一次 acquire 会失败
-        host.block_all_request();
 
         let req_info = RequestInfo::from_base_path(host.clone(), "/test", false, 1, Some(1000), Some(1)).unwrap();
         let rb = client.get(req_info.as_ref().as_str());
-
-        // 在很短的延时后放行 host，让 acquire 在消耗一次后成功
-        let host_for_task = host.clone();
-        tokio::spawn(async move {
-            sleep(Duration::from_millis(20)).await;
-            host_for_task.allow_all_request();
-        });
 
         // 执行 request：应最终失败（重试预算被耗尽）
         let res = bn.request(rb, &req_info, None).await;

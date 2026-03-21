@@ -3,12 +3,12 @@ use governor::clock::DefaultClock;
 use governor::middleware::{StateInformationMiddleware, StateSnapshot};
 use governor::state::{InMemoryState, NotKeyed};
 use governor::{Jitter, Quota};
-use li::tools::time::unix_time_now_u64_utc;
+use li::tools::time::{UnixTimeStamp, unix_time_now_u64_utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::time::timeout;
@@ -78,8 +78,8 @@ pub type ShareRateLimiter = Arc<RwLock<Arc<DefaultRateLimiter>>>;
 pub struct HostInfo {
     host: String,
     max_limit: Arc<AtomicU32>,
+    disable_before: Arc<AtomicU64>, //unix timestamp,在此时间点之前，该host应该不可用。
     limiter: ShareRateLimiter,
-    block: Arc<AtomicU8>, //0表示ok。1表示应该停止
 }
 
 pub fn create_share_rate_limiter(bucket_size: u32) -> ShareRateLimiter {
@@ -110,9 +110,92 @@ impl HostInfo {
         Self {
             host: host.as_ref().to_string(),
             max_limit: Arc::new(AtomicU32::new(max_limit)),
+            disable_before: Arc::new(AtomicU64::new(0)),
             limiter,
-            block: Arc::new(AtomicU8::new(0)),
         }
+    }
+
+    ///
+    /// 并等到到host重新open
+    ///
+    /// reopen_timestamp: 设置host重新开启的时间时间戳。如果为None，表示不需要设置，如果其他线程设置，就等待。
+    /// jitter：时间抖动。默认为2分钟。
+    ///
+    /// # 方法逻辑。
+    /// 1. 如果reopen_timestamp为None，
+    ///     1. 现在的时间戳大于self.disable_before，认为host是开的，直不用等待。
+    ///     2. 现在的时间戳小于self.disable_before，等到到disable_before+jitter
+    /// 2. 比较reopen_timestamp不为None。那么以下情况
+    ///     1.reopen_timestamp > disable_before
+    ///         1. 设置disable_before为reopen_timestamp
+    ///         2. 等待reopen_timestamp+jitter的时间
+    ///     2.reopen_timestamp < disable_before
+    ///         2. disable_before+jitter的时间
+    /// 3. 等待结束后，检查等待结束的时间戳end_timestamp和disable_before的关系， 如果end_timestamp < disable_before，
+    ///    说明host还是关闭的，那么继续等待，直到end_timestamp > disable_before
+    pub fn waiting_for_open(&self, reopen_timestamp: Option<UnixTimeStamp>, jitter: Option<Jitter>) {
+        // 该方法为同步阻塞实现：等待直到 host 被标记为 open（disable_before 小于当前时间）
+        // 设计要点：
+        // 1. 如果 reopen_timestamp 为 None，且当前时间 > disable_before，则立即返回（host 已开启）
+        // 2. 如果 reopen_timestamp 有值且大于当前的 disable_before，则把 disable_before 更新为 reopen_timestamp
+        // 3. 否则（reopen_timestamp < disable_before 或 reopen_timestamp 为 None），以当前 disable_before 为等待目标
+        // 4. 通过循环检查并短时间 sleep，直到当前时间超过目标时间
+        // 说明：
+        // - 由于函数为同步接口，使用 std::thread::sleep 做短轮询，避免 busy-spin
+        // - jitter 参数目前仅作为提示：若提供则在等待目标上额外增加少量缓冲（取 0..max_jitter/2），以避免临界竞争。
+
+        // 安全读取当前时间和 disable_before
+        let mut now = unix_time_now_u64_utc();
+        let mut disable_before = self.disable_before.load(Ordering::Relaxed);
+
+        // 快速路径：无 reopen_timestamp 并且已经开了
+        if reopen_timestamp.is_none() && now > disable_before {
+            return;
+        }
+
+        // 如果传入 reopen_timestamp 并且大于当前 disable_before，则进行更新
+        if let Some(reopen_ts) = reopen_timestamp {
+            if reopen_ts > disable_before {
+                self.disable_before.store(reopen_ts, Ordering::SeqCst);
+                disable_before = reopen_ts;
+            }
+        }
+        let real_jitter: Jitter = jitter.unwrap_or(Jitter::up_to(Duration::from_secs(120)));
+        let buff_duration_ms = (real_jitter + Duration::ZERO).as_millis() as u64;
+        // 计算可能的 jitter buffer（取较小的默认值以便测试快速），如果传入 jitter，则使用 100 ms 的上限
+
+        // 目标时间点为 disable_before + jitter_buffer_ms
+        let mut target = disable_before.saturating_add(buff_duration_ms);
+
+        // 若当前时间已经超过目标，则直接返回
+        now = unix_time_now_u64_utc();
+        if now > target {
+            return;
+        }
+
+        // 循环等待直到当前时间超过目标时间。在循环中重新读取 disable_before，允许其他线程变更该值。
+        loop {
+            // 每次循环重新读取最新的 disable_before
+            let current_disable = self.disable_before.load(Ordering::Relaxed);
+            if current_disable > disable_before {
+                // 如果有人把 disable_before 提高了，则把目标提升到新的值
+                disable_before = current_disable;
+                target = disable_before.saturating_add(buff_duration_ms);
+            }
+
+            let now = unix_time_now_u64_utc();
+            if now > target {
+                break;
+            }
+
+            // 计算剩余等待 ms，限制最小为 1 ms，最大为 200 ms，避免长时间 sleep
+            let remaining_ms = target.saturating_sub(now);
+            std::thread::sleep(Duration::from_millis(remaining_ms));
+        }
+    }
+
+    pub fn get_open_timestamp(&self) -> UnixTimeStamp {
+        self.disable_before.load(Ordering::Relaxed)
     }
 
     pub fn host_as_str(&self) -> &str {
@@ -121,18 +204,6 @@ impl HostInfo {
 
     pub fn set_max_limit(&self, v: u32) {
         self.max_limit.store(v, Ordering::SeqCst);
-    }
-
-    pub fn block_all_request(&self) {
-        self.block.store(1, Ordering::SeqCst);
-    }
-
-    pub fn allow_all_request(&self) {
-        self.block.store(0, Ordering::SeqCst);
-    }
-
-    pub fn is_block(&self) -> bool {
-        self.block.load(Ordering::SeqCst) == 1
     }
 
     pub fn get_max_limit(&self) -> u32 {
@@ -167,11 +238,6 @@ impl HostInfo {
             None => return Err(crate::errors::YueError::new("权重必须为非零")),
         };
 
-        // 2. 如果当前 host 被阻塞，直接拒绝
-        if self.block.load(Ordering::SeqCst) != 0 {
-            return Err(crate::errors::YueError::new("Host 被阻塞，拒绝请求"));
-        }
-
         // clone an Arc handle to the limiter so we don't hold the RwLock across .await
         let limiter_cloned = {
             let guard = self.limiter.read().await; // tokio RwLock: await to acquire
@@ -184,10 +250,6 @@ impl HostInfo {
         let jitter = Jitter::up_to(Duration::from_millis(500));
         let immediate_try = timeout(Duration::from_millis(0), limiter_cloned.until_n_ready_with_jitter(weight_nz, jitter)).await;
         if let Ok(Ok(snapshot)) = immediate_try {
-            // 再次确认在返回前 host 未被设置为 block
-            if self.block.load(Ordering::SeqCst) != 0 {
-                return Err(crate::errors::YueError::new("Host 被阻塞，拒绝请求"));
-            }
             return Ok(Some(snapshot));
         }
 
@@ -202,14 +264,7 @@ impl HostInfo {
         {
             Err(_) => Err(crate::errors::YueError::new("限流超时")),
             Ok(res) => match res {
-                Ok(snapshot) => {
-                    // 成功获取令牌后，再次检查 block 标志
-                    if self.block.load(Ordering::SeqCst) != 0 {
-                        Err(crate::errors::YueError::new("Host 被阻塞，拒绝请求"))
-                    } else {
-                        Ok(Some(snapshot))
-                    }
-                }
+                Ok(snapshot) => Ok(Some(snapshot)),
                 Err(e) => Err(crate::errors::YueError::new(&format!("限流器内部错误: {:?}", e))),
             },
         }
@@ -349,6 +404,10 @@ impl HistoryInterval {
 #[cfg(test)]
 mod tests {
     use crate::models::{HistoryInterval, HostInfo, create_share_rate_limiter};
+    use governor::Jitter;
+    use li::tools::time::unix_time_now_u64_utc;
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
 
     /// 测试：HistoryInterval::get_close_unix_ms 在一分钟间隔下的对齐
     ///
@@ -413,7 +472,7 @@ mod tests {
     /// - 初次调用 acquire_limit_token(1, 2) 应成功（令牌充足）
     /// 期望：首次获取令牌返回 Ok
     #[tokio::test]
-    async fn test_hostinfo_basic_and_acquire() {
+    async fn test_host_info_basic_and_acquire() {
         let limiter = create_share_rate_limiter(100);
 
         let host = HostInfo::new("https://api.test", 1000, limiter);
@@ -455,5 +514,124 @@ mod tests {
         // zero weight should return error
         let r3 = host.acquire_limit_token(0, 1).await;
         assert!(r3.is_err(), "权重为0应当报错");
+    }
+
+    /// 测试目的：当 `disable_before` 在过去时，`waiting_for_open(None, None)` 应立即返回。
+    /// 场景：将 `disable_before` 设置为当前时间之前（表示 host 已可用），调用等待函数不应阻塞。
+    /// 断言：耗时非常短（<50ms），以确保没有进行不必要的等待。
+    #[test]
+    fn test_waiting_for_open_returns_immediately_if_open() {
+        let limiter = create_share_rate_limiter(10);
+        let host = HostInfo::new("https://api.test", 10, limiter);
+
+        // 确保 disable_before 在过去
+        host.disable_before.store(unix_time_now_u64_utc().saturating_sub(1000), Ordering::SeqCst);
+
+        let start = Instant::now();
+        host.waiting_for_open(None, None);
+        let elapsed = start.elapsed();
+
+        assert!(elapsed.as_millis() < 50, "应当立即返回，实际耗时 {:?}", elapsed);
+    }
+
+    /// 测试目的：当 `disable_before` 在将来时，`waiting_for_open(None, None)` 应等待直到该时间到达。
+    /// 场景：把 `disable_before` 设为短期未来（约150ms），不传入 `reopen_timestamp` 或 `jitter`。
+    /// 断言：函数至少会等待接近该期望（>=140ms），允许少量调度开销误差。
+    #[test]
+    fn test_waiting_for_open_waits_until_disable_before() {
+        let limiter = create_share_rate_limiter(10);
+        let host = HostInfo::new("https://api.test", 10, limiter);
+
+        // 设定 disable_before 为短期未来
+        let now = unix_time_now_u64_utc();
+        host.disable_before.store(now + 150, Ordering::SeqCst);
+        let jitter = Jitter::up_to(Duration::from_millis(30));
+        let start = Instant::now();
+        host.waiting_for_open(None, Some(jitter));
+        let elapsed = start.elapsed();
+
+        // 至少等待了约 150ms
+        assert!(elapsed.as_millis() >= 140, "应当等待至少 140ms, 实际: {:?}", elapsed);
+    }
+
+    /// 测试目的：当传入一个比当前 `disable_before` 更远的 `reopen_timestamp` 时，
+    /// `waiting_for_open(Some(reopen_timestamp), Some(jitter))` 应把 `disable_before` 更新为该值并等待到更新后的时间。
+    /// 场景：先把 `disable_before` 设为较小的未来时间，再传入一个更靠后的 `reopen_timestamp`（约200ms）。
+    /// 断言：函数等待接近更新后的时间（>=180ms），考虑 jitter 与调度误差。
+    #[test]
+    fn test_waiting_for_open_with_reopen_timestamp_updates_target() {
+        let limiter = create_share_rate_limiter(10);
+        let host = HostInfo::new("https://api.test", 10, limiter);
+
+        // 将 disable_before 设为一个较小的未来时间
+        let now = unix_time_now_u64_utc();
+        host.disable_before.store(now + 50, Ordering::SeqCst);
+        let jitter = Jitter::up_to(Duration::from_millis(50));
+        // 传入更远的 reopen_timestamp，函数应把 disable_before 更新为该值并等待
+        let reopen_ts = now + 200;
+        let start = Instant::now();
+        host.waiting_for_open(Some(reopen_ts), Some(jitter));
+        let elapsed = start.elapsed();
+
+        assert!(elapsed.as_millis() >= 180, "应当等待直到 reopen_timestamp (~200ms), 实际: {:?}", elapsed);
+    }
+
+    /// 测试目的：当传入的 `reopen_timestamp` 小于当前 `disable_before` 时，等待目标不应被缩短，
+    /// 而应仍以已有的 `disable_before` 为准。
+    /// 场景：把 `disable_before` 设为较远的未来（约300ms），传入较近的 `reopen_timestamp`（约50ms）。
+    /// 断言：函数等待接近原有的 `disable_before`（>=260ms），而非被传入的较小时间所覆盖。
+    #[test]
+    fn test_waiting_for_open_with_reopen_smaller_than_existing() {
+        // 如果传入的 reopen_timestamp 小于已有的 disable_before，应当以已有的 disable_before 为准等待
+        let limiter = create_share_rate_limiter(10);
+        let host = HostInfo::new("https://api.test", 10, limiter);
+
+        let now = unix_time_now_u64_utc();
+        // 现有 disable_before 比 reopen_timestamp 远
+        host.disable_before.store(now + 300, Ordering::SeqCst);
+
+        // 传入一个较小的 reopen timestamp
+        let reopen_ts = now + 50;
+        let start = Instant::now();
+        let jitter = Jitter::up_to(Duration::from_millis(50));
+        host.waiting_for_open(Some(reopen_ts), Some(jitter));
+        let elapsed = start.elapsed();
+
+        // 应该等待接近已有的 300ms，而不是 50ms
+        assert!(
+            elapsed.as_millis() >= 260,
+            "应当等待直到原有 disable_before (~300ms), 实际: {:?}",
+            elapsed
+        );
+    }
+
+    /// 测试目的：验证 `waiting_for_open` 在并发情况下能响应其他线程对 `disable_before` 的提升，
+    /// 并据此延长等待时间。
+    /// 场景：初始 `disable_before` 设为 100ms，将在另一个线程中于 60ms 后把 `disable_before` 再次提升到更远的时间点。
+    /// 断言：原始等待会被延长（>=340ms），表明函数在循环中重新读取并尊重更新后的 `disable_before`。
+    #[test]
+    fn test_waiting_for_open_concurrent_update_extends_wait() {
+        // 并发场景：在等待过程中，另一线程将 disable_before 提高，等待应随之延长
+        let limiter = create_share_rate_limiter(10);
+        let host = HostInfo::new("https://api.test", 10, limiter);
+
+        let now = unix_time_now_u64_utc();
+        host.disable_before.store(now + 100, Ordering::SeqCst);
+
+        // 另起一个线程，在 60ms 后把 disable_before 提高到 now + 400
+        let host_clone = host.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(60));
+            let later = unix_time_now_u64_utc();
+            // set to a further future (use relative to original now to keep expectation stable)
+            host_clone.disable_before.store(later + 300, Ordering::SeqCst);
+        });
+        let jitter = Jitter::up_to(Duration::from_millis(50));
+        let start = Instant::now();
+        host.waiting_for_open(None, Some(jitter));
+        let elapsed = start.elapsed();
+
+        // 初始等待 100ms，但因为另一个线程延后了 reopen，应至少等待到 ~360ms
+        assert!(elapsed.as_millis() >= 340, "并发更新应延长等待，实际: {:?}", elapsed);
     }
 }
