@@ -145,6 +145,8 @@ impl BinanceRestfulClient {
         // 基于真实经过时间计算 elapsed_ms（避免依赖 sleep 的累加误差）。
         let total_timeout_ms = request_info.request_timeout_mill_secs as u64;
         let start_time = Instant::now();
+        // 累积需要从总耗时中剔除的时长（毫秒），目前仅用于剔除 acquire_limit_token 的耗时
+        let mut excluded_acquire_ms: u64 = 0;
 
         // helper: we will inline remaining/to_sleep calculation at each sleep point to avoid
         // closure borrow issues (we need to mutate cumulative_waited_ms after await).
@@ -155,18 +157,37 @@ impl BinanceRestfulClient {
 
         // 2) 发送请求阶段（失败或限流会消耗共享重试预算）
         loop {
-            // 计算剩余时间（毫秒）并直接传递给 acquire_limit_token。使用真实经过时间而不是
-            // 依赖于之前 sleep 累加的值。
-            let elapsed_ms = start_time.elapsed().as_millis() as u64;
-            let remaining_ms = total_timeout_ms.saturating_sub(elapsed_ms);
+            // 在调用 acquire_limit_token 前记录时间，获取后把该耗时从总计等待时间中剔除。
+            let t_acquire_start = Instant::now();
 
-            let acquire_state_snapshot = match request_info.host.acquire_limit_token(request_info.weight, remaining_ms).await {
+            let acquire_state_snapshot = match request_info
+                .host
+                .acquire_limit_token(request_info.weight, request_info.request_timeout_mill_secs)
+                .await
+            {
                 Ok(snapshot) => snapshot,
                 Err(e) => match e {
                     // 如果是超时错误，直接返回该错误；否则仅重试（continue）
                     YueError::Timeout(_) => return Err(e),
-                    _ => continue,
+                    _ => {
+                        // 仅在非超时错误的情况下继续重试；在这类失败上我们也应该把这次 acquire 的耗时计入剔除
+                        let delta_ms = t_acquire_start.elapsed().as_millis() as u64;
+                        excluded_acquire_ms = excluded_acquire_ms.saturating_add(delta_ms);
+                        continue;
+                    }
                 },
+            };
+
+            // 计算此次 acquire 的耗时并从总耗时中剔除
+            let delta_ms = t_acquire_start.elapsed().as_millis() as u64;
+            excluded_acquire_ms = excluded_acquire_ms.saturating_add(delta_ms);
+
+            // 计算有效已耗时（排除 acquire 的耗时），用于后续剩余时间计算
+            let elapsed_total_ms = start_time.elapsed().as_millis() as u64;
+            let elapsed_effective_ms = if elapsed_total_ms > excluded_acquire_ms {
+                elapsed_total_ms - excluded_acquire_ms
+            } else {
+                0
             };
 
             // 复制 RequestBuilder 以便重试（使用经过 compose_security_header 处理后的 real_builder）
@@ -175,8 +196,12 @@ impl BinanceRestfulClient {
                 None => return Err(YueError::new("无法克隆 RequestBuilder，无法重试")),
             };
 
-            // 设置请求超时
-            rb = rb.timeout(Duration::from_millis(request_info.request_timeout_mill_secs as u64));
+            // 为本次 HTTP 请求设置超时：使用总超时减去已有效耗时（排除 acquire 的耗时）
+            let remaining_for_send = total_timeout_ms.saturating_sub(elapsed_effective_ms);
+            if remaining_for_send == 0 {
+                return Err(YueError::new("total wait time exceeded request timeout before sending request"));
+            }
+            rb = rb.timeout(Duration::from_millis(remaining_for_send));
 
             // 发送请求
             match rb.send().await {
@@ -187,9 +212,14 @@ impl BinanceRestfulClient {
                     }
                     let wait_ms = retry_wait_ms(RetryWaitKind::SendError, attempts_made);
 
-                    // decide sleep respecting total timeout (recompute elapsed before sleep)
-                    let elapsed_ms = start_time.elapsed().as_millis() as u64;
-                    let remaining = total_timeout_ms.saturating_sub(elapsed_ms);
+                    // decide sleep respecting total timeout (recompute elapsed before sleep, exclude acquire time)
+                    let elapsed_total_ms = start_time.elapsed().as_millis() as u64;
+                    let elapsed_effective_ms = if elapsed_total_ms > excluded_acquire_ms {
+                        elapsed_total_ms - excluded_acquire_ms
+                    } else {
+                        0
+                    };
+                    let remaining = total_timeout_ms.saturating_sub(elapsed_effective_ms);
                     if remaining == 0 {
                         return Err(YueError::new("total wait time exceeded request timeout"));
                     }
@@ -197,9 +227,14 @@ impl BinanceRestfulClient {
                     attempts_made = attempts_made.saturating_add(1);
                     sleep(Duration::from_millis(to_sleep)).await;
 
-                    // 重新计算真实经过时间并判断是否超时
-                    let elapsed_ms = start_time.elapsed().as_millis() as u64;
-                    if elapsed_ms >= total_timeout_ms {
+                    // 重新计算真实经过时间并判断是否超时（剔除 acquire 的耗时）
+                    let elapsed_total_ms = start_time.elapsed().as_millis() as u64;
+                    let elapsed_effective_ms = if elapsed_total_ms > excluded_acquire_ms {
+                        elapsed_total_ms - excluded_acquire_ms
+                    } else {
+                        0
+                    };
+                    if elapsed_effective_ms >= total_timeout_ms {
                         return Err(YueError::new("total wait time exceeded request timeout after send error"));
                     }
                     continue;
@@ -223,9 +258,14 @@ impl BinanceRestfulClient {
                                 return Err(YueError::new("exhausted retries due to rate limit"));
                             }
 
-                            // decide sleep respecting total timeout (基于真实经过时间)
-                            let elapsed_ms = start_time.elapsed().as_millis() as u64;
-                            let remaining = total_timeout_ms.saturating_sub(elapsed_ms);
+                            // decide sleep respecting total timeout (基于真实经过时间，剔除 acquire 耗时)
+                            let elapsed_total_ms = start_time.elapsed().as_millis() as u64;
+                            let elapsed_effective_ms = if elapsed_total_ms > excluded_acquire_ms {
+                                elapsed_total_ms - excluded_acquire_ms
+                            } else {
+                                0
+                            };
+                            let remaining = total_timeout_ms.saturating_sub(elapsed_effective_ms);
                             if remaining == 0 {
                                 return Err(YueError::new("total wait time exceeded request timeout"));
                             }
@@ -233,9 +273,14 @@ impl BinanceRestfulClient {
                             attempts_made = attempts_made.saturating_add(1);
                             sleep(Duration::from_millis(to_sleep)).await;
 
-                            // 重新计算真实经过时间并判断是否超时
-                            let elapsed_ms = start_time.elapsed().as_millis() as u64;
-                            if elapsed_ms >= total_timeout_ms {
+                            // 重新计算真实经过时间并判断是否超时（剔除 acquire 耗时）
+                            let elapsed_total_ms = start_time.elapsed().as_millis() as u64;
+                            let elapsed_effective_ms = if elapsed_total_ms > excluded_acquire_ms {
+                                elapsed_total_ms - excluded_acquire_ms
+                            } else {
+                                0
+                            };
+                            if elapsed_effective_ms >= total_timeout_ms {
                                 return Err(YueError::new("total wait time exceeded request timeout after rate limit"));
                             }
                             continue;

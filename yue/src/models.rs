@@ -335,8 +335,8 @@ pub struct RequestInfo {
     pub host: Arc<HostInfo>,
     pub has_security: bool,
     pub weight: u32,
-    pub request_timeout_mill_secs: u32,
-    rate_limit_timeout_secs: u32,
+    pub request_timeout_mill_secs: u64,
+    rate_limit_timeout_mill_secs: u64,
 }
 
 impl RequestInfo {
@@ -346,8 +346,8 @@ impl RequestInfo {
         host: Arc<HostInfo>,
         has_security: bool,
         weight: u32,
-        request_timeout_mill_secs: Option<u32>,
-        rate_limit_timeout_secs: Option<u32>,
+        request_timeout_mill_secs: Option<u64>,
+        rate_limit_timeout_secs: Option<u64>,
     ) -> Result<Self, url::ParseError> {
         let inner = Url::parse(full_url.as_ref())?;
         Ok(Self {
@@ -355,8 +355,8 @@ impl RequestInfo {
             host,
             has_security,
             weight,
-            request_timeout_mill_secs: request_timeout_mill_secs.unwrap_or_else(|| 1000u32) * 1000u32,
-            rate_limit_timeout_secs: rate_limit_timeout_secs.unwrap_or_else(|| 2),
+            request_timeout_mill_secs: request_timeout_mill_secs.unwrap_or_else(|| 1000u64) * 1000u64,
+            rate_limit_timeout_mill_secs: rate_limit_timeout_secs.unwrap_or_else(|| 2u64) * 1000u64,
         })
     }
 
@@ -366,8 +366,8 @@ impl RequestInfo {
         path: P,
         has_security: bool,
         weight: u32,
-        request_timeout_secs: Option<u32>,
-        rate_limit_timeout_secs: Option<u32>,
+        request_timeout_secs: Option<u64>,
+        rate_limit_timeout_secs: Option<u64>,
     ) -> Result<Self, url::ParseError> {
         let base = host.host_as_str();
         let path = path.as_ref();
@@ -386,7 +386,7 @@ impl RequestInfo {
             has_security: self.has_security,
             weight: new_weight,
             request_timeout_mill_secs: self.request_timeout_mill_secs,
-            rate_limit_timeout_secs: self.rate_limit_timeout_secs,
+            rate_limit_timeout_mill_secs: self.rate_limit_timeout_mill_secs,
         }
     }
 
@@ -400,8 +400,8 @@ impl RequestInfo {
         self.inner.as_str()
     }
 
-    pub fn get_rate_limit_timeout(&self) -> u32 {
-        self.rate_limit_timeout_secs
+    pub fn get_rate_limit_timeout_ms(&self) -> u64 {
+        self.rate_limit_timeout_mill_secs
     }
 }
 
