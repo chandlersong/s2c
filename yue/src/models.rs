@@ -239,24 +239,29 @@ impl HostInfo {
     ///     1. 等待时间过长，超过30s，则需要重新获取令牌。
     ///     2. 小于30s直接返回。
     ///
-    pub async fn acquire_limit_token(&self, weight: u32, timeout_secs: u32) -> Result<Option<StateSnapshot>, crate::errors::YueError> {
+    pub async fn acquire_limit_token(&self, weight: u32, timeout_ms: u64) -> Result<Option<StateSnapshot>, crate::errors::YueError> {
         // 1. 判断 weight 是否为非零
         let weight_nz = match NonZeroU32::new(weight) {
             Some(w) => w,
             None => return Err(crate::errors::YueError::new("权重必须为非零")),
         };
 
+        let reopen_ts = self.disable_before.load(Ordering::Relaxed);
+        if reopen_ts > (unix_time_now_u64_utc() + timeout_ms) {
+            return Err(YueError::Timeout(format!("{} is not open", self.host)));
+        }
         // 设置整体截止时间（以毫秒为单位），所有重试都不能超过这个时长
         let start_ms = unix_time_now_u64_utc();
-        let timeout_ms_total: i128 = (timeout_secs as i128) * 1000;
+        let timeout_ms_total = timeout_ms;
 
         // 重试循环：在达到 deadline 之前，尝试获取令牌。每次获取令牌前后均检查 host 是否可用；
         // 若在获取后检查发现等待时间过长 (> 30s)，则丢弃本次获取并重试（直到超时）。
         loop {
             // 计算已过去时间和剩余时间（毫秒）
             let now_ms = unix_time_now_u64_utc();
-            let elapsed = (now_ms as i128).saturating_sub(start_ms as i128);
-            let mut left_ms: i128 = timeout_ms_total.saturating_sub(elapsed);
+
+            let elapsed = now_ms.saturating_sub(start_ms);
+            let mut left_ms = timeout_ms_total.saturating_sub(elapsed);
 
             // 如果剩余时间已耗尽，则超时返回
             if left_ms <= 0 {
@@ -264,14 +269,14 @@ impl HostInfo {
             }
 
             // 在获取令牌之前，确保 host 是 open 的；使用带超时的等待（毫秒）避免阻塞
-            let wait_duration = Duration::from_millis(if left_ms > (u64::MAX as i128) { u64::MAX } else { left_ms as u64 });
+            let wait_duration = Duration::from_millis(left_ms);
             if let Err(_) = timeout(wait_duration, self.check_open_and_wait(None)).await {
                 return Err(YueError::Timeout(format!("host {} is not open", self.host)));
             }
 
             // 在再次计算剩余时间，以便用于令牌获取阶段
             let now_ms = unix_time_now_u64_utc();
-            let elapsed = (now_ms as i128).saturating_sub(start_ms as i128);
+            let elapsed = (now_ms).saturating_sub(start_ms);
             left_ms = timeout_ms_total.saturating_sub(elapsed);
             if left_ms <= 0 {
                 return Err(YueError::Timeout(format!("acquire token timeout for host {}", self.host)));
@@ -284,7 +289,7 @@ impl HostInfo {
             };
 
             // 获取 token，限定为剩余时间
-            let acquire_timeout = Duration::from_millis(if left_ms > (u64::MAX as i128) { u64::MAX } else { left_ms as u64 });
+            let acquire_timeout = Duration::from_millis(left_ms);
             let acquire_token_res = timeout(
                 acquire_timeout,
                 limiter_cloned.until_n_ready_with_jitter(weight_nz, Jitter::up_to(Duration::from_millis(500))),
@@ -295,13 +300,13 @@ impl HostInfo {
                 Ok(Ok(snapshot)) => {
                     // 再次计算剩余时间并检查 host open 状态
                     let now_ms = unix_time_now_u64_utc();
-                    let elapsed = (now_ms as i128).saturating_sub(start_ms as i128);
+                    let elapsed = now_ms.saturating_sub(start_ms);
                     left_ms = timeout_ms_total.saturating_sub(elapsed);
                     if left_ms <= 0 {
                         return Err(YueError::Timeout(format!("acquire token timeout for host {}", self.host)));
                     }
 
-                    let wait_duration = Duration::from_millis(if left_ms > (u64::MAX as i128) { u64::MAX } else { left_ms as u64 });
+                    let wait_duration = Duration::from_millis(left_ms);
                     match timeout(wait_duration, self.check_open_and_wait(None)).await {
                         Ok(escape_ms) => {
                             // escape_ms 是本次等待的毫秒数，由 waiting_for_open 返回
@@ -726,10 +731,10 @@ mod tests {
         host.disable_before.store(now + 2000, Ordering::SeqCst);
 
         // timeout_secs = 1s -> 总超时 1000ms，应在等待 open 阶段超时
-        let r = host.acquire_limit_token(1, 1).await;
+        let r = host.acquire_limit_token(1, 1000).await;
         assert!(r.is_err(), "应当返回超时错误");
         match r.err().unwrap() {
-            YueError::Timeout(s) => assert!(s.contains("acquire token timeout"), "错误信息应包含 acquire token timeout，实际: {}", s),
+            YueError::Timeout(s) => assert!(s.contains("is not open"), "错误信息应包含 is not open，实际: {}", s),
             other => panic!("unexpected error variant: {:?}", other),
         }
     }

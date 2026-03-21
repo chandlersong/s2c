@@ -10,7 +10,7 @@ use reqwest::{RequestBuilder, Response};
 use serde::Deserialize;
 use std::sync::Arc;
 use std::time::Duration;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
 
 /// 枚举：重试等待类型，便于统一管理等待策略与抖动
@@ -134,26 +134,35 @@ impl BinanceRestfulClient {
         // attempts_made 表示已经发生的失败尝试次数（用于判断是否超出重试预算），初始为 0。
         let mut attempts_made: usize = 0;
 
-        // 累计等待时间（毫秒），用于确保所有等待（包括 acquire/blocked/send/rate-limit 等）
-        // 的总计不超过 request_info.request_timeout_mill_secs
+        // 用于确保所有等待（包括 acquire/blocked/send/rate-limit 等）的总计不超过
+        // request_info.request_timeout_mill_secs。改为记录 start_time 并在每次需要时
+        // 基于真实经过时间计算 elapsed_ms（避免依赖 sleep 的累加误差）。
         let total_timeout_ms = request_info.request_timeout_mill_secs as u64;
-        let mut cumulative_waited_ms: u64 = 0;
+        let start_time = Instant::now();
 
         // helper: we will inline remaining/to_sleep calculation at each sleep point to avoid
         // closure borrow issues (we need to mutate cumulative_waited_ms after await).
 
         // 1) 获取令牌阶段（无限次重试，不消耗共享重试预算）
         // 按用户要求：获取令牌应无限重试等待，直到成功为止。但现在加入总等待时长限制
-        let acquire_state_snapshot = match Self::acquire_limit_rate(request_info, total_timeout_ms, cumulative_waited_ms).await {
-            Ok(value) => value,
-            Err(value) => return value,
-        };
-
         // 1.a) 获得令牌后，若 host 仍处于 blocked 状态，则无限等待直到允许（按用户要求），但受总等待时长限制
 
         // 2) 发送请求阶段（失败或限流会消耗共享重试预算）
         loop {
-            request_info.host.waiting_for_open(None, None).await;
+            // 计算剩余时间（毫秒）并直接传递给 acquire_limit_token。使用真实经过时间而不是
+            // 依赖于之前 sleep 累加的值。
+            let elapsed_ms = start_time.elapsed().as_millis() as u64;
+            let remaining_ms = total_timeout_ms.saturating_sub(elapsed_ms);
+
+            let acquire_state_snapshot = match request_info.host.acquire_limit_token(request_info.weight, remaining_ms).await {
+                Ok(snapshot) => snapshot,
+                Err(e) => match e {
+                    // 如果是超时错误，直接返回该错误；否则仅重试（continue）
+                    YueError::Timeout(_) => return Err(e),
+                    _ => continue,
+                },
+            };
+
             // 复制 RequestBuilder 以便重试（使用经过 compose_security_header 处理后的 real_builder）
             let mut rb = match real_builder.try_clone() {
                 Some(b) => b,
@@ -172,17 +181,19 @@ impl BinanceRestfulClient {
                     }
                     let wait_ms = retry_wait_ms(RetryWaitKind::SendError, attempts_made);
 
-                    // decide sleep respecting total timeout
-                    let remaining = total_timeout_ms.saturating_sub(cumulative_waited_ms);
+                    // decide sleep respecting total timeout (recompute elapsed before sleep)
+                    let elapsed_ms = start_time.elapsed().as_millis() as u64;
+                    let remaining = total_timeout_ms.saturating_sub(elapsed_ms);
                     if remaining == 0 {
                         return Err(YueError::new("total wait time exceeded request timeout"));
                     }
                     let to_sleep = if wait_ms >= remaining { remaining } else { wait_ms };
                     attempts_made = attempts_made.saturating_add(1);
                     sleep(Duration::from_millis(to_sleep)).await;
-                    cumulative_waited_ms = cumulative_waited_ms.saturating_add(to_sleep);
 
-                    if cumulative_waited_ms >= total_timeout_ms {
+                    // 重新计算真实经过时间并判断是否超时
+                    let elapsed_ms = start_time.elapsed().as_millis() as u64;
+                    if elapsed_ms >= total_timeout_ms {
                         return Err(YueError::new("total wait time exceeded request timeout after send error"));
                     }
                     continue;
@@ -206,17 +217,19 @@ impl BinanceRestfulClient {
                                 return Err(YueError::new("exhausted retries due to rate limit"));
                             }
 
-                            // decide sleep respecting total timeout
-                            let remaining = total_timeout_ms.saturating_sub(cumulative_waited_ms);
+                            // decide sleep respecting total timeout (基于真实经过时间)
+                            let elapsed_ms = start_time.elapsed().as_millis() as u64;
+                            let remaining = total_timeout_ms.saturating_sub(elapsed_ms);
                             if remaining == 0 {
                                 return Err(YueError::new("total wait time exceeded request timeout"));
                             }
                             let to_sleep = if wait_ms >= remaining { remaining } else { wait_ms };
                             attempts_made = attempts_made.saturating_add(1);
                             sleep(Duration::from_millis(to_sleep)).await;
-                            cumulative_waited_ms = cumulative_waited_ms.saturating_add(to_sleep);
 
-                            if cumulative_waited_ms >= total_timeout_ms {
+                            // 重新计算真实经过时间并判断是否超时
+                            let elapsed_ms = start_time.elapsed().as_millis() as u64;
+                            if elapsed_ms >= total_timeout_ms {
                                 return Err(YueError::new("total wait time exceeded request timeout after rate limit"));
                             }
                             continue;
@@ -229,74 +242,6 @@ impl BinanceRestfulClient {
                 }
             }
         }
-    }
-
-    async fn acquire_limit_rate(
-        request_info: &RequestInfo,
-        total_timeout_ms: u64,
-        cumulative_waited_ms: u64,
-    ) -> Result<Option<StateSnapshot>, Result<Response, YueError>> {
-        let mut acquire_state_snapshot: Option<StateSnapshot> = None;
-        let mut acquire_attempts: usize = 0;
-        loop {
-            request_info.host.waiting_for_open(None, None);
-            match request_info
-                .host
-                .acquire_limit_token(request_info.weight, request_info.get_rate_limit_timeout())
-                .await
-            {
-                Ok(state_snapshot) => {
-                    if let Some(s) = state_snapshot {
-                        if s.remaining_burst_capacity() < (request_info.host.get_max_limit() as f64 * 0.1) as u32 {
-                            if let Some(value) = Self::wait_for_acquire_token(total_timeout_ms, cumulative_waited_ms, acquire_attempts).await {
-                                return Err(value);
-                            }
-                            acquire_attempts = acquire_attempts.saturating_add(1);
-                            continue;
-                        }
-                        acquire_state_snapshot = Some(s)
-                    }
-                    break;
-                } // 获取成功，进入下一阶段
-                Err(e) => {
-                    debug!(
-                        "Acquire token failed: {:?}, acquire_attempts {}. Will retry until total timeout.",
-                        e, acquire_attempts
-                    );
-                    if let Some(value) = Self::wait_for_acquire_token(total_timeout_ms, cumulative_waited_ms, acquire_attempts).await {
-                        return Err(value);
-                    }
-                    acquire_attempts = acquire_attempts.saturating_add(1);
-                    continue;
-                }
-            }
-        }
-        Ok(acquire_state_snapshot)
-    }
-
-    async fn wait_for_acquire_token(
-        total_timeout_ms: u64,
-        mut cumulative_waited_ms: u64,
-        acquire_attempts: usize,
-    ) -> Option<Result<Response, YueError>> {
-        // 无限重试：使用 AcquireToken 类型的抖动等待，但不消耗共享重试预算
-        let wait_ms = retry_wait_ms(RetryWaitKind::AcquireToken, acquire_attempts);
-
-        // decide actual sleep duration respecting total timeout
-        let remaining = total_timeout_ms.saturating_sub(cumulative_waited_ms);
-        if remaining == 0 {
-            return Some(Err(YueError::new("total wait time exceeded request timeout")));
-        }
-        let to_sleep = if wait_ms >= remaining { remaining } else { wait_ms };
-        // perform sleep
-        sleep(Duration::from_millis(to_sleep)).await;
-        cumulative_waited_ms = cumulative_waited_ms.saturating_add(to_sleep);
-
-        // if we slept the remaining time, then total timeout reached
-        if cumulative_waited_ms >= total_timeout_ms {
-            return Some(Err(YueError::new("total wait time exceeded request timeout while acquiring token")));
-        }
-        None
     }
 }
 
@@ -527,7 +472,7 @@ async fn rate_limit_wait_ms(
     );
     //为了等待的久一点。
     let jitter = Jitter::up_to(Duration::from_secs(90));
-    request_info.host.waiting_for_open(Some(reopen_timestamp), Some(jitter));
+    request_info.host.waiting_for_open(Some(reopen_timestamp), Some(jitter)).await;
     // If we can retry, return wait_ms; otherwise return error indicating the limit
     if attempt < max_retries {
         return Ok(Some(wait_ms));
