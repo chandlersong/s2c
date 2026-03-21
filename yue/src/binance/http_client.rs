@@ -163,6 +163,13 @@ impl BinanceRestfulClient {
                 },
             };
 
+            //如果请求太多，这里先卡一下。
+            if let Some(s) = acquire_state_snapshot.clone() {
+                if s.remaining_burst_capacity() < (request_info.host.get_max_limit() as f64 * 0.1) as u32 {
+                    continue;
+                }
+            };
+
             // 复制 RequestBuilder 以便重试（使用经过 compose_security_header 处理后的 real_builder）
             let mut rb = match real_builder.try_clone() {
                 Some(b) => b,
