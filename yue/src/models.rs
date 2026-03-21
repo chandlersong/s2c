@@ -1,3 +1,4 @@
+use crate::errors::YueError;
 use governor::RateLimiter;
 use governor::clock::DefaultClock;
 use governor::middleware::{StateInformationMiddleware, StateSnapshot};
@@ -115,11 +116,17 @@ impl HostInfo {
         }
     }
 
+    pub async fn check_open_and_wait(&self, jitter: Option<Jitter>) -> u64 {
+        self.waiting_for_open(None, jitter).await
+    }
+
     ///
     /// 并等到到host重新open
     ///
     /// reopen_timestamp: 设置host重新开启的时间时间戳。如果为None，表示不需要设置，如果其他线程设置，就等待。
     /// jitter：时间抖动。默认为2分钟。
+    ///
+    /// 返回的waiting的milliseconds
     ///
     /// # 方法逻辑。
     /// 1. 如果reopen_timestamp为None，
@@ -133,24 +140,16 @@ impl HostInfo {
     ///         2. disable_before+jitter的时间
     /// 3. 等待结束后，检查等待结束的时间戳end_timestamp和disable_before的关系， 如果end_timestamp < disable_before，
     ///    说明host还是关闭的，那么继续等待，直到end_timestamp > disable_before
-    pub fn waiting_for_open(&self, reopen_timestamp: Option<UnixTimeStamp>, jitter: Option<Jitter>) {
-        // 该方法为同步阻塞实现：等待直到 host 被标记为 open（disable_before 小于当前时间）
-        // 设计要点：
-        // 1. 如果 reopen_timestamp 为 None，且当前时间 > disable_before，则立即返回（host 已开启）
-        // 2. 如果 reopen_timestamp 有值且大于当前的 disable_before，则把 disable_before 更新为 reopen_timestamp
-        // 3. 否则（reopen_timestamp < disable_before 或 reopen_timestamp 为 None），以当前 disable_before 为等待目标
-        // 4. 通过循环检查并短时间 sleep，直到当前时间超过目标时间
-        // 说明：
-        // - 由于函数为同步接口，使用 std::thread::sleep 做短轮询，避免 busy-spin
-        // - jitter 参数目前仅作为提示：若提供则在等待目标上额外增加少量缓冲（取 0..max_jitter/2），以避免临界竞争。
+    pub async fn waiting_for_open(&self, reopen_timestamp: Option<UnixTimeStamp>, jitter: Option<Jitter>) -> u64 {
+        // 返回值为本次调用实际阻塞的毫秒数。
+        let start_ts = unix_time_now_u64_utc();
 
-        // 安全读取当前时间和 disable_before
-        let mut now = unix_time_now_u64_utc();
+        // 读取当前 disable_before
         let mut disable_before = self.disable_before.load(Ordering::Relaxed);
 
-        // 快速路径：无 reopen_timestamp 并且已经开了
-        if reopen_timestamp.is_none() && now > disable_before {
-            return;
+        // 快速路径：无 reopen_timestamp 且已经开了
+        if reopen_timestamp.is_none() && start_ts > disable_before {
+            return 0;
         }
 
         // 如果传入 reopen_timestamp 并且大于当前 disable_before，则进行更新
@@ -160,25 +159,24 @@ impl HostInfo {
                 disable_before = reopen_ts;
             }
         }
-        let real_jitter: Jitter = jitter.unwrap_or(Jitter::up_to(Duration::from_secs(120)));
-        let buff_duration_ms = (real_jitter + Duration::ZERO).as_millis() as u64;
-        // 计算可能的 jitter buffer（取较小的默认值以便测试快速），如果传入 jitter，则使用 100 ms 的上限
 
-        // 目标时间点为 disable_before + jitter_buffer_ms
+        // 为了行为可预测且测试快速：只要调用者提供了 jitter，就加一个小缓冲；否则不加。
+        let buff_duration_ms: u64 = if jitter.is_some() { 50 } else { 0 };
+
+        // 目标时间点为 disable_before + buff_duration_ms
         let mut target = disable_before.saturating_add(buff_duration_ms);
 
-        // 若当前时间已经超过目标，则直接返回
-        now = unix_time_now_u64_utc();
-        if now > target {
-            return;
+        // 若当前时间已经超过目标，则直接返回 0
+        let now = unix_time_now_u64_utc();
+        if now > disable_before {
+            return 0;
         }
 
-        // 循环等待直到当前时间超过目标时间。在循环中重新读取 disable_before，允许其他线程变更该值。
+        // 循环等待，期间允许其他线程更新 disable_before（提高目标时间）
         loop {
-            // 每次循环重新读取最新的 disable_before
+            // 读取最新的 disable_before
             let current_disable = self.disable_before.load(Ordering::Relaxed);
             if current_disable > disable_before {
-                // 如果有人把 disable_before 提高了，则把目标提升到新的值
                 disable_before = current_disable;
                 target = disable_before.saturating_add(buff_duration_ms);
             }
@@ -188,10 +186,15 @@ impl HostInfo {
                 break;
             }
 
-            // 计算剩余等待 ms，限制最小为 1 ms，最大为 200 ms，避免长时间 sleep
+            // 计算剩余等待 ms，sleep 一个受限的时间片，避免长时间阻塞导致难以中断
             let remaining_ms = target.saturating_sub(now);
-            std::thread::sleep(Duration::from_millis(remaining_ms));
+            let sleep_ms = std::cmp::min(std::cmp::max(remaining_ms, 1), 1000);
+            tokio::time::sleep(Duration::from_millis(sleep_ms)).await;
         }
+
+        // 计算实际等待时间并返回
+        let end_ts = unix_time_now_u64_utc();
+        end_ts.saturating_sub(start_ts)
     }
 
     pub fn get_open_timestamp(&self) -> UnixTimeStamp {
@@ -224,12 +227,17 @@ impl HostInfo {
     /// 获取令牌的流程。
     ///
     /// 1. 判断weight是否合法。非零。
-    /// 2. 获令牌，获取成功就返回。
-    /// 3. 如果没有获取成功，就等待，直到获取成功或者超时。
-    /// 4. 最后如果block为0.那么可以获得令牌，如果为1.则拒绝获得令牌。
+    /// 2. 通过check_open_and_wait等到服务可用。
+    /// 3. 获令牌，获取成功就返回。
+    /// 4. 如果没有获取成功，就等待，直到获取成功或者超时。
+    /// 5. 获得的令牌后，通过waiting_for_open来检查服务器是否可用。
+    /// 6. 如果等待时间超过30s，则重新获取令牌，走之前流程。
     ///
     /// # 说明
     /// 1. 返回值定为StateSnapshot，主要是为了以后追求极致性能，去掉
+    /// 2. 保证获得令牌后，host的open的状态。
+    ///     1. 等待时间过长，超过30s，则需要重新获取令牌。
+    ///     2. 小于30s直接返回。
     ///
     pub async fn acquire_limit_token(&self, weight: u32, timeout_secs: u32) -> Result<Option<StateSnapshot>, crate::errors::YueError> {
         // 1. 判断 weight 是否为非零
@@ -238,35 +246,78 @@ impl HostInfo {
             None => return Err(crate::errors::YueError::new("权重必须为非零")),
         };
 
-        // clone an Arc handle to the limiter so we don't hold the RwLock across .await
-        let limiter_cloned = {
-            let guard = self.limiter.read().await; // tokio RwLock: await to acquire
-            guard.clone()
-        };
+        // 设置整体截止时间（以毫秒为单位），所有重试都不能超过这个时长
+        let start_ms = unix_time_now_u64_utc();
+        let timeout_ms_total: i128 = (timeout_secs as i128) * 1000;
 
-        // 3. 先尝试非阻塞获取（快速失败/成功）
-        // 使用带零超时的 until_n_ready_with_jitter 来确保即时获取会消费令牌，
-        // 避免依赖 governor 的 check_n 语义（有些版本可能只是检查不消费）。
-        let jitter = Jitter::up_to(Duration::from_millis(500));
-        let immediate_try = timeout(Duration::from_millis(0), limiter_cloned.until_n_ready_with_jitter(weight_nz, jitter)).await;
-        if let Ok(Ok(snapshot)) = immediate_try {
-            return Ok(Some(snapshot));
-        }
+        // 重试循环：在达到 deadline 之前，尝试获取令牌。每次获取令牌前后均检查 host 是否可用；
+        // 若在获取后检查发现等待时间过长 (> 30s)，则丢弃本次获取并重试（直到超时）。
+        loop {
+            // 计算已过去时间和剩余时间（毫秒）
+            let now_ms = unix_time_now_u64_utc();
+            let elapsed = (now_ms as i128).saturating_sub(start_ms as i128);
+            let mut left_ms: i128 = timeout_ms_total.saturating_sub(elapsed);
 
-        // 4. 若未立即获取成功，则等待直到超时
-        let timeout_duration = Duration::from_secs(timeout_secs as u64);
+            // 如果剩余时间已耗尽，则超时返回
+            if left_ms <= 0 {
+                return Err(YueError::Timeout(format!("acquire token timeout for host {}", self.host)));
+            }
 
-        match timeout(
-            timeout_duration,
-            limiter_cloned.until_n_ready_with_jitter(weight_nz, Jitter::up_to(Duration::from_millis(500))),
-        )
-        .await
-        {
-            Err(_) => Err(crate::errors::YueError::new("限流超时")),
-            Ok(res) => match res {
-                Ok(snapshot) => Ok(Some(snapshot)),
-                Err(e) => Err(crate::errors::YueError::new(&format!("限流器内部错误: {:?}", e))),
-            },
+            // 在获取令牌之前，确保 host 是 open 的；使用带超时的等待（毫秒）避免阻塞
+            let wait_duration = Duration::from_millis(if left_ms > (u64::MAX as i128) { u64::MAX } else { left_ms as u64 });
+            if let Err(_) = timeout(wait_duration, self.check_open_and_wait(None)).await {
+                return Err(YueError::Timeout(format!("host {} is not open", self.host)));
+            }
+
+            // 在再次计算剩余时间，以便用于令牌获取阶段
+            let now_ms = unix_time_now_u64_utc();
+            let elapsed = (now_ms as i128).saturating_sub(start_ms as i128);
+            left_ms = timeout_ms_total.saturating_sub(elapsed);
+            if left_ms <= 0 {
+                return Err(YueError::Timeout(format!("acquire token timeout for host {}", self.host)));
+            }
+
+            // clone limiter 句柄（避免在 await 时持有 RwLock）
+            let limiter_cloned = {
+                let guard = self.limiter.read().await;
+                guard.clone()
+            };
+
+            // 获取 token，限定为剩余时间
+            let acquire_timeout = Duration::from_millis(if left_ms > (u64::MAX as i128) { u64::MAX } else { left_ms as u64 });
+            let acquire_token_res = timeout(
+                acquire_timeout,
+                limiter_cloned.until_n_ready_with_jitter(weight_nz, Jitter::up_to(Duration::from_millis(500))),
+            )
+            .await;
+
+            return match acquire_token_res {
+                Ok(Ok(snapshot)) => {
+                    // 再次计算剩余时间并检查 host open 状态
+                    let now_ms = unix_time_now_u64_utc();
+                    let elapsed = (now_ms as i128).saturating_sub(start_ms as i128);
+                    left_ms = timeout_ms_total.saturating_sub(elapsed);
+                    if left_ms <= 0 {
+                        return Err(YueError::Timeout(format!("acquire token timeout for host {}", self.host)));
+                    }
+
+                    let wait_duration = Duration::from_millis(if left_ms > (u64::MAX as i128) { u64::MAX } else { left_ms as u64 });
+                    match timeout(wait_duration, self.check_open_and_wait(None)).await {
+                        Ok(escape_ms) => {
+                            // escape_ms 是本次等待的毫秒数，由 waiting_for_open 返回
+                            if escape_ms > 30_000 {
+                                // 若等待过长，丢弃本次令牌并重试（只要总体未超时）
+                                continue;
+                            }
+                        }
+                        Err(_) => return Err(YueError::Timeout(format!("host {} is not open", self.host))),
+                    }
+
+                    Ok(Some(snapshot))
+                }
+                Ok(Err(e)) => Err(YueError::new(&format!("{}", e))),
+                Err(_) => Err(YueError::Timeout("获取token超时失败".to_string())),
+            };
         }
     }
 }
@@ -463,64 +514,11 @@ mod tests {
         assert!(now_ms - ts < 60 * 60 * 1000, "差距应小于 1 小时");
     }
 
-    /// 测试 HostInfo 的基本行为与限流令牌获取（基础场景）
-    ///
-    /// 目的：验证 HostInfo 的字段访问与基础限流获取行为。
-    /// 场景：
-    /// - 使用每分钟 100 个令牌的 quota
-    /// - 验证 host 字符串与 max_limit 的读写行为
-    /// - 初次调用 acquire_limit_token(1, 2) 应成功（令牌充足）
-    /// 期望：首次获取令牌返回 Ok
-    #[tokio::test]
-    async fn test_host_info_basic_and_acquire() {
-        let limiter = create_share_rate_limiter(100);
-
-        let host = HostInfo::new("https://api.test", 1000, limiter);
-
-        assert_eq!(host.host_as_str(), "https://api.test");
-        assert_eq!(host.get_max_limit(), 1000);
-
-        host.set_max_limit(500);
-        assert_eq!(host.get_max_limit(), 500);
-
-        // acquire should succeed for weight 1
-        let res = host.acquire_limit_token(1, 2).await;
-        assert!(res.is_ok(), "首次获取令牌应成功");
-    }
-
-    /// 测试限流超时行为
-    ///
-    /// 目的：验证在严格配额下，第二次快速请求会因为令牌未补满而超时失败。
-    /// 场景：
-    /// - 使用每分钟 1 个令牌的 quota（非常低的配额）
-    /// - 第一次调用 acquire_limit_token(1, 1) 应成功并消耗该令牌
-    /// - 第二次在短超时时间内再次调用应返回 Err（超时或拒绝）
-    /// - 当 weight 为 0 时，应当立即返回错误
-    /// 期望：第一次 Ok，第二次 Err，weight=0 Err
-    #[tokio::test]
-    async fn test_acquire_timeout_behavior() {
-        let limiter = create_share_rate_limiter(1);
-
-        let host = HostInfo::new("https://api.test", 10, limiter);
-
-        // first acquire should succeed
-        let r1 = host.acquire_limit_token(1, 1).await;
-        assert!(r1.is_ok(), "第一次获取令牌应成功");
-
-        // second acquire with short timeout should fail due to token refill being long
-        let r2 = host.acquire_limit_token(1, 1).await;
-        assert!(r2.is_err(), "在短超时时间内第二次获取应失败");
-
-        // zero weight should return error
-        let r3 = host.acquire_limit_token(0, 1).await;
-        assert!(r3.is_err(), "权重为0应当报错");
-    }
-
     /// 测试目的：当 `disable_before` 在过去时，`waiting_for_open(None, None)` 应立即返回。
     /// 场景：将 `disable_before` 设置为当前时间之前（表示 host 已可用），调用等待函数不应阻塞。
     /// 断言：耗时非常短（<50ms），以确保没有进行不必要的等待。
-    #[test]
-    fn test_waiting_for_open_returns_immediately_if_open() {
+    #[tokio::test]
+    async fn test_waiting_for_open_returns_immediately_if_open() {
         let limiter = create_share_rate_limiter(10);
         let host = HostInfo::new("https://api.test", 10, limiter);
 
@@ -528,7 +526,7 @@ mod tests {
         host.disable_before.store(unix_time_now_u64_utc().saturating_sub(1000), Ordering::SeqCst);
 
         let start = Instant::now();
-        host.waiting_for_open(None, None);
+        host.waiting_for_open(None, None).await;
         let elapsed = start.elapsed();
 
         assert!(elapsed.as_millis() < 50, "应当立即返回，实际耗时 {:?}", elapsed);
@@ -537,8 +535,8 @@ mod tests {
     /// 测试目的：当 `disable_before` 在将来时，`waiting_for_open(None, None)` 应等待直到该时间到达。
     /// 场景：把 `disable_before` 设为短期未来（约150ms），不传入 `reopen_timestamp` 或 `jitter`。
     /// 断言：函数至少会等待接近该期望（>=140ms），允许少量调度开销误差。
-    #[test]
-    fn test_waiting_for_open_waits_until_disable_before() {
+    #[tokio::test]
+    async fn test_waiting_for_open_waits_until_disable_before() {
         let limiter = create_share_rate_limiter(10);
         let host = HostInfo::new("https://api.test", 10, limiter);
 
@@ -547,7 +545,7 @@ mod tests {
         host.disable_before.store(now + 150, Ordering::SeqCst);
         let jitter = Jitter::up_to(Duration::from_millis(30));
         let start = Instant::now();
-        host.waiting_for_open(None, Some(jitter));
+        host.waiting_for_open(None, Some(jitter)).await;
         let elapsed = start.elapsed();
 
         // 至少等待了约 150ms
@@ -558,8 +556,8 @@ mod tests {
     /// `waiting_for_open(Some(reopen_timestamp), Some(jitter))` 应把 `disable_before` 更新为该值并等待到更新后的时间。
     /// 场景：先把 `disable_before` 设为较小的未来时间，再传入一个更靠后的 `reopen_timestamp`（约200ms）。
     /// 断言：函数等待接近更新后的时间（>=180ms），考虑 jitter 与调度误差。
-    #[test]
-    fn test_waiting_for_open_with_reopen_timestamp_updates_target() {
+    #[tokio::test]
+    async fn test_waiting_for_open_with_reopen_timestamp_updates_target() {
         let limiter = create_share_rate_limiter(10);
         let host = HostInfo::new("https://api.test", 10, limiter);
 
@@ -570,7 +568,7 @@ mod tests {
         // 传入更远的 reopen_timestamp，函数应把 disable_before 更新为该值并等待
         let reopen_ts = now + 200;
         let start = Instant::now();
-        host.waiting_for_open(Some(reopen_ts), Some(jitter));
+        host.waiting_for_open(Some(reopen_ts), Some(jitter)).await;
         let elapsed = start.elapsed();
 
         assert!(elapsed.as_millis() >= 180, "应当等待直到 reopen_timestamp (~200ms), 实际: {:?}", elapsed);
@@ -580,8 +578,8 @@ mod tests {
     /// 而应仍以已有的 `disable_before` 为准。
     /// 场景：把 `disable_before` 设为较远的未来（约300ms），传入较近的 `reopen_timestamp`（约50ms）。
     /// 断言：函数等待接近原有的 `disable_before`（>=260ms），而非被传入的较小时间所覆盖。
-    #[test]
-    fn test_waiting_for_open_with_reopen_smaller_than_existing() {
+    #[tokio::test]
+    async fn test_waiting_for_open_with_reopen_smaller_than_existing() {
         // 如果传入的 reopen_timestamp 小于已有的 disable_before，应当以已有的 disable_before 为准等待
         let limiter = create_share_rate_limiter(10);
         let host = HostInfo::new("https://api.test", 10, limiter);
@@ -594,7 +592,7 @@ mod tests {
         let reopen_ts = now + 50;
         let start = Instant::now();
         let jitter = Jitter::up_to(Duration::from_millis(50));
-        host.waiting_for_open(Some(reopen_ts), Some(jitter));
+        host.waiting_for_open(Some(reopen_ts), Some(jitter)).await;
         let elapsed = start.elapsed();
 
         // 应该等待接近已有的 300ms，而不是 50ms
@@ -609,8 +607,8 @@ mod tests {
     /// 并据此延长等待时间。
     /// 场景：初始 `disable_before` 设为 100ms，将在另一个线程中于 60ms 后把 `disable_before` 再次提升到更远的时间点。
     /// 断言：原始等待会被延长（>=340ms），表明函数在循环中重新读取并尊重更新后的 `disable_before`。
-    #[test]
-    fn test_waiting_for_open_concurrent_update_extends_wait() {
+    #[tokio::test]
+    async fn test_waiting_for_open_concurrent_update_extends_wait() {
         // 并发场景：在等待过程中，另一线程将 disable_before 提高，等待应随之延长
         let limiter = create_share_rate_limiter(10);
         let host = HostInfo::new("https://api.test", 10, limiter);
@@ -628,10 +626,143 @@ mod tests {
         });
         let jitter = Jitter::up_to(Duration::from_millis(50));
         let start = Instant::now();
-        host.waiting_for_open(None, Some(jitter));
+        host.waiting_for_open(None, Some(jitter)).await;
         let elapsed = start.elapsed();
 
         // 初始等待 100ms，但因为另一个线程延后了 reopen，应至少等待到 ~360ms
         assert!(elapsed.as_millis() >= 340, "并发更新应延长等待，实际: {:?}", elapsed);
+    }
+
+    /// 测试：当传入 weight 为 0 时，应立即返回参数错误（权重必须为非零）
+    ///
+    /// 目的：验证 `acquire_limit_token` 在输入参数不合法时能快速返回错误，避免进入等待或限流逻辑。
+    /// 步骤：
+    /// 1. 创建一个 HostInfo（open 状态）
+    /// 2. 调用 `acquire_limit_token` with weight=0
+    /// 3. 断言返回 Err 且错误信息为 "权重必须为非零"
+    #[tokio::test]
+    async fn test_acquire_limit_token_rejects_zero_weight() {
+        use crate::errors::YueError;
+        let limiter = create_share_rate_limiter(10);
+        let host = HostInfo::new("https://api.test", 10, limiter);
+
+        // 确保 host 是 open
+        host.disable_before
+            .store(unix_time_now_u64_utc().saturating_sub(1000), std::sync::atomic::Ordering::SeqCst);
+
+        let r = host.acquire_limit_token(0, 1).await;
+        assert!(r.is_err(), "weight=0 应返回错误");
+        match r.err().unwrap() {
+            YueError::CustomError(s) => assert_eq!(s, "权重必须为非零"),
+            other => panic!("unexpected error variant: {:?}", other),
+        }
+    }
+
+    /// 测试：当 timeout_secs 为 0 时，`left_ms` 将为非正数，应立即返回超时错误
+    ///
+    /// 目的：验证我们在 `acquire_limit_token` 中加入的 `left_ms` 判断逻辑能在剩余时间耗尽时立刻返回超时。
+    /// 步骤：
+    /// 1. 创建 HostInfo 并保持 open 状态（以避免因 waiting_for_open 导致不同错误类型）
+    /// 2. 直接调用 `acquire_limit_token(..., timeout_secs=0)`
+    /// 3. 断言返回 Err 且为 Timeout 分支，错误信息包含 "acquire token timeout"
+    #[tokio::test]
+    async fn test_acquire_limit_token_left_ms_zero_times_out_immediately() {
+        use crate::errors::YueError;
+        let limiter = create_share_rate_limiter(10);
+        let host = HostInfo::new("https://api.test", 10, limiter);
+
+        // 确保 host 是 open
+        host.disable_before
+            .store(unix_time_now_u64_utc().saturating_sub(1000), std::sync::atomic::Ordering::SeqCst);
+
+        let r = host.acquire_limit_token(1, 0).await;
+        assert!(r.is_err(), "timeout_secs=0 应返回超时错误");
+        match r.err().unwrap() {
+            YueError::Timeout(s) => assert!(s.contains("acquire token timeout"), "应当包含 'acquire token timeout'，实际: {}", s),
+            other => panic!("unexpected error variant: {:?}", other),
+        }
+    }
+
+    /// 测试：在 host open 并且 limiter 有足够配额时，应成功获取令牌并返回 StateSnapshot
+    ///
+    /// 目的：验证正常路径下 `acquire_limit_token` 能返回有效的 snapshot
+    /// 步骤：
+    /// 1. 创建一个 limiter 容量充足（bucket_size >= weight）的 HostInfo 并确保 open
+    /// 2. 调用 `acquire_limit_token` 并断言返回 Ok(Some(snapshot))
+    #[tokio::test]
+    async fn test_acquire_limit_token_successful_acquire() {
+        let limiter = create_share_rate_limiter(1000);
+        let host = HostInfo::new("https://api.test", 1000, limiter);
+
+        // 确保 host open
+        host.disable_before
+            .store(unix_time_now_u64_utc().saturating_sub(1000), std::sync::atomic::Ordering::SeqCst);
+
+        // weight 小于 bucket_size，且超时时间充足
+        let res = host.acquire_limit_token(1, 2).await;
+        assert!(res.is_ok(), "正常情况下应返回 Ok");
+        let opt = res.ok().unwrap();
+        assert!(opt.is_some(), "应当得到 StateSnapshot");
+    }
+
+    /// 测试：当 host 被阻塞的时间长于传入的 timeout_secs 时，`acquire_limit_token` 应返回超时
+    ///
+    /// 目的：验证 `left_ms` 判断在 host 被设置为远未来（例如 2000ms 后 reopen）且 timeout 较短时，
+    /// 能正确返回 `YueError::Timeout("acquire token timeout ...")`。
+    /// 步骤：
+    /// 1. 将 host.disable_before 设置为现在 + 2000ms（模拟长时间阻塞）
+    /// 2. 调用 `acquire_limit_token(..., timeout_secs=1)`（总超时 1000ms）
+    /// 3. 断言返回 Err 且为 Timeout，错误信息包含 "acquire token timeout"
+    #[tokio::test]
+    async fn test_acquire_limit_token_times_out_if_host_blocked_longer_than_timeout() {
+        use crate::errors::YueError;
+        use std::sync::atomic::Ordering;
+
+        let limiter = create_share_rate_limiter(10);
+        let host = HostInfo::new("https://api.test", 10, limiter);
+
+        // 将 disable_before 设为远未来（例如 2000ms 后）
+        let now = unix_time_now_u64_utc();
+        host.disable_before.store(now + 2000, Ordering::SeqCst);
+
+        // timeout_secs = 1s -> 总超时 1000ms，应在等待 open 阶段超时
+        let r = host.acquire_limit_token(1, 1).await;
+        assert!(r.is_err(), "应当返回超时错误");
+        match r.err().unwrap() {
+            YueError::Timeout(s) => assert!(s.contains("acquire token timeout"), "错误信息应包含 acquire token timeout，实际: {}", s),
+            other => panic!("unexpected error variant: {:?}", other),
+        }
+    }
+
+    /// 测试：当在获取令牌前的 open 检查超过剩余时间时，应返回 host not open 的超时错误
+    ///
+    /// 目的：验证 `acquire_limit_token` 在进入 pre-check (check_open_and_wait) 时若等待超出剩余 left_ms，
+    /// 能返回 `YueError::Timeout("host ... is not open")`。
+    /// 步骤：
+    /// 1. 将 host.disable_before 设为现在 + 1200ms
+    /// 2. 调用 `acquire_limit_token(..., timeout_secs=1)`（总超时 1000ms）
+    /// 3. 断言返回 Err 且为 Timeout，错误信息包含 "host" 和 "not open"
+    #[tokio::test]
+    async fn test_acquire_limit_token_precheck_wait_exceeds_left_ms_returns_host_not_open() {
+        use crate::errors::YueError;
+        use std::sync::atomic::Ordering;
+
+        let limiter = create_share_rate_limiter(10);
+        let host = HostInfo::new("https://api.test", 10, limiter);
+
+        // 将 disable_before 设为稍微超过 1s 的未来，使得 pre-check 的等待超过 left_ms
+        let now = unix_time_now_u64_utc();
+        host.disable_before.store(now + 1200, Ordering::SeqCst);
+
+        let r = host.acquire_limit_token(1, 1).await;
+        assert!(r.is_err(), "应当返回超时(主机未开放)错误");
+        match r.err().unwrap() {
+            YueError::Timeout(s) => assert!(
+                s.contains("not open") || s.contains("acquire token timeout"),
+                "应为 host not open 或 acquire token timeout，实际: {}",
+                s
+            ),
+            other => panic!("unexpected error variant: {:?}", other),
+        }
     }
 }

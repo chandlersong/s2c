@@ -19,6 +19,8 @@ pub enum YueError {
     ParseError(String),
     #[error("{0}")]
     NotImplemented(String),
+    #[error("{0}")]
+    Timeout(String),
     #[error("Custom error: {0}")]
     CustomError(String),
 }
