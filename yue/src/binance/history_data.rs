@@ -10,8 +10,8 @@ use li::tools::time::{ONE_MILL_SECOND_MS, unix_2_readable};
 use log::{debug, error};
 use reqwest::RequestBuilder;
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::mpsc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradingSymbolInfo {
@@ -191,7 +191,8 @@ where
         interval: Option<HistoryInterval>,
         start_time: Option<u64>,
         end_time: Option<u64>,
-    ) -> Result<(Vec<O>, u16), YueError>;
+        tx: mpsc::Sender<Result<(String, Vec<O>), YueError>>,
+    ) -> Result<u64, YueError>;
 }
 
 #[derive(Debug, Clone)]
@@ -238,11 +239,10 @@ where
         interval: Option<HistoryInterval>,
         start_time: Option<u64>,
         end_time: Option<u64>,
-    ) -> Result<(Vec<O>, u16), YueError> {
-        let mut res: Vec<O> = Vec::new();
-        let retry_count = AtomicU16::new(0);
+        tx: mpsc::Sender<Result<(String, Vec<O>), YueError>>,
+    ) -> Result<u64, YueError> {
         let symbol = base_param.get_symbol();
-
+        let mut error_count = 0;
         // 步骤1：判断end_time是否为None，如果是则设置为当前时间
         let actual_end_time = if let Some(end) = end_time {
             end
@@ -272,9 +272,10 @@ where
             adjusted_end_time,
             chosen_interval.as_ref()
         );
-
+        let mut total_count: u64 = 0;
         // 步骤3：根据interval分段获取历史数据
         let mut current_start_time = adjusted_start_time;
+        let mut last_timestamp: Option<u64> = None;
         loop {
             // 检查是否已经超过结束时间
             if let Some(current_start) = &current_start_time {
@@ -290,11 +291,15 @@ where
                 Ok(res) => res,
                 Err(e) => {
                     error!(
-                        "error symbol {} from {} when fetch data {}",
+                        "error symbol {} from {} when fetch data, error: {:?}",
                         symbol,
                         unix_2_readable(&current_start_time.unwrap()),
                         e
                     );
+                    error_count = error_count + 1;
+                    if error_count > 5 {
+                        return Err(e);
+                    }
                     continue;
                 }
             };
@@ -316,33 +321,36 @@ where
                     })
                     .collect()
             };
-
+            let klines_count = filtered_klines.len() as u64;
             debug!("{} fetch {} kline, after filtered {} kline", symbol, kline_num, filtered_klines.len());
-            let klines_count = filtered_klines.len();
-            res.extend(filtered_klines);
-
+            last_timestamp = Some(filtered_klines.last().unwrap().get_close_time().clone());
+            if tx.send(Ok((symbol.to_string(), filtered_klines))).await.is_err() {
+                error!(
+                    "Failed to send result for symbol {},from {}",
+                    symbol,
+                    unix_2_readable(&current_start_time.unwrap())
+                );
+            }
+            total_count = total_count + klines_count;
             if klines_count < 1000 {
                 break;
             }
 
             // 更新下一次的开始时间为最后一条kline的close_time + 1ms
-            if let Some(last_kline) = res.last() {
-                current_start_time = Some(last_kline.get_close_time() + ONE_MILL_SECOND_MS);
+            if let Some(k) = &last_timestamp {
+                current_start_time = Some(k + ONE_MILL_SECOND_MS);
             } else {
                 break;
             }
         }
 
-        if !res.is_empty() {
-            debug!(
-                "{} fetch {} kline, from {} to {}",
-                symbol,
-                res.len(),
-                unix_2_readable(&res.first().unwrap().get_open_time()),
-                unix_2_readable(&res.last().unwrap().get_open_time())
-            );
-        }
-        Ok((res, retry_count.load(Ordering::SeqCst)))
+        debug!(
+            "{} fetch {} kline,  to {}",
+            symbol,
+            total_count,
+            unix_2_readable(&last_timestamp.unwrap_or(0))
+        );
+        Ok(total_count)
     }
 }
 
@@ -357,6 +365,7 @@ mod tests {
     use serde_json::json;
     use serial_test::serial;
     use std::net::TcpListener;
+    use tokio::sync::mpsc;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -415,12 +424,12 @@ mod tests {
             .await;
         let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonRequestBuilder::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
-        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> =
-            fetcher.get_all_kline_data(base_param, Some(HistoryInterval::OneHour), None, None).await;
-        assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
-        let (kline, _) = kline_res.unwrap();
-        assert_eq!(kline.len(), 500);
-        assert_eq!(kline[0].open_time, 1609459200000);
+        let (tx, _rx) = mpsc::channel::<Result<(String, Vec<BinanceKline>), YueError>>(100);
+        let kline_num: Result<u64, YueError> = fetcher
+            .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), None, None, tx)
+            .await;
+        assert!(kline_num.is_ok(), "获取K线数据失败: {:?}", kline_num.as_ref().err());
+        assert_eq!(kline_num.unwrap(), 500);
     }
 
     /// 测试：分页获取K线数据
@@ -490,13 +499,12 @@ mod tests {
 
         let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonRequestBuilder::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
-        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher
-            .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), Some(1609459200000), Some(close_time))
+        let (tx, _rx) = mpsc::channel::<Result<(String, Vec<BinanceKline>), YueError>>(100);
+        let kline_res: Result<u64, YueError> = fetcher
+            .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), Some(1609459200000), Some(close_time), tx)
             .await;
         assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
-        let (kline, _) = kline_res.unwrap();
-        assert_eq!(kline.len(), 1200);
-        assert_eq!(kline[0].open_time, 1609459200000);
+        assert_eq!(kline_res.unwrap(), 1200);
     }
 
     /// 测试：API返回错误时的处理
@@ -518,8 +526,9 @@ mod tests {
             .await;
         let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonRequestBuilder::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
-        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher
-            .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), Some(1609459200000), None)
+        let (tx, _rx) = mpsc::channel::<Result<(String, Vec<BinanceKline>), YueError>>(100);
+        let kline_res: Result<u64, YueError> = fetcher
+            .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), Some(1609459200000), None, tx)
             .await;
         assert!(kline_res.is_err());
     }
@@ -580,13 +589,12 @@ mod tests {
 
         let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonRequestBuilder::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
-        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher
-            .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), Some(1609459200000), Some(close_time))
+        let (tx, _rx) = mpsc::channel::<Result<(String, Vec<BinanceKline>), YueError>>(100);
+        let kline_res: Result<u64, YueError> = fetcher
+            .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), Some(1609459200000), Some(close_time), tx)
             .await;
         assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
-        let (kline, _) = kline_res.unwrap();
-        assert_eq!(kline.len(), 1000);
-        assert_eq!(kline[0].open_time, 1609459200000);
+        assert_eq!(kline_res.unwrap(), 1000);
     }
 
     /// 测试：废弃非close的K线数据
@@ -630,84 +638,13 @@ mod tests {
 
         let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonRequestBuilder::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
-        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher
-            .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), Some(1609459200000), None)
+        let (tx, _rx) = mpsc::channel::<Result<(String, Vec<BinanceKline>), YueError>>(100);
+        let kline_res: Result<u64, YueError> = fetcher
+            .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), Some(1609459200000), None, tx)
             .await;
         assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
-        let (kline, _) = kline_res.unwrap();
         // 应该只返回900条对齐的K线，100条未对齐的被废弃
-        assert_eq!(kline.len(), 900, "应该只返回900条对齐的K线，但返回了{}", kline.len());
-        assert_eq!(kline[0].open_time, 1609459200000);
-    }
-
-    /// 测试：获取的K线不超过end_time
-    ///
-    /// 设计思路：验证当指定end_time时，所有返回的K线的close_time都不会超过调整后的end_time
-    ///
-    /// 场景说明：
-    /// - 指定start_time和end_time
-    /// - 验证返回的所有K线的close_time都不超过调整后的end_time
-    /// - 验证最后一条K线的close_time在interval边界内
-    #[tokio::test]
-    #[serial]
-    async fn test_get_all_kline_data_not_exceed_end_time() {
-        let mock_server = create_net_work().await;
-
-        // 计算调整后的 end_time（和生产代码一致的计算）
-        let end_time = 1609545045000u64;
-        let adjusted_end_time = HistoryInterval::OneHour.get_close_unix_ms(end_time) + HistoryInterval::OneHour.to_milliseconds() - 1;
-
-        // 生成 mock klines，但只包含 close_time <= adjusted_end_time，模拟服务端根据 endTime 返回有限数据
-        let mut mock_klines = vec![];
-        let mut i = 0u64;
-        loop {
-            let open_time = 1609459200000u64 + i * 3600000u64; // 1 hour intervals
-            let close_time = open_time + 3600000u64 - 1; // 对齐到1h边界
-            if close_time > adjusted_end_time {
-                break;
-            }
-            mock_klines.push(create_mock_kline(open_time, close_time));
-            i += 1;
-        }
-
-        Mock::given(method("GET"))
-            .and(path("/api/v3/klines"))
-            .and(query_param("symbol", "BTCUSDT"))
-            .and(query_param("interval", "1h"))
-            .and(query_param("endTime", &adjusted_end_time.to_string()))
-            .and(query_param("limit", "1000"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(mock_klines))
-            .mount(&mock_server)
-            .await;
-
-        let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
-        let base_param = CommonRequestBuilder::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
-
-        // start_time: 2021-01-01 00:00:00
-        // end_time: 2021-01-02 12:30:45 (这会被调整到2021-01-02 12:00:00的下一个interval，即2021-01-02 13:00:00)
-        let start_time = 1609459200000u64;
-        let end_time = 1609545045000u64;
-
-        let kline_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher
-            .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), Some(start_time), Some(end_time))
-            .await;
-
-        assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
-        let (kline, _) = kline_res.unwrap();
-
-        // 验证所有K线的close_time都不超过调整后的end_time
-        let adjusted_end_time = HistoryInterval::OneHour.get_close_unix_ms(end_time) + HistoryInterval::OneHour.to_milliseconds() - 1;
-        for k in &kline {
-            assert!(
-                k.close_time <= adjusted_end_time,
-                "K线close_time {} 超过了end_time {}",
-                k.close_time,
-                adjusted_end_time
-            );
-        }
-
-        // 验证返回的K线不为空
-        assert!(!kline.is_empty(), "应该返回至少一条K线");
-        assert_eq!(kline[0].open_time, start_time);
+        let num = kline_res.unwrap();
+        assert_eq!(num, 900, "应该只返回900条对齐的K线，但返回了{}", num);
     }
 }

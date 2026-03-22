@@ -37,7 +37,7 @@ async fn main() -> Result<(), YuError> {
         CloneHistoryFetcherFactory::new(base_swap_kline_fetcher);
 
     let param = CommonRequestBuilder::new("GRASSUSDT".to_string(), 1000, HistoryInterval::OneHour);
-    let (tx, mut rx) = mpsc::channel::<Result<Vec<KlinePo>, YueError>>(100);
+    let (tx, mut rx) = mpsc::channel::<Result<(String, Vec<BinanceKline>), YueError>>(100);
     let interval = HistoryInterval::FiveMinutes;
     let now_timestamp = unix_time_now_u64_utc();
     let start_time = interval.get_close_unix_ms(now_timestamp - 10 * 60 * 1000);
@@ -59,9 +59,9 @@ async fn main() -> Result<(), YuError> {
     let mut all_items = Vec::new();
     while let Some(result) = rx.recv().await {
         match result {
-            Ok(data) => {
+            Ok((_, data)) => {
                 for item in &data {
-                    all_open_times.push(item.candle_begin_time);
+                    all_open_times.push(item.open_time);
                     all_items.push(item.clone());
                 }
                 let mut seen = HashSet::new();
@@ -75,7 +75,7 @@ async fn main() -> Result<(), YuError> {
                     println!("重复的open_time: {:?}", duplicates);
                     for ot in &duplicates {
                         for item in &all_items {
-                            if item.candle_begin_time == *ot {
+                            if item.open_time == *ot {
                                 println!("重复项: {:?}", item);
                             }
                         }

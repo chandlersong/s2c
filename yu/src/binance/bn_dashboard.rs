@@ -14,7 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use yue::binance::bn_models::spot_restful::ExchangeInfo;
 use yue::binance::bn_models::swap_restful::SwapExchangeInfo;
 use yue::binance::bn_restful_commands::{
-    execute_json_request, BINANCE_SPOT_BASE, BINANCE_SWAP_BASE, BURST_NUM, SPOT_EXCHANGE_COMMAND, SPOT_RATE_PER_MINUTE, SWAP_EXCHANGE_COMMAND,
+    execute_json_request, BINANCE_SPOT_BASE, BINANCE_SWAP_BASE, SPOT_EXCHANGE_COMMAND, SPOT_RATE_PER_MINUTE, SWAP_EXCHANGE_COMMAND,
 };
 use yue::binance::history_data::{get_trading_spot_symbols, get_trading_swap_symbols, TradingSymbolInfo, CONTRACT_TYPE_PERPETUAL};
 use yue::binance::order_book::{OrderBook, OrderBookSnapshotMsg};

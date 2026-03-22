@@ -39,7 +39,7 @@ async fn main() -> Result<(), YuError> {
         CloneHistoryFetcherFactory::new(base_swap_funding_rate_fetcher);
 
     let param = CommonRequestBuilder::new("1000SHIBUSDT".to_string(), 1000, HistoryInterval::OneHour);
-    let (tx, mut rx) = mpsc::channel::<Result<Vec<FundingRatePo>, YueError>>(100);
+    let (tx, mut rx) = mpsc::channel::<Result<(String, Vec<FundingRate>), YueError>>(100);
 
     let interval = HistoryInterval::FiveMinutes;
     let now_timestamp = unix_time_now_u64_utc();
@@ -72,7 +72,7 @@ async fn main() -> Result<(), YuError> {
     let mut all_items = Vec::new();
     while let Some(result) = rx.recv().await {
         match result {
-            Ok(data) => {
+            Ok((_, data)) => {
                 // 收集所有funding_time和原始item
                 for item in &data {
                     all_funding_times.push(item.funding_time);

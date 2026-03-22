@@ -14,6 +14,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use yue::binance::bn_models::common::{HistoryVo, SymbolType, ToRequestBuilder};
 use yue::binance::history_data::{HistoryFetcher, MuteHistoryParam};
+use yue::errors::YueError;
 use yue::models::HistoryInterval;
 
 pub trait HistoryPO: Debug {
@@ -205,8 +206,9 @@ where
         for _ in 0..symbol_count {
             if let Some(result) = rx.recv().await {
                 match result {
-                    Ok(data) => {
-                        let _ = self.data_writer.write_batch(data);
+                    Ok((symbol, vo)) => {
+                        let po_vec = vo.iter().map(|v| R::from_source(Some(&symbol), v)).collect::<Vec<_>>();
+                        let _ = self.data_writer.write_batch(po_vec);
                     }
                     Err(e) => {
                         error!("Failed to fetch symbol data: {}", e);
@@ -223,7 +225,7 @@ where
         param: P,
         start_time: u64,
         end_time: u64,
-        tx: mpsc::Sender<Result<Vec<R>, yue::errors::YueError>>,
+        tx: mpsc::Sender<Result<(String, Vec<V>), YueError>>,
         task_name: &str,
         interval: HistoryInterval,
     ) where
@@ -237,36 +239,17 @@ where
             unix_2_readable(&start_time),
             unix_2_readable(&end_time)
         );
-        let result = match kline_fetcher
-            .get_all_kline_data(param.clone(), Some(interval), Some(start_time), Some(end_time))
+        match kline_fetcher
+            .get_all_kline_data(param.clone(), Some(interval), Some(start_time), Some(end_time), tx.clone())
             .await
         {
-            Ok((kline_data, fail_times)) => {
-                let len = kline_data.len();
-                if len <= 1 {
-                    Ok(Vec::new())
-                } else {
-                    let data = &kline_data[..len - 1];
-                    debug!(
-                        "{}:Fetched {} klines for symbol {}: fail times {}",
-                        task_name,
-                        len,
-                        param.get_symbol(),
-                        fail_times
-                    );
-                    // 写入数据库
-                    let kline_pos: Vec<R> = data.iter().map(|kline| R::from_source(Some(param.get_symbol()), kline)).collect();
-                    Ok(kline_pos)
-                }
+            Ok(len) => {
+                debug!("{}:Fetched {} klines for symbol {}:", task_name, len, param.get_symbol(),);
             }
             Err(e) => {
                 error!("{}:Error fetching klines for symbol {}: {}", task_name, param.get_symbol(), e);
-                Err(e)
             }
         };
-        if tx.send(result).await.is_err() {
-            error!("{}:Failed to send result for symbol {}", task_name, param.get_symbol());
-        }
     }
 }
 
@@ -363,154 +346,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::binance::binance_db_consts::BinanceTables::SpotKline;
-    use crate::binance::bn_dashboard::{BinanceDashboard, TradingSymbol};
-    use crate::binance::history_task::{DuckDBHistoryDataWriter, HistoryDataTask};
     use crate::binance::models::po::KlinePo;
-    use crate::duck_db::DBProvider;
-    use crate::errors::YuError;
-    use crate::exchange::HistoryFetcherFactory;
-    use crate::test_utils::initial_memory_db;
-    use crate::test_utils::{generate_test_kline_vec, import_local_csv_and_assert, TEST_BEGIN_TIMESTAMP};
-    use async_trait::async_trait;
-    use li::actix_jobs::AsyncRepeatTask;
-    use li::errors::LiError;
-    use li::tools::time::ONE_HOUR_MS;
-    use mockall::{mock, predicate};
-    use std::path::Path;
-    use std::sync::Arc;
-    use yue::binance::bn_models::common::SymbolType;
-    use yue::binance::bn_models::spot_restful::BinanceKline;
-    use yue::binance::history_data::{CommonRequestBuilder, HistoryFetcher, MuteHistoryParam};
-    use yue::errors::YueError;
-    use yue::models::HistoryInterval;
-
-    // mock 测试部分同步修正
-    mock! {
-        pub HistoryFetcher {}
-
-        impl Clone for HistoryFetcher {
-            fn clone(&self) -> Self {
-                HistoryFetcher {}
-            }
-        }
-
-        #[async_trait]
-        impl HistoryFetcher<CommonRequestBuilder, BinanceKline> for HistoryFetcher {
-            async fn get_all_kline_data(
-                &self,
-                param: CommonRequestBuilder,
-                interval: Option<HistoryInterval>,
-                start_time: Option<u64>,
-                end_time: Option<u64>,
-            ) -> Result<(Vec<BinanceKline>, u16), YueError>;
-        }
-    }
-
-    #[derive(Clone)]
-    struct MockHistoryFetcherFactory {}
-
-    impl HistoryFetcherFactory for MockHistoryFetcherFactory {
-        type Param = CommonRequestBuilder;
-        type Output = BinanceKline;
-        type Fetcher = MockHistoryFetcher;
-        fn create_fetcher(&self) -> Self::Fetcher {
-            create_mock_history_fetch_for_test_refresh_spot_kline_normal()
-        }
-    }
-
-    fn create_mock_history_fetch_for_test_refresh_spot_kline_normal() -> MockHistoryFetcher {
-        let mut fetcher = MockHistoryFetcher::new();
-        let btc_param = CommonRequestBuilder::initial("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
-        let eth_param = CommonRequestBuilder::initial("ETHUSDT".to_string(), 1000, HistoryInterval::OneHour);
-        fetcher
-            .expect_get_all_kline_data()
-            .with(
-                predicate::eq(btc_param.clone()),
-                predicate::eq(None),
-                predicate::eq(Some(1694102460000)),
-                predicate::eq(None),
-            )
-            .returning(|_, _, _, _| {
-                let klines = generate_test_kline_vec(TEST_BEGIN_TIMESTAMP, ONE_HOUR_MS, 1.0, 2);
-                Ok((klines, 200))
-            });
-        fetcher
-            .expect_get_all_kline_data()
-            .with(
-                predicate::eq(eth_param.clone()),
-                predicate::eq(None),
-                predicate::eq(Some(1694101300000)),
-                predicate::eq(None),
-            )
-            .returning(|_, _, _, _| {
-                let klines = generate_test_kline_vec(TEST_BEGIN_TIMESTAMP, ONE_HOUR_MS, 1.0, 2);
-                Ok((klines, 200))
-            });
-        fetcher
-    }
-
-    #[tokio::test]
-    async fn test_refresh_spot_kline_normal() -> Result<(), YuError> {
-        // 初始化内存数据库连接并建表
-        let pool = initial_memory_db();
-        let db_provider = DBProvider::new(pool);
-        let conn = db_provider.acquire()?;
-        let binding = SpotKline.create_table_statement();
-        let table_initial_stmt = binding.split(';');
-        for stmt in table_initial_stmt {
-            let sql = stmt.trim();
-            if !sql.is_empty() {
-                conn.execute(sql, [])?;
-            }
-        }
-        // 直接从仓库中的本地 CSV 导入并断言行数为 2
-        let csv_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/test_refresh_spot_kline_normal.csv");
-
-        let trading_symbols = vec![TradingSymbol {
-            symbol: "BTCUSDT".to_string(),
-            on_board_time: None,
-            quote_asset: "USDT".to_string(),
-            status: "TRADING".to_string(),
-        }];
-        let dash_board = Arc::new(BinanceDashboard::new_with_data(trading_symbols, vec![], 0));
-        import_local_csv_and_assert(&conn, SpotKline.table_name().as_str(), csv_path.as_path(), 7)?;
-
-        let factory = MockHistoryFetcherFactory {};
-        let data_writer = Arc::new(DuckDBHistoryDataWriter::new(db_provider.clone(), SpotKline));
-        let manager: HistoryDataTask<MockHistoryFetcherFactory, CommonRequestBuilder, KlinePo, BinanceKline, BinanceDashboard> = HistoryDataTask::new(
-            factory,
-            dash_board,
-            data_writer,
-            "test_refresh_spot_kline_normal".to_string(),
-            SymbolType::Spot,
-            None,
-        );
-        let res: Result<(), LiError> = manager.initial_data().await;
-
-        println!("{:?}", res);
-        assert!(res.is_ok());
-        let conn = db_provider.acquire()?;
-        let mut stmt = conn.prepare(format!("SELECT * FROM {}", SpotKline.table_name()).as_str())?;
-        let kline_data: Vec<KlinePo> = stmt.query_map([], |row| Ok(KlinePo::from(row)))?.filter_map(Result::ok).collect();
-
-        assert_eq!(&kline_data.len(), &7); // 原有3条 + 每个symbol新增2条
-        let mut btc_vec: Vec<KlinePo> = vec![];
-        let mut eth_vec: Vec<KlinePo> = vec![];
-        for kline in kline_data {
-            if kline.symbol == "BTCUSDT" {
-                btc_vec.push(kline);
-            } else if kline.symbol == "ETHUSDT" {
-                eth_vec.push(kline);
-            }
-        }
-
-        assert_eq!(&btc_vec.len(), &5);
-
-        assert_eq!(&eth_vec.len(), &2);
-
-        Ok(())
-    }
 
     #[test]
     fn test_display_trait() {

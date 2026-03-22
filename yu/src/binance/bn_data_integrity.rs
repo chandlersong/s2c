@@ -11,7 +11,7 @@ use li::tools::time::unix_2_readable;
 use log::{debug, error, info, trace, Level};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{mpsc, RwLock};
 use yue::binance::bn_models::common::SymbolType;
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_models::spot_websocket_stream::{BinanceSpotWebSocketStreamResponse, KlineData, KlineStreamPayload};
@@ -574,52 +574,56 @@ impl RepairStrategy for KlineGapRepairStrategy {
 
                         let fetcher = factory.create_fetcher();
                         let param = <CommonRequestBuilder as MuteHistoryParam>::initial(symbol.clone(), 1000, HistoryInterval::FiveMinutes);
-                        let fetch_res: Result<(Vec<BinanceKline>, u16), YueError> = fetcher
-                            .get_all_kline_data(param, Some(HistoryInterval::FiveMinutes), Some(start_time), Some(end_time))
-                            .await;
+                        let (tx, mut rx) = mpsc::channel::<Result<(String, Vec<BinanceKline>), YueError>>(1000);
+                        tokio::spawn(async move {
+                            let _ = fetcher
+                                .get_all_kline_data(param, Some(HistoryInterval::FiveMinutes), Some(start_time), Some(end_time), tx)
+                                .await;
+                        });
 
-                        match fetch_res {
-                            Ok((lines, _)) => {
-                                let klines: Vec<BinanceKline> = lines;
-                                if klines.is_empty() {
-                                    debug!("repair(task): no lines fetched for {} {}-{}", symbol, start_time, end_time);
-                                    return Ok::<(), String>(());
+                        while let Some(fetch_res) = rx.recv().await {
+                            match fetch_res {
+                                Ok((symbol, lines)) => {
+                                    let klines: Vec<BinanceKline> = lines;
+                                    if klines.is_empty() {
+                                        debug!("repair(task): no lines fetched for {} {}-{}", symbol, start_time, end_time);
+                                        return Ok::<(), String>(());
+                                    }
+                                    for bk in klines.into_iter() {
+                                        let k = KlineData {
+                                            start_time: bk.open_time,
+                                            close_time: bk.close_time,
+                                            symbol: symbol.clone(),
+                                            interval: "5m".to_string(),
+                                            first_trade_id: -1,
+                                            last_trade_id: -1,
+                                            open: bk.open,
+                                            close: bk.close,
+                                            high: bk.high,
+                                            low: bk.low,
+                                            volume: bk.volume,
+                                            trade_count: bk.number_of_trades,
+                                            is_closed: true,
+                                            quote_volume: bk.quote_asset_volume,
+                                            taker_buy_base_volume: bk.taker_buy_base_asset_volume,
+                                            taker_buy_quote_volume: bk.taker_buy_quote_asset_volume,
+                                            ignore: "".to_string(),
+                                        };
+                                        let payload = KlineStreamPayload {
+                                            event: "kline".to_string(),
+                                            event_time: k.close_time,
+                                            symbol: symbol.clone(),
+                                            kline: k,
+                                        };
+                                        let _ = writer_clone.try_send(BinanceSpotWebSocketStreamResponse::Kline(payload));
+                                    }
                                 }
-                                for bk in klines.into_iter() {
-                                    let k = KlineData {
-                                        start_time: bk.open_time,
-                                        close_time: bk.close_time,
-                                        symbol: symbol.clone(),
-                                        interval: "5m".to_string(),
-                                        first_trade_id: -1,
-                                        last_trade_id: -1,
-                                        open: bk.open,
-                                        close: bk.close,
-                                        high: bk.high,
-                                        low: bk.low,
-                                        volume: bk.volume,
-                                        trade_count: bk.number_of_trades,
-                                        is_closed: true,
-                                        quote_volume: bk.quote_asset_volume,
-                                        taker_buy_base_volume: bk.taker_buy_base_asset_volume,
-                                        taker_buy_quote_volume: bk.taker_buy_quote_asset_volume,
-                                        ignore: "".to_string(),
-                                    };
-                                    let payload = KlineStreamPayload {
-                                        event: "kline".to_string(),
-                                        event_time: k.close_time,
-                                        symbol: symbol.clone(),
-                                        kline: k,
-                                    };
-                                    let _ = writer_clone.try_send(BinanceSpotWebSocketStreamResponse::Kline(payload));
+                                Err(e) => {
+                                    error!("repair(task): failed to fetch lines for {}: {:?}", symbol, e);
                                 }
-                                Ok::<(), String>(())
-                            }
-                            Err(e) => {
-                                error!("repair(task): failed to fetch lines for {}: {:?}", symbol, e);
-                                Err(format!("{}:{}", symbol, e))
                             }
                         }
+                        Ok::<(), String>(())
                     });
                     handles.push(handle);
                 }
