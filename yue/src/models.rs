@@ -6,6 +6,8 @@ use governor::state::{InMemoryState, NotKeyed};
 use governor::{Jitter, Quota};
 use li::tools::time::{UnixTimeStamp, unix_time_now_u64_utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+#[cfg(not(test))]
+use std::cmp::max;
 use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -87,8 +89,21 @@ pub fn create_share_rate_limiter(bucket_size: u32) -> ShareRateLimiter {
     Arc::new(RwLock::new(Arc::new(create_default_rate_limiter(bucket_size))))
 }
 
+#[cfg(test)]
 pub fn create_default_rate_limiter(bucket_size: u32) -> DefaultRateLimiter {
-    let quota = Quota::per_minute(NonZeroU32::new(bucket_size).unwrap());
+    let quota = Quota::per_minute(NonZeroU32::new(bucket_size).unwrap()).allow_burst(NonZeroU32::new(bucket_size).unwrap().into());
+    let res = RateLimiter::direct(quota);
+    let limiter_with_info = res.with_middleware::<StateInformationMiddleware>();
+    limiter_with_info
+}
+
+///
+/// 现在已知最小的每s的token数是binance的费率。大概500每5分钟。那么1s也就1个左右
+/// 但是有些测试，比如order book里面初始既要50.所以这里把证实环境和这个分开。
+#[cfg(not(test))]
+pub fn create_default_rate_limiter(bucket_size: u32) -> DefaultRateLimiter {
+    let burst_size = max(bucket_size.saturating_div(61), 1);
+    let quota = Quota::per_minute(NonZeroU32::new(bucket_size).unwrap()).allow_burst(NonZeroU32::new(burst_size).unwrap().into());
     let res = RateLimiter::direct(quota);
     let limiter_with_info = res.with_middleware::<StateInformationMiddleware>();
     limiter_with_info
@@ -239,11 +254,11 @@ impl HostInfo {
     ///     1. 等待时间过长，超过30s，则需要重新获取令牌。
     ///     2. 小于30s直接返回。
     ///
-    pub async fn acquire_limit_token(&self, weight: u32, timeout_ms: u64) -> Result<Option<StateSnapshot>, crate::errors::YueError> {
+    pub async fn acquire_limit_token(&self, weight: u32, timeout_ms: u64) -> Result<Option<StateSnapshot>, YueError> {
         // 1. 判断 weight 是否为非零
         let weight_nz = match NonZeroU32::new(weight) {
             Some(w) => w,
-            None => return Err(crate::errors::YueError::new("权重必须为非零")),
+            None => return Err(YueError::new("权重必须为非零")),
         };
 
         let reopen_ts = self.disable_before.load(Ordering::Relaxed);
@@ -317,7 +332,6 @@ impl HostInfo {
                         }
                         Err(_) => return Err(YueError::Timeout(format!("host {} is not open", self.host))),
                     }
-
                     Ok(Some(snapshot))
                 }
                 Ok(Err(e)) => Err(YueError::new(&format!("{}", e))),

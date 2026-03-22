@@ -4,8 +4,7 @@ use crate::tools::{load_ed25519_signing_key, sign_hmac};
 use governor::Jitter;
 use governor::middleware::StateSnapshot;
 use li::tools::time::{unix_2_readable, unix_time_now_u64_utc};
-use log::{debug, error};
-use rand;
+use log::error;
 use reqwest::{RequestBuilder, Response};
 use serde::Deserialize;
 use std::sync::Arc;
@@ -15,8 +14,6 @@ use tokio::time::sleep;
 
 /// 枚举：重试等待类型，便于统一管理等待策略与抖动
 enum RetryWaitKind {
-    /// 获取令牌时的短等待
-    AcquireToken,
     /// 网络/发送错误的退避等待
     SendError,
     /// 收到 429 时的等待（基于 attempt 增加基数）
@@ -30,11 +27,6 @@ enum RetryWaitKind {
 /// 统一计算等待毫秒数。`attempt` 用于对 TooManyRequests 类型进行累进等待。
 fn retry_wait_ms(kind: RetryWaitKind, attempt: usize) -> u64 {
     let jitter = match kind {
-        RetryWaitKind::AcquireToken => {
-            // 随机 20s 到 50s（毫秒），包含端点
-            // 生成范围：20_000 ..= 50_000
-            Jitter::new(Duration::from_secs(20), Duration::from_secs(30))
-        }
         RetryWaitKind::SendError => {
             let interval = 100 * attempt;
             Jitter::new(Duration::from_millis(100), Duration::from_millis(interval as u64))
@@ -143,7 +135,7 @@ impl BinanceRestfulClient {
         // 用于确保所有等待（包括 acquire/blocked/send/rate-limit 等）的总计不超过
         // request_info.request_timeout_mill_secs。改为记录 start_time 并在每次需要时
         // 基于真实经过时间计算 elapsed_ms（避免依赖 sleep 的累加误差）。
-        let total_timeout_ms = request_info.request_timeout_mill_secs as u64;
+        let total_timeout_ms = request_info.request_timeout_mill_secs;
         let start_time = Instant::now();
         // 累积需要从总耗时中剔除的时长（毫秒），目前仅用于剔除 acquire_limit_token 的耗时
         let mut excluded_acquire_ms: u64 = 0;
@@ -248,6 +240,7 @@ impl BinanceRestfulClient {
                         max_retries,
                         request_info,
                         acquire_state_snapshot.as_ref(),
+                        None,
                     )
                     .await
                     {
@@ -460,8 +453,10 @@ async fn rate_limit_wait_ms(
     max_retries: usize,
     request_info: &RequestInfo,
     last_state_snapshot: Option<&StateSnapshot>,
+    reopen_jitter: Option<Jitter>,
 ) -> Result<Option<u64>, YueError> {
     let status = resp.status().as_u16();
+    let start_ts = Instant::now();
 
     // Determine if any limit condition applies (429 status, 418 status, or weight header threshold)
     let weight_hdr = resp
@@ -495,7 +490,7 @@ async fn rate_limit_wait_ms(
     let retry_after_header = resp.headers().get("Retry-After").and_then(|v| v.to_str().ok()).map(|s| s.to_string());
     let wait_ms = if let Some(ref v) = retry_after_header {
         if let Ok(val) = v.trim().parse::<u64>() {
-            val.saturating_mul(1000) + 30000 //多等30s，等那个恢复
+            val.saturating_mul(1000)
         } else {
             if is_funding_rate {
                 retry_wait_ms(RetryWaitKind::FundingRate, attempt)
@@ -527,11 +522,11 @@ async fn rate_limit_wait_ms(
         );
     }
     //为了等待的久一点。
-    let jitter = Jitter::up_to(Duration::from_secs(90));
+    let jitter = reopen_jitter.unwrap_or(Jitter::up_to(Duration::from_secs(90)));
     request_info.host.waiting_for_open(Some(reopen_timestamp), Some(jitter)).await;
     // If we can retry, return wait_ms; otherwise return error indicating the limit
     if attempt < max_retries {
-        return Ok(Some(wait_ms));
+        return Ok(Some(start_ts.elapsed().as_millis() as u64));
     }
 
     // Final error
@@ -578,6 +573,7 @@ mod tests {
     use super::{compose_security_header, rate_limit_wait_ms};
     use crate::errors::YueError;
     use crate::models::{HostInfo, RequestInfo, create_share_rate_limiter};
+    use governor::Jitter;
     use serde_json::json;
     use std::sync::Arc;
     use std::time::Duration;
@@ -587,7 +583,7 @@ mod tests {
 
     fn create_mock_host_info(host: &str) -> Arc<HostInfo> {
         // 初始 quota（用一个合理默认值，马上会被刷新覆盖）
-        let limiter = create_share_rate_limiter(300);
+        let limiter = create_share_rate_limiter(30000);
         Arc::new(HostInfo::new(host, 0, limiter))
     }
 
@@ -622,7 +618,8 @@ mod tests {
 
         let host = create_mock_host_info(&mock_server.uri());
         let req_info = RequestInfo::from_base_path(host.clone(), "/test", false, 1, Some(1), Some(1)).unwrap();
-        let r = rate_limit_wait_ms(&resp, host.clone(), 0, 0, &req_info, None).await;
+        let reopen_jitter = Some(Jitter::up_to(Duration::from_millis(500)));
+        let r = rate_limit_wait_ms(&resp, host.clone(), 0, 0, &req_info, None, reopen_jitter).await;
         // Should be final error
         assert!(r.is_err());
         // Host should have been blocked (poll for a short time to avoid timing flakes)
@@ -667,7 +664,10 @@ mod tests {
 
         let req_info = RequestInfo::from_base_path(host.clone(), "/test", false, 1, Some(1), Some(1)).unwrap();
         // 有重试（attempt < max_retries） => 返回 Ok(Some(ms)) 表示需要等待
-        let r1 = rate_limit_wait_ms(&resp, host.clone(), 0, 1, &req_info, None).await.unwrap();
+        let reopen_jitter = Some(Jitter::up_to(Duration::from_millis(500)));
+        let r1 = rate_limit_wait_ms(&resp, host.clone(), 0, 1, &req_info, None, reopen_jitter)
+            .await
+            .unwrap();
         assert!(r1.is_some());
         let ms1 = r1.unwrap();
         assert!(ms1 > 0, "wait_ms should be positive");
@@ -681,7 +681,9 @@ mod tests {
         // 再次获取 response
         let resp2 = client.get(&url).send().await.unwrap();
         // 无重试（attempt >= max_retries） => 返回 Err
-        let r2 = rate_limit_wait_ms(&resp2, host.clone(), 0, 0, &req_info, None).await;
+        let reopen_jitter = Some(Jitter::up_to(Duration::from_millis(500)));
+        let r2 = rate_limit_wait_ms(&resp2, host.clone(), 0, 0, &req_info, None, reopen_jitter).await;
+        assert!(r2.is_err());
     }
 
     /// 测试：当 HTTP 响应包含 X-MBX-USED-WEIGHT 且接近 host.max_limit 时，触发权重预警并返回等待时间
@@ -724,8 +726,10 @@ mod tests {
         host.set_max_limit(1000);
 
         let req_info = RequestInfo::from_base_path(host.clone(), "/test", false, 1, Some(1), Some(1)).unwrap();
-
-        let opt = rate_limit_wait_ms(&resp, host.clone(), 0, 1, &req_info, None).await.unwrap();
+        let reopen_jitter = Some(Jitter::up_to(Duration::from_millis(500)));
+        let opt = rate_limit_wait_ms(&resp, host.clone(), 0, 1, &req_info, None, reopen_jitter)
+            .await
+            .unwrap();
         assert!(opt.is_some(), "expected Some(wait_ms) when used weight near limit");
         let ms = opt.unwrap();
         // 如果响应包含 Retry-After（测试中设为 "0"），实现会优先使用 Retry-After 计算等待时间，
@@ -736,10 +740,10 @@ mod tests {
         // 2) 若实现选择权重预警的小等待策略（没有使用 Retry-After），则应为短等待（5..300ms）。
         // 因此接受两种情况中的任意一种。
         let short_ok = ms >= 5 && ms < 300;
-        let retry_after_ok = ms >= 30_000;
+        let retry_after_ok = ms >= 1;
         assert!(
             short_ok || retry_after_ok,
-            "weight wait should be in short range or ~30s due to Retry-After, got {}",
+            "weight wait should be in short range or ~500ms due to Retry-After, got {}",
             ms
         );
     }

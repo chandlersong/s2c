@@ -6,7 +6,6 @@ use li::actix_jobs::AsyncRepeatTask;
 use li::errors::LiError;
 use log::{error, info};
 use serde::de::DeserializeOwned;
-use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;

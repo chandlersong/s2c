@@ -216,10 +216,10 @@ pub static SWAP_FUNDING_RATE_COMMAND: LazyLock<RequestInfo> =
 因为每次取1k，所有为5
 */
 pub static SWAP_KLINE_HISTORY_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_BASE.clone(), SWAP_KLINE_PATH, false, 10, None, Some(2 * 60 * 60)).unwrap());
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_BASE.clone(), SWAP_KLINE_PATH, false, 5, Some(5 * 60), Some(2 * 60 * 60)).unwrap());
 
 pub static SWAP_FIVE_MIN_KLINE_HISTORY_COMMAND: LazyLock<RequestInfo> =
-    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_BASE.clone(), SWAP_KLINE_PATH, false, 2, None, Some(60 * 60)).unwrap());
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_BASE.clone(), SWAP_KLINE_PATH, false, 1, None, Some(60 * 60)).unwrap());
 
 pub static SWAP_LISTEN_KEY_COMMAND: LazyLock<RequestInfo> =
     LazyLock::new(|| RequestInfo::from_base_path(BINANCE_SWAP_BASE.clone(), SWAP_LISTEN_KEY_PATH, false, 1, None, Some(60 * 60)).unwrap());
