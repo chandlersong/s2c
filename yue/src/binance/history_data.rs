@@ -7,7 +7,7 @@ use crate::http_client::{HTTP_CLIENT, get_http_client};
 use crate::models::{EmptyObject, HistoryInterval, RequestInfo};
 use async_trait::async_trait;
 use li::tools::time::{ONE_MILL_SECOND_MS, unix_2_readable};
-use log::debug;
+use log::{debug, error};
 use reqwest::RequestBuilder;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU16, Ordering};
@@ -286,7 +286,18 @@ where
             // 将调整好的 adjusted_end_time 传入请求参数，保证服务端返回的数据不超过期望的 endTime
             let params = base_param.create_new(current_start_time, Some(adjusted_end_time), interval.clone());
 
-            let klines: Vec<O> = execute_json_request::<Vec<O>>(&self.request_info, params.to_request_builder(&self.request_info), None).await?;
+            let klines: Vec<O> = match execute_json_request::<Vec<O>>(&self.request_info, params.to_request_builder(&self.request_info), None).await {
+                Ok(res) => res,
+                Err(e) => {
+                    error!(
+                        "error symbol {} from {} when fetch data {}",
+                        symbol,
+                        unix_2_readable(&current_start_time.unwrap()),
+                        e
+                    );
+                    continue;
+                }
+            };
 
             if klines.is_empty() {
                 break;
