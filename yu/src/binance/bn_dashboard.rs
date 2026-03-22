@@ -103,14 +103,8 @@ impl BinanceDashboard {
             .next()
             .unwrap_or(SPOT_RATE_PER_MINUTE as i32);
         info!("refresh spot rate limit {},swap rate limit {}", spot_request_limit, swap_request_limit);
-        BINANCE_SPOT_BASE
-            .clone()
-            .refresh_rate_limit(spot_request_limit as u32, Some(BURST_NUM))
-            .await;
-        BINANCE_SWAP_BASE
-            .clone()
-            .refresh_rate_limit(swap_request_limit as u32, Some(BURST_NUM))
-            .await;
+        BINANCE_SPOT_BASE.clone().refresh_rate_limit(spot_request_limit as u32, None).await;
+        BINANCE_SWAP_BASE.clone().refresh_rate_limit(swap_request_limit as u32, None).await;
     }
 
     fn refresh_trading_symbol(
@@ -281,7 +275,7 @@ impl AsyncRepeatTask for BinanceDashboard {
             (Ok(spot), Ok(swap)) => {
                 // refresh limit
                 //TODO：能正常下载后，再把这个功能加上。
-                // Self::refresh_rate_limit(&spot, &swap).await;
+                Self::refresh_rate_limit(&spot, &swap).await;
                 // refresh symbol
                 let spot_res = get_trading_spot_symbols(spot, None).await;
                 let swap_res = get_trading_swap_symbols(swap, None, Some(CONTRACT_TYPE_PERPETUAL)).await;
