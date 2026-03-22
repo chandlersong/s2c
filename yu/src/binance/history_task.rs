@@ -121,7 +121,7 @@ where
     P: MuteHistoryParam + ToRequestBuilder + Clone + Send + Sync,
     V: HistoryVo + Clone,
     R: HistoryPO + Clone,
-    D: ExchangeDashBoard<TradingSymbol = TradingSymbol> + Send + Sync,
+    D: ExchangeDashBoard<TradingSymbol = TradingSymbol> + Send + Sync + 'static,
 {
     kline_fetcher_factory: F,
     exchange_dashboard: Arc<D>,
@@ -173,10 +173,11 @@ where
         end_timestamp: UnixTimeStamp,
     ) -> Result<(), LiError> {
         let symbol_count = symbols.len();
-        let (tx, mut rx) = mpsc::channel(100);
+        let (read_tx, mut read_rx) = mpsc::channel(100000);
 
+        let share_cache = Arc::new(tokio::sync::Mutex::new(Vec::<R>::new()));
         for symbol in symbols {
-            let tx_clone = tx.clone();
+            let tx_clone = read_tx.clone();
             let kline_fetcher = self.kline_fetcher_factory.create_fetcher();
             // NEXT： 这里1000变成参数化，现在是历史数据无所谓。但是实盘需要准确一点
             let interval = self.interval.clone();
@@ -200,15 +201,36 @@ where
                 }
             });
         }
-        drop(tx);
+        drop(read_tx);
+        let write_cache = share_cache.clone();
+        let data_writer_clone = self.data_writer.clone();
+        // 后台定时任务：定期把共享缓存刷新到数据库
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
+                // 1) 在持锁时 clone 一份数据并清空缓存
+                let cloned_cache: Vec<R> = {
+                    let mut cache = write_cache.lock().await;
+                    if cache.is_empty() {
+                        continue;
+                    }
+                    let cloned = cache.clone();
+                    cache.clear();
+                    cloned
+                };
+                if let Err(e) = data_writer_clone.write_batch(cloned_cache) {
+                    error!("Failed to write batch data: {}", e);
+                }
+            }
+        });
         // 在主线程中接收结果并串行插入数据库
         for _ in 0..symbol_count {
-            if let Some(result) = rx.recv().await {
+            if let Some(result) = read_rx.recv().await {
                 match result {
                     Ok((symbol, vo)) => {
                         let po_vec = vo.iter().map(|v| R::from_source(Some(&symbol), v)).collect::<Vec<_>>();
-                        let _ = self.data_writer.write_batch(po_vec);
+                        share_cache.lock().await.extend(po_vec);
                     }
                     Err(e) => {
                         error!("Failed to fetch symbol data: {}", e);
