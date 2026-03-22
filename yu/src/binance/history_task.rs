@@ -173,7 +173,7 @@ where
         end_timestamp: UnixTimeStamp,
     ) -> Result<(), LiError> {
         let symbol_count = symbols.len();
-        let (read_tx, mut read_rx) = mpsc::channel(100000);
+        let (read_tx, mut read_rx) = mpsc::channel(100000000);
 
         let share_cache = Arc::new(tokio::sync::Mutex::new(Vec::<R>::new()));
         for symbol in symbols {
@@ -201,7 +201,6 @@ where
                 }
             });
         }
-        drop(read_tx);
         let write_cache = share_cache.clone();
         let data_writer_clone = self.data_writer.clone();
         // 后台定时任务：定期把共享缓存刷新到数据库
