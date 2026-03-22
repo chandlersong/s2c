@@ -44,8 +44,8 @@ fn retry_wait_ms(kind: RetryWaitKind, attempt: usize) -> u64 {
             Jitter::new(Duration::from_secs(30), Duration::from_millis(interval as u64))
         }
         RetryWaitKind::TooManyWeight => {
-            let interval = 10_000 * attempt;
-            Jitter::new(Duration::from_secs(10), Duration::from_millis(interval as u64))
+            let interval = 5 * attempt;
+            Jitter::new(Duration::from_secs(10), Duration::from_secs(interval as u64))
         }
     };
     (jitter + Duration::ZERO).as_millis() as u64

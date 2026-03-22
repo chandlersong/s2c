@@ -99,7 +99,7 @@ pub fn create_default_rate_limiter(bucket_size: u32) -> DefaultRateLimiter {
 
 ///
 /// 现在已知最小的每s的token数是binance的费率。大概500每5分钟。那么1s也就1个左右
-/// 但是有些测试，比如order book里面初始既要50.所以这里把证实环境和这个分开。
+/// 但是有些测试，比如order book里面初始既要50.所以这里把真实环境和UT环境分开。
 #[cfg(not(test))]
 pub fn create_default_rate_limiter(bucket_size: u32) -> DefaultRateLimiter {
     let burst_size = max(bucket_size.saturating_div(61), 1);
