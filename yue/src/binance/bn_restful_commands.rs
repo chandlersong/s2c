@@ -13,15 +13,17 @@ use std::sync::{Arc, LazyLock};
 
 /// PLAN：这些做成配置项。比如一台server需要部署多个instance
 /// 然后经过测试，发觉比上限低一点，如果定格，容易被封
-pub static SPOT_RATE_PER_MINUTE: u32 = 1190;
-pub static SWAP_LIMITER_PER_MINUTE: u32 = 1200;
+pub static SPOT_RATE_PER_MINUTE: u32 = 2000;
+pub static SWAP_LIMITER_PER_MINUTE: u32 = 2000;
 pub static SWAP_FUNDING_PER_MINUTE: u32 = 95;
+
+pub static BURST_NUM: u32 = 150;
 #[cfg(not(any(feature = "binance-testnet", test)))]
 pub const BINANCE_SPOT_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
     Arc::new(HostInfo::new(
         "https://api.binance.com",
         SPOT_RATE_PER_MINUTE,
-        create_share_rate_limiter(SPOT_RATE_PER_MINUTE),
+        create_share_rate_limiter(SPOT_RATE_PER_MINUTE, Some(BURST_NUM)),
     ))
 });
 
@@ -30,7 +32,7 @@ pub const BINANCE_SPOT_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
     Arc::new(HostInfo::new(
         "https://testnet.binance.vision",
         SPOT_RATE_PER_MINUTE,
-        create_share_rate_limiter(SPOT_RATE_PER_MINUTE),
+        create_share_rate_limiter(SPOT_RATE_PER_MINUTE, Some(BURST_NUM)),
     ))
 });
 #[cfg(test)]
@@ -38,7 +40,7 @@ pub const BINANCE_SPOT_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
     Arc::new(HostInfo::new(
         "http://127.0.0.1:18080",
         SPOT_RATE_PER_MINUTE,
-        create_share_rate_limiter(SPOT_RATE_PER_MINUTE),
+        create_share_rate_limiter(SPOT_RATE_PER_MINUTE, None),
     ))
 });
 
@@ -49,7 +51,7 @@ pub const BINANCE_SWAP_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
     Arc::new(HostInfo::new(
         "http://127.0.0.1:18081",
         SWAP_LIMITER_PER_MINUTE,
-        create_share_rate_limiter(SWAP_LIMITER_PER_MINUTE),
+        create_share_rate_limiter(SWAP_LIMITER_PER_MINUTE, Some(BURST_NUM)),
     ))
 });
 #[cfg(all(feature = "binance-testnet", not(test)))]
@@ -57,7 +59,7 @@ pub const BINANCE_SWAP_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
     Arc::new(HostInfo::new(
         "https://testnet.binance.vision",
         SWAP_LIMITER_PER_MINUTE,
-        create_share_rate_limiter(SWAP_LIMITER_PER_MINUTE),
+        create_share_rate_limiter(SWAP_LIMITER_PER_MINUTE, None),
     ))
 });
 
@@ -66,7 +68,7 @@ pub const BINANCE_SWAP_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
     Arc::new(HostInfo::new(
         "https://fapi.binance.com",
         SWAP_LIMITER_PER_MINUTE,
-        create_share_rate_limiter(SWAP_LIMITER_PER_MINUTE),
+        create_share_rate_limiter(SWAP_LIMITER_PER_MINUTE, Some(BURST_NUM)),
     ))
 });
 
@@ -75,7 +77,7 @@ pub const BINANCE_FUNDING_RATE_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| 
     Arc::new(HostInfo::new(
         "http://127.0.0.1:18081",
         SWAP_FUNDING_PER_MINUTE,
-        create_share_rate_limiter(SWAP_FUNDING_PER_MINUTE),
+        create_share_rate_limiter(SWAP_FUNDING_PER_MINUTE, None),
     ))
 });
 #[cfg(all(feature = "binance-testnet", not(test)))]
@@ -83,7 +85,7 @@ pub const BINANCE_FUNDING_RATE_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| 
     Arc::new(HostInfo::new(
         "https://testnet.binance.vision",
         SWAP_FUNDING_PER_MINUTE,
-        create_share_rate_limiter(SWAP_FUNDING_PER_MINUTE),
+        create_share_rate_limiter(SWAP_FUNDING_PER_MINUTE, Some(3)),
     ))
 });
 
@@ -92,7 +94,7 @@ pub const BINANCE_FUNDING_RATE_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| 
     Arc::new(HostInfo::new(
         "https://fapi.binance.com",
         SWAP_FUNDING_PER_MINUTE,
-        create_share_rate_limiter(SWAP_FUNDING_PER_MINUTE),
+        create_share_rate_limiter(SWAP_FUNDING_PER_MINUTE, Some(3)),
     ))
 });
 
@@ -100,7 +102,7 @@ pub const BINANCE_PAPI_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
     Arc::new(HostInfo::new(
         "https://papi.binance.com/",
         SWAP_LIMITER_PER_MINUTE,
-        create_share_rate_limiter(SWAP_LIMITER_PER_MINUTE),
+        create_share_rate_limiter(SWAP_LIMITER_PER_MINUTE, Some(BURST_NUM)),
     ))
 });
 

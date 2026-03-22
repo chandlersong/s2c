@@ -583,7 +583,7 @@ mod tests {
 
     fn create_mock_host_info(host: &str) -> Arc<HostInfo> {
         // 初始 quota（用一个合理默认值，马上会被刷新覆盖）
-        let limiter = create_share_rate_limiter(30000);
+        let limiter = create_share_rate_limiter(30000, None);
         Arc::new(HostInfo::new(host, 0, limiter))
     }
 
@@ -863,7 +863,7 @@ mod tests {
             .await;
 
         // 构造 HostInfo 和 RequestInfo
-        let limiter = create_share_rate_limiter(1000);
+        let limiter = create_share_rate_limiter(1000, None);
         let host = Arc::new(HostInfo::new(mock_server.uri(), 1000, limiter));
         let req_info = RequestInfo::from_base_path(host.clone(), "/api/v3/test_post", true, 1, Some(2000), Some(1)).unwrap();
 
@@ -896,7 +896,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let limiter = create_share_rate_limiter(1000);
+        let limiter = create_share_rate_limiter(1000, None);
         let host = Arc::new(HostInfo::new(mock_server.uri(), 1000, limiter));
         let req_info = RequestInfo::from_base_path(host.clone(), "/api/v3/test_put", true, 1, Some(2000), Some(1)).unwrap();
 

@@ -85,13 +85,14 @@ pub struct HostInfo {
     limiter: ShareRateLimiter,
 }
 
-pub fn create_share_rate_limiter(bucket_size: u32) -> ShareRateLimiter {
-    Arc::new(RwLock::new(Arc::new(create_default_rate_limiter(bucket_size))))
+pub fn create_share_rate_limiter(bucket_size: u32, burst_size: Option<u32>) -> ShareRateLimiter {
+    Arc::new(RwLock::new(Arc::new(create_default_rate_limiter(bucket_size, burst_size))))
 }
 
 #[cfg(test)]
-pub fn create_default_rate_limiter(bucket_size: u32) -> DefaultRateLimiter {
-    let quota = Quota::per_minute(NonZeroU32::new(bucket_size).unwrap()).allow_burst(NonZeroU32::new(bucket_size).unwrap().into());
+pub fn create_default_rate_limiter(bucket_size: u32, burst_size: Option<u32>) -> DefaultRateLimiter {
+    let real_burst_size = burst_size.unwrap_or(bucket_size);
+    let quota = Quota::per_minute(NonZeroU32::new(bucket_size).unwrap()).allow_burst(NonZeroU32::new(real_burst_size).unwrap().into());
     let res = RateLimiter::direct(quota);
     let limiter_with_info = res.with_middleware::<StateInformationMiddleware>();
     limiter_with_info
@@ -101,9 +102,9 @@ pub fn create_default_rate_limiter(bucket_size: u32) -> DefaultRateLimiter {
 /// 现在已知最小的每s的token数是binance的费率。大概500每5分钟。那么1s也就1个左右
 /// 但是有些测试，比如order book里面初始既要50.所以这里把真实环境和UT环境分开。
 #[cfg(not(test))]
-pub fn create_default_rate_limiter(bucket_size: u32) -> DefaultRateLimiter {
-    let burst_size = max(bucket_size.saturating_div(61), 1);
-    let quota = Quota::per_minute(NonZeroU32::new(bucket_size).unwrap()).allow_burst(NonZeroU32::new(burst_size).unwrap().into());
+pub fn create_default_rate_limiter(bucket_size: u32, burst_size: Option<u32>) -> DefaultRateLimiter {
+    let real_burst_size = burst_size.unwrap_or(max(bucket_size.saturating_div(61), 1));
+    let quota = Quota::per_minute(NonZeroU32::new(bucket_size).unwrap()).allow_burst(NonZeroU32::new(real_burst_size).unwrap().into());
     let res = RateLimiter::direct(quota);
     let limiter_with_info = res.with_middleware::<StateInformationMiddleware>();
     limiter_with_info
@@ -233,8 +234,8 @@ impl HostInfo {
         *guard = Arc::new(limiter);
     }
 
-    pub async fn refresh_rate_limit(&self, rate_limit: u32) {
-        self.set_limiter(create_default_rate_limiter(rate_limit)).await;
+    pub async fn refresh_rate_limit(&self, rate_limit: u32, burst_size: Option<u32>) {
+        self.set_limiter(create_default_rate_limiter(rate_limit, burst_size)).await;
         self.set_max_limit(rate_limit);
     }
 
@@ -538,7 +539,7 @@ mod tests {
     /// 断言：耗时非常短（<50ms），以确保没有进行不必要的等待。
     #[tokio::test]
     async fn test_waiting_for_open_returns_immediately_if_open() {
-        let limiter = create_share_rate_limiter(10);
+        let limiter = create_share_rate_limiter(10, None);
         let host = HostInfo::new("https://api.test", 10, limiter);
 
         // 确保 disable_before 在过去
@@ -556,7 +557,7 @@ mod tests {
     /// 断言：函数至少会等待接近该期望（>=140ms），允许少量调度开销误差。
     #[tokio::test]
     async fn test_waiting_for_open_waits_until_disable_before() {
-        let limiter = create_share_rate_limiter(10);
+        let limiter = create_share_rate_limiter(10, None);
         let host = HostInfo::new("https://api.test", 10, limiter);
 
         // 设定 disable_before 为短期未来
@@ -577,7 +578,7 @@ mod tests {
     /// 断言：函数等待接近更新后的时间（>=180ms），考虑 jitter 与调度误差。
     #[tokio::test]
     async fn test_waiting_for_open_with_reopen_timestamp_updates_target() {
-        let limiter = create_share_rate_limiter(10);
+        let limiter = create_share_rate_limiter(10, None);
         let host = HostInfo::new("https://api.test", 10, limiter);
 
         // 将 disable_before 设为一个较小的未来时间
@@ -600,7 +601,7 @@ mod tests {
     #[tokio::test]
     async fn test_waiting_for_open_with_reopen_smaller_than_existing() {
         // 如果传入的 reopen_timestamp 小于已有的 disable_before，应当以已有的 disable_before 为准等待
-        let limiter = create_share_rate_limiter(10);
+        let limiter = create_share_rate_limiter(10, None);
         let host = HostInfo::new("https://api.test", 10, limiter);
 
         let now = unix_time_now_u64_utc();
@@ -629,7 +630,7 @@ mod tests {
     #[tokio::test]
     async fn test_waiting_for_open_concurrent_update_extends_wait() {
         // 并发场景：在等待过程中，另一线程将 disable_before 提高，等待应随之延长
-        let limiter = create_share_rate_limiter(10);
+        let limiter = create_share_rate_limiter(10, None);
         let host = HostInfo::new("https://api.test", 10, limiter);
 
         let now = unix_time_now_u64_utc();
@@ -662,7 +663,7 @@ mod tests {
     #[tokio::test]
     async fn test_acquire_limit_token_rejects_zero_weight() {
         use crate::errors::YueError;
-        let limiter = create_share_rate_limiter(10);
+        let limiter = create_share_rate_limiter(10, None);
         let host = HostInfo::new("https://api.test", 10, limiter);
 
         // 确保 host 是 open
@@ -687,7 +688,7 @@ mod tests {
     #[tokio::test]
     async fn test_acquire_limit_token_left_ms_zero_times_out_immediately() {
         use crate::errors::YueError;
-        let limiter = create_share_rate_limiter(10);
+        let limiter = create_share_rate_limiter(10, None);
         let host = HostInfo::new("https://api.test", 10, limiter);
 
         // 确保 host 是 open
@@ -710,7 +711,7 @@ mod tests {
     /// 2. 调用 `acquire_limit_token` 并断言返回 Ok(Some(snapshot))
     #[tokio::test]
     async fn test_acquire_limit_token_successful_acquire() {
-        let limiter = create_share_rate_limiter(1000);
+        let limiter = create_share_rate_limiter(1000, None);
         let host = HostInfo::new("https://api.test", 1000, limiter);
 
         // 确保 host open
@@ -737,7 +738,7 @@ mod tests {
         use crate::errors::YueError;
         use std::sync::atomic::Ordering;
 
-        let limiter = create_share_rate_limiter(10);
+        let limiter = create_share_rate_limiter(10, None);
         let host = HostInfo::new("https://api.test", 10, limiter);
 
         // 将 disable_before 设为远未来（例如 2000ms 后）
@@ -766,7 +767,7 @@ mod tests {
         use crate::errors::YueError;
         use std::sync::atomic::Ordering;
 
-        let limiter = create_share_rate_limiter(10);
+        let limiter = create_share_rate_limiter(10, None);
         let host = HostInfo::new("https://api.test", 10, limiter);
 
         // 将 disable_before 设为稍微超过 1s 的未来，使得 pre-check 的等待超过 left_ms

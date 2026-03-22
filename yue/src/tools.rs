@@ -276,7 +276,7 @@ async fn frequency_reducer_output<V: Send + Clone + Sync>(
 #[cfg(test)]
 pub fn create_mock_host_info(host: &str) -> Arc<HostInfo> {
     // 初始 quota（用一个合理默认值，马上会被刷新覆盖）
-    let limiter = create_share_rate_limiter(300);
+    let limiter = create_share_rate_limiter(300, None);
     Arc::new(HostInfo::new(host, 0, limiter))
 }
 
