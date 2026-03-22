@@ -17,7 +17,7 @@ pub static SPOT_RATE_PER_MINUTE: u32 = 2000;
 pub static SWAP_LIMITER_PER_MINUTE: u32 = 2000;
 pub static SWAP_FUNDING_PER_MINUTE: u32 = 95;
 
-pub static BURST_NUM: u32 = 150;
+pub static BURST_NUM: u32 = 60;
 #[cfg(not(any(feature = "binance-testnet", test)))]
 pub const BINANCE_SPOT_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
     Arc::new(HostInfo::new(
