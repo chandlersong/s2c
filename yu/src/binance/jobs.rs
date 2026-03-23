@@ -1,7 +1,8 @@
 use crate::binance::binance_db_consts::BinanceTables::{SpotKline, SwapFundingRate, SwapKline};
 use crate::binance::binance_db_consts::ALL_BINANCE_TABLES;
+use crate::binance::bn_actors::DuckDBOneTableDataWriter;
 use crate::binance::bn_dashboard::{init_market_depth_dashboard, BinanceDashboard, MarketDepthDashBoard};
-use crate::binance::history_task::{DuckDBHistoryDataWriter, HistoryDataTask};
+use crate::binance::history_task::HistoryDataTask;
 use crate::binance::models::po::{FundingRatePo, KlinePo};
 use crate::config::{get_config, AccountConfig, AccountType, SecurityType};
 use crate::duck_db::DBProvider;
@@ -324,73 +325,73 @@ async fn start_spot_websocket_stream_job() -> Result<(), YuError> {
 ///
 ///
 async fn start_refresh_history_data(origin_dash_board: BinanceDashboard) -> Result<(), YuError> {
-    let update_dashboard_task = origin_dash_board.clone();
-    let dash_board = Arc::new(origin_dash_board);
-
-    let build_kline_task = |request_info, dash_board, data_writer, task_name: &str, symbol_type, interval| {
-        let base_fetcher = SimpleHistoryFetcher::new(request_info);
-        let fetcher_factory: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonRequestBuilder, BinanceKline> =
-            CloneHistoryFetcherFactory::new(base_fetcher);
-        HistoryDataTask::<_, _, KlinePo, BinanceKline, BinanceDashboard>::new(
-            fetcher_factory,
-            dash_board,
-            data_writer,
-            task_name.to_string(),
-            symbol_type,
-            Some(interval),
-        )
-    };
-
-    let spot_data_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SpotKline));
-    let spot_kline_task = build_kline_task(
-        &SPOT_KLINE_HISTORY_COMMAND,
-        dash_board.clone(),
-        spot_data_writer,
-        "refresh spot kline data",
-        SymbolType::Spot,
-        HistoryInterval::FiveMinutes,
-    );
-    spot_kline_task.initial_data().await?;
-
-    let swap_data_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SwapKline));
-    let swap_initial_kline_task = build_kline_task(
-        &SWAP_KLINE_HISTORY_COMMAND,
-        dash_board.clone(),
-        swap_data_writer.clone(),
-        "initial swap kline data",
-        SymbolType::Swap,
-        HistoryInterval::FiveMinutes,
-    );
-    swap_initial_kline_task.initial_data().await?;
-
-    let swap_update_kline_task = build_kline_task(
-        &SWAP_FIVE_MIN_KLINE_HISTORY_COMMAND,
-        dash_board.clone(),
-        swap_data_writer,
-        "refresh swap kline data",
-        SymbolType::Swap,
-        HistoryInterval::FiveMinutes,
-    );
-
-    let funding_rate_writer = Arc::new(DuckDBHistoryDataWriter::new(DBProvider::default(), SwapFundingRate));
-    let funding_rate_fetcher = SimpleHistoryFetcher::new(&SWAP_FUNDING_RATE_COMMAND);
-    let funding_rate_fetcher_factory: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonRequestBuilder, FundingRate> =
-        CloneHistoryFetcherFactory::new(funding_rate_fetcher);
-    let funding_rate_task = HistoryDataTask::<_, _, FundingRatePo, FundingRate, BinanceDashboard>::new(
-        funding_rate_fetcher_factory,
-        dash_board,
-        funding_rate_writer,
-        "refresh swap funding rate".to_string(),
-        SymbolType::Swap,
-        Some(HistoryInterval::OneHour),
-    );
-    funding_rate_task.initial_data().await?;
-    //PLAN： 更新交易所时间表达式进入Config
-    let _ = CronActor::new("30 59 */6 * * * *", update_dashboard_task).start();
-    //FUTURE: 支持不同的interval
-    let _ = CronActor::new("01 */5 * * * * *", spot_kline_task).start();
-    let _ = CronActor::new("01 */5 * * * * *", swap_update_kline_task).start();
-    let _ = CronActor::new("01 01 * * * * *", funding_rate_task).start();
+    // let update_dashboard_task = origin_dash_board.clone();
+    // let dash_board = Arc::new(origin_dash_board);
+    //
+    // let build_kline_task = |request_info, dash_board, data_writer, task_name: &str, symbol_type, interval| {
+    //     let base_fetcher = SimpleHistoryFetcher::new(request_info);
+    //     let fetcher_factory: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonRequestBuilder, BinanceKline> =
+    //         CloneHistoryFetcherFactory::new(base_fetcher);
+    //     HistoryDataTask::<_, _, KlinePo, BinanceKline, BinanceDashboard>::new(
+    //         fetcher_factory,
+    //         dash_board,
+    //         data_writer,
+    //         task_name.to_string(),
+    //         symbol_type,
+    //         Some(interval),
+    //     )
+    // };
+    //
+    // let spot_data_writer = Arc::new(DuckDBOneTableDataWriter::new(SpotKline));
+    // let spot_kline_task = build_kline_task(
+    //     &SPOT_KLINE_HISTORY_COMMAND,
+    //     dash_board.clone(),
+    //     spot_data_writer,
+    //     "refresh spot kline data",
+    //     SymbolType::Spot,
+    //     HistoryInterval::FiveMinutes,
+    // );
+    // spot_kline_task.initial_data().await?;
+    //
+    // let swap_data_writer = Arc::new(DuckDBOneTableDataWriter::new(SwapKline));
+    // let swap_initial_kline_task = build_kline_task(
+    //     &SWAP_KLINE_HISTORY_COMMAND,
+    //     dash_board.clone(),
+    //     swap_data_writer.clone(),
+    //     "initial swap kline data",
+    //     SymbolType::Swap,
+    //     HistoryInterval::FiveMinutes,
+    // );
+    // swap_initial_kline_task.initial_data().await?;
+    //
+    // let swap_update_kline_task = build_kline_task(
+    //     &SWAP_FIVE_MIN_KLINE_HISTORY_COMMAND,
+    //     dash_board.clone(),
+    //     swap_data_writer,
+    //     "refresh swap kline data",
+    //     SymbolType::Swap,
+    //     HistoryInterval::FiveMinutes,
+    // );
+    //
+    // let funding_rate_writer = Arc::new(DuckDBOneTableDataWriter::new(SwapFundingRate));
+    // let funding_rate_fetcher = SimpleHistoryFetcher::new(&SWAP_FUNDING_RATE_COMMAND);
+    // let funding_rate_fetcher_factory: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonRequestBuilder, FundingRate> =
+    //     CloneHistoryFetcherFactory::new(funding_rate_fetcher);
+    // let funding_rate_task = HistoryDataTask::<_, _, FundingRatePo, FundingRate, BinanceDashboard>::new(
+    //     funding_rate_fetcher_factory,
+    //     dash_board,
+    //     funding_rate_writer,
+    //     "refresh swap funding rate".to_string(),
+    //     SymbolType::Swap,
+    //     Some(HistoryInterval::OneHour),
+    // );
+    // funding_rate_task.initial_data().await?;
+    // //PLAN： 更新交易所时间表达式进入Config
+    // let _ = CronActor::new("30 59 */6 * * * *", update_dashboard_task).start();
+    // //FUTURE: 支持不同的interval
+    // let _ = CronActor::new("01 */5 * * * * *", spot_kline_task).start();
+    // let _ = CronActor::new("01 */5 * * * * *", swap_update_kline_task).start();
+    // let _ = CronActor::new("01 01 * * * * *", funding_rate_task).start();
     Ok(())
 }
 

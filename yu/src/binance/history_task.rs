@@ -1,5 +1,6 @@
 use crate::binance::binance_db_consts::BinanceTables;
 use crate::binance::bn_dashboard::TradingSymbol;
+use crate::binance::models::po::DuckDBPO;
 use crate::duck_db::DBProvider;
 use crate::errors::YuError;
 use crate::exchange::{ExchangeDashBoard, HistoryFetcherFactory};
@@ -17,15 +18,7 @@ use yue::binance::history_data::{HistoryFetcher, MuteHistoryParam};
 use yue::errors::YueError;
 use yue::models::HistoryInterval;
 
-pub trait HistoryPO: Debug {
-    type Source: HistoryVo;
-
-    fn from_source(symbol: Option<&str>, source: &Self::Source) -> Self;
-
-    fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>>;
-}
-
-pub trait HistoryDataWriter<O: HistoryPO, D: ExchangeDashBoard<TradingSymbol = TradingSymbol>>: Send + Sync {
+pub trait HistoryDataWriter<O: DuckDBPO, D: ExchangeDashBoard<TradingSymbol = TradingSymbol>>: Send + Sync {
     ///
     /// 批量写入历史数据
     ///
@@ -37,81 +30,6 @@ pub trait HistoryDataWriter<O: HistoryPO, D: ExchangeDashBoard<TradingSymbol = T
     fn is_empty(&self) -> Result<bool, YuError>;
 }
 
-pub struct DuckDBHistoryDataWriter {
-    provider: DBProvider,
-    table: BinanceTables,
-}
-
-impl DuckDBHistoryDataWriter {
-    pub fn new(provider: DBProvider, table: BinanceTables) -> Self {
-        DuckDBHistoryDataWriter { provider, table }
-    }
-}
-
-impl<O: HistoryPO, D: ExchangeDashBoard<TradingSymbol = TradingSymbol>> HistoryDataWriter<O, D> for DuckDBHistoryDataWriter {
-    fn write_batch(&self, data: Vec<O>) -> Result<(), YuError> {
-        if data.is_empty() {
-            return Ok(());
-        }
-        let mut conn = self.provider.acquire()?;
-        let mut tx = conn.transaction()?;
-        tx.set_drop_behavior(DropBehavior::Commit);
-        let mut appender = match tx.appender(&self.table.table_name()) {
-            Ok(a) => a,
-            Err(e) => {
-                error!("Failed to create appender for table {}: {}", self.table.table_name(), e);
-                return Err(YuError::CustomError("Failed to create appender".to_string()));
-            }
-        };
-
-        for po in data {
-            if let Err(e) = appender.append_row(po.to_params()) {
-                error!("Failed to append kline {:?}: {}", po, e);
-            }
-        }
-        if let Err(e) = appender.flush() {
-            error!("Failed to flush appender for table {}: {}", self.table.table_name(), e);
-        };
-        Ok(())
-    }
-
-    ///
-    /// 这里只是判断当前表是否有没有记录，没有记录，就表示没有记录
-    ///
-    /// FUTURE: 改进判断数据库为空的方式。
-    /// 因为现有方式还是太简单。但是考虑到初始化的复杂程度，其实暂缓开发。
-    /// 可以参考一下其他数据中心的写法。
-    ///
-    /// 步骤，
-    /// 1. 通过sql语句，判断其当前表是否为空，如果为空，则返回true
-    /// 2. 只要有数据，就返回false
-    ///
-    ///
-    fn is_empty(&self) -> Result<bool, YuError> {
-        // 如果表没有提供 query_lastest_record SQL，则认为没有可查询的最新记录
-        let query_sql_opt = self.table.count_records();
-        if query_sql_opt.is_none() {
-            return Err(YuError::CustomError(format!(
-                "Table {:?} does not support counting records",
-                self.table.table_name()
-            )));
-        }
-
-        let sql = query_sql_opt.unwrap();
-        let conn = self.provider.acquire()?;
-
-        let mut stmt = conn.prepare(sql.as_str())?;
-        let mut rows = stmt.query([])?;
-
-        if let Some(row) = rows.next()? {
-            let count: i64 = row.get(0)?;
-            return if count == 0 { Ok(true) } else { Ok(false) };
-        }
-
-        Err(YuError::CustomError(format!("Table {:?} 数据库访问失败", self.table.table_name())))
-    }
-}
-
 /// 初始化的历史数据任务，每次启动的时候，都会调用
 /// NEXT：写一个实时更新的task
 #[derive(Clone)]
@@ -120,7 +38,7 @@ where
     F: HistoryFetcherFactory<Param = P, Output = V>,
     P: MuteHistoryParam + ToRequestBuilder + Clone + Send + Sync,
     V: HistoryVo + Clone,
-    R: HistoryPO + Clone,
+    R: DuckDBPO + Clone,
     D: ExchangeDashBoard<TradingSymbol = TradingSymbol> + Send + Sync + 'static,
 {
     kline_fetcher_factory: F,
@@ -136,7 +54,7 @@ where
     F: HistoryFetcherFactory<Param = P, Output = V> + Clone + Send + Sync + 'static,
     P: MuteHistoryParam + ToRequestBuilder + Clone + Send + Sync + 'static,
     V: HistoryVo + Clone + Send + Sync + 'static,
-    R: HistoryPO<Source = V> + Clone + Send + Sync + 'static,
+    R: DuckDBPO<Source = V> + Clone + Send + Sync + 'static,
     D: ExchangeDashBoard<TradingSymbol = TradingSymbol> + Send + Sync,
 {
     pub fn new(
@@ -251,7 +169,7 @@ where
         interval: HistoryInterval,
     ) where
         T: HistoryFetcher<P, V> + Send + Sync + 'static,
-        R: HistoryPO<Source = V> + Clone,
+        R: DuckDBPO<Source = V> + Clone,
     {
         debug!(
             "update {} -> symbol: {}, time from {} to {}",
@@ -280,7 +198,7 @@ where
     F: HistoryFetcherFactory<Param = P, Output = V> + Clone + Send + Sync + Unpin + 'static,
     P: MuteHistoryParam + ToRequestBuilder + Clone + Send + Sync + 'static,
     V: HistoryVo + Clone + Send + Sync + Clone + 'static,
-    R: HistoryPO<Source = V> + Send + Sync + Clone + 'static,
+    R: DuckDBPO<Source = V> + Send + Sync + Clone + 'static,
     D: ExchangeDashBoard<TradingSymbol = TradingSymbol> + Send + Sync + Clone + 'static,
 {
     ///

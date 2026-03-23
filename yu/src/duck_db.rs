@@ -27,6 +27,10 @@ fn get_duck_connection_manager() -> DuckdbConnectionManager {
     DuckdbConnectionManager::memory().unwrap()
 }
 
+pub fn get_connection() -> Result<PooledConnection<DuckdbConnectionManager>, YuError> {
+    DBProvider::default().acquire()
+}
+
 #[derive(Clone)]
 pub struct DBProvider {
     pool: Pool<DuckdbConnectionManager>,

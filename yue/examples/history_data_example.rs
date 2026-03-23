@@ -1,7 +1,7 @@
+use actix::{Actor, Context};
 use li::tools::logs::setup_logger_all;
 use li::tools::time::{unix_2_readable, unix_time_now_u64_utc};
 use log::{LevelFilter, debug, error, info};
-use tokio::sync::mpsc;
 use yue::binance::bn_models::common::HistoryVo;
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_restful_commands::{SPOT_KLINE_HISTORY_COMMAND, SWAP_KLINE_HISTORY_COMMAND};
@@ -9,6 +9,22 @@ use yue::binance::history_data::{CommonRequestBuilder, HistoryFetcher, SimpleHis
 use yue::errors::YueError;
 use yue::http_client::init_http_client;
 use yue::models::HistoryInterval;
+use yue::query_message::BatchInsert;
+
+struct PrinterActor;
+
+impl Actor for PrinterActor {
+    type Context = Context<Self>;
+}
+
+impl actix::Handler<BatchInsert<BinanceKline>> for PrinterActor {
+    type Result = Result<usize, YueError>;
+
+    fn handle(&mut self, _msg: BatchInsert<BinanceKline>, _ctx: &mut Self::Context) -> Self::Result {
+        print_kline_result(&_msg.data, None);
+        Ok(1) // 模拟成功处理，返回插入了1条记录
+    }
+}
 
 fn print_kline_result<H>(klines: &Vec<H>, interval: Option<HistoryInterval>)
 where
@@ -66,7 +82,7 @@ where
 /// 1. spot
 /// 2. swap
 /// 3. 资金费率
-#[tokio::main]
+#[actix::main]
 async fn main() {
     // Initialize http client with default settings
     let proxy = Option::from("http://localhost:7891");
@@ -80,46 +96,31 @@ async fn main() {
     let symbol = "BTCUSDT";
     let spot_kline_fetch = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
     let base_param = CommonRequestBuilder::new(symbol.to_string(), 1000, HistoryInterval::FiveMinutes);
-    let (spot_tx, mut spot_rx) = mpsc::channel::<Result<(String, Vec<BinanceKline>), YueError>>(100);
-    tokio::spawn(async move {
-        let _ = spot_kline_fetch
-            .get_all_kline_data(base_param, Some(HistoryInterval::FiveMinutes), Some(start_ms), Some(end_ms), spot_tx)
-            .await;
-    });
-    while let Some(result) = spot_rx.recv().await {
-        match result {
-            Ok((symbol, klines)) => {
-                info!("Received {} klines for symbol {}", klines.len(), symbol);
-                print_kline_result(&klines, Some(HistoryInterval::FiveMinutes));
-            }
-            Err(e) => {
-                error!("Error receiving kline data: {:?}", e);
-            }
-        }
-    }
+
+    let spot_recipient = PrinterActor {}.start().recipient();
+    let _ = spot_kline_fetch
+        .get_all_kline_data(
+            base_param,
+            Some(HistoryInterval::FiveMinutes),
+            Some(start_ms),
+            Some(end_ms),
+            spot_recipient,
+            false,
+        )
+        .await;
 
     info!("================fetch spot btc==============");
 
     let swap_kline_fetch = SimpleHistoryFetcher::new(&SWAP_KLINE_HISTORY_COMMAND);
     let base_param = CommonRequestBuilder::new(symbol.to_string(), 1000, HistoryInterval::OneHour);
-    let (swap_tx, mut swap_rx) = mpsc::channel::<Result<(String, Vec<BinanceKline>), YueError>>(100);
-    tokio::spawn(async move {
-        let _ = swap_kline_fetch
-            .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), Some(start_ms), None, swap_tx)
-            .await;
-    });
-    while let Some(result) = swap_rx.recv().await {
-        match result {
-            Ok((symbol, klines)) => {
-                info!("Received {} klines for symbol {}", klines.len(), symbol);
-                print_kline_result(&klines, Some(HistoryInterval::FiveMinutes));
-            }
-            Err(e) => {
-                error!("Error receiving kline data: {:?}", e);
-            }
-        }
-    }
+
+    let swap_recipient = PrinterActor {}.start().recipient();
+    let _ = swap_kline_fetch
+        .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), Some(start_ms), None, swap_recipient, false)
+        .await;
+
     info!("================fetch swap btc==============");
+    tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
 
     // let swap_funding_rate_fetch = SimpleHistoryFetcher::new(&SWAP_FUNDING_RATE_COMMAND);
     // let base_param = CommonParam::new(symbol.to_string(), 1000, HistoryInterval::OneHour);

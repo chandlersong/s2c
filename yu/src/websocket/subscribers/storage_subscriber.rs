@@ -1,5 +1,4 @@
-use crate::binance::history_task::HistoryPO;
-use crate::binance::models::po::KlinePo;
+use crate::binance::models::po::{DuckDBPO, KlinePo};
 use crate::binance::models::SpotStreamTradeRecordPo;
 use crate::config::{get_config, SpotWebSocketStreamConfig};
 use crate::duck_db::DBProvider;

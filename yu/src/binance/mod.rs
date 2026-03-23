@@ -4,6 +4,7 @@ pub mod history_task;
 
 pub mod bn_dashboard;
 
+pub mod bn_actors;
 pub mod bn_data_integrity;
 pub mod bn_mcp;
 pub mod jobs;

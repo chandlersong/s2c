@@ -39,7 +39,7 @@ impl Display for SymbolType {
     }
 }
 
-pub trait HistoryVo: DeserializeOwned {
+pub trait HistoryVo: DeserializeOwned + Sync + Send {
     fn get_close_time(&self) -> u64;
 
     fn get_open_time(&self) -> u64;

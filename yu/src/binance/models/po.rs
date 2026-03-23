@@ -1,13 +1,21 @@
-use crate::binance::history_task::HistoryPO;
 use duckdb::appender_params_from_iter;
 use rust_decimal::prelude::ToPrimitive;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use std::fmt::Display;
-use yue::binance::bn_models::common::{PortfolioSpotOrderData, PortfolioSwapOrderData, SpotOrderData, SwapOrderData};
+use std::fmt::{Debug, Display};
+use yue::binance::bn_models::common::{HistoryVo, PortfolioSpotOrderData, PortfolioSwapOrderData, SpotOrderData, SwapOrderData};
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_models::spot_websocket_stream::{KlineData, TradeStreamPayload};
 use yue::binance::bn_models::swap_restful::FundingRate;
 use yue::tools::{get_snow_flake_id_u64, SnowyFlakeWrapper};
+
+pub trait DuckDBPO: Debug + Clone + DeserializeOwned + 'static {
+    type Source: HistoryVo;
+
+    fn from_source(symbol: Option<&str>, source: &Self::Source) -> Self;
+
+    fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>>;
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpotStreamTradeRecordPo {
@@ -40,7 +48,7 @@ impl From<TradeStreamPayload> for SpotStreamTradeRecordPo {
 
 pub const INTERVAL_5M: u8 = 1;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KlinePo {
     pub id: i64,
     pub symbol: String,
@@ -109,7 +117,7 @@ impl<'a> From<&duckdb::Row<'a>> for KlinePo {
     }
 }
 
-impl HistoryPO for KlinePo {
+impl DuckDBPO for KlinePo {
     type Source = BinanceKline;
 
     fn from_source(symbol: Option<&str>, source: &Self::Source) -> Self {
@@ -389,7 +397,7 @@ impl From<PortfolioSwapOrderData> for SwapOrderPo {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FundingRatePo {
     pub id: i64,
     pub symbol: String,
@@ -410,7 +418,7 @@ impl<'a> From<&duckdb::Row<'a>> for FundingRatePo {
     }
 }
 
-impl HistoryPO for FundingRatePo {
+impl DuckDBPO for FundingRatePo {
     type Source = FundingRate;
 
     fn from_source(symbol: Option<&str>, source: &Self::Source) -> Self {
