@@ -172,12 +172,18 @@ where
     /// 2. 时间范围为设定的最早时间到现在
     ///
     async fn initial_data(&self) -> Result<(), LiError> {
-        let count = self
-            .db_empty_checker
-            .send(Count::new())
-            .await
-            .map_err(|e| LiError::CustomError(format!("Failed to send Count message to db_empty_checker in {}: {}", self.task_name, e)))?;
-        if count == 0 {
+        let result = self.db_empty_checker.send(Count::new()).await;
+        let count = match result {
+            Ok(count) => count,
+            Err(e) => {
+                error!("error when query table {} count,{}", self.task_name, e);
+                return Err(LiError::CustomError(format!(
+                    "Failed to send Count message to db_empty_checker in {}: {}",
+                    self.task_name, e
+                )));
+            }
+        };
+        if count != 0 {
             info!("{} database is not empty, skip initial history data fetch", self.task_name);
             return Ok(());
         } else if count == UNKNOWN_ROW {
