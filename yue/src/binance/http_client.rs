@@ -44,8 +44,8 @@ fn retry_wait_ms(kind: RetryWaitKind, attempt: usize) -> u64 {
             Jitter::new(Duration::from_secs(30), Duration::from_millis(interval as u64))
         }
         RetryWaitKind::TooManyWeight => {
-            let interval = 5 * attempt;
-            Jitter::new(Duration::from_secs(10), Duration::from_secs(interval as u64))
+            let interval = 1 * attempt;
+            Jitter::new(Duration::from_secs(2), Duration::from_secs(interval as u64))
         }
     };
     (jitter + Duration::ZERO).as_millis() as u64
@@ -470,7 +470,7 @@ async fn rate_limit_wait_ms(
         Some(val) => {
             let max_limit = host.get_max_limit();
             // 使用 max_limit 的 10% 作为阈值，至少为 1
-            let margin = std::cmp::max(1, (max_limit as f32 * 0.8) as u32);
+            let margin = std::cmp::max(1, (max_limit as f32 * 0.75) as u32);
             // 触发逻辑：当已用权重 val 小于 margin（即超过 max_limit 的 10%）时视为权重限制
             val >= margin
         }
