@@ -299,14 +299,14 @@ where
             let klines: Vec<O> = match execute_json_request::<Vec<O>>(&self.request_info, params.to_request_builder(&self.request_info), None).await {
                 Ok(res) => res,
                 Err(e) => {
-                    error!(
-                        "error symbol {} from {} when fetch data, error: {:?}",
-                        symbol,
-                        unix_2_readable(&current_start_time.unwrap()),
-                        e
-                    );
                     error_count = error_count + 1;
-                    if error_count > 5 {
+                    if error_count > 1000 && retry_1000_times {
+                        error!(
+                            "error symbol {} from {} when fetch data, error: {:?}",
+                            symbol,
+                            unix_2_readable(&current_start_time.unwrap()),
+                            e
+                        );
                         return Err(e);
                     }
                     continue;
