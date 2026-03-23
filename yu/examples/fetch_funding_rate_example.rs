@@ -1,11 +1,10 @@
+use actix::{Actor, Context};
 use li::tools::logs::setup_logger;
 use li::tools::time::unix_time_now_u64_utc;
 use log::{info, LevelFilter};
 use std::collections::HashMap;
-use tokio::sync::mpsc;
 use yu::binance::bn_dashboard::BinanceDashboard;
 use yu::binance::history_task::HistoryDataTask;
-use yu::binance::models::po::FundingRatePo;
 use yu::config::get_config;
 use yu::errors::YuError;
 use yu::exchange::{CloneHistoryFetcherFactory, HistoryFetcherFactory};
@@ -15,7 +14,26 @@ use yue::binance::history_data::{CommonRequestBuilder, SimpleHistoryFetcher};
 use yue::errors::YueError;
 use yue::http_client::init_http_client;
 use yue::models::HistoryInterval;
+use yue::query_message::BatchInsert;
 
+struct PrinterActor;
+
+impl Actor for PrinterActor {
+    type Context = Context<Self>;
+}
+
+impl actix::Handler<BatchInsert<FundingRate>> for PrinterActor {
+    type Result = Result<usize, YueError>;
+
+    fn handle(&mut self, msg: BatchInsert<FundingRate>, _ctx: &mut Self::Context) -> Self::Result {
+        let data = msg.data;
+        // 统计重复的funding_time，并打印所有重复行
+        for d in data.iter() {
+            println!("{:?}", d);
+        }
+        Ok(1) // 模拟成功处理，返回插入了1条记录
+    }
+}
 /// 建立这个例子，主要是在初始化的时候，发现GRASSUSDT一直取不到数据
 /// 所以也就在这里用了一下
 #[tokio::main]
@@ -39,19 +57,17 @@ async fn main() -> Result<(), YuError> {
         CloneHistoryFetcherFactory::new(base_swap_funding_rate_fetcher);
 
     let param = CommonRequestBuilder::new("1000SHIBUSDT".to_string(), 1000, HistoryInterval::OneHour);
-    let (tx, mut rx) = mpsc::channel::<Result<(String, Vec<FundingRate>), YueError>>(100);
 
     let interval = HistoryInterval::FiveMinutes;
     let now_timestamp = unix_time_now_u64_utc();
     let start_time = interval.get_close_unix_ms(now_timestamp - 10 * 60 * 1000);
     let end_time = interval.get_close_unix_ms(now_timestamp);
-
+    let addr = PrinterActor {}.start();
     // 用tokio::spawn在后台异步任务中运行fetch_symbol_data
     let fetch_handle = tokio::spawn(async move {
         HistoryDataTask::<
             CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonRequestBuilder, FundingRate>,
             CommonRequestBuilder,
-            FundingRatePo,
             FundingRate,
             BinanceDashboard,
         >::fetch_symbol_data(
@@ -59,51 +75,12 @@ async fn main() -> Result<(), YuError> {
             param,
             start_time,
             end_time,
-            tx,
             "test",
             interval,
+            addr.recipient(),
         )
         .await;
     });
-
-    // 主线程异步接收数据
-    use std::collections::HashSet;
-    let mut all_funding_times = Vec::new();
-    let mut all_items = Vec::new();
-    while let Some(result) = rx.recv().await {
-        match result {
-            Ok((_, data)) => {
-                // 收集所有funding_time和原始item
-                for item in &data {
-                    all_funding_times.push(item.funding_time);
-                    all_items.push(item.clone());
-                }
-                // 统计重复的funding_time，并打印所有重复行
-                let mut seen = HashSet::new();
-                let mut duplicates = HashSet::new();
-                for &ft in &all_funding_times {
-                    if !seen.insert(ft) {
-                        duplicates.insert(ft);
-                    }
-                }
-                if !duplicates.is_empty() {
-                    println!("重复的funding_time: {:?}", duplicates);
-                    for ft in &duplicates {
-                        for item in &all_items {
-                            if item.funding_time == *ft {
-                                println!("重复项: {:?}", item);
-                            }
-                        }
-                    }
-                }
-                if !all_funding_times.is_empty() {
-                    println!("funding_time第一项: {:?}", all_funding_times.first().unwrap());
-                    println!("funding_time最后一项: {:?}", all_funding_times.last().unwrap());
-                }
-            }
-            Err(e) => println!("Error: {:?}", e),
-        }
-    }
     // 等待后台任务完成
     let _ = fetch_handle.await;
     Ok(())

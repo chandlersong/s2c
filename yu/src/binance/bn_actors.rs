@@ -1,8 +1,8 @@
 use crate::binance::binance_db_consts::BinanceTables;
-use crate::binance::models::po::{DuckDBPO, FundingRatePo, KlinePo};
+use crate::binance::models::po::DuckDBPO;
 use crate::duck_db::get_connection;
 use crate::errors::YuError;
-use actix::{Actor, Context, Handler};
+use actix::{Actor, Addr, Context, Handler};
 use duckdb::DropBehavior;
 use log::error;
 use std::marker::PhantomData;
@@ -14,15 +14,19 @@ pub mod table_query_message {}
 ///
 /// 基于DuckDB对一张表
 ///
-pub struct DuckDBOneTableDataWriter<P: DuckDBPO> {
+pub struct DuckDBOneTable<P: DuckDBPO> {
     table: BinanceTables,
     // use a raw pointer PhantomData to avoid imposing auto trait bounds (like Unpin) on P
     _marker: PhantomData<*const P>,
 }
 
-impl<P: DuckDBPO> DuckDBOneTableDataWriter<P> {
+impl<P: DuckDBPO> DuckDBOneTable<P> {
     pub fn new(table: BinanceTables) -> Self {
-        DuckDBOneTableDataWriter { table, _marker: PhantomData }
+        DuckDBOneTable { table, _marker: PhantomData }
+    }
+
+    pub fn start_new(table: BinanceTables) -> Addr<Self> {
+        DuckDBOneTable { table, _marker: PhantomData }.start()
     }
 
     fn write_batch(&self, data: Vec<P>) -> Result<usize, YueError> {
@@ -30,10 +34,10 @@ impl<P: DuckDBPO> DuckDBOneTableDataWriter<P> {
             return Ok(0);
         }
         let res = data.len();
-        let mut conn = get_connection().map_err(|e| YueError::CustomError(String::from("Failed to connect to DuckDB")))?;
+        let mut conn = get_connection().map_err(|_e| YueError::CustomError(String::from("Failed to connect to DuckDB")))?;
         let mut tx = conn
             .transaction()
-            .map_err(|e| YueError::CustomError(String::from("Failed to create duckDB transaction")))?;
+            .map_err(|_e| YueError::CustomError(String::from("Failed to create duckDB transaction")))?;
         tx.set_drop_behavior(DropBehavior::Commit);
         let mut appender = match tx.appender(&self.table.table_name()) {
             Ok(a) => a,
@@ -81,7 +85,7 @@ impl<P: DuckDBPO> DuckDBOneTableDataWriter<P> {
     }
 }
 
-impl<P: DuckDBPO> Actor for DuckDBOneTableDataWriter<P> {
+impl<P: DuckDBPO> Actor for DuckDBOneTable<P> {
     type Context = Context<Self>;
 
     fn started(&mut self, _ctx: &mut Self::Context) {
@@ -94,9 +98,9 @@ impl<P: DuckDBPO> Actor for DuckDBOneTableDataWriter<P> {
     }
 }
 
-impl<P: DuckDBPO> actix::Supervised for DuckDBOneTableDataWriter<P> {}
+impl<P: DuckDBPO> actix::Supervised for DuckDBOneTable<P> {}
 
-impl<P: DuckDBPO> Handler<Count> for DuckDBOneTableDataWriter<P> {
+impl<P: DuckDBPO> Handler<Count> for DuckDBOneTable<P> {
     type Result = isize;
     fn handle(&mut self, _: Count, _: &mut Self::Context) -> Self::Result {
         // reuse existing is_empty which still uses self.table
@@ -104,7 +108,7 @@ impl<P: DuckDBPO> Handler<Count> for DuckDBOneTableDataWriter<P> {
     }
 }
 
-impl<P> Handler<BatchInsert<<P as DuckDBPO>::Source>> for DuckDBOneTableDataWriter<P>
+impl<P> Handler<BatchInsert<<P as DuckDBPO>::Source>> for DuckDBOneTable<P>
 where
     P: DuckDBPO + Clone + 'static,
     P::Source: Clone + 'static,

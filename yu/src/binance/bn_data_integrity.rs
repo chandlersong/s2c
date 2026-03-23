@@ -1,24 +1,23 @@
 use crate::binance::binance_db_consts::BinanceTables;
+use crate::binance::bn_backends::{get_spot_kline_table_addr, get_swap_kline_table_addr};
 use crate::data_integrity::check::ValidationStrategy;
 use crate::data_integrity::models::{RepairRequest, ValidationGap, ValidationResult};
 use crate::data_integrity::repair::RepairStrategy;
 use crate::duck_db::DBProvider;
 use crate::errors::YuError;
 use crate::exchange::{CloneHistoryFetcherFactory, HistoryFetcherFactory};
-use crate::websocket::subscribers::storage_subscriber::get_spot_stream_writer;
 use async_trait::async_trait;
 use li::tools::time::unix_2_readable;
 use log::{debug, error, info, trace, Level};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, Semaphore};
 use yue::binance::bn_models::common::SymbolType;
 use yue::binance::bn_models::spot_restful::BinanceKline;
-use yue::binance::bn_models::spot_websocket_stream::{BinanceSpotWebSocketStreamResponse, KlineData, KlineStreamPayload};
 use yue::binance::bn_restful_commands::{SPOT_KLINE_HISTORY_COMMAND, SWAP_KLINE_HISTORY_COMMAND};
 use yue::binance::history_data::{CommonRequestBuilder, HistoryFetcher, MuteHistoryParam, SimpleHistoryFetcher};
-use yue::errors::YueError;
 use yue::models::HistoryInterval;
+use yue::query_message::BatchInsert;
 
 pub const BN_SPOT_KLINE_CHECK: &str = "binance_spot_check"; // WireMock server address
 pub const BN_SWAP_KLINE_CHECK: &str = "binance_swap_check"; // WireMock server address
@@ -545,12 +544,8 @@ impl RepairStrategy for KlineGapRepairStrategy {
         };
         let fetch_factory: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonRequestBuilder, BinanceKline> =
             CloneHistoryFetcherFactory::new(kline_fetcher);
-        let writer = get_spot_stream_writer();
 
         // 并发拉取：使用 Semaphore 控制并发量，避免同时发起过多请求
-        use std::sync::Arc;
-        use tokio::sync::Semaphore;
-
         let concurrency_limit = 10usize; // 可调整
         let sem = Arc::new(Semaphore::new(concurrency_limit));
 
@@ -565,8 +560,15 @@ impl RepairStrategy for KlineGapRepairStrategy {
                     ..
                 } => {
                     let factory = fetch_factory.clone();
-                    let writer_clone = writer.clone();
                     let sem_clone = sem.clone();
+                    let reception = match self.symbol_type {
+                        SymbolType::Spot => get_spot_kline_table_addr().recipient::<BatchInsert<BinanceKline>>(),
+                        SymbolType::Swap => get_swap_kline_table_addr().recipient::<BatchInsert<BinanceKline>>(),
+                        _ => {
+                            error!("symbol type mismatch");
+                            continue;
+                        }
+                    };
                     // spawn 一个异步任务来处理该 gap
                     let handle = tokio::spawn(async move {
                         // 获取信号量许可
@@ -574,55 +576,18 @@ impl RepairStrategy for KlineGapRepairStrategy {
 
                         let fetcher = factory.create_fetcher();
                         let param = <CommonRequestBuilder as MuteHistoryParam>::initial(symbol.clone(), 1000, HistoryInterval::FiveMinutes);
-                        let (tx, mut rx) = mpsc::channel::<Result<(String, Vec<BinanceKline>), YueError>>(1000);
                         tokio::spawn(async move {
                             let _ = fetcher
-                                .get_all_kline_data(param, Some(HistoryInterval::FiveMinutes), Some(start_time), Some(end_time), tx)
+                                .get_all_kline_data(
+                                    param,
+                                    Some(HistoryInterval::FiveMinutes),
+                                    Some(start_time),
+                                    Some(end_time),
+                                    reception,
+                                    true,
+                                )
                                 .await;
                         });
-
-                        while let Some(fetch_res) = rx.recv().await {
-                            match fetch_res {
-                                Ok((symbol, lines)) => {
-                                    let klines: Vec<BinanceKline> = lines;
-                                    if klines.is_empty() {
-                                        debug!("repair(task): no lines fetched for {} {}-{}", symbol, start_time, end_time);
-                                        return Ok::<(), String>(());
-                                    }
-                                    for bk in klines.into_iter() {
-                                        let k = KlineData {
-                                            start_time: bk.open_time,
-                                            close_time: bk.close_time,
-                                            symbol: symbol.clone(),
-                                            interval: "5m".to_string(),
-                                            first_trade_id: -1,
-                                            last_trade_id: -1,
-                                            open: bk.open,
-                                            close: bk.close,
-                                            high: bk.high,
-                                            low: bk.low,
-                                            volume: bk.volume,
-                                            trade_count: bk.number_of_trades,
-                                            is_closed: true,
-                                            quote_volume: bk.quote_asset_volume,
-                                            taker_buy_base_volume: bk.taker_buy_base_asset_volume,
-                                            taker_buy_quote_volume: bk.taker_buy_quote_asset_volume,
-                                            ignore: "".to_string(),
-                                        };
-                                        let payload = KlineStreamPayload {
-                                            event: "kline".to_string(),
-                                            event_time: k.close_time,
-                                            symbol: symbol.clone(),
-                                            kline: k,
-                                        };
-                                        let _ = writer_clone.try_send(BinanceSpotWebSocketStreamResponse::Kline(payload));
-                                    }
-                                }
-                                Err(e) => {
-                                    error!("repair(task): failed to fetch lines for {}: {:?}", symbol, e);
-                                }
-                            }
-                        }
                         Ok::<(), String>(())
                     });
                     handles.push(handle);

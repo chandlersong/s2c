@@ -8,11 +8,12 @@ use crate::models::{EmptyObject, HistoryInterval, RequestInfo};
 use crate::query_message::BatchInsert;
 use actix::Recipient;
 use async_trait::async_trait;
+use governor::Jitter;
 use li::tools::time::{ONE_MILL_SECOND_MS, unix_2_readable};
 use log::{debug, error};
 use reqwest::RequestBuilder;
 use serde::{Deserialize, Serialize};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradingSymbolInfo {
@@ -247,7 +248,7 @@ where
         start_time: Option<u64>,
         end_time: Option<u64>,
         saver: Recipient<BatchInsert<O>>,
-        retry_on_error: bool,
+        retry_1000_times: bool,
     ) -> Result<u64, YueError> {
         let symbol = base_param.get_symbol();
         let mut error_count = 0;
@@ -335,13 +336,31 @@ where
             // 发送数据到 saver
             let message = BatchInsert::new(Some(symbol.to_string()), filtered_klines);
             match saver.send(message).await {
-                Ok(_) => {}
+                Ok(result) => {
+                    if let Err(e) = result {
+                        error_count += 1;
+                        if error_count > 1000 {
+                            error!("Failed to send data to saver after 1000 attempts, error: {:?}", e);
+                            return Err(YueError::new(&format!("Failed to send data to saver after 1000 attempts, error:{:?}", e)));
+                        }
+                        if retry_1000_times {
+                            let jitter = Jitter::up_to(Duration::from_secs(10));
+                            tokio::time::sleep(jitter + Duration::from_millis(10)).await;
+                            continue;
+                        } else {
+                            return Err(YueError::new(&format!("Failed to send data to saver, error: {:?}", e)));
+                        }
+                    }
+                }
                 Err(e) => {
                     error_count += 1;
-                    if error_count > 100 {
-                        error!("Failed to send data to saver after 100 attempts, error: {:?}", e);
+                    if error_count > 1000 {
+                        error!("Failed to send data to saver after 1000 attempts, error: {:?}", e);
+                        return Err(YueError::new(&format!("Failed to send data to saver after 1000 attempts, error:{:?}", e)));
                     }
-                    if retry_on_error {
+                    if retry_1000_times {
+                        let jitter = Jitter::up_to(Duration::from_secs(30));
+                        tokio::time::sleep(jitter + Duration::from_millis(10)).await;
                         continue;
                     } else {
                         return Err(YueError::new(&format!("Failed to send data to saver, error: {:?}", e)));
@@ -385,7 +404,6 @@ mod tests {
     use serde_json::json;
     use serial_test::serial;
     use std::net::TcpListener;
-    use tokio::sync::mpsc;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -439,7 +457,7 @@ mod tests {
     /// - 模拟返回500条K线数据（1小时间隔）
     /// - 调用时传入interval参数，验证能够正确处理
     /// - 验证返回的K线数量和开始时间正确
-    #[tokio::test]
+    #[actix::test]
     #[serial]
     async fn test_get_all_kline_data_normal_case() {
         let mock_server = create_net_work().await;
@@ -481,7 +499,7 @@ mod tests {
     /// - 第一批：1000条K线（close_time对齐到1h边界）
     /// - 第二批：200条K线（继续1h间隔）
     /// - 验证总共获取1200条K线
-    #[tokio::test]
+    #[actix::test]
     #[serial]
     async fn test_get_all_kline_data_pagination() {
         let mock_server = create_net_work().await;
@@ -560,7 +578,7 @@ mod tests {
     /// 场景说明：
     /// - API返回500错误
     /// - 验证函数返回Err结果
-    #[tokio::test]
+    #[actix::test]
     #[serial]
     async fn test_get_all_kline_data_api_error() {
         let mock_server = create_net_work().await;
@@ -589,7 +607,7 @@ mod tests {
     /// 场景说明：
     /// - 第一次请求返回1000条K线
     /// - 第二次请求返回空或少于1000条，停止
-    #[tokio::test]
+    #[actix::test]
     #[serial]
     async fn test_get_all_kline_data_exactly_1000() {
         let mock_server = create_net_work().await;
@@ -636,7 +654,6 @@ mod tests {
 
         let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonRequestBuilder::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
-        let (tx, _rx) = mpsc::channel::<Result<(String, Vec<BinanceKline>), YueError>>(100);
         let saver_addr = MockSaver {}.start();
         let recipient: Recipient<BatchInsert<BinanceKline>> = saver_addr.recipient();
         let kline_res: Result<u64, YueError> = fetcher
@@ -663,7 +680,7 @@ mod tests {
     ///   - 900条K线的close_time对齐到1h边界（保留）
     ///   - 100条K线的close_time不对齐（废弃）
     /// - 验证最终只返回900条K线
-    #[tokio::test]
+    #[actix::test]
     #[serial]
     async fn test_get_all_kline_data_discard_non_closed_kline() {
         let mock_server = create_net_work().await;

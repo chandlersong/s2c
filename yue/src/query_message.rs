@@ -13,6 +13,12 @@ use actix::Message;
 #[rtype(result = "isize")]
 pub struct Count {}
 
+impl Count {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
 pub const UNKNOWN_ROW: isize = -1;
 
 ///

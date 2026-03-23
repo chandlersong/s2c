@@ -1,22 +1,18 @@
-use crate::binance::binance_db_consts::BinanceTables;
 use crate::binance::bn_dashboard::TradingSymbol;
 use crate::binance::models::po::DuckDBPO;
-use crate::duck_db::DBProvider;
 use crate::errors::YuError;
 use crate::exchange::{ExchangeDashBoard, HistoryFetcherFactory};
+use actix::Recipient;
 use async_trait::async_trait;
-use duckdb::DropBehavior;
 use li::actix_jobs::AsyncRepeatTask;
 use li::errors::LiError;
 use li::tools::time::{unix_2_readable, UnixTimeStamp};
 use log::{debug, error, info};
-use std::fmt::Debug;
 use std::sync::Arc;
-use tokio::sync::mpsc;
 use yue::binance::bn_models::common::{HistoryVo, SymbolType, ToRequestBuilder};
 use yue::binance::history_data::{HistoryFetcher, MuteHistoryParam};
-use yue::errors::YueError;
 use yue::models::HistoryInterval;
+use yue::query_message::{BatchInsert, Count, UNKNOWN_ROW};
 
 pub trait HistoryDataWriter<O: DuckDBPO, D: ExchangeDashBoard<TradingSymbol = TradingSymbol>>: Send + Sync {
     ///
@@ -33,34 +29,34 @@ pub trait HistoryDataWriter<O: DuckDBPO, D: ExchangeDashBoard<TradingSymbol = Tr
 /// 初始化的历史数据任务，每次启动的时候，都会调用
 /// NEXT：写一个实时更新的task
 #[derive(Clone)]
-pub struct HistoryDataTask<F, P, R, V, D>
+pub struct HistoryDataTask<F, P, V, D>
 where
     F: HistoryFetcherFactory<Param = P, Output = V>,
     P: MuteHistoryParam + ToRequestBuilder + Clone + Send + Sync,
-    V: HistoryVo + Clone,
-    R: DuckDBPO + Clone,
+    V: HistoryVo + Clone + Sync + Send,
     D: ExchangeDashBoard<TradingSymbol = TradingSymbol> + Send + Sync + 'static,
 {
     kline_fetcher_factory: F,
     exchange_dashboard: Arc<D>,
-    data_writer: Arc<dyn HistoryDataWriter<R, D> + Send + Sync>,
+    batch_writer: Recipient<BatchInsert<V>>,
+    db_empty_checker: Recipient<Count>,
     task_name: String,
     symbol_type: SymbolType,
     interval: HistoryInterval,
 }
 
-impl<F, P, R, V, D> HistoryDataTask<F, P, R, V, D>
+impl<F, P, V, D> HistoryDataTask<F, P, V, D>
 where
     F: HistoryFetcherFactory<Param = P, Output = V> + Clone + Send + Sync + 'static,
     P: MuteHistoryParam + ToRequestBuilder + Clone + Send + Sync + 'static,
     V: HistoryVo + Clone + Send + Sync + 'static,
-    R: DuckDBPO<Source = V> + Clone + Send + Sync + 'static,
     D: ExchangeDashBoard<TradingSymbol = TradingSymbol> + Send + Sync,
 {
     pub fn new(
         factory: F,
         exchange_dashboard: Arc<D>,
-        data_writer: Arc<dyn HistoryDataWriter<R, D> + Send + Sync>,
+        batch_writer: Recipient<BatchInsert<V>>,
+        db_empty_checker: Recipient<Count>,
         task_name: String,
         symbol_type: SymbolType,
         interval: Option<HistoryInterval>,
@@ -69,7 +65,8 @@ where
         HistoryDataTask {
             kline_fetcher_factory: factory,
             exchange_dashboard,
-            data_writer,
+            batch_writer,
+            db_empty_checker,
             task_name,
             symbol_type,
             interval: actual_interval,
@@ -90,19 +87,15 @@ where
         start_timestamp: UnixTimeStamp,
         end_timestamp: UnixTimeStamp,
     ) -> Result<(), LiError> {
-        let symbol_count = symbols.len();
-        let (read_tx, mut read_rx) = mpsc::channel(100000000);
-
-        let share_cache = Arc::new(tokio::sync::Mutex::new(Vec::<R>::new()));
+        let mut handles = Vec::new();
         for symbol in symbols {
-            let tx_clone = read_tx.clone();
             let kline_fetcher = self.kline_fetcher_factory.create_fetcher();
             // NEXT： 这里1000变成参数化，现在是历史数据无所谓。但是实盘需要准确一点
             let interval = self.interval.clone();
             let param = P::initial(symbol.symbol.clone(), 1000, interval.clone());
             let task_name = self.task_name.clone();
-            tokio::spawn({
-                let tx_clone = tx_clone.clone();
+            let reception = self.batch_writer.clone();
+            let handle = tokio::spawn({
                 let param = param.clone();
                 let kline_fetcher = kline_fetcher;
                 async move {
@@ -111,50 +104,24 @@ where
                         param,
                         start_timestamp,
                         end_timestamp,
-                        tx_clone,
                         &task_name,
                         interval.clone(),
+                        reception,
                     )
                     .await;
                 }
             });
+            handles.push(handle);
         }
-        let write_cache = share_cache.clone();
-        let data_writer_clone = self.data_writer.clone();
-        // 后台定时任务：定期把共享缓存刷新到数据库
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-
-                // 1) 在持锁时 clone 一份数据并清空缓存
-                let cloned_cache: Vec<R> = {
-                    let mut cache = write_cache.lock().await;
-                    if cache.is_empty() {
-                        continue;
-                    }
-                    let cloned = cache.clone();
-                    cache.clear();
-                    cloned
-                };
-                if let Err(e) = data_writer_clone.write_batch(cloned_cache) {
-                    error!("Failed to write batch data: {}", e);
-                }
-            }
-        });
-        // 在主线程中接收结果并串行插入数据库
-        for _ in 0..symbol_count {
-            if let Some(result) = read_rx.recv().await {
-                match result {
-                    Ok((symbol, vo)) => {
-                        let po_vec = vo.iter().map(|v| R::from_source(Some(&symbol), v)).collect::<Vec<_>>();
-                        share_cache.lock().await.extend(po_vec);
-                    }
-                    Err(e) => {
-                        error!("Failed to fetch symbol data: {}", e);
-                    }
+        for h in handles {
+            match h.await {
+                Ok(_) => {}
+                Err(join_err) => {
+                    error!("{}", join_err);
                 }
             }
         }
+        // 在主线程中接收结果并串行插入数据
         info!("finish fetch {}", self.task_name);
         Ok(())
     }
@@ -164,12 +131,11 @@ where
         param: P,
         start_time: u64,
         end_time: u64,
-        tx: mpsc::Sender<Result<(String, Vec<V>), YueError>>,
         task_name: &str,
         interval: HistoryInterval,
+        recipient: Recipient<BatchInsert<V>>,
     ) where
         T: HistoryFetcher<P, V> + Send + Sync + 'static,
-        R: DuckDBPO<Source = V> + Clone,
     {
         debug!(
             "update {} -> symbol: {}, time from {} to {}",
@@ -179,7 +145,7 @@ where
             unix_2_readable(&end_time)
         );
         match kline_fetcher
-            .get_all_kline_data(param.clone(), Some(interval), Some(start_time), Some(end_time), tx.clone())
+            .get_all_kline_data(param.clone(), Some(interval), Some(start_time), Some(end_time), recipient, true)
             .await
         {
             Ok(len) => {
@@ -193,12 +159,11 @@ where
 }
 
 #[async_trait]
-impl<F, P, R, V, D> AsyncRepeatTask for HistoryDataTask<F, P, R, V, D>
+impl<F, P, V, D> AsyncRepeatTask for HistoryDataTask<F, P, V, D>
 where
     F: HistoryFetcherFactory<Param = P, Output = V> + Clone + Send + Sync + Unpin + 'static,
     P: MuteHistoryParam + ToRequestBuilder + Clone + Send + Sync + 'static,
     V: HistoryVo + Clone + Send + Sync + Clone + 'static,
-    R: DuckDBPO<Source = V> + Send + Sync + Clone + 'static,
     D: ExchangeDashBoard<TradingSymbol = TradingSymbol> + Send + Sync + Clone + 'static,
 {
     ///
@@ -207,10 +172,17 @@ where
     /// 2. 时间范围为设定的最早时间到现在
     ///
     async fn initial_data(&self) -> Result<(), LiError> {
-        if !self.data_writer.is_empty().unwrap() {
+        let count = self
+            .db_empty_checker
+            .send(Count::new())
+            .await
+            .map_err(|e| LiError::CustomError(format!("Failed to send Count message to db_empty_checker in {}: {}", self.task_name, e)))?;
+        if count == 0 {
             info!("{} database is not empty, skip initial history data fetch", self.task_name);
             return Ok(());
-        }
+        } else if count == UNKNOWN_ROW {
+            return Err(LiError::CustomError(format!("DB connection fail {}", self.task_name)));
+        };
 
         let earliest_time = self
             .exchange_dashboard

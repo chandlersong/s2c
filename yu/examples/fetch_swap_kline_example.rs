@@ -1,11 +1,10 @@
+use actix::{Actor, Context};
 use li::tools::logs::setup_logger;
 use li::tools::time::unix_time_now_u64_utc;
 use log::{info, LevelFilter};
 use std::collections::HashMap;
-use tokio::sync::mpsc;
 use yu::binance::bn_dashboard::BinanceDashboard;
 use yu::binance::history_task::HistoryDataTask;
-use yu::binance::models::po::KlinePo;
 use yu::config::get_config;
 use yu::errors::YuError;
 use yu::exchange::{CloneHistoryFetcherFactory, HistoryFetcherFactory};
@@ -15,6 +14,33 @@ use yue::binance::history_data::{CommonRequestBuilder, SimpleHistoryFetcher};
 use yue::errors::YueError;
 use yue::http_client::init_http_client;
 use yue::models::HistoryInterval;
+use yue::query_message::{BatchInsert, Count};
+
+struct PrinterActor;
+
+impl Actor for PrinterActor {
+    type Context = Context<Self>;
+}
+
+impl actix::Handler<BatchInsert<BinanceKline>> for PrinterActor {
+    type Result = Result<usize, YueError>;
+
+    fn handle(&mut self, msg: BatchInsert<BinanceKline>, _ctx: &mut Self::Context) -> Self::Result {
+        let data = msg.data;
+        // 统计重复的funding_time，并打印所有重复行
+        for d in data.iter() {
+            println!("{:?}", d);
+        }
+        Ok(1) // 模拟成功处理，返回插入了1条记录
+    }
+}
+
+impl actix::Handler<Count> for PrinterActor {
+    type Result = isize;
+    fn handle(&mut self, _: Count, _ctx: &mut Self::Context) -> Self::Result {
+        1
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), YuError> {
@@ -37,74 +63,29 @@ async fn main() -> Result<(), YuError> {
         CloneHistoryFetcherFactory::new(base_swap_kline_fetcher);
 
     let param = CommonRequestBuilder::new("GRASSUSDT".to_string(), 1000, HistoryInterval::OneHour);
-    let (tx, mut rx) = mpsc::channel::<Result<(String, Vec<BinanceKline>), YueError>>(100);
     let interval = HistoryInterval::FiveMinutes;
     let now_timestamp = unix_time_now_u64_utc();
     let start_time = interval.get_close_unix_ms(now_timestamp - 10 * 60 * 1000);
     let end_time = interval.get_close_unix_ms(now_timestamp);
 
-    let fetch_handle = tokio::spawn(async move {
+    let addr = PrinterActor {}.start();
+    let _ = tokio::spawn(async move {
         HistoryDataTask::<
             CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonRequestBuilder, BinanceKline>,
             CommonRequestBuilder,
-            KlinePo, // 修正为 KlinePo，满足 HistoryPO 约束
             BinanceKline,
             BinanceDashboard,
-        >::fetch_symbol_data(swap_kline_fetcher.create_fetcher(), param, start_time, end_time, tx, "test", interval)
+        >::fetch_symbol_data(
+            swap_kline_fetcher.create_fetcher(),
+            param,
+            start_time,
+            end_time,
+            "test",
+            interval,
+            addr.recipient(),
+        )
         .await;
     });
 
-    use std::collections::HashSet;
-    let mut all_open_times = Vec::new();
-    let mut all_items = Vec::new();
-    while let Some(result) = rx.recv().await {
-        match result {
-            Ok((_, data)) => {
-                for item in &data {
-                    all_open_times.push(item.open_time);
-                    all_items.push(item.clone());
-                }
-                let mut seen = HashSet::new();
-                let mut duplicates = HashSet::new();
-                for &ot in &all_open_times {
-                    if !seen.insert(ot) {
-                        duplicates.insert(ot);
-                    }
-                }
-                if !duplicates.is_empty() {
-                    println!("重复的open_time: {:?}", duplicates);
-                    for ot in &duplicates {
-                        for item in &all_items {
-                            if item.open_time == *ot {
-                                println!("重复项: {:?}", item);
-                            }
-                        }
-                    }
-                }
-                // 新增：校验 candle_begin_time 是否严格相差一个小时
-                if all_open_times.len() > 1 {
-                    let mut last = all_open_times[0];
-                    for (idx, &cur) in all_open_times.iter().enumerate().skip(1) {
-                        if cur != last + 3600_000 {
-                            println!(
-                                "第{}项与前一项candle_begin_time间隔不是1小时: {} -> {} (差值: {} ms)",
-                                idx,
-                                last,
-                                cur,
-                                cur - last
-                            );
-                        }
-                        last = cur;
-                    }
-                }
-                if !all_open_times.is_empty() {
-                    println!("open_time第一项: {:?}", all_open_times.first().unwrap());
-                    println!("open_time最后一项: {:?}", all_open_times.last().unwrap());
-                }
-            }
-            Err(e) => println!("Error: {:?}", e),
-        }
-    }
-    let _ = fetch_handle.await;
     Ok(())
 }
