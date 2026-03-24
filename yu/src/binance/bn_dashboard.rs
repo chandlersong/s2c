@@ -263,8 +263,8 @@ impl AsyncRepeatTask for BinanceDashboard {
     ///
     async fn execute(&self) -> Result<(), LiError> {
         let (spot_exchange, swap_exchange) = if self.debug_mood {
-            let spot = Self::read_spot_exchange_info_from_file_sync("path");
-            let swap = Self::read_spot_exchange_info_from_file_sync("path");
+            let spot = Self::read_spot_exchange_info_from_file_sync("testdata/exchange_data/spot_exchange.json");
+            let swap = Self::read_spot_exchange_info_from_file_sync("testdata/exchange_data/swap_exchange.json");
             (spot, swap)
         } else {
             let (spot_exchange, swap_exchange) = tokio::join!(Self::query_spot_exchange_info(), Self::query_swap_exchange_info());

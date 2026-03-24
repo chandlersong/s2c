@@ -83,6 +83,8 @@ pub struct HostInfo {
     max_limit: Arc<AtomicU32>,
     disable_before: Arc<AtomicU64>, //unix timestamp,在此时间点之前，该host应该不可用。
     limiter: ShareRateLimiter,
+    used_limit: Arc<AtomicU32>, //我想这里用一个数字表示，如果
+    decelerate_token: u32,
 }
 
 pub fn create_share_rate_limiter(bucket_size: u32, burst_size: Option<u32>) -> ShareRateLimiter {
@@ -124,16 +126,29 @@ impl<'a> From<&'a HostInfo> for &'a str {
 
 impl HostInfo {
     pub fn new<S: AsRef<str>>(host: S, max_limit: u32, limiter: Arc<RwLock<Arc<DefaultRateLimiter>>>) -> Self {
+        let decelerate_token = (max_limit as f64 * 0.8).floor() as u32;
         Self {
             host: host.as_ref().to_string(),
             max_limit: Arc::new(AtomicU32::new(max_limit)),
             disable_before: Arc::new(AtomicU64::new(0)),
             limiter,
+            used_limit: Arc::new(AtomicU32::new(0)),
+            decelerate_token,
         }
     }
 
     pub async fn check_open_and_wait(&self, jitter: Option<Jitter>) -> u64 {
         self.waiting_for_open(None, jitter).await
+    }
+
+    pub async fn set_used_limit(&self, used_token: u32) {
+        self.used_limit.store(used_token, Ordering::Release);
+    }
+
+    //以用的是否超过比例，如果超过，就自动等待一段时间
+    pub async fn check_slow_down(&self) -> bool {
+        let used_token = self.used_limit.load(Ordering::Relaxed);
+        used_token > self.decelerate_token
     }
 
     ///
@@ -311,7 +326,6 @@ impl HostInfo {
                 limiter_cloned.until_n_ready_with_jitter(weight_nz, Jitter::up_to(Duration::from_millis(500))),
             )
             .await;
-
             return match acquire_token_res {
                 Ok(Ok(snapshot)) => {
                     // 再次计算剩余时间并检查 host open 状态

@@ -149,6 +149,11 @@ impl BinanceRestfulClient {
 
         // 2) 发送请求阶段（失败或限流会消耗共享重试预算）
         loop {
+            //估计应该出现这种情况的时候应该是最后，所以等个5s左右，随机散开
+            if request_info.host.check_slow_down().await {
+                let jitter = Jitter::up_to(Duration::from_secs(5));
+                tokio::time::sleep(jitter + Duration::ZERO).await;
+            }
             // 在调用 acquire_limit_token 前记录时间，获取后把该耗时从总计等待时间中剔除。
             let t_acquire_start = Instant::now();
 
@@ -472,6 +477,7 @@ async fn rate_limit_wait_ms(
             // 使用 max_limit 的 10% 作为阈值，至少为 1
             let margin = std::cmp::max(1, (max_limit as f32 * 0.75) as u32);
             // 触发逻辑：当已用权重 val 小于 margin（即超过 max_limit 的 10%）时视为权重限制
+            host.set_used_limit(val).await;
             val >= margin
         }
         None => false,
