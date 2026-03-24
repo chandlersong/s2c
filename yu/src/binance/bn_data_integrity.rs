@@ -359,9 +359,24 @@ impl SpotCheckStrategy {
             //AI生成的，健壮编程
             return Ok(vec![]);
         }
+        //
+        // count_distinct_between查询的时候，max_timestamp是不包含的。而传进来的max_timestamp可能不是整点
+        // 可能大1
+        // 如果开始是00分， max_timestamp是36
+        // 那么sql查询就会是 8个slot。但是计算下来是7个，那么后面计算find_gaps_rec就不对了。
+        // 因为由于同样的问题，认为数据不存在
+        //
+        let adjust_max_timestamp = self.interval.get_close_unix_ms(max_timestamp);
 
-        let expected_slots = (max_timestamp - min_timestamp) / interval_ms + 1;
-        let actual = self.count_distinct_between(&mut conn, &self.table_name, symbol, &self.time_column, min_timestamp, max_timestamp)?;
+        let expected_slots = (adjust_max_timestamp - min_timestamp) / interval_ms;
+        let actual = self.count_distinct_between(
+            &mut conn,
+            &self.table_name,
+            symbol,
+            &self.time_column,
+            min_timestamp,
+            adjust_max_timestamp,
+        )?;
         if actual == expected_slots {
             return Ok(vec![]);
         }
@@ -374,7 +389,7 @@ impl SpotCheckStrategy {
             &self.time_column,
             &self.interval,
             min_timestamp,
-            max_timestamp,
+            adjust_max_timestamp,
             &mut gaps,
         )?;
 
@@ -664,7 +679,8 @@ mod tests {
         );
 
         let start = t0 as u64;
-        let end = (t0 + (5 - 1) * interval_ms) as u64;
+        //真实环境，可能不是整点。所以比较来弄。
+        let end = (t0 + (5 - 1) * interval_ms + 10) as u64;
         let mut gaps: Vec<ValidationGap> = Vec::new();
         check_strategy.find_gaps_rec(symbol, &mut conn, "bn_spot_kline", "candle_begin_time", &interval, start, end, &mut gaps)?;
         assert!(gaps.is_empty(), "expected no gaps but found: {:?}", gaps);
@@ -839,7 +855,7 @@ mod tests {
         );
 
         let start = t0 as u64;
-        let end = (t0 + 10 * interval_ms) as u64;
+        let end = (t0 + 10 * interval_ms + 10) as u64;
         let mut gaps: Vec<ValidationGap> = Vec::new();
         check_strategy.find_gaps_rec(
             expected_symbol,
