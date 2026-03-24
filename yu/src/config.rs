@@ -194,7 +194,11 @@ impl Default for DataIntegrityConfig {
     fn default() -> Self {
         DataIntegrityConfig {
             startup_check_timeout_ms: 3_600_000,
-            periodic_check_interval_cron: "0 3-53/10 * * * * *".to_string(),
+            /*
+            默认正常运行的时候，这个检查往往会很快。同时。5分钟的数据1分钟也能完成。那么这个时候，
+            而且觉得没有必要太平凡。半小时检查一次。
+            */
+            periodic_check_interval_cron: "0 6,36 * * * * *".to_string(),
             repair_backoff: Default::default(),
         }
     }

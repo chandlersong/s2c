@@ -7,10 +7,12 @@ use crate::duck_db::DBProvider;
 use crate::errors::YuError;
 use crate::exchange::{CloneHistoryFetcherFactory, HistoryFetcherFactory};
 use async_trait::async_trait;
+use governor::Jitter;
 use li::tools::time::unix_2_readable;
 use log::{debug, error, info, trace, Level};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{RwLock, Semaphore};
 use yue::binance::bn_models::common::SymbolType;
 use yue::binance::bn_models::spot_restful::BinanceKline;
@@ -320,7 +322,7 @@ impl SpotCheckStrategy {
         let mut conn = self
             .db_provider
             .acquire()
-            .map_err(|_| YuError::new(&format!("{}, query db provider", symbol)))?;
+            .map_err(|e| YuError::new(&format!("when check {}, query db provider,e is {}", symbol, e)))?;
         let interval_ms = self.interval.to_milliseconds();
 
         // 使用参数化查询以避免注入，并安全获取 min/max
@@ -445,13 +447,20 @@ impl ValidationStrategy for SpotCheckStrategy {
         let now = self.interval.get_now_close_unix_ms_utc();
         // 2. 并行检查每个 symbol（check_one_symbol 是同步 DB 操作，使用 spawn_blocking）
         let mut handles = Vec::new();
+        let sem = Arc::new(Semaphore::new(10usize));
         for sym in symbols.into_iter() {
             let strategy = self.clone();
             let s = sym.clone();
             if self.ignore_symbols.read().await.is_ignored(&s) {
                 continue;
             }
-            let h = tokio::task::spawn_blocking(move || strategy.check_one_symbol(&s, now));
+            let sem_clone = sem.clone();
+            let h = tokio::task::spawn(async move {
+                let jitter = Jitter::up_to(Duration::from_secs(30));
+                tokio::time::sleep(jitter + Duration::ZERO).await;
+                let _ = sem_clone.acquire().await.unwrap();
+                strategy.check_one_symbol(&s, now)
+            });
             handles.push(h);
         }
 
