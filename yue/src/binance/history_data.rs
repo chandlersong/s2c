@@ -332,7 +332,11 @@ where
             };
             let klines_count = filtered_klines.len() as u64;
             debug!("{} fetch {} kline, after filtered {} kline", symbol, kline_num, filtered_klines.len());
-            last_timestamp = Some(filtered_klines.last().unwrap().get_close_time().clone());
+            let last_kline = filtered_klines.last();
+            if let Some(l) = last_kline {
+                last_timestamp = Some(l.get_close_time().clone());
+            }
+
             // 发送数据到 saver
             let message = BatchInsert::new(Some(symbol.to_string()), filtered_klines);
             match saver.send(message).await {
