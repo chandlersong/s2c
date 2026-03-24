@@ -328,7 +328,7 @@ async fn start_refresh_history_data(origin_dash_board: BinanceDashboard) -> Resu
     let dash_board = Arc::new(origin_dash_board);
 
     let build_kline_task = |request_info, dash_board, batch_writer, empty_checker, task_name: &str, symbol_type, interval| {
-        let base_fetcher = SimpleHistoryFetcher::new(request_info);
+        let base_fetcher = SimpleHistoryFetcher::kline(request_info);
         let fetcher_factory: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonRequestBuilder, BinanceKline> =
             CloneHistoryFetcherFactory::new(base_fetcher);
         HistoryDataTask::<_, _, BinanceKline, BinanceDashboard>::new(
@@ -377,7 +377,7 @@ async fn start_refresh_history_data(origin_dash_board: BinanceDashboard) -> Resu
     );
 
     let funding_rate_table = get_swap_funding_rate_table_addr();
-    let funding_rate_fetcher = SimpleHistoryFetcher::new(&SWAP_FUNDING_RATE_COMMAND);
+    let funding_rate_fetcher = SimpleHistoryFetcher::funding_rate(&SWAP_FUNDING_RATE_COMMAND);
     let funding_rate_fetcher_factory: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonRequestBuilder, FundingRate> =
         CloneHistoryFetcherFactory::new(funding_rate_fetcher);
     let funding_rate_task = HistoryDataTask::<_, _, FundingRate, BinanceDashboard>::new(
