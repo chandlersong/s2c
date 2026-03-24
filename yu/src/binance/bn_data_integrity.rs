@@ -443,8 +443,9 @@ impl ValidationStrategy for SpotCheckStrategy {
             // no symbols => nothing to validate
             return Ok(None);
         }
-
-        let now = self.interval.get_now_close_unix_ms_utc();
+        //防止检测到到当前周期。
+        // 比如说现在11:36分，那么5分钟周期的，35已经开始了。但是可能还没结束，这样35可能被存入两次。
+        let now = self.interval.get_now_close_unix_ms_utc() - 2 * self.interval.to_milliseconds();
         // 2. 并行检查每个 symbol（check_one_symbol 是同步 DB 操作，使用 spawn_blocking）
         let mut handles = Vec::new();
         let sem = Arc::new(Semaphore::new(10usize));

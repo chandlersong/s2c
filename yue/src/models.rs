@@ -344,6 +344,7 @@ impl HostInfo {
 
 /// NEXT：加入一个generate方法，参数为weight和timeout
 /// 因为这两个可能是多变的。比如在获取swap kline的过程中，会根据limit进行变更
+/// TODO: 加入一个used token的设定。内部定时刷新。
 #[derive(Debug, Clone)]
 pub struct RequestInfo {
     inner: Url,
