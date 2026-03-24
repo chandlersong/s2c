@@ -475,7 +475,7 @@ async fn rate_limit_wait_ms(
         Some(val) => {
             let max_limit = host.get_max_limit();
             // 使用 max_limit 的 10% 作为阈值，至少为 1
-            let margin = std::cmp::max(1, (max_limit as f32 * 0.75) as u32);
+            let margin = std::cmp::max(1, (max_limit as f32 * 0.9) as u32);
             // 触发逻辑：当已用权重 val 小于 margin（即超过 max_limit 的 10%）时视为权重限制
             host.set_used_limit(val).await;
             val >= margin
