@@ -94,7 +94,7 @@ async fn main() {
     let end_ms = now_ms - 10 * 1000 * 60;
     println!("Now (ms) = {}, start_time (ms) = {}", now_ms, start_ms);
     let symbol = "BTCUSDT";
-    let spot_kline_fetch = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
+    let spot_kline_fetch = SimpleHistoryFetcher::kline(&SPOT_KLINE_HISTORY_COMMAND);
     let base_param = CommonRequestBuilder::new(symbol.to_string(), 1000, HistoryInterval::FiveMinutes);
 
     let spot_recipient = PrinterActor {}.start().recipient();
@@ -111,7 +111,7 @@ async fn main() {
 
     info!("================fetch spot btc==============");
 
-    let swap_kline_fetch = SimpleHistoryFetcher::new(&SWAP_KLINE_HISTORY_COMMAND);
+    let swap_kline_fetch = SimpleHistoryFetcher::kline(&SWAP_KLINE_HISTORY_COMMAND);
     let base_param = CommonRequestBuilder::new(symbol.to_string(), 1000, HistoryInterval::OneHour);
 
     let swap_recipient = PrinterActor {}.start().recipient();

@@ -206,7 +206,7 @@ impl Handler<BufferedDepthUpdate> for InitActor {
         if let Some(buffer) = self.pending_inits.get_mut(&msg.symbol) {
             let buff_size = buffer.len();
             if buff_size > 100 {
-                warn!("[InitActor] 缓存buffer过大，可能失败，当前buffer大小={}", buff_size);
+                debug!("[InitActor] 缓存buffer过大，可能失败，当前buffer大小={}", buff_size);
             }
 
             buffer.push_back(msg.update);

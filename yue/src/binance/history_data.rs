@@ -206,12 +206,20 @@ where
 #[derive(Debug, Clone)]
 pub struct SimpleHistoryFetcher {
     request_info: RequestInfo,
+    filter_enabled: bool,
 }
 
 impl SimpleHistoryFetcher {
-    pub fn new(request_info: &RequestInfo) -> Self {
+    pub fn kline(request_info: &RequestInfo) -> Self {
         Self {
             request_info: request_info.clone(),
+            filter_enabled: true,
+        }
+    }
+    pub fn funding_rate(request_info: &RequestInfo) -> Self {
+        Self {
+            request_info: request_info.clone(),
+            filter_enabled: false,
         }
     }
 }
@@ -319,7 +327,7 @@ where
 
             let kline_num = klines.len();
             // 注意点：废弃所有非close的kline（close_time不符合 interval 倍数）
-            let filtered_klines: Vec<O> = {
+            let filtered_klines: Vec<O> = if self.filter_enabled {
                 let iv_ms = chosen_interval.to_milliseconds();
                 klines
                     .into_iter()
@@ -329,6 +337,8 @@ where
                         close_time % iv_ms == 0
                     })
                     .collect()
+            } else {
+                klines
             };
             let klines_count = filtered_klines.len() as u64;
             debug!("{} fetch {} kline, after filtered {} kline", symbol, kline_num, filtered_klines.len());
@@ -481,7 +491,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(mock_klines))
             .mount(&mock_server)
             .await;
-        let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
+        let fetcher = SimpleHistoryFetcher::kline(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonRequestBuilder::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
         let saver_addr = MockSaver {}.start();
         let recipient: Recipient<BatchInsert<BinanceKline>> = saver_addr.recipient();
@@ -557,7 +567,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
+        let fetcher = SimpleHistoryFetcher::kline(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonRequestBuilder::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
         let saver_addr = MockSaver {}.start();
         let recipient: Recipient<BatchInsert<BinanceKline>> = saver_addr.recipient();
@@ -592,7 +602,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(500))
             .mount(&mock_server)
             .await;
-        let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
+        let fetcher = SimpleHistoryFetcher::kline(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonRequestBuilder::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
         let saver_addr = MockSaver {}.start();
         let recipient: Recipient<BatchInsert<BinanceKline>> = saver_addr.recipient();
@@ -656,7 +666,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
+        let fetcher = SimpleHistoryFetcher::kline(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonRequestBuilder::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
         let saver_addr = MockSaver {}.start();
         let recipient: Recipient<BatchInsert<BinanceKline>> = saver_addr.recipient();
@@ -713,7 +723,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let fetcher = SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND);
+        let fetcher = SimpleHistoryFetcher::kline(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonRequestBuilder::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
         let saver_addr = MockSaver {}.start();
         let recipient: Recipient<BatchInsert<BinanceKline>> = saver_addr.recipient();

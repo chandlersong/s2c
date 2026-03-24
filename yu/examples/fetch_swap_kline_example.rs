@@ -58,7 +58,7 @@ async fn main() -> Result<(), YuError> {
     special_log.insert("yue".to_string(), LevelFilter::Debug);
     setup_logger(Some(LevelFilter::Warn), special_log).unwrap();
 
-    let base_swap_kline_fetcher = SimpleHistoryFetcher::new(&SWAP_KLINE_HISTORY_COMMAND);
+    let base_swap_kline_fetcher = SimpleHistoryFetcher::kline(&SWAP_KLINE_HISTORY_COMMAND);
     let swap_kline_fetcher: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonRequestBuilder, BinanceKline> =
         CloneHistoryFetcherFactory::new(base_swap_kline_fetcher);
 

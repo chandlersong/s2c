@@ -546,8 +546,8 @@ impl RepairStrategy for KlineGapRepairStrategy {
         }
 
         let kline_fetcher = match self.symbol_type {
-            SymbolType::Spot => SimpleHistoryFetcher::new(&SPOT_KLINE_HISTORY_COMMAND),
-            SymbolType::Swap => SimpleHistoryFetcher::new(&SWAP_KLINE_HISTORY_COMMAND),
+            SymbolType::Spot => SimpleHistoryFetcher::kline(&SPOT_KLINE_HISTORY_COMMAND),
+            SymbolType::Swap => SimpleHistoryFetcher::kline(&SWAP_KLINE_HISTORY_COMMAND),
             _ => {
                 return Err(format!("KlineGapRepairStrategy does not support symbol type: {:?}", self.symbol_type));
             }

@@ -103,7 +103,7 @@ pub fn create_default_rate_limiter(bucket_size: u32, burst_size: Option<u32>) ->
 /// 但是有些测试，比如order book里面初始既要50.所以这里把真实环境和UT环境分开。
 #[cfg(not(test))]
 pub fn create_default_rate_limiter(bucket_size: u32, burst_size: Option<u32>) -> DefaultRateLimiter {
-    let real_burst_size = burst_size.unwrap_or(max(bucket_size.saturating_div(61), 1));
+    let real_burst_size = burst_size.unwrap_or(max(bucket_size.saturating_div(62), 1));
     let quota = Quota::per_minute(NonZeroU32::new(bucket_size).unwrap()).allow_burst(NonZeroU32::new(real_burst_size).unwrap().into());
     let res = RateLimiter::direct(quota);
     let limiter_with_info = res.with_middleware::<StateInformationMiddleware>();

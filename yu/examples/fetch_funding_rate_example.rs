@@ -52,7 +52,7 @@ async fn main() -> Result<(), YuError> {
     special_log.insert("yue".to_string(), LevelFilter::Debug);
     setup_logger(Some(LevelFilter::Warn), special_log).unwrap();
 
-    let base_swap_funding_rate_fetcher = SimpleHistoryFetcher::new(&SWAP_FUNDING_RATE_COMMAND);
+    let base_swap_funding_rate_fetcher = SimpleHistoryFetcher::kline(&SWAP_FUNDING_RATE_COMMAND);
     let swap_funding_rate_fetcher: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonRequestBuilder, FundingRate> =
         CloneHistoryFetcherFactory::new(base_swap_funding_rate_fetcher);
 
