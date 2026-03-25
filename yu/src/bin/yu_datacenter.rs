@@ -33,21 +33,21 @@ async fn main() {
         log_in_config,
         parse_level(app_config.log_level.as_deref())
     );
-    // match start_bn_jobs().await {
-    //     Ok(_) => info!("Binance jobs started successfully"),
-    //     Err(e) => {
-    //         error!("Failed to start Binance jobs: {}", e);
-    //         panic!("stop process");
-    //     }
-    // }
-    //
-    // match start_check_data_integrity_jobs().await {
-    //     Ok(_) => {}
-    //     Err(e) => {
-    //         error!("Failed to start check data integrity jobs: {}", e);
-    //         panic!("stop process");
-    //     }
-    // }
+    match start_bn_jobs().await {
+        Ok(_) => info!("Binance jobs started successfully"),
+        Err(e) => {
+            error!("Failed to start Binance jobs: {}", e);
+            panic!("stop process");
+        }
+    }
+
+    match start_check_data_integrity_jobs().await {
+        Ok(_) => {}
+        Err(e) => {
+            error!("Failed to start check data integrity jobs: {}", e);
+            panic!("stop process");
+        }
+    }
 
     match yu::arrow_flight_server::start_flight_server("0.0.0.0:8815").await {
         Ok(()) => {
