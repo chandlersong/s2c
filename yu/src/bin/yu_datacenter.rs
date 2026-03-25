@@ -41,13 +41,13 @@ async fn main() {
         }
     }
 
-    // match start_check_data_integrity_jobs().await {
-    //     Ok(_) => {}
-    //     Err(e) => {
-    //         error!("Failed to start check data integrity jobs: {}", e);
-    //         panic!("stop process");
-    //     }
-    // }
+    match start_check_data_integrity_jobs().await {
+        Ok(_) => {}
+        Err(e) => {
+            error!("Failed to start check data integrity jobs: {}", e);
+            panic!("stop process");
+        }
+    }
 
     match yu::arrow_flight_server::start_flight_server("0.0.0.0:8815").await {
         Ok(()) => {
