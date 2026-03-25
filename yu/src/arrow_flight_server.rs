@@ -15,7 +15,7 @@ use log::{debug, error, info};
 use prost::bytes::Bytes;
 use rust_decimal::prelude::ToPrimitive;
 use std::sync::Arc;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status, Streaming};
@@ -337,14 +337,11 @@ impl FlightService for DuckDBFlightServer {
     }
 }
 
-pub async fn start_flight_server(addr: &str) -> Result<oneshot::Sender<()>, YuError> {
+pub async fn start_flight_server(addr: &str) -> Result<(), YuError> {
     let addr_str = addr.to_string();
     let parsed_addr = addr_str.parse().map_err(|e| YuError::new(&format!("Bad address {}: {}", addr, e)))?;
 
-    // Create a shutdown channel for the server
-    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-
-    // Create initialization result channel - only used to report startup errors
+    // Create initialization result channel - used to report startup success/errors
     let (init_tx, mut init_rx) = tokio::sync::mpsc::channel::<Result<(), String>>(1);
 
     let init_tx_clone = init_tx.clone();
@@ -354,13 +351,8 @@ pub async fn start_flight_server(addr: &str) -> Result<oneshot::Sender<()>, YuEr
         let service = DuckDBFlightServer::new();
         let svc = FlightServiceServer::new(service);
 
-        let shutdown_future = async {
-            let _ = shutdown_rx.await;
-            info!("Shutdown signal received for flight server");
-        };
-
         // Try to start the server
-        match Server::builder().add_service(svc).serve_with_shutdown(parsed_addr, shutdown_future).await {
+        match Server::builder().add_service(svc).serve(parsed_addr).await {
             Ok(_) => {
                 info!("✅ Arrow Flight Server shutdown gracefully");
             }
@@ -385,7 +377,7 @@ pub async fn start_flight_server(addr: &str) -> Result<oneshot::Sender<()>, YuEr
             match tokio::net::TcpStream::connect(&addr_str_health).await {
                 Ok(_) => {
                     info!("✅ Arrow Flight Server is running and accepting connections on {}", &addr_str_health);
-                    // Server is confirmed to be running, close the verification connection implicitly
+                    let _ = init_tx.send(Ok(())).await;
                     return;
                 }
                 Err(e) => {
@@ -400,20 +392,27 @@ pub async fn start_flight_server(addr: &str) -> Result<oneshot::Sender<()>, YuEr
         }
     });
 
-    // Wait for either a startup error or timeout
+    // Wait for either startup success, startup error, or timeout
     tokio::select! {
         result = init_rx.recv() => {
-            if let Some(Err(e)) = result {
-                return Err(YuError::new(&e));
+            match result {
+                Some(Ok(())) => {
+                    info!("✅ Arrow Flight Server successfully started on {}", addr_str);
+                }
+                Some(Err(e)) => {
+                    return Err(YuError::new(&e));
+                }
+                None => {
+                    return Err(YuError::new("Arrow Flight Server init channel closed unexpectedly"));
+                }
             }
         }
-        _ = tokio::time::sleep(tokio::time::Duration::from_secs(6)) => {
-            // If we don't get an error message within 6 seconds, assume success
-            info!("Arrow Flight Server initialization completed (6s timeout)");
+        _ = tokio::time::sleep(tokio::time::Duration::from_mins(1)) => {
+            return Err(YuError::new("Arrow Flight Server initialization timeout (6s)"));
         }
     }
 
-    Ok(shutdown_tx)
+    Ok(())
 }
 
 #[cfg(test)]

@@ -32,15 +32,14 @@ async fn main() {
 async fn example_start_server() -> Result<(), Box<dyn std::error::Error>> {
     // 启动服务器
     let addr = "127.0.0.1:50051";
-    let shutdown_tx = start_flight_server(addr).await?;
+    start_flight_server(addr).await?;
     println!("✓ Flight server started on {}", addr);
 
     // 模拟业务逻辑
     tokio::time::sleep(std::time::Duration::from_secs(10)).await;
 
-    // 关闭服务器
-    shutdown_tx.send(()).ok();
-    println!("✓ Flight server stopped");
+    // 当前实现不从外部控制关闭，示例只演示启动
+    println!("✓ Flight server is running in background");
 
     Ok(())
 }

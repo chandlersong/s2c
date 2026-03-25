@@ -11,7 +11,7 @@ mod tests {
         // 启动 Flight 服务器
         let addr = "127.0.0.1:50051";
         match start_flight_server(addr).await {
-            Ok(shutdown_tx) => {
+            Ok(()) => {
                 println!("✓ Flight 服务器启动成功，监听 {}", addr);
 
                 // 给服务器一点时间启动
@@ -26,9 +26,7 @@ mod tests {
                 //     println!("Received: {:?}", data);
                 // }
 
-                // 关闭服务器
-                let _ = shutdown_tx.send(());
-                println!("✓ Flight 服务器已关闭");
+                println!("✓ Flight 服务器仍在后台运行（测试结束后由运行时清理）");
             }
             Err(e) => {
                 panic!("Failed to start flight server: {}", e);
@@ -42,7 +40,7 @@ mod tests {
         // 启动 Flight 服务器
         let addr = "127.0.0.1:50052";
         match start_flight_server(addr).await {
-            Ok(shutdown_tx) => {
+            Ok(()) => {
                 println!("✓ Flight 服务器启动成功，监听 {}", addr);
 
                 // 给服务器一点时间启动
@@ -57,9 +55,7 @@ mod tests {
                 //     println!("Received: {:?}", data);
                 // }
 
-                // 关闭服务器
-                let _ = shutdown_tx.send(());
-                println!("✓ Flight 服务器已关闭");
+                println!("✓ Flight 服务器仍在后台运行（测试结束后由运行时清理）");
             }
             Err(e) => {
                 panic!("Failed to start flight server: {}", e);

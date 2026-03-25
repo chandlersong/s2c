@@ -45,7 +45,7 @@ use yue::tools::SnowyFlakeWrapper;
 ///
 pub async fn start_bn_jobs() -> Result<(), YuError> {
     let config = get_config();
-    let dash_board = BinanceDashboard::new(config.get_data_retention_hours());
+    let dash_board = BinanceDashboard::debug_mode(config.get_data_retention_hours());
     dash_board.initial_data().await?;
     if let Err(_e) = initial_tables(None) {
         warn!("币安表创建失败,{}", _e);

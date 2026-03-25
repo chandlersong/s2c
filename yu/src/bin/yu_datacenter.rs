@@ -41,24 +41,23 @@ async fn main() {
         }
     }
 
-    match start_check_data_integrity_jobs().await {
-        Ok(_) => {}
-        Err(e) => {
-            error!("Failed to start check data integrity jobs: {}", e);
-            panic!("stop process");
-        }
-    }
+    // match start_check_data_integrity_jobs().await {
+    //     Ok(_) => {}
+    //     Err(e) => {
+    //         error!("Failed to start check data integrity jobs: {}", e);
+    //         panic!("stop process");
+    //     }
+    // }
 
-    let shutdown_sender = match yu::arrow_flight_server::start_flight_server("0.0.0.0:8815").await {
-        Ok(tx) => {
+    match yu::arrow_flight_server::start_flight_server("0.0.0.0:8815").await {
+        Ok(()) => {
             info!("✅ Arrow Flight Server successfully started on 0.0.0.0:8815");
-            Some(tx)
         }
         Err(e) => {
             error!("❌ Failed to start Arrow Flight Server: {}", e);
             panic!("Flight server startup failed, aborting");
         }
-    };
+    }
 
     // Wait for Ctrl+C in the actix (main) runtime, then signal the flight server to shut down.
     match actix_rt::signal::ctrl_c().await {
@@ -68,11 +67,6 @@ async fn main() {
         Err(e) => {
             error!("Signal handler error: {}", e);
         }
-    }
-
-    if let Some(tx) = shutdown_sender {
-        // Ignore send error: receiver may have already been dropped
-        let _ = tx.send(());
     }
 
     System::current().stop(); // 优雅停止
