@@ -338,26 +338,80 @@ impl FlightService for DuckDBFlightServer {
 }
 
 pub async fn start_flight_server(addr: &str) -> Result<oneshot::Sender<()>, YuError> {
-    let addr = addr.parse().map_err(|e| YuError::new(&format!("Bad address {}: {}", addr, e)))?;
+    let addr_str = addr.to_string();
+    let parsed_addr = addr_str.parse().map_err(|e| YuError::new(&format!("Bad address {}: {}", addr, e)))?;
 
-    // Create a shutdown channel; return the sender to the caller so they can trigger shutdown
+    // Create a shutdown channel for the server
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
-    // Spawn the tonic server on the current runtime. This avoids creating a new runtime/thread.
+    // Create initialization result channel - only used to report startup errors
+    let (init_tx, mut init_rx) = tokio::sync::mpsc::channel::<Result<(), String>>(1);
+
+    let init_tx_clone = init_tx.clone();
+
+    // Spawn the tonic server task
     tokio::spawn(async move {
         let service = DuckDBFlightServer::new();
         let svc = FlightServiceServer::new(service);
 
         let shutdown_future = async {
-            // Wait for shutdown signal from the caller
             let _ = shutdown_rx.await;
             info!("Shutdown signal received for flight server");
         };
 
-        if let Err(e) = Server::builder().add_service(svc).serve_with_shutdown(addr, shutdown_future).await {
-            error!("Flight server error: {}", e);
+        // Try to start the server
+        match Server::builder().add_service(svc).serve_with_shutdown(parsed_addr, shutdown_future).await {
+            Ok(_) => {
+                info!("✅ Arrow Flight Server shutdown gracefully");
+            }
+            Err(e) => {
+                let error_msg = format!("Arrow Flight Server error: {}", e);
+                error!("❌ {}", error_msg);
+                // Notify about the error
+                let _ = init_tx_clone.send(Err(error_msg)).await;
+            }
         }
     });
+
+    // Spawn a health check task to verify server is running
+    let addr_str_health = addr_str.clone();
+    tokio::spawn(async move {
+        // Give the server a moment to start
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        // Try to connect to verify server is running
+        let max_retries = 50; // 5 seconds with 100ms intervals
+        for attempt in 0..max_retries {
+            match tokio::net::TcpStream::connect(&addr_str_health).await {
+                Ok(_) => {
+                    info!("✅ Arrow Flight Server is running and accepting connections on {}", &addr_str_health);
+                    // Server is confirmed to be running, close the verification connection implicitly
+                    return;
+                }
+                Err(e) => {
+                    if attempt == max_retries - 1 {
+                        let error_msg = format!("Arrow Flight Server failed to start after {} attempts: {}", max_retries, e);
+                        error!("❌ {}", error_msg);
+                        let _ = init_tx.send(Err(error_msg)).await;
+                    }
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                }
+            }
+        }
+    });
+
+    // Wait for either a startup error or timeout
+    tokio::select! {
+        result = init_rx.recv() => {
+            if let Some(Err(e)) = result {
+                return Err(YuError::new(&e));
+            }
+        }
+        _ = tokio::time::sleep(tokio::time::Duration::from_secs(6)) => {
+            // If we don't get an error message within 6 seconds, assume success
+            info!("Arrow Flight Server initialization completed (6s timeout)");
+        }
+    }
 
     Ok(shutdown_tx)
 }

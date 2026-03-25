@@ -5,11 +5,10 @@ use std::collections::HashMap;
 use yu::binance::jobs::start_bn_jobs;
 use yu::config::get_config;
 use yu::data_integrity::jobs::start_check_data_integrity_jobs;
-use yu::errors::YuError;
 use yue::http_client::init_http_client;
 
 #[actix::main]
-async fn main() -> Result<(), YuError> {
+async fn main() {
     let app_config = get_config();
     let mut special_log = HashMap::new();
 
@@ -52,18 +51,24 @@ async fn main() -> Result<(), YuError> {
 
     let shutdown_sender = match yu::arrow_flight_server::start_flight_server("0.0.0.0:8815").await {
         Ok(tx) => {
-            info!("Flight server started on 0.0.0.0:8815");
+            info!("✅ Arrow Flight Server successfully started on 0.0.0.0:8815");
             Some(tx)
         }
         Err(e) => {
-            error!("Failed to start Flight server: {}", e);
-            None
+            error!("❌ Failed to start Arrow Flight Server: {}", e);
+            panic!("Flight server startup failed, aborting");
         }
     };
 
     // Wait for Ctrl+C in the actix (main) runtime, then signal the flight server to shut down.
-    actix_rt::signal::ctrl_c().await?;
-    println!("Received Ctrl+C, shutting down...");
+    match actix_rt::signal::ctrl_c().await {
+        Ok(()) => {
+            println!("Received Ctrl+C, shutting down...");
+        }
+        Err(e) => {
+            error!("Signal handler error: {}", e);
+        }
+    }
 
     if let Some(tx) = shutdown_sender {
         // Ignore send error: receiver may have already been dropped
@@ -71,5 +76,4 @@ async fn main() -> Result<(), YuError> {
     }
 
     System::current().stop(); // 优雅停止
-    Ok(())
 }
