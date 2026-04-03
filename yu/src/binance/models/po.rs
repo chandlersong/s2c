@@ -9,7 +9,7 @@ use yue::binance::bn_models::spot_websocket_stream::{KlineData, TradeStreamPaylo
 use yue::binance::bn_models::swap_restful::FundingRate;
 use yue::tools::{get_snow_flake_id_u64, SnowyFlakeWrapper};
 
-pub trait DuckDBPO: Debug + Clone + DeserializeOwned + 'static {
+pub trait DuckDBPO: Debug + Clone + DeserializeOwned + 'static + Send + Sync {
     type Source: HistoryVo;
 
     fn from_source(symbol: Option<&str>, source: &Self::Source) -> Self;

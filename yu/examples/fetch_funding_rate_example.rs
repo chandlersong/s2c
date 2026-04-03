@@ -1,8 +1,8 @@
-use actix::{Actor, Context};
 use li::tools::logs::setup_logger;
 use li::tools::time::unix_time_now_u64_utc;
 use log::{info, LevelFilter};
 use std::collections::HashMap;
+use tokio::sync::mpsc;
 use yu::binance::bn_dashboard::BinanceDashboard;
 use yu::binance::history_task::HistoryDataTask;
 use yu::config::get_config;
@@ -11,29 +11,10 @@ use yu::exchange::{CloneHistoryFetcherFactory, HistoryFetcherFactory};
 use yue::binance::bn_models::swap_restful::FundingRate;
 use yue::binance::bn_restful_commands::SWAP_FUNDING_RATE_COMMAND;
 use yue::binance::history_data::{CommonRequestBuilder, SimpleHistoryFetcher};
-use yue::errors::YueError;
 use yue::http_client::init_http_client;
 use yue::models::HistoryInterval;
-use yue::query_message::BatchInsert;
+use yue::query_message::QueryCommand;
 
-struct PrinterActor;
-
-impl Actor for PrinterActor {
-    type Context = Context<Self>;
-}
-
-impl actix::Handler<BatchInsert<FundingRate>> for PrinterActor {
-    type Result = Result<usize, YueError>;
-
-    fn handle(&mut self, msg: BatchInsert<FundingRate>, _ctx: &mut Self::Context) -> Self::Result {
-        let data = msg.data;
-        // 统计重复的funding_time，并打印所有重复行
-        for d in data.iter() {
-            println!("{:?}", d);
-        }
-        Ok(1) // 模拟成功处理，返回插入了1条记录
-    }
-}
 /// 建立这个例子，主要是在初始化的时候，发现GRASSUSDT一直取不到数据
 /// 所以也就在这里用了一下
 #[tokio::main]
@@ -62,8 +43,8 @@ async fn main() -> Result<(), YuError> {
     let now_timestamp = unix_time_now_u64_utc();
     let start_time = interval.get_close_unix_ms(now_timestamp - 10 * 60 * 1000);
     let end_time = interval.get_close_unix_ms(now_timestamp);
-    let addr = PrinterActor {}.start();
     // 用tokio::spawn在后台异步任务中运行fetch_symbol_data
+    let (swap_recipient, mut swap_rx) = mpsc::channel::<QueryCommand<FundingRate>>(100);
     let fetch_handle = tokio::spawn(async move {
         HistoryDataTask::<
             CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonRequestBuilder, FundingRate>,
@@ -77,11 +58,25 @@ async fn main() -> Result<(), YuError> {
             end_time,
             "test",
             interval,
-            addr.recipient(),
+            swap_recipient,
         )
         .await;
     });
     // 等待后台任务完成
     let _ = fetch_handle.await;
+    while let Some(msg) = swap_rx.recv().await {
+        match msg {
+            QueryCommand::GetCount(_) => {
+                info!("receive GetCount");
+            }
+            QueryCommand::BatchInsert(payload) => {
+                info!("receive BatchInsertPayload");
+                for d in payload.data.iter() {
+                    println!("{:?}", d);
+                }
+                payload.callback.send(Ok(1)).expect("TODO: panic message");
+            }
+        }
+    }
     Ok(())
 }

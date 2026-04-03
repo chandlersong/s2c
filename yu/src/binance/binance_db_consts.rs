@@ -5,6 +5,7 @@ pub static QUERY_LATEST_SWAP_KLINE_SQL: &str = "select symbol,max(close_time) as
 
 pub static QUERY_LATEST_FUNDING_RATE_SQL: &str = "select symbol,max(funding_time)+60000 as latest from bn_swap_funding_rate group by symbol;";
 
+#[derive(Clone)]
 pub enum BinanceTables {
     SpotKline,
     SwapKline,

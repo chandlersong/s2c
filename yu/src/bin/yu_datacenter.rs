@@ -4,10 +4,9 @@ use log::{error, info, LevelFilter};
 use std::collections::HashMap;
 use yu::binance::jobs::start_bn_jobs;
 use yu::config::get_config;
-use yu::data_integrity::jobs::start_check_data_integrity_jobs;
 use yue::http_client::init_http_client;
 
-#[actix::main]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() {
     let app_config = get_config();
     let mut special_log = HashMap::new();
@@ -41,13 +40,13 @@ async fn main() {
         }
     }
 
-    match start_check_data_integrity_jobs().await {
-        Ok(_) => {}
-        Err(e) => {
-            error!("Failed to start check data integrity jobs: {}", e);
-            panic!("stop process");
-        }
-    }
+    // match start_check_data_integrity_jobs().await {
+    //     Ok(_) => {}
+    //     Err(e) => {
+    //         error!("Failed to start check data integrity jobs: {}", e);
+    //         panic!("stop process");
+    //     }
+    // }
 
     match yu::arrow_flight_server::start_flight_server("0.0.0.0:8815").await {
         Ok(()) => {
@@ -60,7 +59,7 @@ async fn main() {
     }
 
     // Wait for Ctrl+C in the actix (main) runtime, then signal the flight server to shut down.
-    match actix_rt::signal::ctrl_c().await {
+    match tokio::signal::ctrl_c().await {
         Ok(()) => {
             println!("Received Ctrl+C, shutting down...");
         }

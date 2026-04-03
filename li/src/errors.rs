@@ -13,6 +13,12 @@ pub enum LiError {
     CustomError(String),
 }
 
+impl LiError {
+    pub fn custom_error(message: &str) -> Self {
+        LiError::CustomError(String::from(message))
+    }
+}
+
 impl From<SdkError<CreateTableError>> for LiError {
     fn from(err: SdkError<CreateTableError>) -> Self {
         LiError::DynamoDBError(aws_sdk_dynamodb::Error::from(err))

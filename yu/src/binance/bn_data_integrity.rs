@@ -1,5 +1,5 @@
 use crate::binance::binance_db_consts::BinanceTables;
-use crate::binance::bn_backends::{get_spot_kline_table_addr, get_swap_kline_table_addr};
+use crate::binance::bn_backend_service::{get_spot_kline_table, get_swap_kline_table_addr};
 use crate::data_integrity::check::ValidationStrategy;
 use crate::data_integrity::models::{RepairRequest, ValidationGap, ValidationResult};
 use crate::data_integrity::repair::RepairStrategy;
@@ -19,7 +19,6 @@ use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_restful_commands::{SPOT_KLINE_HISTORY_COMMAND, SWAP_KLINE_HISTORY_COMMAND};
 use yue::binance::history_data::{CommonRequestBuilder, HistoryFetcher, MuteHistoryParam, SimpleHistoryFetcher};
 use yue::models::HistoryInterval;
-use yue::query_message::BatchInsert;
 
 pub const BN_SPOT_KLINE_CHECK: &str = "binance_spot_check"; // WireMock server address
 pub const BN_SWAP_KLINE_CHECK: &str = "binance_swap_check"; // WireMock server address
@@ -186,6 +185,7 @@ impl SpotCheckStrategy {
     /// 数据说明
     /// 1. 数据库中的数据，candle_begin_time和close_time相差的是interval-1。
     ///    - 比如说candle_begin_time是0， interval是300_000，那么close_time是299_999
+    /// 2. 传入的数据必须是interval的整点。
     ///
     ///
     fn find_gaps_rec(
@@ -587,8 +587,8 @@ impl RepairStrategy for KlineGapRepairStrategy {
                     let factory = fetch_factory.clone();
                     let sem_clone = sem.clone();
                     let reception = match self.symbol_type {
-                        SymbolType::Spot => get_spot_kline_table_addr().recipient::<BatchInsert<BinanceKline>>(),
-                        SymbolType::Swap => get_swap_kline_table_addr().recipient::<BatchInsert<BinanceKline>>(),
+                        SymbolType::Spot => get_spot_kline_table(),
+                        SymbolType::Swap => get_swap_kline_table_addr(),
                         _ => {
                             error!("symbol type mismatch");
                             continue;
@@ -680,7 +680,7 @@ mod tests {
 
         let start = t0 as u64;
         //真实环境，可能不是整点。所以比较来弄。
-        let end = (t0 + (5 - 1) * interval_ms + 10) as u64;
+        let end = (t0 + (5 - 1) * interval_ms) as u64;
         let mut gaps: Vec<ValidationGap> = Vec::new();
         check_strategy.find_gaps_rec(symbol, &mut conn, "bn_spot_kline", "candle_begin_time", &interval, start, end, &mut gaps)?;
         assert!(gaps.is_empty(), "expected no gaps but found: {:?}", gaps);
@@ -870,7 +870,7 @@ mod tests {
         assert!(!gaps.is_empty(), "expected gaps but found none");
 
         // 验证每个缺失索引都能被检测到
-        let mut found_missing = std::collections::HashSet::new();
+        let mut found_missing = HashSet::new();
 
         for g in gaps.iter() {
             if let ValidationGap::MissingData {

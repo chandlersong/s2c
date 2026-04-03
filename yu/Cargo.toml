@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 duckdb = { workspace = true }
 tokio = { workspace = true }
+tokio-cron-scheduler = { workspace = true }
 yue = { path = "../yue" }
 li = { path = "../li" }
 thiserror = { workspace = true }
@@ -36,6 +37,7 @@ arrow-schema = { workspace = true }
 # cron scheduling support
 cron = "0.15.0"
 chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.22.0", features = ["v4"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -2,17 +2,17 @@ use crate::binance::bn_dashboard::TradingSymbol;
 use crate::binance::models::po::DuckDBPO;
 use crate::errors::YuError;
 use crate::exchange::{ExchangeDashBoard, HistoryFetcherFactory};
-use actix::Recipient;
 use async_trait::async_trait;
 use li::actix_jobs::AsyncRepeatTask;
 use li::errors::LiError;
 use li::tools::time::{unix_2_readable, UnixTimeStamp};
 use log::{debug, error, info};
 use std::sync::Arc;
+use tokio::sync::oneshot;
 use yue::binance::bn_models::common::{HistoryVo, SymbolType, ToRequestBuilder};
 use yue::binance::history_data::{HistoryFetcher, MuteHistoryParam};
 use yue::models::HistoryInterval;
-use yue::query_message::{BatchInsert, Count, UNKNOWN_ROW};
+use yue::query_message::{DataSourceExecutor, QueryCommand};
 
 pub trait HistoryDataWriter<O: DuckDBPO, D: ExchangeDashBoard<TradingSymbol = TradingSymbol>>: Send + Sync {
     ///
@@ -38,8 +38,7 @@ where
 {
     kline_fetcher_factory: F,
     exchange_dashboard: Arc<D>,
-    batch_writer: Recipient<BatchInsert<V>>,
-    db_empty_checker: Recipient<Count>,
+    db_executor: DataSourceExecutor<V>,
     task_name: String,
     symbol_type: SymbolType,
     interval: HistoryInterval,
@@ -55,8 +54,7 @@ where
     pub fn new(
         factory: F,
         exchange_dashboard: Arc<D>,
-        batch_writer: Recipient<BatchInsert<V>>,
-        db_empty_checker: Recipient<Count>,
+        db_executor: DataSourceExecutor<V>,
         task_name: String,
         symbol_type: SymbolType,
         interval: Option<HistoryInterval>,
@@ -65,8 +63,7 @@ where
         HistoryDataTask {
             kline_fetcher_factory: factory,
             exchange_dashboard,
-            batch_writer,
-            db_empty_checker,
+            db_executor,
             task_name,
             symbol_type,
             interval: actual_interval,
@@ -94,7 +91,7 @@ where
             let interval = self.interval.clone();
             let param = P::initial(symbol.symbol.clone(), 1000, interval.clone());
             let task_name = self.task_name.clone();
-            let reception = self.batch_writer.clone();
+            let db_executor = self.db_executor.clone();
             let handle = tokio::spawn({
                 let param = param.clone();
                 let kline_fetcher = kline_fetcher;
@@ -106,7 +103,7 @@ where
                         end_timestamp,
                         &task_name,
                         interval.clone(),
-                        reception,
+                        db_executor,
                     )
                     .await;
                 }
@@ -133,7 +130,7 @@ where
         end_time: u64,
         task_name: &str,
         interval: HistoryInterval,
-        recipient: Recipient<BatchInsert<V>>,
+        db_executor: DataSourceExecutor<V>,
     ) where
         T: HistoryFetcher<P, V> + Send + Sync + 'static,
     {
@@ -145,7 +142,7 @@ where
             unix_2_readable(&end_time)
         );
         match kline_fetcher
-            .get_all_kline_data(param.clone(), Some(interval), Some(start_time), Some(end_time), recipient, true)
+            .get_all_kline_data(param.clone(), Some(interval), Some(start_time), Some(end_time), db_executor, true)
             .await
         {
             Ok(len) => {
@@ -172,8 +169,14 @@ where
     /// 2. 时间范围为设定的最早时间到现在
     ///
     async fn initial_data(&self) -> Result<(), LiError> {
-        let result = self.db_empty_checker.send(Count::new()).await;
-        let count = match result {
+        let (tx, rx) = oneshot::channel();
+        if let Err(e) = self.db_executor.send(QueryCommand::GetCount(tx)).await {
+            error!("{}", e);
+            return Err(LiError::custom_error(
+                format!("Failed to send Count message to db_empty_checker in {}: {}", self.task_name, e).as_ref(),
+            ));
+        }
+        let count = match rx.await.unwrap() {
             Ok(count) => count,
             Err(e) => {
                 error!("error when query table {} count,{}", self.task_name, e);
@@ -186,9 +189,7 @@ where
         if count != 0 {
             info!("{} database is not empty, skip initial history data fetch", self.task_name);
             return Ok(());
-        } else if count == UNKNOWN_ROW {
-            return Err(LiError::CustomError(format!("DB connection fail {}", self.task_name)));
-        };
+        }
 
         let earliest_time = self
             .exchange_dashboard

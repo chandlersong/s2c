@@ -1,18 +1,19 @@
 use crate::binance::binance_db_consts::ALL_BINANCE_TABLES;
-use crate::binance::bn_backends::{get_spot_kline_table_addr, get_swap_funding_rate_table_addr, get_swap_kline_table_addr};
+use crate::binance::bn_backend_service::{get_spot_kline_table, get_swap_funding_rate_table_addr, get_swap_kline_table_addr};
 use crate::binance::bn_dashboard::{init_market_depth_dashboard, BinanceDashboard, MarketDepthDashBoard};
 use crate::binance::history_task::HistoryDataTask;
 use crate::config::{get_config, AccountConfig, AccountType, SecurityType};
+use crate::cron_job;
 use crate::duck_db::DBProvider;
 use crate::errors::YuError;
 use crate::exchange::CloneHistoryFetcherFactory;
 use crate::websocket::subscribers::account_sync_actor::get_account_addr;
 use crate::websocket::subscribers::storage_subscriber::get_spot_stream_writer;
 use actix::Actor;
-use li::actix_jobs::{AsyncRepeatTask, CronActor};
+use li::actix_jobs::AsyncRepeatTask;
 use li::subscribe_event_addr;
 use li::websocket::client::{CommandMessage, WebSocketClient};
-use log::{info, warn};
+use log::{error, info, warn};
 use rust_decimal::prelude::ToPrimitive;
 use serde_json::to_string;
 use std::sync::Arc;
@@ -32,7 +33,6 @@ use yue::binance::listen_key_client::{ListenKeyClient, NormalAccountAssignName, 
 use yue::binance::order_book::{OrderBookService, Subscribe as OrderBookSubscribe};
 use yue::binance::websocket_actor::SpotAccountActor;
 use yue::models::HistoryInterval;
-use yue::query_message::{BatchInsert, Count};
 use yue::tools::SnowyFlakeWrapper;
 
 ///
@@ -45,15 +45,29 @@ use yue::tools::SnowyFlakeWrapper;
 ///
 pub async fn start_bn_jobs() -> Result<(), YuError> {
     let config = get_config();
-    let dash_board = BinanceDashboard::new(config.get_data_retention_hours());
+    let dash_board = Arc::new(BinanceDashboard::new(config.get_data_retention_hours()));
+
     dash_board.initial_data().await?;
+    let dash_board_refresh = dash_board.clone();
+    let _ = cron_job!("0 58 * * * *", move |_uuid, _locked| {
+        let dash_board_job = dash_board_refresh.clone();
+        Box::pin(async move {
+            match dash_board_job.clone().execute().await {
+                Ok(_) => {}
+                Err(_) => {
+                    error!("Failed to refresh binance dash_board");
+                }
+            }
+        })
+    });
+
     if let Err(_e) = initial_tables(None) {
         warn!("币安表创建失败,{}", _e);
     }
     info!("数据库创建表完成");
     start_refresh_history_data(dash_board.clone()).await?;
-    start_monitor_account().await?;
-    start_spot_websocket_stream_job().await?;
+    // start_monitor_account().await?;
+    // start_spot_websocket_stream_job().await?;
     Ok(())
 }
 
@@ -323,31 +337,26 @@ async fn start_spot_websocket_stream_job() -> Result<(), YuError> {
 
 ///
 ///
-async fn start_refresh_history_data(origin_dash_board: BinanceDashboard) -> Result<(), YuError> {
-    let update_dashboard_task = origin_dash_board.clone();
-    let dash_board = Arc::new(origin_dash_board);
-
-    let build_kline_task = |request_info, dash_board, batch_writer, empty_checker, task_name: &str, symbol_type, interval| {
+async fn start_refresh_history_data(dash_board: Arc<BinanceDashboard>) -> Result<(), YuError> {
+    let build_kline_task = |request_info, dash_board, db_executor, task_name: &str, symbol_type, interval| {
         let base_fetcher = SimpleHistoryFetcher::kline(request_info);
         let fetcher_factory: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonRequestBuilder, BinanceKline> =
             CloneHistoryFetcherFactory::new(base_fetcher);
         HistoryDataTask::<_, _, BinanceKline, BinanceDashboard>::new(
             fetcher_factory,
             dash_board,
-            batch_writer,
-            empty_checker,
+            db_executor,
             task_name.to_string(),
             symbol_type,
             Some(interval),
         )
     };
 
-    let spot_kline_table = get_spot_kline_table_addr();
+    let spot_kline_table = get_spot_kline_table();
     let spot_kline_task = build_kline_task(
         &SPOT_KLINE_HISTORY_COMMAND,
         dash_board.clone(),
-        spot_kline_table.clone().recipient::<BatchInsert<BinanceKline>>(),
-        spot_kline_table.clone().recipient::<Count>(),
+        spot_kline_table.clone(),
         "refresh spot kline data",
         SymbolType::Spot,
         HistoryInterval::FiveMinutes,
@@ -358,8 +367,7 @@ async fn start_refresh_history_data(origin_dash_board: BinanceDashboard) -> Resu
     let swap_initial_kline_task = build_kline_task(
         &SWAP_KLINE_HISTORY_COMMAND,
         dash_board.clone(),
-        swap_kline_table.clone().recipient::<BatchInsert<BinanceKline>>(),
-        swap_kline_table.clone().recipient::<Count>(),
+        swap_kline_table.clone(),
         "initial swap kline data",
         SymbolType::Swap,
         HistoryInterval::FiveMinutes,
@@ -369,8 +377,7 @@ async fn start_refresh_history_data(origin_dash_board: BinanceDashboard) -> Resu
     let swap_update_kline_task = build_kline_task(
         &SWAP_FIVE_MIN_KLINE_HISTORY_COMMAND,
         dash_board.clone(),
-        swap_kline_table.clone().recipient::<BatchInsert<BinanceKline>>(),
-        swap_kline_table.recipient::<Count>(),
+        swap_kline_table.clone(),
         "refresh swap kline data",
         SymbolType::Swap,
         HistoryInterval::FiveMinutes,
@@ -383,19 +390,48 @@ async fn start_refresh_history_data(origin_dash_board: BinanceDashboard) -> Resu
     let funding_rate_task = HistoryDataTask::<_, _, FundingRate, BinanceDashboard>::new(
         funding_rate_fetcher_factory,
         dash_board,
-        funding_rate_table.clone().recipient::<BatchInsert<FundingRate>>(),
-        funding_rate_table.clone().recipient::<Count>(),
+        funding_rate_table.clone(),
         "refresh swap funding rate".to_string(),
         SymbolType::Swap,
         Some(HistoryInterval::OneHour),
     );
     funding_rate_task.initial_data().await?;
     // //PLAN： 更新交易所时间表达式进入Config
-    let _ = CronActor::new("30 59 */6 * * * *", update_dashboard_task).start();
-    // //FUTURE: 支持不同的interval
-    let _ = CronActor::new("01 */5 * * * * *", spot_kline_task).start();
-    let _ = CronActor::new("01 */5 * * * * *", swap_update_kline_task).start();
-    let _ = CronActor::new("01 01 * * * * *", funding_rate_task).start();
+    // let _ = CronActor::new("30 59 */6 * * * *", update_dashboard_task).start();
+    // // //FUTURE: 支持不同的interval
+    let _ = cron_job!("01 */5 * * * * *", move |_uuid, _locked| {
+        let spot_kline_refresh = spot_kline_task.clone();
+        Box::pin(async move {
+            match spot_kline_refresh.clone().execute().await {
+                Ok(_) => {}
+                Err(_) => {
+                    error!("Failed to refresh binance spot kline data");
+                }
+            }
+        })
+    });
+    let _ = cron_job!("01 */5 * * * * *", move |_uuid, _locked| {
+        let swap_kline_refresh = swap_update_kline_task.clone();
+        Box::pin(async move {
+            match swap_kline_refresh.clone().execute().await {
+                Ok(_) => {}
+                Err(_) => {
+                    error!("Failed to refresh binance swap kline data");
+                }
+            }
+        })
+    });
+    let _ = cron_job!("01 */5 * * * * *", move |_uuid, _locked| {
+        let funding_rate_refresh = funding_rate_task.clone();
+        Box::pin(async move {
+            match funding_rate_refresh.clone().execute().await {
+                Ok(_) => {}
+                Err(_) => {
+                    error!("Failed to refresh binance swap kline data");
+                }
+            }
+        })
+    });
     Ok(())
 }
 

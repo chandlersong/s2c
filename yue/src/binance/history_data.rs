@@ -5,15 +5,15 @@ use crate::binance::bn_restful_commands::{PING_COMMAND, execute_json_request};
 use crate::errors::YueError;
 use crate::http_client::{HTTP_CLIENT, get_http_client};
 use crate::models::{EmptyObject, HistoryInterval, RequestInfo};
-use crate::query_message::BatchInsert;
-use actix::Recipient;
+use crate::query_message::{BatchInsertPayload, DataSourceExecutor, QueryCommand};
 use async_trait::async_trait;
 use governor::Jitter;
 use li::tools::time::{ONE_MILL_SECOND_MS, unix_2_readable};
-use log::{debug, error};
+use log::{debug, error, warn};
 use reqwest::RequestBuilder;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::sync::oneshot;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradingSymbolInfo {
@@ -198,7 +198,7 @@ where
         interval: Option<HistoryInterval>,
         start_time: Option<u64>,
         end_time: Option<u64>,
-        saver: Recipient<BatchInsert<O>>,
+        saver: DataSourceExecutor<O>,
         retry_on_error: bool,
     ) -> Result<u64, YueError>;
 }
@@ -228,7 +228,7 @@ impl SimpleHistoryFetcher {
 impl<'a, T, O> HistoryFetcher<T, O> for SimpleHistoryFetcher
 where
     T: MuteHistoryParam + ToRequestBuilder + Send + Sync + 'static,
-    O: HistoryVo + Send + Sync + 'static,
+    O: HistoryVo + Clone + Send + Sync + 'static,
 {
     /// 获取指定交易对和时间间隔的K线数据
     ///
@@ -255,7 +255,7 @@ where
         interval: Option<HistoryInterval>,
         start_time: Option<u64>,
         end_time: Option<u64>,
-        saver: Recipient<BatchInsert<O>>,
+        saver: DataSourceExecutor<O>,
         retry_1000_times: bool,
     ) -> Result<u64, YueError> {
         let symbol = base_param.get_symbol();
@@ -308,7 +308,7 @@ where
                 Ok(res) => res,
                 Err(e) => {
                     error_count = error_count + 1;
-                    if error_count > 1000 && retry_1000_times {
+                    if error_count > 1000 || !retry_1000_times {
                         error!(
                             "error symbol {} from {} when fetch data, error: {:?}",
                             symbol,
@@ -342,15 +342,26 @@ where
             };
             let klines_count = filtered_klines.len() as u64;
             debug!("{} fetch {} kline, after filtered {} kline", symbol, kline_num, filtered_klines.len());
-            let last_kline = filtered_klines.last();
-            if let Some(l) = last_kline {
-                last_timestamp = Some(l.get_close_time().clone());
+            // 直接读取最后一条 kline 的 close_time（u64 是 Copy），
+            // 避免对 `filtered_klines` 的借用在后面把它移动时跨越所有权边界。
+            let last_close_time: Option<u64> = {
+                // 把借用限制在此小块作用域，确保在后面移动 `filtered_klines` 时没有活动借用。
+                filtered_klines.last().map(|k| k.get_close_time())
+            };
+
+            let (tx, rx) = oneshot::channel();
+            // 发送数据到 saver
+            let message = BatchInsertPayload::new(Some(symbol.to_string()), filtered_klines, tx);
+            if let Err(e) = saver.send(QueryCommand::BatchInsert(message)).await {
+                let jitter = Jitter::up_to(Duration::from_secs(1));
+                tokio::time::sleep(jitter + Duration::from_millis(10)).await;
+                warn!("batch insert error: {}", e);
+                continue;
             }
 
-            // 发送数据到 saver
-            let message = BatchInsert::new(Some(symbol.to_string()), filtered_klines);
-            match saver.send(message).await {
-                Ok(result) => {
+            // 等待保存者的回报，加入超时以避免无限挂起
+            match tokio::time::timeout(Duration::from_secs(30), rx).await {
+                Ok(Ok(result)) => {
                     if let Err(e) = result {
                         error_count += 1;
                         if error_count > 1000 {
@@ -366,7 +377,8 @@ where
                         }
                     }
                 }
-                Err(e) => {
+                // Receiver 错误（发送方已 drop 或者接收失败）
+                Ok(Err(e)) => {
                     error_count += 1;
                     if error_count > 1000 {
                         error!("Failed to send data to saver after 1000 attempts, error: {:?}", e);
@@ -380,8 +392,31 @@ where
                         return Err(YueError::new(&format!("Failed to send data to saver, error: {:?}", e)));
                     }
                 }
+                // 超时
+                Err(_) => {
+                    error_count += 1;
+                    let timeout_err = format!("Timed out waiting for saver response for symbol {}", symbol);
+                    if error_count > 1000 {
+                        error!("Failed to send data to saver after 1000 attempts, error: {}", timeout_err);
+                        return Err(YueError::new(&format!(
+                            "Failed to send data to saver after 1000 attempts, error:{}",
+                            timeout_err
+                        )));
+                    }
+                    if retry_1000_times {
+                        let jitter = Jitter::up_to(Duration::from_secs(30));
+                        tokio::time::sleep(jitter + Duration::from_millis(10)).await;
+                        continue;
+                    } else {
+                        return Err(YueError::new(&format!("Failed to send data to saver, error: {}", timeout_err)));
+                    }
+                }
             }
-
+            if let Some(ts) = last_close_time {
+                last_timestamp = Some(ts);
+            }
+            // 不再需要对 `filtered_klines` 取引用来读取最后一条，
+            // 上面已经把 close_time 读取并保存到 `last_close_time`/`last_timestamp`。
             total_count = total_count + klines_count;
             if klines_count < 1000 {
                 break;
@@ -413,30 +448,13 @@ mod tests {
     use crate::errors::YueError;
     use crate::http_client::init_http_client;
     use crate::models::HistoryInterval;
-    use crate::query_message::BatchInsert;
-    use actix::{Actor, Context, Recipient};
+    use crate::query_message::QueryCommand;
     use serde_json::json;
     use serial_test::serial;
     use std::net::TcpListener;
+    use tokio::sync::mpsc;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
-
-    struct MockSaver;
-
-    impl Actor for MockSaver {
-        type Context = Context<Self>;
-    }
-
-    impl<O> actix::Handler<BatchInsert<O>> for MockSaver
-    where
-        O: Send + 'static,
-    {
-        type Result = Result<usize, YueError>;
-
-        fn handle(&mut self, _msg: BatchInsert<O>, _ctx: &mut Self::Context) -> Self::Result {
-            Ok(1) // 模拟成功处理，返回插入了1条记录
-        }
-    }
 
     // Helper function to create mock Kline data
     fn create_mock_kline(open_time: u64, close_time: u64) -> serde_json::Value {
@@ -471,7 +489,7 @@ mod tests {
     /// - 模拟返回500条K线数据（1小时间隔）
     /// - 调用时传入interval参数，验证能够正确处理
     /// - 验证返回的K线数量和开始时间正确
-    #[actix::test]
+    #[tokio::test]
     #[serial]
     async fn test_get_all_kline_data_normal_case() {
         let mock_server = create_net_work().await;
@@ -493,10 +511,21 @@ mod tests {
             .await;
         let fetcher = SimpleHistoryFetcher::kline(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonRequestBuilder::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
-        let saver_addr = MockSaver {}.start();
-        let recipient: Recipient<BatchInsert<BinanceKline>> = saver_addr.recipient();
+        let (tx, mut rx) = mpsc::channel::<QueryCommand<BinanceKline>>(100);
+
+        tokio::task::spawn(async move {
+            while let Some(command) = rx.recv().await {
+                match command {
+                    QueryCommand::GetCount(_) => {}
+                    QueryCommand::BatchInsert(payload) => {
+                        payload.callback.send(Ok(1)).unwrap();
+                    }
+                }
+            }
+        });
+
         let kline_num: Result<u64, YueError> = fetcher
-            .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), None, None, recipient, false)
+            .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), None, None, tx, false)
             .await;
         assert!(kline_num.is_ok(), "获取K线数据失败: {:?}", kline_num.as_ref().err());
         assert_eq!(kline_num.unwrap(), 500);
@@ -513,7 +542,7 @@ mod tests {
     /// - 第一批：1000条K线（close_time对齐到1h边界）
     /// - 第二批：200条K线（继续1h间隔）
     /// - 验证总共获取1200条K线
-    #[actix::test]
+    #[tokio::test]
     #[serial]
     async fn test_get_all_kline_data_pagination() {
         let mock_server = create_net_work().await;
@@ -569,8 +598,17 @@ mod tests {
 
         let fetcher = SimpleHistoryFetcher::kline(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonRequestBuilder::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
-        let saver_addr = MockSaver {}.start();
-        let recipient: Recipient<BatchInsert<BinanceKline>> = saver_addr.recipient();
+        let (recipient, mut rx) = mpsc::channel::<QueryCommand<BinanceKline>>(100);
+        tokio::task::spawn(async move {
+            while let Some(command) = rx.recv().await {
+                match command {
+                    QueryCommand::GetCount(_) => {}
+                    QueryCommand::BatchInsert(payload) => {
+                        payload.callback.send(Ok(1)).unwrap();
+                    }
+                }
+            }
+        });
         let kline_res: Result<u64, YueError> = fetcher
             .get_all_kline_data(
                 base_param,
@@ -592,7 +630,7 @@ mod tests {
     /// 场景说明：
     /// - API返回500错误
     /// - 验证函数返回Err结果
-    #[actix::test]
+    #[tokio::test]
     #[serial]
     async fn test_get_all_kline_data_api_error() {
         let mock_server = create_net_work().await;
@@ -604,8 +642,17 @@ mod tests {
             .await;
         let fetcher = SimpleHistoryFetcher::kline(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonRequestBuilder::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
-        let saver_addr = MockSaver {}.start();
-        let recipient: Recipient<BatchInsert<BinanceKline>> = saver_addr.recipient();
+        let (recipient, mut rx) = mpsc::channel::<QueryCommand<BinanceKline>>(100);
+        tokio::task::spawn(async move {
+            while let Some(command) = rx.recv().await {
+                match command {
+                    QueryCommand::GetCount(_) => {}
+                    QueryCommand::BatchInsert(payload) => {
+                        payload.callback.send(Ok(1)).unwrap();
+                    }
+                }
+            }
+        });
         let kline_res: Result<u64, YueError> = fetcher
             .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), Some(1609459200000), None, recipient, false)
             .await;
@@ -621,7 +668,7 @@ mod tests {
     /// 场景说明：
     /// - 第一次请求返回1000条K线
     /// - 第二次请求返回空或少于1000条，停止
-    #[actix::test]
+    #[tokio::test]
     #[serial]
     async fn test_get_all_kline_data_exactly_1000() {
         let mock_server = create_net_work().await;
@@ -668,8 +715,17 @@ mod tests {
 
         let fetcher = SimpleHistoryFetcher::kline(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonRequestBuilder::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
-        let saver_addr = MockSaver {}.start();
-        let recipient: Recipient<BatchInsert<BinanceKline>> = saver_addr.recipient();
+        let (recipient, mut rx) = mpsc::channel::<QueryCommand<BinanceKline>>(100);
+        tokio::task::spawn(async move {
+            while let Some(command) = rx.recv().await {
+                match command {
+                    QueryCommand::GetCount(_) => {}
+                    QueryCommand::BatchInsert(payload) => {
+                        payload.callback.send(Ok(1)).unwrap();
+                    }
+                }
+            }
+        });
         let kline_res: Result<u64, YueError> = fetcher
             .get_all_kline_data(
                 base_param,
@@ -694,7 +750,7 @@ mod tests {
     ///   - 900条K线的close_time对齐到1h边界（保留）
     ///   - 100条K线的close_time不对齐（废弃）
     /// - 验证最终只返回900条K线
-    #[actix::test]
+    #[tokio::test]
     #[serial]
     async fn test_get_all_kline_data_discard_non_closed_kline() {
         let mock_server = create_net_work().await;
@@ -725,8 +781,18 @@ mod tests {
 
         let fetcher = SimpleHistoryFetcher::kline(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonRequestBuilder::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
-        let saver_addr = MockSaver {}.start();
-        let recipient: Recipient<BatchInsert<BinanceKline>> = saver_addr.recipient();
+        let (recipient, mut rx) = mpsc::channel::<QueryCommand<BinanceKline>>(100);
+        tokio::task::spawn(async move {
+            while let Some(command) = rx.recv().await {
+                match command {
+                    QueryCommand::GetCount(_) => {}
+                    QueryCommand::BatchInsert(payload) => {
+                        payload.callback.send(Ok(1)).unwrap();
+                    }
+                }
+            }
+        });
+
         let kline_res: Result<u64, YueError> = fetcher
             .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), Some(1609459200000), None, recipient, false)
             .await;

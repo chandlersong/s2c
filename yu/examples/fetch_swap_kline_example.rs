@@ -1,8 +1,8 @@
-use actix::{Actor, Context};
 use li::tools::logs::setup_logger;
 use li::tools::time::unix_time_now_u64_utc;
 use log::{info, LevelFilter};
 use std::collections::HashMap;
+use tokio::sync::mpsc;
 use yu::binance::bn_dashboard::BinanceDashboard;
 use yu::binance::history_task::HistoryDataTask;
 use yu::config::get_config;
@@ -11,36 +11,9 @@ use yu::exchange::{CloneHistoryFetcherFactory, HistoryFetcherFactory};
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_restful_commands::SWAP_KLINE_HISTORY_COMMAND;
 use yue::binance::history_data::{CommonRequestBuilder, SimpleHistoryFetcher};
-use yue::errors::YueError;
 use yue::http_client::init_http_client;
 use yue::models::HistoryInterval;
-use yue::query_message::{BatchInsert, Count};
-
-struct PrinterActor;
-
-impl Actor for PrinterActor {
-    type Context = Context<Self>;
-}
-
-impl actix::Handler<BatchInsert<BinanceKline>> for PrinterActor {
-    type Result = Result<usize, YueError>;
-
-    fn handle(&mut self, msg: BatchInsert<BinanceKline>, _ctx: &mut Self::Context) -> Self::Result {
-        let data = msg.data;
-        // 统计重复的funding_time，并打印所有重复行
-        for d in data.iter() {
-            println!("{:?}", d);
-        }
-        Ok(1) // 模拟成功处理，返回插入了1条记录
-    }
-}
-
-impl actix::Handler<Count> for PrinterActor {
-    type Result = isize;
-    fn handle(&mut self, _: Count, _ctx: &mut Self::Context) -> Self::Result {
-        1
-    }
-}
+use yue::query_message::QueryCommand;
 
 #[tokio::main]
 async fn main() -> Result<(), YuError> {
@@ -68,7 +41,7 @@ async fn main() -> Result<(), YuError> {
     let start_time = interval.get_close_unix_ms(now_timestamp - 10 * 60 * 1000);
     let end_time = interval.get_close_unix_ms(now_timestamp);
 
-    let addr = PrinterActor {}.start();
+    let (swap_recipient, mut swap_rx) = mpsc::channel::<QueryCommand<BinanceKline>>(100);
     let _ = tokio::spawn(async move {
         HistoryDataTask::<
             CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonRequestBuilder, BinanceKline>,
@@ -82,10 +55,24 @@ async fn main() -> Result<(), YuError> {
             end_time,
             "test",
             interval,
-            addr.recipient(),
+            swap_recipient,
         )
         .await;
     });
+    while let Some(msg) = swap_rx.recv().await {
+        match msg {
+            QueryCommand::GetCount(_) => {
+                info!("receive GetCount");
+            }
+            QueryCommand::BatchInsert(payload) => {
+                info!("receive BatchInsertPayload");
+                for d in payload.data.iter() {
+                    println!("{:?}", d);
+                }
+                payload.callback.send(Ok(1)).expect("TODO: panic message");
+            }
+        }
+    }
 
     Ok(())
 }

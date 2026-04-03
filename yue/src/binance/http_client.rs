@@ -205,7 +205,7 @@ impl BinanceRestfulClient {
                 Err(e) => {
                     error!("HTTP request error: {:?}, attempts_made {}", e, attempts_made);
                     if attempts_made >= max_retries {
-                        return Err(YueError::RequestError(e));
+                        return Err(YueError::from(e));
                     }
                     let wait_ms = retry_wait_ms(RetryWaitKind::SendError, attempts_made);
 
