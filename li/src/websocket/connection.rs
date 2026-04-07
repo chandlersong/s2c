@@ -1,0 +1,390 @@
+use crate::errors::LiError;
+use crate::tools::SubscribeEvent;
+use crate::websocket::models::WebSocketMessage;
+use actix::Message as ActixMessage;
+use actix::{Actor, Addr, AsyncContext, Context, Handler, Recipient};
+use futures_util::{SinkExt, StreamExt};
+use log::{debug, error, info, trace, warn};
+use std::fmt::Debug;
+use std::marker::PhantomData;
+use std::rc::Rc;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::{broadcast, mpsc};
+use tokio::time::sleep;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::Uri;
+use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
+
+/// WebSocket 事件，发送给订阅者
+#[derive(Clone, Debug, ActixMessage)]
+#[rtype(result = "()")]
+pub enum WebSocketEvent {
+    /// 连接成功，携带 WebSocketClient 的地址
+    Connected(UnboundedSender<CommandMessage>),
+    /// 连接断开
+    Disconnected,
+    /// 重连中
+    Reconnecting,
+    /// 错误
+    Error(String),
+}
+
+///
+/// 客户端给服务器端发送的消息。
+/// Binary暂时先不管，也就是一个new的区别
+///
+#[derive(Clone, Debug, ActixMessage)]
+#[rtype(result = "Result<(), LiError>")]
+pub enum CommandMessage {
+    Text(String, bool),
+    Binary(Vec<u8>, bool),
+}
+
+impl CommandMessage {
+    pub fn text(text: impl Into<String>) -> Self {
+        Self::Text(text.into(), true)
+    }
+
+    pub fn text_no_resend(text: impl Into<String>) -> Self {
+        Self::Text(text.into(), false)
+    }
+
+    ///
+    /// 返回是WsMessage，和是否要重发
+    ///
+    pub fn to_ws_message(&self) -> (WsMessage, bool) {
+        match self {
+            CommandMessage::Text(txt, resend) => (WsMessage::Text(txt.clone().into()), *resend),
+            CommandMessage::Binary(data, resend) => (WsMessage::Binary(data.clone().into()), resend.clone()),
+        }
+    }
+}
+
+const MESSAGE_CACHE: usize = 1000;
+const EVENT_CACHE: usize = 100;
+
+const COMMAND_CACHE: usize = 100;
+
+#[derive(Clone)]
+pub struct WebSocketInterface<M>
+where
+    M: WebSocketMessage,
+{
+    message_broadcast: broadcast::Sender<M>,
+    event_broadcast: broadcast::Sender<WebSocketEvent>,
+    command_sender: UnboundedSender<CommandMessage>,
+}
+
+impl<M> WebSocketInterface<M>
+where
+    M: WebSocketMessage,
+{
+    pub fn new(
+        message_broadcast: broadcast::Sender<M>,
+        event_broadcast: broadcast::Sender<WebSocketEvent>,
+        command_sender: UnboundedSender<CommandMessage>,
+    ) -> Self {
+        Self {
+            message_broadcast,
+            event_broadcast,
+            command_sender,
+        }
+    }
+
+    pub fn get_message_receiver(&self) -> broadcast::Receiver<M> {
+        self.message_broadcast.subscribe()
+    }
+
+    pub fn get_event_broadcast(&self) -> broadcast::Receiver<WebSocketEvent> {
+        self.event_broadcast.subscribe()
+    }
+
+    pub fn command_sender(&self) -> UnboundedSender<CommandMessage> {
+        self.command_sender.clone()
+    }
+}
+
+/// WebSocket 连接管理器
+/// 负责：实际的 WebSocket 连接、重连、消息收发
+///
+/// 外界和他的沟通主要是是3个方面
+/// 1. 服务器发过来的消息。比如服务器端返回的k线信息
+/// 2. connection状态变化，比如说重连，服务启动。
+/// 3. 客户端给服务器发送消息。比如说订阅命令。
+///
+/// 所以这个启动的返回值，就是这个
+///
+pub struct WebSocketConnection<M>
+where
+    M: WebSocketMessage,
+{
+    _holder: PhantomData<M>,
+}
+
+impl<M> WebSocketConnection<M>
+where
+    M: WebSocketMessage,
+{
+    pub async fn run(url: String, reconnect_interval: Duration, proxy: Option<String>) -> Arc<WebSocketInterface<M>> {
+        let (message_tx, _) = broadcast::channel(MESSAGE_CACHE);
+        let (event_tx, _) = broadcast::channel(MESSAGE_CACHE);
+        let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+        let res = Arc::new(WebSocketInterface::new(message_tx.clone(), event_tx.clone(), command_tx.clone()));
+
+        tokio::spawn(async move {
+            loop {
+                info!("正在连接到 WebSocket: {}", url);
+                if let Err(e) = event_tx.send(WebSocketEvent::Reconnecting) {
+                    error!("sending {}", e);
+                }
+                let mut message_cache = vec![];
+
+                match Self::connect_and_run(&url, &proxy, &event_tx, &message_tx, &command_tx, &mut command_rx, &mut message_cache).await {
+                    Ok(_) => info!("连接正常关闭"),
+                    Err(e) => error!("连接错误: {}", e),
+                }
+
+                warn!("将在 {} 秒后重新连接...", reconnect_interval.as_secs());
+                sleep(reconnect_interval).await;
+            }
+        });
+        res
+    }
+
+    async fn connect_and_run(
+        url: &str,
+        proxy: &Option<String>,
+        event_tx: &broadcast::Sender<WebSocketEvent>,
+        message_tx: &broadcast::Sender<M>,
+        command_tx: &UnboundedSender<CommandMessage>,
+        command_rx: &mut UnboundedReceiver<CommandMessage>,
+        initial_command: &mut Vec<WsMessage>,
+    ) -> Result<(), LiError> {
+        let (ws_stream, _) = if let Some(proxy_url) = proxy {
+            info!("使用代理连接: {}", proxy_url);
+            Self::connect_with_proxy(url, proxy_url).await?
+        } else {
+            info!("直接连接（无代理）");
+            connect_async(url).await.map_err(|e| LiError::CustomError(format!("连接失败: {}", e)))?
+        };
+
+        info!("WebSocket 连接成功!");
+
+        if let Err(e) = event_tx.send(WebSocketEvent::Connected(command_tx.clone().into())) {
+            error!("sending websocket started event:{}", e);
+        }
+
+        let (mut write, mut read) = ws_stream.split();
+        let (ws_tx, mut ws_rx) = mpsc::unbounded_channel::<WsMessage>();
+
+        info!("开始发初始化消息! 数量: {}", initial_command.len());
+        // 使用 iter() 避免移动 initial_command（后面需要继续使用它）
+        for event in initial_command.iter() {
+            if let Err(e) = ws_tx.send(event.clone()) {
+                error!("error sending websocket event at first connection:{}", e);
+            }
+        }
+
+        loop {
+            tokio::select! {
+                // 处理来自 Actor 的命令
+                Some(command) = command_rx.recv() => {
+                    // 注意：`ws_tx.send` 会取得消息的所有权，如果先 send 再使用
+                    // 原始变量会导致 "use of moved value" 编译错误。因此先
+                    // 使用 clone() 发出去，保留原始 msg 以便在需要时缓存。
+                    let (msg, resend) = command.to_ws_message();
+                    if let Err(e) = ws_tx.send(msg.clone()) {
+                        error!("消息入队失败: {}", e);
+                    }
+                    if resend {
+                        initial_command.push(msg);
+                    }
+
+                }
+                // 处理接收到的 WebSocket 消息
+                message = read.next() => {
+                    match message {
+                        Some(Ok(msg)) => {
+                            match msg {
+                                WsMessage::Text(text) => {
+                                    let text_str = String::from_utf8_lossy(text.as_bytes()).to_string();
+                                    trace!("收到文本消息");
+                                    match M::from_text(&text_str) {
+                                        Ok(m) => {
+                                            if let Err(e) =message_tx.send(m){
+                                                // 感觉这个会很多，所以也就这样处理了。
+                                                debug!("send error {}", e);
+                                            };
+                                        },
+                                        Err(e) => {
+                                            error!("解析文本消息失败: {}", e);
+                                            continue;
+                                        }
+                                    };
+                                }
+                                WsMessage::Binary(data) => {
+                                    let data_vec = data.to_vec();
+                                    trace!("收到二进制消息: {} 字节", data_vec.len());
+                                    match M::from_binary(data_vec) {
+                                        Ok(m) => {
+                                            if let Err(e) =message_tx.send(m){
+                                                // 感觉这个会很多，所以也就这样处理了。
+                                                debug!("send error {}", e);
+                                            };
+                                        },
+                                        Err(e) => {
+                                            error!("解析文本消息失败: {}", e);
+                                            continue;
+                                        }
+                                    };
+                                }
+                                WsMessage::Ping(data) => {
+                                    trace!("收到 Ping");
+                                    if let Err(e) = write.send(WsMessage::Pong(data)).await {
+                                        error!("发送 Pong 失败: {}", e);
+                                        return Err(LiError::CustomError(format!("发送 Pong 失败: {}", e)));
+                                    }
+                                }
+                                WsMessage::Pong(_) => {
+                                    trace!("收到 Pong");
+                                }
+                                WsMessage::Close(frame) => {
+                                    trace!("收到关闭帧: {:?}", frame);
+                                    if let Err(e) =event_tx.send(WebSocketEvent::Disconnected){
+                                        // 感觉这个会很多，所以也就这样处理了。
+                                        debug!("send error {}", e);
+                                    };
+                                    return Ok(());
+                                }
+                                WsMessage::Frame(_) => {}
+                            }
+                        }
+                        Some(Err(e)) => {
+                            error!("接收消息错误: {}", e);
+                            if let Err(e) =event_tx.send(WebSocketEvent::Error(e.to_string())){
+                                    // 感觉这个会很多，所以也就这样处理了。
+                                    debug!("send error {}", e);
+                            };
+                            return Err(LiError::CustomError(format!("接收消息错误: {}", e)));
+                        }
+                        None => {
+                            warn!("WebSocket 流已关闭");
+                            if let Err(e) =event_tx.send(WebSocketEvent::Disconnected){
+                                    // 感觉这个会很多，所以也就这样处理了。
+                                    debug!("send error {}", e);
+                            };
+                            return Ok(());
+                        }
+                    }
+                }
+                // 处理要发送的 WebSocket 消息
+                Some(msg) = ws_rx.recv() => {
+                    info!("实际发送消息,{}",msg);
+                    if let Err(e) = write.send(msg).await {
+                        error!("发送消息失败: {}", e);
+                        return Err(LiError::CustomError(format!("发送消息失败: {}", e)));
+                    }
+                }
+                // 心跳
+                _ = sleep(Duration::from_secs(60)) => {
+                    let ping = WsMessage::Ping(vec![1u8, 2u8, 3u8].into());
+                    if let Err(e) = write.send(ping).await {
+                        error!("发送心跳 Ping 失败: {}", e);
+                        return Err(LiError::CustomError(format!("发送心跳 Ping 失败: {}", e)));
+                    }
+                    debug!("Sent Ping");
+                }
+            }
+        }
+    }
+
+    /// 通过代理连接 WebSocket
+    async fn connect_with_proxy(
+        url: &str,
+        proxy_url: &str,
+    ) -> Result<
+        (
+            tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+            tokio_tungstenite::tungstenite::handshake::client::Response,
+        ),
+        LiError,
+    > {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        // 解析代理地址
+        let proxy_uri: Uri = proxy_url.parse().map_err(|e| LiError::CustomError(format!("代理地址解析失败: {}", e)))?;
+
+        // 解析目标 WebSocket 地址
+        let ws_uri: Uri = url.parse().map_err(|e| LiError::CustomError(format!("WebSocket地址解析失败: {}", e)))?;
+
+        // 获取代理主机和端口
+        let proxy_host = proxy_uri.host().ok_or_else(|| LiError::CustomError("代理地址缺少主机名".to_string()))?;
+        let proxy_port = proxy_uri.port_u16().unwrap_or(8080);
+
+        // 获取目标主机和端口
+        let target_host = ws_uri.host().ok_or_else(|| LiError::CustomError("WebSocket地址缺少主机名".to_string()))?;
+        let target_port = ws_uri.port_u16().unwrap_or(if ws_uri.scheme_str() == Some("wss") { 443 } else { 80 });
+
+        // 连接到代理服务器
+        let proxy_addr = format!("{}:{}", proxy_host, proxy_port);
+        info!("连接到代理服务器: {}", proxy_addr);
+        let mut stream = tokio::net::TcpStream::connect(&proxy_addr)
+            .await
+            .map_err(|e| LiError::CustomError(format!("连接代理服务器失败 {}: {}", proxy_addr, e)))?;
+
+        // 发送 HTTP CONNECT 请求
+        let connect_request = format!(
+            "CONNECT {}:{} HTTP/1.1\r\nHost: {}:{}\r\n\r\n",
+            target_host, target_port, target_host, target_port
+        );
+
+        stream
+            .write_all(connect_request.as_bytes())
+            .await
+            .map_err(|e| LiError::CustomError(format!("发送CONNECT请求失败: {}", e)))?;
+
+        // 读取代理响应
+        let mut buffer = vec![0u8; 1024];
+        let n = stream
+            .read(&mut buffer)
+            .await
+            .map_err(|e| LiError::CustomError(format!("读取代理响应失败: {}", e)))?;
+
+        let response = String::from_utf8_lossy(&buffer[..n]);
+        if !response.starts_with("HTTP/1.1 200") && !response.starts_with("HTTP/1.0 200") {
+            return Err(LiError::CustomError(format!(
+                "代理连接失败: {}",
+                response.lines().next().unwrap_or("未知错误")
+            )));
+        }
+
+        info!("代理隧道建立成功");
+
+        // 通过代理隧道建立 WebSocket 连接
+        let request = url
+            .to_string()
+            .into_client_request()
+            .map_err(|e| LiError::CustomError(format!("创建WebSocket请求失败: {}", e)))?;
+
+        // 如果是 WSS，需要 TLS 包装
+        if ws_uri.scheme_str() == Some("wss") {
+            use tokio_tungstenite::Connector;
+            let connector = Connector::NativeTls(
+                tokio_native_tls::native_tls::TlsConnector::new().map_err(|e| LiError::CustomError(format!("创建TLS连接器失败: {}", e)))?,
+            );
+
+            tokio_tungstenite::client_async_tls_with_config(request, stream, None, Some(connector))
+                .await
+                .map_err(|e| LiError::CustomError(format!("通过代理连接WebSocket失败: {}", e)))
+        } else {
+            // 对于非TLS连接，需要手动包装为 MaybeTlsStream
+            use tokio_tungstenite::MaybeTlsStream;
+            let tls_stream = MaybeTlsStream::Plain(stream);
+            tokio_tungstenite::client_async(request, tls_stream)
+                .await
+                .map_err(|e| LiError::CustomError(format!("通过代理连接WebSocket失败: {}", e)))
+        }
+    }
+}

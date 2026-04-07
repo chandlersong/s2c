@@ -45,7 +45,7 @@ use yue::tools::SnowyFlakeWrapper;
 ///
 pub async fn start_bn_jobs() -> Result<(), YuError> {
     let config = get_config();
-    let dash_board = Arc::new(BinanceDashboard::new(config.get_data_retention_hours()));
+    let dash_board = Arc::new(BinanceDashboard::debug_mode(config.get_data_retention_hours()));
 
     dash_board.initial_data().await?;
     let dash_board_refresh = dash_board.clone();
@@ -396,9 +396,7 @@ async fn start_refresh_history_data(dash_board: Arc<BinanceDashboard>) -> Result
         Some(HistoryInterval::OneHour),
     );
     funding_rate_task.initial_data().await?;
-    // //PLAN： 更新交易所时间表达式进入Config
-    // let _ = CronActor::new("30 59 */6 * * * *", update_dashboard_task).start();
-    // // //FUTURE: 支持不同的interval
+    //FUTURE： 更新交易所时间表达式进入Config
     let _ = cron_job!("01 */5 * * * * *", move |_uuid, _locked| {
         let spot_kline_refresh = spot_kline_task.clone();
         Box::pin(async move {
@@ -410,28 +408,28 @@ async fn start_refresh_history_data(dash_board: Arc<BinanceDashboard>) -> Result
             }
         })
     });
-    let _ = cron_job!("01 */5 * * * * *", move |_uuid, _locked| {
-        let swap_kline_refresh = swap_update_kline_task.clone();
-        Box::pin(async move {
-            match swap_kline_refresh.clone().execute().await {
-                Ok(_) => {}
-                Err(_) => {
-                    error!("Failed to refresh binance swap kline data");
-                }
-            }
-        })
-    });
-    let _ = cron_job!("01 */5 * * * * *", move |_uuid, _locked| {
-        let funding_rate_refresh = funding_rate_task.clone();
-        Box::pin(async move {
-            match funding_rate_refresh.clone().execute().await {
-                Ok(_) => {}
-                Err(_) => {
-                    error!("Failed to refresh binance swap kline data");
-                }
-            }
-        })
-    });
+    // let _ = cron_job!("01 */5 * * * * *", move |_uuid, _locked| {
+    //     let swap_kline_refresh = swap_update_kline_task.clone();
+    //     Box::pin(async move {
+    //         match swap_kline_refresh.clone().execute().await {
+    //             Ok(_) => {}
+    //             Err(_) => {
+    //                 error!("Failed to refresh binance swap kline data");
+    //             }
+    //         }
+    //     })
+    // });
+    // let _ = cron_job!("01 56 * * * * *", move |_uuid, _locked| {
+    //     let funding_rate_refresh = funding_rate_task.clone();
+    //     Box::pin(async move {
+    //         match funding_rate_refresh.clone().execute().await {
+    //             Ok(_) => {}
+    //             Err(_) => {
+    //                 error!("Failed to refresh binance swap kline data");
+    //             }
+    //         }
+    //     })
+    // });
     Ok(())
 }
 
