@@ -10,3 +10,4 @@ mod bn_duck_db;
 pub mod bn_mcp;
 pub mod jobs;
 pub mod models;
+pub mod websocket_service;

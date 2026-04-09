@@ -4,6 +4,7 @@ use actix::{Actor, Addr, Context, Handler, Message};
 use async_trait::async_trait;
 use li::actix_jobs::AsyncRepeatTask;
 use li::errors::LiError;
+use li::tools::time::{unix_time_now_u64_utc, UnixTimeStamp};
 use log::{error, info};
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
@@ -11,6 +12,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::watch;
 use yue::binance::bn_models::spot_restful::ExchangeInfo;
 use yue::binance::bn_models::swap_restful::SwapExchangeInfo;
 use yue::binance::bn_restful_commands::{
@@ -30,6 +32,26 @@ pub struct TradingSymbol {
     pub quote_asset: String, //报价资产
     pub status: String,
 }
+
+type BinanceSnapshot = watch::Sender<Arc<BinanceDashboardSnapShot>>;
+#[derive(Clone)]
+pub struct BinanceDashboardSnapShot {
+    pub spot_trading_symbols: Vec<TradingSymbol>,
+    pub swap_trading_symbols: Vec<TradingSymbol>,
+    pub timestamp: UnixTimeStamp,
+}
+
+impl BinanceDashboardSnapShot {
+    pub fn new(spot_trading_symbols: Vec<TradingSymbol>, swap_trading_symbols: Vec<TradingSymbol>) -> Self {
+        Self {
+            spot_trading_symbols,
+            swap_trading_symbols,
+            timestamp: unix_time_now_u64_utc(),
+        }
+    }
+}
+
+pub type BinanceDashboardWatcher = watch::Sender<Arc<BinanceDashboardSnapShot>>;
 
 //FUTURE：把这些存入数据库
 #[derive(Clone)]
@@ -111,7 +133,7 @@ impl BinanceDashboard {
         &self,
         spot_res: Result<Vec<TradingSymbolInfo>, YueError>,
         swap_res: Result<Vec<TradingSymbolInfo>, YueError>,
-    ) -> Result<(), LiError> {
+    ) -> Result<(Vec<TradingSymbol>, Vec<TradingSymbol>), LiError> {
         match (spot_res, swap_res) {
             (Ok(spot_symbols), Ok(swap_symbols)) => {
                 let trading_spot_symbols: Vec<TradingSymbol> = spot_symbols
@@ -133,9 +155,9 @@ impl BinanceDashboard {
                     })
                     .collect();
 
-                *self.spot_symbols.write().unwrap() = trading_spot_symbols;
-                *self.swap_symbols.write().unwrap() = trading_swap_symbols;
-                Ok(())
+                *self.spot_symbols.write().unwrap() = trading_spot_symbols.clone();
+                *self.swap_symbols.write().unwrap() = trading_swap_symbols.clone();
+                Ok((trading_spot_symbols, trading_swap_symbols))
             }
             (Err(e), _) => {
                 error!("Error fetching trading spot symbols: {:?}", e);
@@ -152,6 +174,36 @@ impl BinanceDashboard {
         let s = fs::read_to_string(path)?; // std::io::Error -> YueError::IoError
         let info: E = serde_json::from_str(&s)?; // serde_json::Error -> YueError::SerdeError
         Ok(info)
+    }
+    pub async fn execute(&self) -> Result<Arc<BinanceDashboardSnapShot>, LiError> {
+        let (spot_exchange, swap_exchange) = if self.debug_mood {
+            let spot = Self::read_spot_exchange_info_from_file_sync("testdata/exchange_data/spot_exchange.json");
+            let swap = Self::read_spot_exchange_info_from_file_sync("testdata/exchange_data/swap_exchange.json");
+            (spot, swap)
+        } else {
+            let (spot_exchange, swap_exchange) = tokio::join!(Self::query_spot_exchange_info(), Self::query_swap_exchange_info());
+            (spot_exchange, swap_exchange)
+        };
+
+        match (spot_exchange, swap_exchange) {
+            (Ok(spot), Ok(swap)) => {
+                // refresh limit
+                //TODO：能正常下载后，再把这个功能加上。
+                Self::refresh_rate_limit(&spot, &swap).await;
+                // refresh symbol
+                let spot_res = get_trading_spot_symbols(spot, None).await;
+                let swap_res = get_trading_swap_symbols(swap, None, Some(CONTRACT_TYPE_PERPETUAL)).await;
+
+                let res = match self.refresh_trading_symbol(spot_res, swap_res) {
+                    Ok((spot_symbols, swap_symbols)) => BinanceDashboardSnapShot::new(spot_symbols, swap_symbols),
+                    Err(e) => return Err(LiError::CustomError(format!("刷新交易符号失败: {}", e))),
+                };
+
+                Ok(Arc::new(res))
+            }
+            (Err(e), _) => Err(LiError::CustomError(format!("获取现货交易所信息失败: {}", e))),
+            (_, Err(e)) => Err(LiError::CustomError(format!("获取永续交易所信息失败: {}", e))),
+        }
     }
 }
 
@@ -244,53 +296,6 @@ impl ExchangeDashBoard for BinanceDashboard {
         let aligned = interval_to_use.get_close_unix_ms(earliest);
 
         Some(aligned)
-    }
-}
-
-#[async_trait]
-impl AsyncRepeatTask for BinanceDashboard {
-    ///
-    /// 初始化数据，与execute方法完全相同的逻辑
-    ///
-    async fn initial_data(&self) -> Result<(), LiError> {
-        self.execute().await
-    }
-
-    ///
-    /// FUTURE：
-    /// 1，swap根据数据，判断上架和下架操作
-    /// 2, status会不会出现上下架的操作。这点需要能够对接telegram
-    ///
-    async fn execute(&self) -> Result<(), LiError> {
-        let (spot_exchange, swap_exchange) = if self.debug_mood {
-            let spot = Self::read_spot_exchange_info_from_file_sync("testdata/exchange_data/spot_exchange.json");
-            let swap = Self::read_spot_exchange_info_from_file_sync("testdata/exchange_data/swap_exchange.json");
-            (spot, swap)
-        } else {
-            let (spot_exchange, swap_exchange) = tokio::join!(Self::query_spot_exchange_info(), Self::query_swap_exchange_info());
-            (spot_exchange, swap_exchange)
-        };
-
-        match (spot_exchange, swap_exchange) {
-            (Ok(spot), Ok(swap)) => {
-                // refresh limit
-                //TODO：能正常下载后，再把这个功能加上。
-                Self::refresh_rate_limit(&spot, &swap).await;
-                // refresh symbol
-                let spot_res = get_trading_spot_symbols(spot, None).await;
-                let swap_res = get_trading_swap_symbols(swap, None, Some(CONTRACT_TYPE_PERPETUAL)).await;
-                if let Err(e) = self.refresh_trading_symbol(spot_res, swap_res) {
-                    return Err(LiError::CustomError(format!("刷新交易符号失败: {}", e)));
-                };
-                Ok(())
-            }
-            (Err(e), _) => Err(LiError::CustomError(format!("获取现货交易所信息失败: {}", e))),
-            (_, Err(e)) => Err(LiError::CustomError(format!("获取永续交易所信息失败: {}", e))),
-        }
-    }
-
-    fn task_name(&self) -> &str {
-        "binance dashboard"
     }
 }
 

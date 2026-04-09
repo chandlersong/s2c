@@ -17,6 +17,7 @@ use log::{error, info, warn};
 use rust_decimal::prelude::ToPrimitive;
 use serde_json::to_string;
 use std::sync::Arc;
+use tokio::sync::watch;
 use yue::binance::bn_json_websocket::{StreamCommandRequest, SPOT_STREAM_WEBSOCKET, SPOT_WEBSOCKET, WS_SUBSCRIBE_COMMAND};
 use yue::binance::bn_models::common::{PortfolioSpotOrderData, PortfolioSwapOrderData, SpotOrderData, SwapOrderData, SymbolType};
 use yue::binance::bn_models::portfolio_account_websocket::BinancePortfolioWebSocketStreamResponse;
@@ -46,14 +47,22 @@ use yue::tools::SnowyFlakeWrapper;
 pub async fn start_bn_jobs() -> Result<(), YuError> {
     let config = get_config();
     let dash_board = Arc::new(BinanceDashboard::debug_mode(config.get_data_retention_hours()));
+    let snapshot = dash_board.execute().await?;
+    let (dash_board_watch, _) = watch::channel(snapshot);
 
-    dash_board.initial_data().await?;
     let dash_board_refresh = dash_board.clone();
     let _ = cron_job!("0 58 * * * *", move |_uuid, _locked| {
         let dash_board_job = dash_board_refresh.clone();
+        let dashboard_watch_sender = dash_board_watch.clone();
         Box::pin(async move {
             match dash_board_job.clone().execute().await {
-                Ok(_) => {}
+                Ok(snapshot) => {
+                    if let Err(e) = dashboard_watch_sender.send(snapshot) {
+                        error!("Failed to send updated snapshot to channel: {}", e);
+                    } else {
+                        info!("BinanceDashboard snapshot updated and sent to channel");
+                    }
+                }
                 Err(_) => {
                     error!("Failed to refresh binance dash_board");
                 }

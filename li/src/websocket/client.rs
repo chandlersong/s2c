@@ -73,6 +73,7 @@ pub enum ConnectionCommand<C: Actor, M: WebSocketMessage> {
 
 /// WebSocket 客户端 Actor
 /// 负责：订阅管理、消息发送的外部接口
+#[deprecated]
 pub struct WebSocketClient<M: WebSocketMessage> {
     url: String,
     reconnect_interval: Duration,
@@ -206,6 +207,7 @@ impl<M: WebSocketMessage> Handler<SubscribeEvent<M>> for WebSocketClient<M> {
 
 /// WebSocket 连接管理器
 /// 负责：实际的 WebSocket 连接、重连、消息收发
+#[deprecated]
 pub struct WebSocketConnection<C, M>
 where
     C: Actor + Handler<CommandMessage>,

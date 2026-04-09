@@ -1,13 +1,9 @@
 use crate::errors::LiError;
-use crate::tools::SubscribeEvent;
 use crate::websocket::models::WebSocketMessage;
 use actix::Message as ActixMessage;
-use actix::{Actor, Addr, AsyncContext, Context, Handler, Recipient};
 use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, info, trace, warn};
 use std::fmt::Debug;
-use std::marker::PhantomData;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -62,10 +58,8 @@ impl CommandMessage {
     }
 }
 
-const MESSAGE_CACHE: usize = 1000;
+pub const MESSAGE_CACHE: usize = 1000;
 const EVENT_CACHE: usize = 100;
-
-const COMMAND_CACHE: usize = 100;
 
 #[derive(Clone)]
 pub struct WebSocketInterface<M>
@@ -106,6 +100,45 @@ where
     }
 }
 
+///
+/// 主要是对message做点定制化操纵的handler。比如分发消息
+///
+pub trait MessageHandler<M: WebSocketMessage> {
+    /// 处理收到的消息。
+    fn handle_message(&self, message: &M);
+
+    /// 提供Sender方便其他人处理
+    fn get_tx(&self) -> broadcast::Sender<M>;
+}
+
+pub struct BroadcastMessageHandler<M: WebSocketMessage> {
+    message_broadcast: broadcast::Sender<M>,
+}
+
+impl<M: WebSocketMessage> BroadcastMessageHandler<M> {
+    pub fn new() -> Self {
+        let (message_broadcast, _) = broadcast::channel(MESSAGE_CACHE);
+        Self { message_broadcast }
+    }
+}
+
+impl<M: WebSocketMessage> MessageHandler<M> for BroadcastMessageHandler<M> {
+    fn handle_message(&self, message: &M) {
+        if self.message_broadcast.receiver_count() == 0 {
+            debug!("没有订阅者，消息将被丢弃");
+            return;
+        }
+        if let Err(e) = self.message_broadcast.send(message.clone()) {
+            // 这个感觉会很多，所以就debug了
+            debug!("广播消息失败: {}", e);
+        }
+    }
+
+    fn get_tx(&self) -> broadcast::Sender<M> {
+        self.message_broadcast.clone()
+    }
+}
+
 /// WebSocket 连接管理器
 /// 负责：实际的 WebSocket 连接、重连、消息收发
 ///
@@ -116,22 +149,32 @@ where
 ///
 /// 所以这个启动的返回值，就是这个
 ///
-pub struct WebSocketConnection<M>
-where
-    M: WebSocketMessage,
-{
-    _holder: PhantomData<M>,
-}
+pub struct WebSocketConnection {}
 
-impl<M> WebSocketConnection<M>
-where
-    M: WebSocketMessage,
-{
-    pub async fn run(url: String, reconnect_interval: Duration, proxy: Option<String>) -> Arc<WebSocketInterface<M>> {
-        let (message_tx, _) = broadcast::channel(MESSAGE_CACHE);
-        let (event_tx, _) = broadcast::channel(MESSAGE_CACHE);
+impl WebSocketConnection {
+    /// 启动 WebSocket 连接管理器。
+    ///
+    /// 如果 `message_handler` 为 Some(...) 则使用用户提供的处理器；否则使用
+    /// 默认的 `BroadcastMessageHandler`，它会把消息广播到 `message_tx`。
+    pub async fn run<M>(
+        url: String,
+        reconnect_interval: Duration,
+        proxy: Option<String>,
+        message_handler: Option<Arc<dyn MessageHandler<M> + Send + Sync + 'static>>,
+    ) -> Arc<WebSocketInterface<M>>
+    where
+        M: WebSocketMessage + Send + Sync + 'static,
+    {
+        let m_handler: Arc<dyn MessageHandler<M> + Send + Sync + 'static> = match message_handler {
+            Some(h) => h,
+            None => Arc::new(BroadcastMessageHandler::new()),
+        };
+        let message_tx = m_handler.get_tx();
+        let (event_tx, _) = broadcast::channel(EVENT_CACHE);
         let (command_tx, mut command_rx) = mpsc::unbounded_channel();
         let res = Arc::new(WebSocketInterface::new(message_tx.clone(), event_tx.clone(), command_tx.clone()));
+
+        // 准备 handler：如果用户没有提供，则构造默认的 BroadcastMessageHandler
 
         tokio::spawn(async move {
             loop {
@@ -141,7 +184,17 @@ where
                 }
                 let mut message_cache = vec![];
 
-                match Self::connect_and_run(&url, &proxy, &event_tx, &message_tx, &command_tx, &mut command_rx, &mut message_cache).await {
+                match Self::connect_and_run(
+                    &url,
+                    &proxy,
+                    &event_tx,
+                    &command_tx,
+                    &mut command_rx,
+                    &mut message_cache,
+                    m_handler.clone(),
+                )
+                .await
+                {
                     Ok(_) => info!("连接正常关闭"),
                     Err(e) => error!("连接错误: {}", e),
                 }
@@ -153,14 +206,14 @@ where
         res
     }
 
-    async fn connect_and_run(
+    async fn connect_and_run<M: WebSocketMessage>(
         url: &str,
         proxy: &Option<String>,
         event_tx: &broadcast::Sender<WebSocketEvent>,
-        message_tx: &broadcast::Sender<M>,
         command_tx: &UnboundedSender<CommandMessage>,
         command_rx: &mut UnboundedReceiver<CommandMessage>,
         initial_command: &mut Vec<WsMessage>,
+        message_handler: Arc<dyn MessageHandler<M> + Send + Sync + 'static>,
     ) -> Result<(), LiError> {
         let (ws_stream, _) = if let Some(proxy_url) = proxy {
             info!("使用代理连接: {}", proxy_url);
@@ -213,10 +266,8 @@ where
                                     trace!("收到文本消息");
                                     match M::from_text(&text_str) {
                                         Ok(m) => {
-                                            if let Err(e) =message_tx.send(m){
-                                                // 感觉这个会很多，所以也就这样处理了。
-                                                debug!("send error {}", e);
-                                            };
+                                            // 交给 message_handler 处理（可能是广播、也可能是用户自定义处理）
+                                            message_handler.handle_message(&m);
                                         },
                                         Err(e) => {
                                             error!("解析文本消息失败: {}", e);
@@ -229,10 +280,8 @@ where
                                     trace!("收到二进制消息: {} 字节", data_vec.len());
                                     match M::from_binary(data_vec) {
                                         Ok(m) => {
-                                            if let Err(e) =message_tx.send(m){
-                                                // 感觉这个会很多，所以也就这样处理了。
-                                                debug!("send error {}", e);
-                                            };
+                                            // 交给 message_handler 处理（可能是广播、也可能是用户自定义处理）
+                                            message_handler.handle_message(&m);
                                         },
                                         Err(e) => {
                                             error!("解析文本消息失败: {}", e);
@@ -281,7 +330,7 @@ where
                 }
                 // 处理要发送的 WebSocket 消息
                 Some(msg) = ws_rx.recv() => {
-                    info!("实际发送消息,{}",msg);
+                    debug!("实际发送消息,{}",msg);
                     if let Err(e) = write.send(msg).await {
                         error!("发送消息失败: {}", e);
                         return Err(LiError::CustomError(format!("发送消息失败: {}", e)));

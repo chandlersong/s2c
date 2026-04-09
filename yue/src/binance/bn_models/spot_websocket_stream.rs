@@ -7,6 +7,21 @@ use li::websocket::models::WebSocketMessage;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct BinanceSpotWebSocketStreamWrapper {
+    pub stream: String,
+    pub data: BinanceSpotWebSocketStreamResponse,
+}
+
+impl ActixMessage for BinanceSpotWebSocketStreamWrapper {
+    type Result = ();
+}
+impl WebSocketMessage for BinanceSpotWebSocketStreamWrapper {
+    fn from_text(text: &str) -> Result<Self, LiError> {
+        serde_json::from_str(text).map_err(|e| LiError::from(e))
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(untagged)]
 /// 现货公共流的顶层反序列化入口，兼容单条事件和数组推送。
 /// 支持的流类型：逐笔交易、归集交易、K线、有限档深度、按Symbol的最优挂单

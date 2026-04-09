@@ -154,6 +154,8 @@ pub fn extract_trading_symbols<S: SymbolInfoTrait>(symbols: &[S], status: Option
             symbol_type: symbol.symbol_type().to_string(),
             on_board_time: symbol.get_on_board_time(),
         })
+        .filter(|symbol| symbol.status == "TRADING")
+        .filter(|symbol| symbol.quote_asset == "USDT")
         .collect()
 }
 

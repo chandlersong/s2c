@@ -13,6 +13,10 @@ pub enum YuError {
     R2D2Error(#[from] r2d2::Error),
     #[error("li error: {0}")]
     LiError(#[from] LiError),
+    #[error("parse json error: {0}")]
+    SerdeJsonError(#[from] serde_json::Error),
+    #[error("Not support: {0}")]
+    NotSupportError(String),
     #[error("Custom error: {0}")]
     CustomError(String),
 }
