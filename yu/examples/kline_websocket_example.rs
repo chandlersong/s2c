@@ -1,4 +1,3 @@
-use actix::fut::err;
 use li::tools::logs::setup_logger;
 use log::{error, LevelFilter};
 use std::collections::HashMap;

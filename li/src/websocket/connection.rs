@@ -1,6 +1,5 @@
 use crate::errors::LiError;
 use crate::websocket::models::WebSocketMessage;
-use actix::Message as ActixMessage;
 use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, info, trace, warn};
 use std::fmt::Debug;
@@ -14,8 +13,7 @@ use tokio_tungstenite::tungstenite::http::Uri;
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 
 /// WebSocket 事件，发送给订阅者
-#[derive(Clone, Debug, ActixMessage)]
-#[rtype(result = "()")]
+#[derive(Clone, Debug)]
 pub enum WebSocketEvent {
     /// 连接成功，携带 WebSocketClient 的地址
     Connected(UnboundedSender<CommandMessage>),
@@ -27,18 +25,27 @@ pub enum WebSocketEvent {
     Error(String),
 }
 
+pub enum CommandMessage {
+    Connection(ConnectionAction),
+    ToServer(ToServerMessage),
+}
+
+pub enum ConnectionAction {
+    Close,
+    Reconnection,
+}
+
 ///
 /// 客户端给服务器端发送的消息。
 /// Binary暂时先不管，也就是一个new的区别
 ///
-#[derive(Clone, Debug, ActixMessage)]
-#[rtype(result = "Result<(), LiError>")]
-pub enum CommandMessage {
+#[derive(Clone, Debug)]
+pub enum ToServerMessage {
     Text(String, bool),
     Binary(Vec<u8>, bool),
 }
 
-impl CommandMessage {
+impl ToServerMessage {
     pub fn text(text: impl Into<String>) -> Self {
         Self::Text(text.into(), true)
     }
@@ -52,8 +59,8 @@ impl CommandMessage {
     ///
     pub fn to_ws_message(&self) -> (WsMessage, bool) {
         match self {
-            CommandMessage::Text(txt, resend) => (WsMessage::Text(txt.clone().into()), *resend),
-            CommandMessage::Binary(data, resend) => (WsMessage::Binary(data.clone().into()), resend.clone()),
+            ToServerMessage::Text(txt, resend) => (WsMessage::Text(txt.clone().into()), *resend),
+            ToServerMessage::Binary(data, resend) => (WsMessage::Binary(data.clone().into()), resend.clone()),
         }
     }
 }
@@ -195,7 +202,15 @@ impl WebSocketConnection {
                 )
                 .await
                 {
-                    Ok(_) => info!("连接正常关闭"),
+                    Ok(action) => match action {
+                        ConnectionAction::Reconnection => {
+                            info!("连接重启：{}", url);
+                        }
+                        ConnectionAction::Close => {
+                            info!("连接关闭：{}", url);
+                            break;
+                        }
+                    },
                     Err(e) => error!("连接错误: {}", e),
                 }
 
@@ -214,7 +229,7 @@ impl WebSocketConnection {
         command_rx: &mut UnboundedReceiver<CommandMessage>,
         initial_command: &mut Vec<WsMessage>,
         message_handler: Arc<dyn MessageHandler<M> + Send + Sync + 'static>,
-    ) -> Result<(), LiError> {
+    ) -> Result<ConnectionAction, LiError> {
         let (ws_stream, _) = if let Some(proxy_url) = proxy {
             info!("使用代理连接: {}", proxy_url);
             Self::connect_with_proxy(url, proxy_url).await?
@@ -247,13 +262,21 @@ impl WebSocketConnection {
                     // 注意：`ws_tx.send` 会取得消息的所有权，如果先 send 再使用
                     // 原始变量会导致 "use of moved value" 编译错误。因此先
                     // 使用 clone() 发出去，保留原始 msg 以便在需要时缓存。
-                    let (msg, resend) = command.to_ws_message();
-                    if let Err(e) = ws_tx.send(msg.clone()) {
-                        error!("消息入队失败: {}", e);
+                    match command {
+                        CommandMessage::Connection(action) => {
+                            return Ok(action);
+                        }
+                        CommandMessage::ToServer(to_server_message) => {
+                            let (msg, resend) = to_server_message.to_ws_message();
+                            if let Err(e) = ws_tx.send(msg.clone()) {
+                                error!("消息入队失败: {}", e);
+                            }
+                            if resend {
+                                initial_command.push(msg);
+                            }
+                        }
                     }
-                    if resend {
-                        initial_command.push(msg);
-                    }
+
 
                 }
                 // 处理接收到的 WebSocket 消息
@@ -305,7 +328,7 @@ impl WebSocketConnection {
                                         // 感觉这个会很多，所以也就这样处理了。
                                         debug!("send error {}", e);
                                     };
-                                    return Ok(());
+                                    return Ok(ConnectionAction::Reconnection);
                                 }
                                 WsMessage::Frame(_) => {}
                             }
@@ -324,7 +347,7 @@ impl WebSocketConnection {
                                     // 感觉这个会很多，所以也就这样处理了。
                                     debug!("send error {}", e);
                             };
-                            return Ok(());
+                            return Ok(ConnectionAction::Reconnection);
                         }
                     }
                 }

@@ -1,8 +1,6 @@
 use crate::errors::YuError;
 use crate::exchange::ExchangeDashBoard;
 use actix::{Actor, Addr, Context, Handler, Message};
-use async_trait::async_trait;
-use li::actix_jobs::AsyncRepeatTask;
 use li::errors::LiError;
 use li::tools::time::{unix_time_now_u64_utc, UnixTimeStamp};
 use log::{error, info};

@@ -1,17 +1,15 @@
 use crate::binance::bn_dashboard::{BinanceDashboardSnapShot, BinanceDashboardWatcher, TradingSymbol};
 use crate::errors::YuError;
 use crate::errors::YuError::NotSupportError;
-use li::websocket::connection::{CommandMessage, WebSocketConnection};
-use log::{debug, info};
+use li::websocket::connection::{WebSocketConnection, WebSocketInterface};
+use log::{error, info};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::watch::error::RecvError;
-use yue::binance::bn_json_websocket::{StreamCommandRequest, SPOT_STREAM_WEBSOCKET, SWAP_STREAM_WEBSOCKET, WS_SUBSCRIBE_COMMAND};
+use yue::binance::bn_json_websocket::{SPOT_STREAM_WEBSOCKET, SWAP_STREAM_WEBSOCKET, WS_SUBSCRIBE_COMMAND};
 use yue::binance::bn_models::common::SymbolType;
 use yue::binance::bn_models::spot_restful::BinanceKline;
-use yue::binance::bn_models::spot_websocket_stream::{BinanceSpotWebSocketStreamResponse, BinanceSpotWebSocketStreamWrapper};
+use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamWrapper;
 use yue::query_message::DataSourceExecutor;
-use yue::tools::SnowyFlakeWrapper;
 
 ///
 /// 这个服务，主要后段，负责和websocket通行的一些service
@@ -44,8 +42,7 @@ impl KlineSubscribeService {
             _ => {
                 return Err(NotSupportError(format!("symbol type {:?} not support", symbol_type)).into());
             }
-        }
-        .to_string();
+        };
         let mut rx = symbol_watch.subscribe();
         let snapshot = (*rx.borrow()).clone();
         tokio::spawn(async move {
@@ -54,8 +51,20 @@ impl KlineSubscribeService {
                 Err(_) => {}
             }
         });
+        if let Err(e) = Self::subscribe_trading_kline(symbol_type, proxy, ws_url, &snapshot).await {
+            error!("Error subscribing to trading {} kline: {:?}", symbol_type, e);
+            return Err(YuError::from(e));
+        }
 
-        //start to create initial call
+        Ok(())
+    }
+
+    async fn subscribe_trading_kline(
+        symbol_type: SymbolType,
+        proxy: Option<String>,
+        ws_url: &str,
+        snapshot: &Arc<BinanceDashboardSnapShot>,
+    ) -> Result<(), YuError> {
         let symbols = match symbol_type {
             SymbolType::Spot => &snapshot.spot_trading_symbols,
             SymbolType::Swap => &snapshot.swap_trading_symbols,
@@ -78,7 +87,6 @@ impl KlineSubscribeService {
                 info!("Received message {:?}", message);
             }
         });
-
         Ok(())
     }
 
@@ -102,20 +110,6 @@ impl KlineSubscribeService {
 
         // build_streams 会返回类似 `symbol@kline_5m` 的名称列表，按 Binance websocket 合并流的 path 要用 `/` 拼接
         Self::build_streams(symbols).join("/")
-    }
-
-    /// 仅取 `symbols` 的第一个元素来构造 streams ���表。
-    ///
-    /// 用途：当只需要订阅第一个 symbol 的情况（例如调试或按单个 symbol 进行快速验证）时使用。
-    /// 返回值：如果 `symbols` 为空则返回空 Vec，否则返回包含单个 stream 名称的 Vec。
-    fn build_request(method: &str, symbol: &TradingSymbol) -> Option<StreamCommandRequest> {
-        let payload = format!("{}@kline_{}", symbol.symbol.to_lowercase(), "5m");
-        let snow_flake = SnowyFlakeWrapper::new();
-        Some(StreamCommandRequest {
-            method: method.to_string(),
-            params: vec![payload],
-            id: snow_flake.next_id_u64(),
-        })
     }
 }
 
