@@ -10,6 +10,8 @@ use tokio::sync::{broadcast, mpsc};
 use tokio::time::sleep;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::Uri;
+use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 
 /// WebSocket 事件，发送给订阅者
@@ -230,7 +232,7 @@ impl WebSocketConnection {
         initial_command: &mut Vec<WsMessage>,
         message_handler: Arc<dyn MessageHandler<M> + Send + Sync + 'static>,
     ) -> Result<ConnectionAction, LiError> {
-        let (ws_stream, _) = if let Some(proxy_url) = proxy {
+        let (mut ws_stream, _) = if let Some(proxy_url) = proxy {
             info!("使用代理连接: {}", proxy_url);
             Self::connect_with_proxy(url, proxy_url).await?
         } else {
@@ -264,6 +266,20 @@ impl WebSocketConnection {
                     // 使用 clone() 发出去，保留原始 msg 以便在需要时缓存。
                     match command {
                         CommandMessage::Connection(action) => {
+                            let close_frame = Some(CloseFrame {
+                                code: CloseCode::Normal,           // 1000: 正常关闭
+                                reason: "See you soon".into(),
+                            });
+
+                            if let Err(e) = write.send(WsMessage::Close(close_frame)).await {
+                                error!("Failed to send close frame: {},url:{}", e, url);
+                            }
+                               // 可选：显式关闭 sink（有助于 flush 并关闭）
+                            if let Err(e) = write.close().await {
+                                error!("调用 write.close() 失败: {},url:{}", e, url);
+                            } else {
+                                debug!("connection关闭:{}",url);
+                            }
                             return Ok(action);
                         }
                         CommandMessage::ToServer(to_server_message) => {
