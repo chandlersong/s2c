@@ -12,7 +12,7 @@ use yue::tools::{get_snow_flake_id_u64, SnowyFlakeWrapper};
 pub trait DuckDBPO: Debug + Clone + DeserializeOwned + 'static + Send + Sync {
     type Source: HistoryVo;
 
-    fn from_source(symbol: Option<&str>, source: &Self::Source) -> Self;
+    fn from_source(symbol: Option<String>, source: &Self::Source) -> Self;
 
     fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>>;
 }
@@ -120,7 +120,7 @@ impl<'a> From<&duckdb::Row<'a>> for KlinePo {
 impl DuckDBPO for KlinePo {
     type Source = BinanceKline;
 
-    fn from_source(symbol: Option<&str>, source: &Self::Source) -> Self {
+    fn from_source(symbol: Option<String>, source: &Self::Source) -> Self {
         KlinePo {
             id: get_snow_flake_id_u64() as i64,
             symbol: symbol.expect("Symbol must be provided").to_string(),
@@ -421,7 +421,7 @@ impl<'a> From<&duckdb::Row<'a>> for FundingRatePo {
 impl DuckDBPO for FundingRatePo {
     type Source = FundingRate;
 
-    fn from_source(symbol: Option<&str>, source: &Self::Source) -> Self {
+    fn from_source(symbol: Option<String>, source: &Self::Source) -> Self {
         let snow_flake = SnowyFlakeWrapper::new();
         let id = snow_flake.next_id_u64() as i64;
         FundingRatePo {

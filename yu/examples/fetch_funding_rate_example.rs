@@ -74,8 +74,11 @@ async fn main() -> Result<(), YuError> {
                 for d in payload.data.iter() {
                     println!("{:?}", d);
                 }
-                payload.callback.send(Ok(1)).expect("TODO: panic message");
+                if let Some(callback) = payload.callback {
+                    callback.send(Ok(1)).unwrap();
+                }
             }
+            _ => {}
         }
     }
     Ok(())

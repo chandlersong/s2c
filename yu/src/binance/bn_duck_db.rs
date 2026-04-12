@@ -2,6 +2,7 @@ use crate::binance::binance_db_consts::BinanceTables;
 use crate::binance::models::po::DuckDBPO;
 use crate::duck_db::get_connection;
 use duckdb::DropBehavior;
+use li::tools::time::unix_time_now_u64_utc;
 use log::error;
 use std::marker::PhantomData;
 use std::time::Duration;
@@ -17,16 +18,21 @@ pub struct DuckDBOneTable<V, P: DuckDBPO<Source = V>> {
     table: BinanceTables,
     // use a raw pointer PhantomData to avoid imposing auto trait bounds (like Unpin) on V and P
     // PhantomData only accepts one type parameter; use a tuple to hold multiple types.
+    flush_interval: Duration,
+    flush_count: usize,
     _marker: PhantomData<(*const V, *const P)>,
 }
 
 // FUTURE: 以后做成根据具体表的变换。纯技术需求。
 const DB_CHANNEL_CAPACITY: usize = 1000;
+const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 
 impl<V: Send + 'static, P: DuckDBPO<Source = V>> DuckDBOneTable<V, P> {
     pub fn start_new(table: BinanceTables) -> DataSourceExecutor<V> {
         DuckDBOneTable {
             table,
+            flush_interval: FLUSH_INTERVAL,
+            flush_count: 600, //主要对应的是kline的根数。
             _marker: PhantomData::<(*const V, *const P)>,
         }
         .start_listen()
@@ -86,6 +92,10 @@ impl<V: Send + 'static, P: DuckDBPO<Source = V>> DuckDBOneTable<V, P> {
         Err(YueError::CustomError(format!("Table {:?} 数据库访问失败", table.table_name())))
     }
 
+    fn flush_data(table: BinanceTables, data: Vec<P>) {
+        tokio::spawn(async move { Self::write_batch(table, data) });
+    }
+
     ///
     /// 启动一个线程，监听rx发来的的消息。发来的rx都是yue::query_message::QueryCommand
     /// # GetCount
@@ -102,7 +112,12 @@ impl<V: Send + 'static, P: DuckDBPO<Source = V>> DuckDBOneTable<V, P> {
     pub fn start_listen(self) -> DataSourceExecutor<V> {
         let (tx, mut rx) = mpsc::channel(DB_CHANNEL_CAPACITY);
         let table = self.table.clone();
+        let flush_interval = self.flush_interval;
+        let flush_count = self.flush_count;
         tokio::spawn(async move {
+            let mut single_cache = vec![];
+            let mut cache_count = 0;
+            let mut last_flush_time = unix_time_now_u64_utc();
             loop {
                 tokio::select! {
                     // 处理接收消息；注意 rx.recv() 返回 None 表示所有 sender 已关闭，应退出循环
@@ -111,20 +126,42 @@ impl<V: Send + 'static, P: DuckDBPO<Source = V>> DuckDBOneTable<V, P> {
                             Some(cmd) => {
                                 match cmd {
                                     QueryCommand::GetCount(resp_tx) => {
+                                         //统计行数
                                         let count_result = Self::count_table(table.clone());
                                         if let Err(_unsent) = resp_tx.send(count_result) {
                                             error!("在发送查询{}数量的时候出错：receiver 已关闭。", table.table_name());
                                         }
                                     }
                                     QueryCommand::BatchInsert(payload) => {
-                                        let symbol_opt = payload.symbol.as_deref();
-                                        let po_vec = payload.data.into_iter().map(|v| P::from_source(symbol_opt, &v)).collect::<Vec<P>>();
+                                        //批量保存
+                                        let po_vec = payload.data.into_iter().map(|v| P::from_source(payload.symbol.clone(), &v)).collect::<Vec<P>>();
                                         let insert_result = Self::write_batch(table.clone(), po_vec);
-                                        if let Err(_unsent) = payload.callback.send(insert_result) {
-                                            error!("在发送批量查询{}数量的时候出错：receiver 已关闭。", table.table_name());
+                                        if let Some(callback) =payload.callback{
+                                            if let Err(_unsent) = callback.send(insert_result) {
+                                                error!("在发送批量查询{}数量的时候出错：receiver 已关闭。", table.table_name());
+                                            }
                                         }
+
                                     }
-                                }
+                                    QueryCommand::Insert(payload) => {
+                                         //单条保存，单条保存的逻辑
+                                         // 1. 统一保存到cache里面去。下面两种状态刷新cache。
+                                         //    1. 记录满500条。主要是为了保存k线。
+                                         //    2. 上次刷新时间过了2s。
+                                         // 2. 保存启动一条线程。
+                                        let po = P::from_source(payload.symbol.clone(), &payload.data);
+                                        single_cache.push(po);
+                                        let now = unix_time_now_u64_utc();
+                                        cache_count = cache_count +1;
+                                        let cond1 = (now - last_flush_time) < flush_interval.as_millis() as u64;
+                                        let cond2 = cache_count >= flush_count;
+                                        if cond1||cond2 {
+                                            Self::flush_data(table.clone(),single_cache);
+                                            single_cache = vec![];
+                                            cache_count = 0;
+                                            last_flush_time = now;
+                                        };
+                                    }}
                             }
                             None => {
                                 // channel 关闭，退出后台任务
@@ -135,9 +172,16 @@ impl<V: Send + 'static, P: DuckDBPO<Source = V>> DuckDBOneTable<V, P> {
                     }
 
                     // 空闲超时分支：5 分钟
-                    _ = tokio::time::sleep(Duration::from_secs(300)) => {
+                    _ = tokio::time::sleep(flush_interval) => {
                         log::debug!("DuckDBOneTable idle timeout (5m) for table {}", table.table_name());
                         // 可在此处执行周期性 flush 或维护逻辑
+                        let now = unix_time_now_u64_utc();
+                        if now - last_flush_time > flush_interval.as_millis() as u64 {
+                             Self::flush_data(table.clone(),single_cache);
+                             single_cache = vec![];
+                             cache_count = 0;
+                             last_flush_time = now;
+                        }
                     }
                 }
             }

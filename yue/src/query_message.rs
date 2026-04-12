@@ -11,6 +11,7 @@ pub type DataSourceExecutor<V> = mpsc::Sender<QueryCommand<V>>;
 pub enum QueryCommand<V: Send> {
     GetCount(oneshot::Sender<Result<usize, YueError>>), // 查询数量，返回 usize,如果-1，表示查询出错
     BatchInsert(BatchInsertPayload<V>),
+    Insert(InsertPayload<V>),
     // Add more commands as needed...
 }
 
@@ -19,13 +20,37 @@ pub enum QueryCommand<V: Send> {
 ///
 pub struct Count {}
 
+pub struct InsertPayload<V: Send> {
+    pub symbol: Option<String>,
+    pub data: V,
+    pub callback: Option<oneshot::Sender<Result<usize, YueError>>>,
+}
+
+impl<V: Send> InsertPayload<V> {
+    pub fn new(symbol: Option<String>, data: V, result_tx: oneshot::Sender<Result<usize, YueError>>) -> Self {
+        Self {
+            symbol,
+            data,
+            callback: Some(result_tx),
+        }
+    }
+
+    pub fn new_no_replay(symbol: Option<String>, data: V) -> Self {
+        Self {
+            symbol,
+            data,
+            callback: None,
+        }
+    }
+}
+
 ///
 /// 批量插入数据，返回的是插入多少条
 ///
 pub struct BatchInsertPayload<V: Send> {
     pub symbol: Option<String>,
     pub data: Vec<V>,
-    pub callback: oneshot::Sender<Result<usize, YueError>>,
+    pub callback: Option<oneshot::Sender<Result<usize, YueError>>>,
 }
 
 impl<V: Send> BatchInsertPayload<V> {
@@ -33,16 +58,15 @@ impl<V: Send> BatchInsertPayload<V> {
         Self {
             symbol,
             data,
-            callback: result_tx,
+            callback: Some(result_tx),
         }
     }
 
     pub fn new_no_replay(symbol: Option<String>, data: Vec<V>) -> Self {
-        let (result_tx, _) = oneshot::channel();
         Self {
             symbol,
             data,
-            callback: result_tx,
+            callback: None,
         }
     }
 }

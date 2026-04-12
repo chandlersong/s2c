@@ -520,8 +520,11 @@ mod tests {
                 match command {
                     QueryCommand::GetCount(_) => {}
                     QueryCommand::BatchInsert(payload) => {
-                        payload.callback.send(Ok(1)).unwrap();
+                        if let Some(callback) = payload.callback {
+                            callback.send(Ok(1)).unwrap();
+                        }
                     }
+                    _ => {}
                 }
             }
         });
@@ -606,8 +609,11 @@ mod tests {
                 match command {
                     QueryCommand::GetCount(_) => {}
                     QueryCommand::BatchInsert(payload) => {
-                        payload.callback.send(Ok(1)).unwrap();
+                        if let Some(callback) = payload.callback {
+                            callback.send(Ok(1)).unwrap();
+                        }
                     }
+                    _ => {}
                 }
             }
         });
@@ -650,8 +656,11 @@ mod tests {
                 match command {
                     QueryCommand::GetCount(_) => {}
                     QueryCommand::BatchInsert(payload) => {
-                        payload.callback.send(Ok(1)).unwrap();
+                        if let Some(callback) = payload.callback {
+                            callback.send(Ok(1)).unwrap();
+                        }
                     }
+                    _ => {}
                 }
             }
         });
@@ -723,8 +732,11 @@ mod tests {
                 match command {
                     QueryCommand::GetCount(_) => {}
                     QueryCommand::BatchInsert(payload) => {
-                        payload.callback.send(Ok(1)).unwrap();
+                        if let Some(callback) = payload.callback {
+                            callback.send(Ok(1)).unwrap();
+                        }
                     }
+                    _ => {}
                 }
             }
         });
@@ -789,8 +801,11 @@ mod tests {
                 match command {
                     QueryCommand::GetCount(_) => {}
                     QueryCommand::BatchInsert(payload) => {
-                        payload.callback.send(Ok(1)).unwrap();
+                        if let Some(callback) = payload.callback {
+                            callback.send(Ok(1)).unwrap();
+                        }
                     }
+                    _ => {}
                 }
             }
         });

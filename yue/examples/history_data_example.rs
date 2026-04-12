@@ -114,6 +114,7 @@ async fn main() {
                     // 返回当前已统计的总数（示例中使用 usize -> Result<usize, YueError>）
                     let _ = resp.send(Ok(total_klines));
                 }
+                _ => {}
             }
         }
         info!("spot_rx closed: total batches = {}, total klines = {}", batch_count, total_klines);
@@ -150,6 +151,7 @@ async fn main() {
                     // 返回当前已统计的总数（示例中使用 usize -> Result<usize, YueError>）
                     let _ = resp.send(Ok(total_klines));
                 }
+                _ => {}
             }
         }
         info!("spot_rx closed: total batches = {}, total klines = {}", batch_count, total_klines);
