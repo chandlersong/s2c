@@ -1,6 +1,4 @@
 use crate::binance::bn_dashboard::TradingSymbol;
-use crate::binance::models::po::DuckDBPO;
-use crate::errors::YuError;
 use crate::exchange::{ExchangeDashBoard, HistoryFetcherFactory};
 use async_trait::async_trait;
 use li::actix_jobs::AsyncRepeatTask;
@@ -10,21 +8,9 @@ use log::{debug, error, info};
 use std::sync::Arc;
 use tokio::sync::oneshot;
 use yue::binance::bn_models::common::{HistoryVo, SymbolType, ToRequestBuilder};
-use yue::binance::history_data::{HistoryFetcher, MuteHistoryParam};
+use yue::binance::restful_func::{HistoryFetcher, MuteHistoryParam};
 use yue::models::HistoryInterval;
 use yue::query_message::{DataSourceExecutor, QueryCommand};
-
-pub trait HistoryDataWriter<O: DuckDBPO, D: ExchangeDashBoard<TradingSymbol = TradingSymbol>>: Send + Sync {
-    ///
-    /// 批量写入历史数据
-    ///
-    fn write_batch(&self, data: Vec<O>) -> Result<(), YuError>;
-
-    ///
-    /// 数据库为是否为空
-    ///
-    fn is_empty(&self) -> Result<bool, YuError>;
-}
 
 /// 初始化的历史数据任务，每次启动的时候，都会调用
 /// NEXT：写一个实时更新的task

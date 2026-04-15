@@ -29,9 +29,9 @@ use yue::binance::bn_models::swap_restful::FundingRate;
 use yue::binance::bn_restful_commands::{
     SPOT_KLINE_HISTORY_COMMAND, SWAP_FIVE_MIN_KLINE_HISTORY_COMMAND, SWAP_FUNDING_RATE_COMMAND, SWAP_KLINE_HISTORY_COMMAND,
 };
-use yue::binance::history_data::{CommonRequestBuilder, SimpleHistoryFetcher};
 use yue::binance::listen_key_client::{ListenKeyClient, NormalAccountAssignName, PortfolioAccountAssignName};
 use yue::binance::order_book::{OrderBookService, Subscribe as OrderBookSubscribe};
+use yue::binance::restful_func::{CommonRequestBuilder, SimpleHistoryFetcher};
 use yue::binance::websocket_actor::SpotAccountActor;
 use yue::models::HistoryInterval;
 use yue::tools::SnowyFlakeWrapper;

@@ -45,7 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let interface = WebSocketConnection::run(url, reconnect_interval, proxy, None).await;
     info!("✓ WebSocket 客户端已启动");
 
-    let mut message_rx: Receiver<TextMessage> = interface.get_message_receiver();
+    let mut message_rx: Receiver<TextMessage> = interface.get_message_receiver().unwrap();
 
     tokio::spawn(async move {
         while let Ok(message) = message_rx.recv().await {

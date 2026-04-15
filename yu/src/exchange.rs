@@ -1,6 +1,6 @@
 use std::sync::{Arc, RwLock};
 use yue::binance::bn_models::common::{HistoryVo, ToRequestBuilder};
-use yue::binance::history_data::{HistoryFetcher, MuteHistoryParam};
+use yue::binance::restful_func::{HistoryFetcher, MuteHistoryParam};
 use yue::models::HistoryInterval;
 
 /// 主要处理各个交易所的数据的更新操作，

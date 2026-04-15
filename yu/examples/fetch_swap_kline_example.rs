@@ -10,7 +10,7 @@ use yu::errors::YuError;
 use yu::exchange::{CloneHistoryFetcherFactory, HistoryFetcherFactory};
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_restful_commands::SWAP_KLINE_HISTORY_COMMAND;
-use yue::binance::history_data::{CommonRequestBuilder, SimpleHistoryFetcher};
+use yue::binance::restful_func::{CommonRequestBuilder, SimpleHistoryFetcher};
 use yue::http_client::init_http_client;
 use yue::models::HistoryInterval;
 use yue::query_message::QueryCommand;

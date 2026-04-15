@@ -186,6 +186,10 @@ pub struct BinanceKline {
     #[serde(rename = "open_time")]
     pub open_time: u64, // 开盘时间戳 (毫秒)
 
+    #[serde(skip)]
+    /// 交易对符号（可选）例如 "BTCUSDT"，非必填
+    pub symbol: Option<String>,
+
     #[serde(rename = "open")]
     #[serde(with = "string_to_decimal")]
     pub open: Decimal, // 开盘价

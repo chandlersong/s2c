@@ -1,39 +1,85 @@
 use crate::binance::binance_db_consts::BinanceTables;
-use crate::binance::models::po::DuckDBPO;
+use crate::binance::models::po::{DuckDBPO, KlinePo};
 use crate::duck_db::get_connection;
+use async_trait::async_trait;
 use duckdb::DropBehavior;
 use li::tools::time::unix_time_now_u64_utc;
 use log::error;
 use std::marker::PhantomData;
 use std::time::Duration;
+use thiserror::Error;
 use tokio::sync::mpsc;
+use yue::binance::bn_models::spot_restful::BinanceKline;
+use yue::binance::bn_models::spot_websocket_stream::SpotKlineData;
 use yue::errors::YueError;
-use yue::query_message::{DataSourceExecutor, QueryCommand};
+use yue::query_message::{BatchInsertPayload, DataSourceExecutor, InsertPayload, QueryCommand};
+
+pub type DuckTableTableListener<P: DuckDBPO> = mpsc::Sender<QueryCommand<P>>;
+
+#[derive(Clone)]
+pub struct BinanceKlineDataExecutor {
+    table: DuckTableTableListener<KlinePo>,
+}
+
+impl BinanceKlineDataExecutor {
+    pub fn new(table: DuckTableTableListener<KlinePo>) -> Self {
+        Self { table }
+    }
+}
+#[async_trait]
+impl DataSourceExecutor<BinanceKline> for BinanceKlineDataExecutor {
+    async fn execute(&self, command: QueryCommand<BinanceKline>) -> Result<(), YueError> {
+        match command {
+            QueryCommand::GetCount(sender) => {
+                if let Err(e) = self.table.send(QueryCommand::GetCount(sender)).await {
+                    return Err(YueError::CustomError("tokio error".to_string()));
+                };
+            }
+            QueryCommand::BatchInsert(payload) => {
+                let data: Vec<KlinePo> = payload.data.iter().map(|source| KlinePo::from(source.clone())).collect();
+                let command_payload = BatchInsertPayload::new_all(data, payload.callback);
+                if let Err(e) = self.table.send(QueryCommand::BatchInsert(command_payload)).await {
+                    return Err(YueError::CustomError("tokio error".to_string()));
+                };
+            }
+            QueryCommand::Insert(payload) => {
+                let record = KlinePo::from(payload.data);
+                let command_payload = InsertPayload::new_all(record, payload.callback);
+                if let Err(e) = self.table.send(QueryCommand::Insert(command_payload)).await {
+                    return Err(YueError::CustomError("tokio error".to_string()));
+                };
+            }
+        }
+        Ok(())
+    }
+}
 
 ///
 /// 基于DuckDB对一张表
-/// 这里接收的应该是都Value，复制转换成最后存入数据库的PO
+/// 为了简化现有的代码。大致为两层。
+/// 1. 外层负责VO->PO的转换。因为这是一个业务相关的。而且会有很多不同的变种。
+/// 2. 内层，也就该类，主要则PO的操作。
 ///
-pub struct DuckDBOneTable<V, P: DuckDBPO<Source = V>> {
+pub struct DuckDBOneTable<P: DuckDBPO> {
     table: BinanceTables,
     // use a raw pointer PhantomData to avoid imposing auto trait bounds (like Unpin) on V and P
     // PhantomData only accepts one type parameter; use a tuple to hold multiple types.
     flush_interval: Duration,
     flush_count: usize,
-    _marker: PhantomData<(*const V, *const P)>,
+    _marker: PhantomData<P>,
 }
 
 // FUTURE: 以后做成根据具体表的变换。纯技术需求。
 const DB_CHANNEL_CAPACITY: usize = 1000;
 const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 
-impl<V: Send + 'static, P: DuckDBPO<Source = V>> DuckDBOneTable<V, P> {
-    pub fn start_new(table: BinanceTables) -> DataSourceExecutor<V> {
+impl<P: DuckDBPO> DuckDBOneTable<P> {
+    pub fn start_new(table: BinanceTables) -> DuckTableTableListener<P> {
         DuckDBOneTable {
             table,
             flush_interval: FLUSH_INTERVAL,
             flush_count: 600, //主要对应的是kline的根数。
-            _marker: PhantomData::<(*const V, *const P)>,
+            _marker: PhantomData::<P>,
         }
         .start_listen()
     }
@@ -109,7 +155,7 @@ impl<V: Send + 'static, P: DuckDBPO<Source = V>> DuckDBOneTable<V, P> {
     /// # 定时检查
     /// 1. 比如BatchInsert，定期检查一下，如果1s内没有收到消息，也要能够保存。
     ///
-    pub fn start_listen(self) -> DataSourceExecutor<V> {
+    pub fn start_listen(self) -> DuckTableTableListener<P> {
         let (tx, mut rx) = mpsc::channel(DB_CHANNEL_CAPACITY);
         let table = self.table.clone();
         let flush_interval = self.flush_interval;
@@ -134,8 +180,7 @@ impl<V: Send + 'static, P: DuckDBPO<Source = V>> DuckDBOneTable<V, P> {
                                     }
                                     QueryCommand::BatchInsert(payload) => {
                                         //批量保存
-                                        let po_vec = payload.data.into_iter().map(|v| P::from_source(payload.symbol.clone(), &v)).collect::<Vec<P>>();
-                                        let insert_result = Self::write_batch(table.clone(), po_vec);
+                                        let insert_result = Self::write_batch(table.clone(), payload.data);
                                         if let Some(callback) =payload.callback{
                                             if let Err(_unsent) = callback.send(insert_result) {
                                                 error!("在发送批量查询{}数量的时候出错：receiver 已关闭。", table.table_name());
@@ -149,8 +194,7 @@ impl<V: Send + 'static, P: DuckDBPO<Source = V>> DuckDBOneTable<V, P> {
                                          //    1. 记录满500条。主要是为了保存k线。
                                          //    2. 上次刷新时间过了2s。
                                          // 2. 保存启动一条线程。
-                                        let po = P::from_source(payload.symbol.clone(), &payload.data);
-                                        single_cache.push(po);
+                                        single_cache.push(payload.data);
                                         let now = unix_time_now_u64_utc();
                                         cache_count = cache_count +1;
                                         let cond1 = (now - last_flush_time) < flush_interval.as_millis() as u64;

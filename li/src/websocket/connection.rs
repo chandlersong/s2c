@@ -1,5 +1,6 @@
 use crate::errors::LiError;
 use crate::websocket::models::WebSocketMessage;
+use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, info, trace, warn};
 use std::fmt::Debug;
@@ -75,7 +76,7 @@ pub struct WebSocketInterface<M>
 where
     M: WebSocketMessage,
 {
-    message_broadcast: broadcast::Sender<M>,
+    message_broadcast: Option<broadcast::Sender<M>>,
     event_broadcast: broadcast::Sender<WebSocketEvent>,
     command_sender: UnboundedSender<CommandMessage>,
 }
@@ -85,7 +86,7 @@ where
     M: WebSocketMessage,
 {
     pub fn new(
-        message_broadcast: broadcast::Sender<M>,
+        message_broadcast: Option<broadcast::Sender<M>>,
         event_broadcast: broadcast::Sender<WebSocketEvent>,
         command_sender: UnboundedSender<CommandMessage>,
     ) -> Self {
@@ -96,8 +97,12 @@ where
         }
     }
 
-    pub fn get_message_receiver(&self) -> broadcast::Receiver<M> {
-        self.message_broadcast.subscribe()
+    pub fn get_message_receiver(&self) -> Option<broadcast::Receiver<M>> {
+        if let Some(broadcast) = &self.message_broadcast {
+            Some(broadcast.subscribe())
+        } else {
+            None
+        }
     }
 
     pub fn get_event_broadcast(&self) -> broadcast::Receiver<WebSocketEvent> {
@@ -112,12 +117,17 @@ where
 ///
 /// 主要是对message做点定制化操纵的handler。比如分发消息
 ///
+#[async_trait]
 pub trait MessageHandler<M: WebSocketMessage> {
     /// 处理收到的消息。
-    fn handle_message(&self, message: &M);
+    async fn handle_message(&self, message: &M);
 
     /// 提供Sender方便其他人处理
-    fn get_tx(&self) -> broadcast::Sender<M>;
+    /// 并不是每个下流都要服务都要监听。只要写个handler处理一下就好了。
+    /// 所以这里用这种方式。
+    fn get_tx(&self) -> Option<broadcast::Sender<M>> {
+        None
+    }
 }
 
 pub struct BroadcastMessageHandler<M: WebSocketMessage> {
@@ -130,9 +140,9 @@ impl<M: WebSocketMessage> BroadcastMessageHandler<M> {
         Self { message_broadcast }
     }
 }
-
+#[async_trait]
 impl<M: WebSocketMessage> MessageHandler<M> for BroadcastMessageHandler<M> {
-    fn handle_message(&self, message: &M) {
+    async fn handle_message(&self, message: &M) {
         if self.message_broadcast.receiver_count() == 0 {
             debug!("没有订阅者，消息将被丢弃");
             return;
@@ -143,8 +153,8 @@ impl<M: WebSocketMessage> MessageHandler<M> for BroadcastMessageHandler<M> {
         }
     }
 
-    fn get_tx(&self) -> broadcast::Sender<M> {
-        self.message_broadcast.clone()
+    fn get_tx(&self) -> Option<broadcast::Sender<M>> {
+        Some(self.message_broadcast.clone())
     }
 }
 
@@ -306,7 +316,7 @@ impl WebSocketConnection {
                                     match M::from_text(&text_str) {
                                         Ok(m) => {
                                             // 交给 message_handler 处理（可能是广播、也可能是用户自定义处理）
-                                            message_handler.handle_message(&m);
+                                            message_handler.handle_message(&m).await;
                                         },
                                         Err(e) => {
                                             error!("解析文本消息失败: {}", e);
@@ -320,7 +330,7 @@ impl WebSocketConnection {
                                     match M::from_binary(data_vec) {
                                         Ok(m) => {
                                             // 交给 message_handler 处理（可能是广播、也可能是用户自定义处理）
-                                            message_handler.handle_message(&m);
+                                            message_handler.handle_message(&m).await;
                                         },
                                         Err(e) => {
                                             error!("解析文本消息失败: {}", e);

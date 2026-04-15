@@ -161,12 +161,12 @@ pub struct KlineStreamPayload {
     pub symbol: String,
     #[serde(rename = "k")]
     /// K 线细节。
-    pub kline: KlineData,
+    pub kline: SpotKlineData,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 /// K 线细节字段，含开收高低与量。
-pub struct KlineData {
+pub struct SpotKlineData {
     #[serde(rename = "t")]
     /// K 线开始时间 (ms)。
     pub start_time: u64,

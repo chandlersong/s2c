@@ -1,12 +1,20 @@
 use crate::errors::YueError;
+use async_trait::async_trait;
+use li::websocket::client::CommandMessage;
 use tokio::sync::{mpsc, oneshot};
+
 ///
 /// 这里mod主要是为了抽象一些数据库的操作。
 /// 因为在实际操作中，我想这个对于数据库是解耦的。但是有一些操作还是有必要的。比如insert等操作。
 /// 借助actix，则可以做到这一点。这里会定义一些基本的数据操作的message
 ///
 
-pub type DataSourceExecutor<V> = mpsc::Sender<QueryCommand<V>>;
+#[async_trait]
+pub trait DataSourceExecutor<V: Send> {
+    async fn execute(&self, command: QueryCommand<V>) -> Result<(), YueError>;
+}
+
+pub type DataSourceExecutorImpl<V> = Box<dyn DataSourceExecutor<V> + Send>;
 
 pub enum QueryCommand<V: Send> {
     GetCount(oneshot::Sender<Result<usize, YueError>>), // 查询数量，返回 usize,如果-1，表示查询出错
@@ -21,26 +29,24 @@ pub enum QueryCommand<V: Send> {
 pub struct Count {}
 
 pub struct InsertPayload<V: Send> {
-    pub symbol: Option<String>,
     pub data: V,
     pub callback: Option<oneshot::Sender<Result<usize, YueError>>>,
 }
 
 impl<V: Send> InsertPayload<V> {
-    pub fn new(symbol: Option<String>, data: V, result_tx: oneshot::Sender<Result<usize, YueError>>) -> Self {
+    pub fn new(data: V, result_tx: oneshot::Sender<Result<usize, YueError>>) -> Self {
         Self {
-            symbol,
             data,
             callback: Some(result_tx),
         }
     }
 
-    pub fn new_no_replay(symbol: Option<String>, data: V) -> Self {
-        Self {
-            symbol,
-            data,
-            callback: None,
-        }
+    pub fn new_all(data: V, callback: Option<oneshot::Sender<Result<usize, YueError>>>) -> Self {
+        Self { data, callback }
+    }
+
+    pub fn new_no_replay(data: V) -> Self {
+        Self { data, callback: None }
     }
 }
 
@@ -48,25 +54,23 @@ impl<V: Send> InsertPayload<V> {
 /// 批量插入数据，返回的是插入多少条
 ///
 pub struct BatchInsertPayload<V: Send> {
-    pub symbol: Option<String>,
     pub data: Vec<V>,
     pub callback: Option<oneshot::Sender<Result<usize, YueError>>>,
 }
 
 impl<V: Send> BatchInsertPayload<V> {
-    pub fn new(symbol: Option<String>, data: Vec<V>, result_tx: oneshot::Sender<Result<usize, YueError>>) -> Self {
+    pub fn new(data: Vec<V>, result_tx: oneshot::Sender<Result<usize, YueError>>) -> Self {
         Self {
-            symbol,
             data,
             callback: Some(result_tx),
         }
     }
 
+    pub fn new_all(data: Vec<V>, callback: Option<oneshot::Sender<Result<usize, YueError>>>) -> Self {
+        Self { data, callback }
+    }
+
     pub fn new_no_replay(symbol: Option<String>, data: Vec<V>) -> Self {
-        Self {
-            symbol,
-            data,
-            callback: None,
-        }
+        Self { data, callback: None }
     }
 }

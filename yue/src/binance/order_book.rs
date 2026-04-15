@@ -2,7 +2,7 @@ use crate::binance::bn_models::common::ToRequestBuilder;
 use crate::binance::bn_models::spot_restful::Depth;
 use crate::binance::bn_models::spot_websocket_stream::{BinanceSpotWebSocketStreamResponse, DepthUpdateStreamPayload};
 use crate::binance::bn_restful_commands::{SPOT_DEPTH_1000_COMMAND, execute_json_request};
-use crate::binance::history_data::CommonRequestBuilder;
+use crate::binance::restful_func::CommonRequestBuilder;
 use actix::{Actor, ActorFutureExt, Addr, AsyncContext, Context, Handler, Message as ActixMessage, Recipient, WrapFuture};
 use log::{debug, error, info, trace, warn};
 use rust_decimal::Decimal;

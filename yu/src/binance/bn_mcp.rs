@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use yue::binance::bn_models::common::ToRequestBuilder;
 use yue::binance::bn_models::spot_restful::Ticker24hr;
 use yue::binance::bn_restful_commands::{execute_json_request, SPOT_TICKER_24HR_ONE_SYMBOL_COMMAND};
-use yue::binance::history_data::CommonRequestBuilder;
+use yue::binance::restful_func::CommonRequestBuilder;
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct SymbolRequest {

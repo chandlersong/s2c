@@ -5,15 +5,11 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display};
 use yue::binance::bn_models::common::{HistoryVo, PortfolioSpotOrderData, PortfolioSwapOrderData, SpotOrderData, SwapOrderData};
 use yue::binance::bn_models::spot_restful::BinanceKline;
-use yue::binance::bn_models::spot_websocket_stream::{KlineData, TradeStreamPayload};
+use yue::binance::bn_models::spot_websocket_stream::{SpotKlineData, TradeStreamPayload};
 use yue::binance::bn_models::swap_restful::FundingRate;
 use yue::tools::{get_snow_flake_id_u64, SnowyFlakeWrapper};
 
 pub trait DuckDBPO: Debug + Clone + DeserializeOwned + 'static + Send + Sync {
-    type Source: HistoryVo;
-
-    fn from_source(symbol: Option<String>, source: &Self::Source) -> Self;
-
     fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>>;
 }
 
@@ -71,8 +67,8 @@ pub struct KlinePo {
     pub last_trade_id: Option<i64>,
 }
 
-impl From<KlineData> for KlinePo {
-    fn from(value: KlineData) -> Self {
+impl From<SpotKlineData> for KlinePo {
+    fn from(value: SpotKlineData) -> Self {
         KlinePo {
             id: get_snow_flake_id_u64() as i64,
             symbol: value.symbol,
@@ -90,6 +86,29 @@ impl From<KlineData> for KlinePo {
             interval: INTERVAL_5M,
             first_trade_id: Some(value.first_trade_id),
             last_trade_id: Some(value.last_trade_id),
+        }
+    }
+}
+
+impl From<BinanceKline> for KlinePo {
+    fn from(source: BinanceKline) -> Self {
+        KlinePo {
+            id: get_snow_flake_id_u64() as i64,
+            symbol: source.symbol.unwrap(),
+            candle_begin_time: source.open_time,
+            open: source.open.to_f64().unwrap(),
+            high: source.high.to_f64().unwrap(),
+            low: source.low.to_f64().unwrap(),
+            close: source.close.to_f64().unwrap(),
+            volume: source.volume.to_f64().unwrap(),
+            quote_volume: source.quote_asset_volume.to_f64().unwrap(),
+            number_of_trades: source.number_of_trades,
+            taker_buy_base_asset_volume: source.taker_buy_base_asset_volume.to_f64().unwrap(),
+            taker_buy_quote_asset_volume: source.taker_buy_quote_asset_volume.to_f64().unwrap(),
+            close_time: source.close_time,
+            interval: 0,
+            first_trade_id: Some(-1),
+            last_trade_id: Some(-1),
         }
     }
 }
@@ -118,29 +137,6 @@ impl<'a> From<&duckdb::Row<'a>> for KlinePo {
 }
 
 impl DuckDBPO for KlinePo {
-    type Source = BinanceKline;
-
-    fn from_source(symbol: Option<String>, source: &Self::Source) -> Self {
-        KlinePo {
-            id: get_snow_flake_id_u64() as i64,
-            symbol: symbol.expect("Symbol must be provided").to_string(),
-            candle_begin_time: source.open_time,
-            open: source.open.to_f64().unwrap(),
-            high: source.high.to_f64().unwrap(),
-            low: source.low.to_f64().unwrap(),
-            close: source.close.to_f64().unwrap(),
-            volume: source.volume.to_f64().unwrap(),
-            quote_volume: source.quote_asset_volume.to_f64().unwrap(),
-            number_of_trades: source.number_of_trades,
-            taker_buy_base_asset_volume: source.taker_buy_base_asset_volume.to_f64().unwrap(),
-            taker_buy_quote_asset_volume: source.taker_buy_quote_asset_volume.to_f64().unwrap(),
-            close_time: source.close_time,
-            interval: 0,
-            first_trade_id: Some(-1),
-            last_trade_id: Some(-1),
-        }
-    }
-
     fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>> {
         appender_params_from_iter(vec![
             &self.id as &dyn duckdb::ToSql,
@@ -418,21 +414,21 @@ impl<'a> From<&duckdb::Row<'a>> for FundingRatePo {
     }
 }
 
-impl DuckDBPO for FundingRatePo {
-    type Source = FundingRate;
-
-    fn from_source(symbol: Option<String>, source: &Self::Source) -> Self {
+impl<'a> From<FundingRate> for FundingRatePo {
+    fn from(source: FundingRate) -> Self {
         let snow_flake = SnowyFlakeWrapper::new();
         let id = snow_flake.next_id_u64() as i64;
         FundingRatePo {
             id,
-            symbol: symbol.expect("Symbol must be provided").to_string(),
+            symbol: "".to_string(),
             funding_rate: source.funding_rate,
             funding_time: source.funding_time,
             mark_price: source.mark_price,
         }
     }
+}
 
+impl DuckDBPO for FundingRatePo {
     fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>> {
         appender_params_from_iter(vec![
             &self.id as &dyn duckdb::ToSql,

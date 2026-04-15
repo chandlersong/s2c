@@ -157,9 +157,9 @@ impl SpotStreamStorageActor {
         let mut appender = conn.appender("bn_spot_kline")?;
 
         for kline in &self.kline_buffer {
-            if let Err(e) = appender.append_row(kline.to_params()) {
-                error!("Failed to append kline to db: {:?}", e);
-            }
+            // if let Err(e) = appender.append_row(kline.to_params()) {
+            //     error!("Failed to append kline to db: {:?}", e);
+            // }
         }
 
         if let Err(e) = appender.flush() {
@@ -262,7 +262,7 @@ mod tests {
 
         let mut actor = SpotStreamStorageActor::new(SpotWebSocketStreamConfig { trade: None, depth: None }, db_provider);
 
-        let kline = yue::binance::bn_models::spot_websocket_stream::KlineData {
+        let kline = yue::binance::bn_models::spot_websocket_stream::SpotKlineData {
             start_time: 1,
             close_time: 2,
             symbol: "BTCUSDT".to_string(),

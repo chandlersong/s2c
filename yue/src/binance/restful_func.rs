@@ -1,39 +1,22 @@
-use crate::binance::bn_models::common::{ExchangeInfoTrait, HistoryVo, SymbolInfoTrait, ToRequestBuilder};
+///
+/// 主要是集中了很多调用restful的过程。
+///
+use crate::binance::bn_models::common::{ExchangeInfoTrait, HistoryVo, SymbolInfoTrait, ToRequestBuilder, TradingSymbolInfo};
 use crate::binance::bn_models::spot_restful::ExchangeInfo;
 use crate::binance::bn_models::swap_restful::SwapExchangeInfo;
 use crate::binance::bn_restful_commands::{PING_COMMAND, execute_json_request};
 use crate::errors::YueError;
 use crate::http_client::{HTTP_CLIENT, get_http_client};
 use crate::models::{EmptyObject, HistoryInterval, RequestInfo};
-use crate::query_message::{BatchInsertPayload, DataSourceExecutor, QueryCommand};
+use crate::query_message::{BatchInsertPayload, DataSourceExecutor, DataSourceExecutorImpl, QueryCommand};
+use actix::dev::MessageResponse;
 use async_trait::async_trait;
 use governor::Jitter;
-use li::tools::time::{ONE_MILL_SECOND_MS, unix_2_readable};
+use li::tools::time::{ONE_MILL_SECOND_MS, unix_2_readable, unix_time_now_u64_utc};
 use log::{debug, error, warn};
 use reqwest::RequestBuilder;
 use serde::{Deserialize, Serialize};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::oneshot;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TradingSymbolInfo {
-    /// 交易对符号，如 "BTCUSDT"
-    pub symbol: String,
-    /// 交易状态，可能的值包括：TRADING, END_OF_DAY, HALT, BREAK
-    pub status: String,
-    /// 基础资产，如 "BTC"
-    pub base_asset: String,
-    /// 报价资产，如 "USDT"
-    pub quote_asset: String,
-    /// 报价资产精度
-    pub quote_asset_precision: i32,
-    /// 支持的订单类型数组
-    pub order_types: Vec<String>,
-    /// 类型字段，spot统一填"spot"，swap填contract_type
-    pub symbol_type: String,
-    /// 上线时间，单位毫秒时间戳，spot取不到，所以为None，swap有值
-    pub on_board_time: Option<u64>,
-}
+use std::time::Duration;
 
 pub trait MuteHistoryParam: ToRequestBuilder {
     fn initial(symbol: String, limit: u32, interval: HistoryInterval) -> Self;
@@ -165,6 +148,8 @@ pub async fn get_trading_spot_symbols(exchange: ExchangeInfo, status: Option<&st
 }
 
 pub const CONTRACT_TYPE_PERPETUAL: &str = "PERPETUAL";
+// 默认从 2021-01-01 00:00:00 UTC 开始回补历史K线。
+const DEFAULT_HISTORY_START_TIME_MS: u64 = 1609459200000;
 
 /// 获取合约交易对信息
 /// PERPETUAL 为永续
@@ -183,11 +168,31 @@ pub async fn get_trading_swap_symbols(
     }
 }
 
+pub type HistoryBatchHandler<O: HistoryVo + Clone + Send + Sync> = Box<dyn HistoryBatchHandlerTrait<O> + Send + Sync>;
+
+///
+///  因为有些需要批量的中间操作。所以这里就需要一个方法做为处理的类
+///
 #[async_trait]
-pub trait HistoryFetcher<T, O>
+pub trait HistoryBatchHandlerTrait<O>: Send + Sync
 where
-    T: MuteHistoryParam + ToRequestBuilder + Send + Sync,
-    O: HistoryVo,
+    O: HistoryVo + Clone + Send + Sync + 'static,
+{
+    async fn handle(&self, batch_data: Vec<O>) -> Result<(), YueError>;
+}
+
+///
+/// 这样处理，最主要的目的是为了方便后续写单元测试。
+/// 因为这类外部的IO类，rust下面很难写单元测试。所以也就这么搞了。
+/// 主要是一种尝试。
+///
+pub type HistoryFetcher<O: HistoryVo + Clone + Send + Sync + 'static> = Box<dyn HistoryBatchHandlerTrait<O>>;
+
+#[async_trait]
+pub trait HistoryFetcherTrait<T, O>
+where
+    T: MuteHistoryParam + ToRequestBuilder + Send + Sync + 'static,
+    O: HistoryVo + 'static,
 {
     ///
     /// 因为不同的情况不同。
@@ -200,45 +205,45 @@ where
         interval: Option<HistoryInterval>,
         start_time: Option<u64>,
         end_time: Option<u64>,
-        saver: DataSourceExecutor<O>,
+        handler: Option<HistoryBatchHandler<O>>,
         retry_on_error: bool,
     ) -> Result<u64, YueError>;
 }
 
 #[derive(Debug, Clone)]
-pub struct SimpleHistoryFetcher {
+pub struct HistoryFetcherImpl {
     request_info: RequestInfo,
-    filter_enabled: bool,
 }
 
-impl SimpleHistoryFetcher {
+impl HistoryFetcherImpl {
     pub fn kline(request_info: &RequestInfo) -> Self {
         Self {
             request_info: request_info.clone(),
-            filter_enabled: true,
-        }
-    }
-    pub fn funding_rate(request_info: &RequestInfo) -> Self {
-        Self {
-            request_info: request_info.clone(),
-            filter_enabled: false,
         }
     }
 }
 
 #[async_trait]
-impl<'a, T, O> HistoryFetcher<T, O> for SimpleHistoryFetcher
+impl<T, O> HistoryFetcherTrait<T, O> for HistoryFetcherImpl
 where
     T: MuteHistoryParam + ToRequestBuilder + Send + Sync + 'static,
-    O: HistoryVo + Clone + Send + Sync + 'static,
+    O: HistoryVo + 'static,
 {
-    /// 获取指定交易对和时间间隔的K线数据
+    /// 获取指定交易对和时间间隔的历史数据.
+    /// 只是对参数做透传，而且只是定位最后的处理方式。不会做过多的其他操作。
+    /// 外部自己处理特殊关系。
     ///
     /// 大致流程：
-    /// 1. 判断end_time是否为None，如果是None则设置为当前时间。
-    /// 2. 分别通过interval的，更新最近和的开始时间和结束时间。然后结束时间+1ms。
-    /// 3. 根据interval分段获取历数据。
+    /// 1. 判断当前的interval，如果为None的话，就是5分钟。
+    /// 2. start_time为None的话，取2021年01月1日
+    /// 3. end_time为None的话，取上一个周期的时间点。例如现在interval是5分钟，现在是36，那么end就是上一个35分的milliseconds减去1.
+    /// 4. 循环调用，然后返回。
+    ///     1. 每次循环，都把上一次的end_time作为下一次的start_time，end_time不变。保证每次请求的时间段是连续的。
+    /// 5. 结束条件
+    ///     1. 本次获得最后K线的日期和上一次相同。
+    ///     2. 最后一条的end_time超过了或等于期望的end_time。因为有可能最后一条的end_time就是超过了期望的end_time的，所以需要判断一下。
     ///
+    /// Option<HistoryBatchHandler<O>>
     /// 注意点
     /// 1. 最后一段时间最好废弃。比如说现在是11:30:00， interval是1h。那么最后一段就是11点到12点的一段时间。
     ///
@@ -246,7 +251,7 @@ where
     /// # 参数
     /// * `base_param` - 输入请求的基本参数，其应该包含symbol，limit，interval等信息。主要因为多次请求，会需要开始和结束时间。
     /// * `interval` - K线时间间隔，默认值为5分钟
-    /// * `start_time` - 开始时间（毫秒时间戳），如果为None则获取全部历史数据，默认值为2021年1月1日
+    /// * `start_time` - 开始时间（毫秒时间戳），如果为None则获取全部历史数据，2021年01月01
     /// * `end_time` - 结束时间（毫秒时间戳），如果为None则表示是现在，默认值为当前时间
     ///
     /// # 返回
@@ -257,33 +262,34 @@ where
         interval: Option<HistoryInterval>,
         start_time: Option<u64>,
         end_time: Option<u64>,
-        saver: DataSourceExecutor<O>,
+        handler: Option<HistoryBatchHandler<O>>,
         retry_1000_times: bool,
     ) -> Result<u64, YueError> {
         let symbol = base_param.get_symbol();
         let mut error_count = 0;
-        // 步骤1：判断end_time是否为None，如果是则设置为当前时间
-        let actual_end_time = if let Some(end) = end_time {
-            end
-        } else {
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_err(|e| YueError::new(&format!("获取当前时间失败: {}", e)))?
-                .as_millis() as u64
-        };
 
-        debug!("start fetch {} kline data from {:?} to {:?}", symbol, start_time, actual_end_time);
+        // 步骤1：interval 为 None 时默认使用 5 分钟。
+        let chosen_interval = interval.unwrap_or(HistoryInterval::FiveMinutes);
 
-        // 步骤2：如果没有显式传入 interval，则默认使用 5 分钟；
-        // 使用选定的 interval 调整开始/结束时间到 interval 边界，然后结束时间+1ms
-        let chosen_interval = if let Some(iv) = &interval {
-            iv.clone()
-        } else {
-            HistoryInterval::FiveMinutes
-        };
+        // 步骤2：start_time 为 None 时，从 2021-01-01 00:00:00 UTC 开始。
+        let actual_start_time = start_time.unwrap_or(DEFAULT_HISTORY_START_TIME_MS);
 
-        let adjusted_start_time = start_time.map(|st| chosen_interval.get_close_unix_ms(st));
-        let adjusted_end_time = chosen_interval.get_close_unix_ms(actual_end_time) + chosen_interval.to_milliseconds() - 1;
+        // 步骤3：end_time 为 None 时，取当前时间；并统一折算到“上一个完整周期”的末尾(-1ms)。
+        let actual_end_time = end_time.unwrap_or(unix_time_now_u64_utc());
+
+        let adjusted_start_time = Some(chosen_interval.get_close_unix_ms(actual_start_time));
+        let adjusted_end_time = chosen_interval.get_close_unix_ms(actual_end_time).saturating_sub(ONE_MILL_SECOND_MS);
+
+        // 入参时间窗口非法时直接返回，避免无意义请求。
+        if adjusted_start_time.unwrap_or(0) > adjusted_end_time {
+            debug!(
+                "{} skip fetch because start {} > end {}",
+                symbol,
+                adjusted_start_time.unwrap_or(0),
+                adjusted_end_time
+            );
+            return Ok(0);
+        }
 
         debug!(
             "adjusted time range: {:?} to {} (using interval {})",
@@ -292,7 +298,7 @@ where
             chosen_interval.as_ref()
         );
         let mut total_count: u64 = 0;
-        // 步骤3：根据interval分段获取历史数据
+        // 步骤4：根据 interval 连续翻页，直到满足注释里定义的退出条件。
         let mut current_start_time = adjusted_start_time;
         let mut last_timestamp: Option<u64> = None;
         loop {
@@ -304,7 +310,7 @@ where
             }
 
             // 将调整好的 adjusted_end_time 传入请求参数，保证服务端返回的数据不超过期望的 endTime
-            let params = base_param.create_new(current_start_time, Some(adjusted_end_time), interval.clone());
+            let params = base_param.create_new(current_start_time, Some(adjusted_end_time), Some(chosen_interval.clone()));
 
             let klines: Vec<O> = match execute_json_request::<Vec<O>>(&self.request_info, params.to_request_builder(&self.request_info), None).await {
                 Ok(res) => res,
@@ -328,103 +334,50 @@ where
             }
 
             let kline_num = klines.len();
-            // 注意点：废弃所有非close的kline（close_time不符合 interval 倍数）
-            let filtered_klines: Vec<O> = if self.filter_enabled {
-                let iv_ms = chosen_interval.to_milliseconds();
-                klines
-                    .into_iter()
-                    .filter(|kline| {
-                        let close_time = kline.get_close_time() + ONE_MILL_SECOND_MS;
-                        // 检查 close_time 是否在 interval 边界上
-                        close_time % iv_ms == 0
-                    })
-                    .collect()
-            } else {
-                klines
-            };
-            let klines_count = filtered_klines.len() as u64;
-            debug!("{} fetch {} kline, after filtered {} kline", symbol, kline_num, filtered_klines.len());
+            let klines_count = kline_num as u64;
+            debug!("{} fetch {} kline", symbol, kline_num);
             // 直接读取最后一条 kline 的 close_time（u64 是 Copy），
-            // 避免对 `filtered_klines` 的借用在后面把它移动时跨越所有权边界。
+            // 避免后续移动 `klines` 时出现借用跨越所有权边界。
             let last_close_time: Option<u64> = {
-                // 把借用限制在此小块作用域，确保在后面移动 `filtered_klines` 时没有活动借用。
-                filtered_klines.last().map(|k| k.get_close_time())
+                // 把借用限制在小作用域，确保后面移动 `klines` 时没有活动借用。
+                klines.last().map(|k| k.get_close_time())
             };
 
-            let (tx, rx) = oneshot::channel();
-            // 发送数据到 saver
-            let message = BatchInsertPayload::new(Some(symbol.to_string()), filtered_klines, tx);
-            if let Err(e) = saver.send(QueryCommand::BatchInsert(message)).await {
-                let jitter = Jitter::up_to(Duration::from_secs(1));
-                tokio::time::sleep(jitter + Duration::from_millis(10)).await;
-                warn!("batch insert error: {}", e);
-                continue;
+            if let Some(h) = &handler {
+                if let Err(e) = h.handle(klines).await {
+                    let jitter = Jitter::up_to(Duration::from_secs(1));
+                    tokio::time::sleep(jitter + Duration::from_millis(10)).await;
+                    warn!("batch handler error: {}", e);
+                    continue;
+                }
             }
 
-            // 等待保存者的回报，加入超时以避免无限挂起
-            match tokio::time::timeout(Duration::from_secs(30), rx).await {
-                Ok(Ok(result)) => {
-                    if let Err(e) = result {
-                        error_count += 1;
-                        if error_count > 1000 {
-                            error!("Failed to send data to saver after 1000 attempts, error: {:?}", e);
-                            return Err(YueError::new(&format!("Failed to send data to saver after 1000 attempts, error:{:?}", e)));
-                        }
-                        if retry_1000_times {
-                            let jitter = Jitter::up_to(Duration::from_secs(10));
-                            tokio::time::sleep(jitter + Duration::from_millis(10)).await;
-                            continue;
-                        } else {
-                            return Err(YueError::new(&format!("Failed to send data to saver, error: {:?}", e)));
-                        }
-                    }
-                }
-                // Receiver 错误（发送方已 drop 或者接收失败）
-                Ok(Err(e)) => {
-                    error_count += 1;
-                    if error_count > 1000 {
-                        error!("Failed to send data to saver after 1000 attempts, error: {:?}", e);
-                        return Err(YueError::new(&format!("Failed to send data to saver after 1000 attempts, error:{:?}", e)));
-                    }
-                    if retry_1000_times {
-                        let jitter = Jitter::up_to(Duration::from_secs(30));
-                        tokio::time::sleep(jitter + Duration::from_millis(10)).await;
-                        continue;
-                    } else {
-                        return Err(YueError::new(&format!("Failed to send data to saver, error: {:?}", e)));
-                    }
-                }
-                // 超时
-                Err(_) => {
-                    error_count += 1;
-                    let timeout_err = format!("Timed out waiting for saver response for symbol {}", symbol);
-                    if error_count > 1000 {
-                        error!("Failed to send data to saver after 1000 attempts, error: {}", timeout_err);
-                        return Err(YueError::new(&format!(
-                            "Failed to send data to saver after 1000 attempts, error:{}",
-                            timeout_err
-                        )));
-                    }
-                    if retry_1000_times {
-                        let jitter = Jitter::up_to(Duration::from_secs(30));
-                        tokio::time::sleep(jitter + Duration::from_millis(10)).await;
-                        continue;
-                    } else {
-                        return Err(YueError::new(&format!("Failed to send data to saver, error: {}", timeout_err)));
-                    }
-                }
-            }
+            // 保留上一轮最后时间戳，用于判断本轮是否没有向前推进。
+            let previous_last_timestamp = last_timestamp;
             if let Some(ts) = last_close_time {
                 last_timestamp = Some(ts);
             }
-            // 不再需要对 `filtered_klines` 取引用来读取最后一条，
-            // 上面已经把 close_time 读取并保存到 `last_close_time`/`last_timestamp`。
-            total_count = total_count + klines_count;
-            if klines_count < 1000 {
-                break;
+
+            // 步骤5-1：本轮最后一条时间与上一轮相同（或倒退），说明翻页不再前进，直接退出且不计入本轮统计。
+            if let (Some(prev), Some(curr)) = (previous_last_timestamp, last_timestamp) {
+                if curr <= prev {
+                    debug!("{} stop fetch because timestamp not forward: prev={}, curr={}", symbol, prev, curr);
+                    break;
+                }
             }
 
-            // 更新下一次的开始时间为最后一条kline的close_time + 1ms
+            // 不再需要对 `klines` 取引用来读取最后一条，
+            // 上面已经把 close_time 读取并保存到 `last_close_time`/`last_timestamp`。
+            total_count = total_count + klines_count;
+
+            // 步骤5-2：最后一条已经到达(或超过)目标 end_time，结束。
+            if let Some(ts) = last_timestamp {
+                if ts >= adjusted_end_time {
+                    break;
+                }
+            }
+
+            // 步骤4：下一次请求从本次最后一条 close_time + 1ms 开始。
             if let Some(k) = &last_timestamp {
                 current_start_time = Some(k + ONE_MILL_SECOND_MS);
             } else {
@@ -446,15 +399,13 @@ where
 mod tests {
     use crate::binance::bn_models::spot_restful::BinanceKline;
     use crate::binance::bn_restful_commands::SPOT_KLINE_HISTORY_COMMAND;
-    use crate::binance::history_data::{CommonRequestBuilder, HistoryFetcher, SimpleHistoryFetcher};
+    use crate::binance::restful_func::{CommonRequestBuilder, HistoryBatchHandler, HistoryFetcherImpl, HistoryFetcherTrait};
     use crate::errors::YueError;
     use crate::http_client::init_http_client;
     use crate::models::HistoryInterval;
-    use crate::query_message::QueryCommand;
     use serde_json::json;
     use serial_test::serial;
     use std::net::TcpListener;
-    use tokio::sync::mpsc;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -481,6 +432,10 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:18080").expect("bind failed");
         let mock_server = MockServer::builder().listener(listener).start().await;
         mock_server
+    }
+
+    fn no_handler() -> Option<HistoryBatchHandler<BinanceKline>> {
+        None
     }
 
     /// 测试：获取K线数据基本功能
@@ -511,26 +466,10 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(mock_klines))
             .mount(&mock_server)
             .await;
-        let fetcher = SimpleHistoryFetcher::kline(&SPOT_KLINE_HISTORY_COMMAND);
+        let fetcher = HistoryFetcherImpl::kline(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonRequestBuilder::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
-        let (tx, mut rx) = mpsc::channel::<QueryCommand<BinanceKline>>(100);
-
-        tokio::task::spawn(async move {
-            while let Some(command) = rx.recv().await {
-                match command {
-                    QueryCommand::GetCount(_) => {}
-                    QueryCommand::BatchInsert(payload) => {
-                        if let Some(callback) = payload.callback {
-                            callback.send(Ok(1)).unwrap();
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        });
-
         let kline_num: Result<u64, YueError> = fetcher
-            .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), None, None, tx, false)
+            .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), None, None, no_handler(), false)
             .await;
         assert!(kline_num.is_ok(), "获取K线数据失败: {:?}", kline_num.as_ref().err());
         assert_eq!(kline_num.unwrap(), 500);
@@ -573,8 +512,12 @@ mod tests {
         let interval_ms = 3600000u64; // 1h
         let first_start = base_open;
         let second_start = base_open + (first_batch.len() as u64) * interval_ms;
-        let close_time = base_open + 1200 * 3600000; // 最后一条的 close_time
-        let adjusted_end_time = HistoryInterval::OneHour.get_close_unix_ms(close_time) + HistoryInterval::OneHour.to_milliseconds() - 1;
+        let third_start = base_open + (second_batch.len() as u64 + first_batch.len() as u64) * interval_ms;
+        // end_time 设置在 1300h 处，保证两批数据都在窗口内
+        // 生产代码: adjusted_end_time = get_close_unix_ms(end_time) - 1
+        let end_time_input = base_open + 1300 * interval_ms;
+        let adjusted_end_time = HistoryInterval::OneHour.get_close_unix_ms(end_time_input).saturating_sub(1);
+        let empty_response: Vec<serde_json::Value> = vec![];
 
         Mock::given(method("GET"))
             .and(path("/api/v3/klines"))
@@ -601,29 +544,28 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let fetcher = SimpleHistoryFetcher::kline(&SPOT_KLINE_HISTORY_COMMAND);
+        // 第三次请求用于结束循环：返回空数组，触发 klines.is_empty() 退出。
+        Mock::given(method("GET"))
+            .and(path("/api/v3/klines"))
+            .and(query_param("symbol", "BTCUSDT"))
+            .and(query_param("interval", "1h"))
+            .and(query_param("startTime", &third_start.to_string()))
+            .and(query_param("endTime", &adjusted_end_time.to_string()))
+            .and(query_param("limit", "1000"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(empty_response))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let fetcher = HistoryFetcherImpl::kline(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonRequestBuilder::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
-        let (recipient, mut rx) = mpsc::channel::<QueryCommand<BinanceKline>>(100);
-        tokio::task::spawn(async move {
-            while let Some(command) = rx.recv().await {
-                match command {
-                    QueryCommand::GetCount(_) => {}
-                    QueryCommand::BatchInsert(payload) => {
-                        if let Some(callback) = payload.callback {
-                            callback.send(Ok(1)).unwrap();
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        });
         let kline_res: Result<u64, YueError> = fetcher
             .get_all_kline_data(
                 base_param,
                 Some(HistoryInterval::OneHour),
-                Some(1609459200000),
-                Some(close_time),
-                recipient,
+                Some(base_open),
+                Some(end_time_input),
+                no_handler(),
                 false,
             )
             .await;
@@ -648,24 +590,10 @@ mod tests {
             .respond_with(ResponseTemplate::new(500))
             .mount(&mock_server)
             .await;
-        let fetcher = SimpleHistoryFetcher::kline(&SPOT_KLINE_HISTORY_COMMAND);
+        let fetcher = HistoryFetcherImpl::kline(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonRequestBuilder::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
-        let (recipient, mut rx) = mpsc::channel::<QueryCommand<BinanceKline>>(100);
-        tokio::task::spawn(async move {
-            while let Some(command) = rx.recv().await {
-                match command {
-                    QueryCommand::GetCount(_) => {}
-                    QueryCommand::BatchInsert(payload) => {
-                        if let Some(callback) = payload.callback {
-                            callback.send(Ok(1)).unwrap();
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        });
         let kline_res: Result<u64, YueError> = fetcher
-            .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), Some(1609459200000), None, recipient, false)
+            .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), Some(1609459200000), None, no_handler(), false)
             .await;
         assert!(kline_res.is_err());
     }
@@ -694,12 +622,14 @@ mod tests {
         let empty_response: Vec<serde_json::Value> = vec![];
 
         // 对于恰好 1000 条的场景，第二次请求应从第一批最后一条 close_time + 1ms 开始
+        // end_time 设置在 1200h 处，确保第一批 1000 条不会触发步骤5-2退出（还有余量）
+        // 生产代码: adjusted_end_time = get_close_unix_ms(end_time) - 1
         let base_open = 1609459200000u64;
-        let close_time = base_open + (mock_klines.len() as u64) * 3600000; // 最后一条的 close_time
-        let adjusted_end_time = HistoryInterval::OneHour.get_close_unix_ms(close_time) + HistoryInterval::OneHour.to_milliseconds() - 1;
         let interval_ms = 3600000u64; // 1h
         let first_start = base_open;
         let second_start = base_open + (mock_klines.len() as u64) * interval_ms;
+        let end_time_input = base_open + 1200 * interval_ms;
+        let adjusted_end_time = HistoryInterval::OneHour.get_close_unix_ms(end_time_input).saturating_sub(1);
 
         Mock::given(method("GET"))
             .and(path("/api/v3/klines"))
@@ -718,104 +648,26 @@ mod tests {
             .and(query_param("symbol", "BTCUSDT"))
             .and(query_param("interval", "1h"))
             .and(query_param("startTime", &second_start.to_string()))
+            .and(query_param("endTime", &adjusted_end_time.to_string()))
             .and(query_param("limit", "1000"))
             .respond_with(ResponseTemplate::new(200).set_body_json(empty_response))
             .expect(1)
             .mount(&mock_server)
             .await;
 
-        let fetcher = SimpleHistoryFetcher::kline(&SPOT_KLINE_HISTORY_COMMAND);
+        let fetcher = HistoryFetcherImpl::kline(&SPOT_KLINE_HISTORY_COMMAND);
         let base_param = CommonRequestBuilder::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
-        let (recipient, mut rx) = mpsc::channel::<QueryCommand<BinanceKline>>(100);
-        tokio::task::spawn(async move {
-            while let Some(command) = rx.recv().await {
-                match command {
-                    QueryCommand::GetCount(_) => {}
-                    QueryCommand::BatchInsert(payload) => {
-                        if let Some(callback) = payload.callback {
-                            callback.send(Ok(1)).unwrap();
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        });
         let kline_res: Result<u64, YueError> = fetcher
             .get_all_kline_data(
                 base_param,
                 Some(HistoryInterval::OneHour),
-                Some(1609459200000),
-                Some(close_time),
-                recipient,
+                Some(base_open),
+                Some(end_time_input),
+                no_handler(),
                 false,
             )
             .await;
         assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
         assert_eq!(kline_res.unwrap(), 1000);
-    }
-
-    /// 测试：废弃非close的K线数据
-    ///
-    /// 设计思路：验证当API返回的K线中有非close的数据时（close_time不符合interval边界），
-    /// 这些数据应该被过滤掉，只返回符合interval边界的K线
-    ///
-    /// 场景说明：
-    /// - API返回1000条K线，其中：
-    ///   - 900条K线的close_time对齐到1h边界（保留）
-    ///   - 100条K线的close_time不对齐（废弃）
-    /// - 验证最终只返回900条K线
-    #[tokio::test]
-    #[serial]
-    async fn test_get_all_kline_data_discard_non_closed_kline() {
-        let mock_server = create_net_work().await;
-
-        let mut mock_klines = vec![];
-        // 添加900条对齐的K线（close_time在1h边界上）
-        for i in 0..900 {
-            let open_time = 1609459200000 + i * 3600000;
-            let close_time = open_time + 3600000 - 1; // 对齐到1h边界
-            mock_klines.push(create_mock_kline(open_time, close_time));
-        }
-        // 添加100条未对齐的K线（close_time不在1h边界上）
-        for i in 900..1000 {
-            let open_time = 1609459200000 + i * 3600000;
-            let close_time = open_time + 3600000 - 500 - 1; // 不对齐，提前500ms
-            mock_klines.push(create_mock_kline(open_time, close_time));
-        }
-
-        Mock::given(method("GET"))
-            .and(path("/api/v3/klines"))
-            .and(query_param("symbol", "BTCUSDT"))
-            .and(query_param("interval", "1h"))
-            .and(query_param("limit", "1000"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(mock_klines))
-            .expect(1) // Only one request expected
-            .mount(&mock_server)
-            .await;
-
-        let fetcher = SimpleHistoryFetcher::kline(&SPOT_KLINE_HISTORY_COMMAND);
-        let base_param = CommonRequestBuilder::new("BTCUSDT".to_string(), 1000, HistoryInterval::OneHour);
-        let (recipient, mut rx) = mpsc::channel::<QueryCommand<BinanceKline>>(100);
-        tokio::task::spawn(async move {
-            while let Some(command) = rx.recv().await {
-                match command {
-                    QueryCommand::GetCount(_) => {}
-                    QueryCommand::BatchInsert(payload) => {
-                        if let Some(callback) = payload.callback {
-                            callback.send(Ok(1)).unwrap();
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        });
-
-        let kline_res: Result<u64, YueError> = fetcher
-            .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), Some(1609459200000), None, recipient, false)
-            .await;
-        assert!(kline_res.is_ok(), "获取K线数据失败: {:?}", kline_res.as_ref().err());
-        // 应该只返回900条对齐的K线，100条未对齐的被废弃
-        let num = kline_res.unwrap();
-        assert_eq!(num, 900, "应该只返回900条对齐的K线，但返回了{}", num);
     }
 }

@@ -17,7 +17,7 @@ use tokio::sync::{RwLock, Semaphore};
 use yue::binance::bn_models::common::SymbolType;
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_restful_commands::{SPOT_KLINE_HISTORY_COMMAND, SWAP_KLINE_HISTORY_COMMAND};
-use yue::binance::history_data::{CommonRequestBuilder, HistoryFetcher, MuteHistoryParam, SimpleHistoryFetcher};
+use yue::binance::restful_func::{CommonRequestBuilder, HistoryFetcher, MuteHistoryParam, SimpleHistoryFetcher};
 use yue::models::HistoryInterval;
 
 pub const BN_SPOT_KLINE_CHECK: &str = "binance_spot_check"; // WireMock server address
@@ -588,7 +588,7 @@ impl RepairStrategy for KlineGapRepairStrategy {
                     let sem_clone = sem.clone();
                     let reception = match self.symbol_type {
                         SymbolType::Spot => get_spot_kline_table(),
-                        SymbolType::Swap => get_swap_kline_table_addr(),
+                        // SymbolType::Swap => get_swap_kline_table_addr(),
                         _ => {
                             error!("symbol type mismatch");
                             continue;

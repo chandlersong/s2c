@@ -1,10 +1,11 @@
 use std::error::Error;
 use std::fs::File;
 use std::io::Write;
+use yue::binance::bn_models::common::TradingSymbolInfo;
 use yue::binance::bn_models::spot_restful::ExchangeInfo;
 use yue::binance::bn_models::swap_restful::SwapExchangeInfo;
 use yue::binance::bn_restful_commands::{SPOT_EXCHANGE_COMMAND, SWAP_EXCHANGE_COMMAND, execute_json_request};
-use yue::binance::history_data::{CONTRACT_TYPE_PERPETUAL, TradingSymbolInfo, get_trading_spot_symbols, get_trading_swap_symbols};
+use yue::binance::restful_func::{CONTRACT_TYPE_PERPETUAL, get_trading_spot_symbols, get_trading_swap_symbols};
 use yue::http_client::{get_http_client, init_http_client};
 
 /// 将symbols写入CSV文件

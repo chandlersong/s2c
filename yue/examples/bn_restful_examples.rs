@@ -5,7 +5,7 @@ use yue::binance::bn_models::common::{ServerTime, ToRequestBuilder};
 use yue::binance::bn_models::spot_restful::{BinanceKline, Depth, Ticker24hr};
 use yue::binance::bn_restful_commands::{SERVER_TIME_COMMAND, execute_json_request};
 use yue::binance::bn_restful_commands::{SPOT_DEPTH_1000_COMMAND, SPOT_KLINE_HISTORY_COMMAND, SPOT_TICKER_24HR_ONE_SYMBOL_COMMAND};
-use yue::binance::history_data::{CommonRequestBuilder, execute_ping};
+use yue::binance::restful_func::{CommonRequestBuilder, execute_ping};
 
 use yue::http_client::{get_http_client, init_http_client};
 use yue::models::HistoryInterval;

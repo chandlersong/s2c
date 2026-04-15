@@ -1,20 +1,46 @@
 use crate::binance::bn_dashboard::{BinanceDashboardSnapShot, BinanceDashboardWatcher, TradingSymbol};
 use crate::errors::YuError;
 use crate::errors::YuError::NotSupportError;
-use li::websocket::connection::{WebSocketConnection, WebSocketInterface};
+use async_trait::async_trait;
+use li::websocket::connection::{MessageHandler, WebSocketConnection, WebSocketInterface};
+use li::websocket::models::WebSocketMessage;
 use log::{error, info};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::broadcast;
 use yue::binance::bn_json_websocket::{SPOT_STREAM_WEBSOCKET, SWAP_STREAM_WEBSOCKET, WS_SUBSCRIBE_COMMAND};
 use yue::binance::bn_models::common::SymbolType;
 use yue::binance::bn_models::spot_restful::BinanceKline;
-use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamWrapper;
-use yue::query_message::DataSourceExecutor;
+use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamResponse::Kline;
+use yue::binance::bn_models::spot_websocket_stream::{BinanceSpotWebSocketStreamWrapper, SpotKlineData};
+use yue::query_message::{DataSourceExecutor, InsertPayload, QueryCommand};
 
 ///
 /// 这个服务，主要后段，负责和websocket通行的一些service
 ///
 ///
+
+struct SpotKlineSaver {
+    db: DataSourceExecutor<SpotKlineData>,
+}
+#[async_trait]
+impl MessageHandler<BinanceSpotWebSocketStreamWrapper> for SpotKlineSaver {
+    async fn handle_message(&self, message: &BinanceSpotWebSocketStreamWrapper) {
+        match &message.data {
+            Kline(payload) => {
+                if payload.kline.is_closed {
+                    let insert_payload = InsertPayload::new_no_replay(payload.kline.clone());
+                    if let Err(e) = self.db.send(QueryCommand::Insert(insert_payload)).await {
+                        error!("Error save spot kline: {}", e);
+                    }
+                }
+            }
+            _ => {
+                //ignore other message types
+            }
+        }
+    }
+}
 
 ///
 /// 这个主要负责
@@ -32,7 +58,7 @@ impl KlineSubscribeService {
     ///
     pub async fn startup(
         symbol_type: SymbolType,
-        db: DataSourceExecutor<BinanceKline>,
+        db: DataSourceExecutor<SpotKlineData>,
         symbol_watch: BinanceDashboardWatcher,
         proxy: Option<String>,
     ) -> Result<(), YuError> {
@@ -79,14 +105,6 @@ impl KlineSubscribeService {
 
         info!("initial subscribe symbols num: {:?}", symbols.len());
 
-        //debug代码
-        let mut message_rx = interface.get_message_receiver();
-
-        tokio::spawn(async move {
-            while let Ok(message) = message_rx.recv().await {
-                info!("Received message {:?}", message);
-            }
-        });
         Ok(())
     }
 

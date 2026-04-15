@@ -39,6 +39,7 @@ pub fn generate_test_kline_vec(start_time: u64, interval_ms: u64, close: f64, co
             let close_time = open_time + interval_ms - 1;
             BinanceKline {
                 open_time,
+                symbol: None,
                 open: dec!(10000.0),
                 high: dec!(10100.0),
                 low: dec!(9900.0),

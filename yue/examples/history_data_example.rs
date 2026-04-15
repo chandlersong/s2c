@@ -5,10 +5,11 @@ use tokio::sync::mpsc;
 use yue::binance::bn_models::common::HistoryVo;
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_restful_commands::{SPOT_KLINE_HISTORY_COMMAND, SWAP_KLINE_HISTORY_COMMAND};
-use yue::binance::history_data::{CommonRequestBuilder, HistoryFetcher, SimpleHistoryFetcher};
+use yue::binance::restful_func::{CommonRequestBuilder, HistoryBatchHandlerTrait, HistoryFetcherImpl, HistoryFetcherTrait};
+use yue::errors::YueError;
 use yue::http_client::init_http_client;
 use yue::models::HistoryInterval;
-use yue::query_message::QueryCommand;
+use yue::query_message::{DataSourceExecutor, QueryCommand};
 
 fn print_kline_result<H>(klines: &Vec<H>, interval: Option<HistoryInterval>)
 where
@@ -61,6 +62,27 @@ where
     }
 }
 
+struct PrinterHandler;
+
+impl PrinterHandler {
+    pub fn new() -> Box<dyn HistoryBatchHandlerTrait<BinanceKline> + Send> {
+        Box::new(Self {}) as Box<dyn HistoryBatchHandlerTrait<BinanceKline> + Send>
+    }
+}
+
+#[async_trait::async_trait]
+impl HistoryBatchHandlerTrait<BinanceKline> for PrinterHandler {
+    async fn handle(&self, batch_data: Vec<BinanceKline>) -> Result<(), YueError> {
+        let size = batch_data.len();
+        info!("received BatchInsert, size={}", size);
+        if size > 0 {
+            // 打印该批次的首尾时间信息
+            print_kline_result(&batch_data, Some(HistoryInterval::FiveMinutes));
+        }
+        Ok(())
+    }
+}
+
 ///
 /// 这个例子，主要是是获取Kline，包括以下一些数据
 /// 1. spot
@@ -76,96 +98,35 @@ async fn main() {
     let one_hour: u64 = 60 * 60 * 1000;
     let start_ms = now_ms - 10 * one_hour;
     let end_ms = now_ms - 10 * 1000 * 60;
-    println!("Now (ms) = {}, start_time (ms) = {}", now_ms, start_ms);
+    info!("Now  = {}, start_time  = {}", unix_2_readable(&now_ms), unix_2_readable(&start_ms));
     let symbol = "BTCUSDT";
-    let spot_kline_fetch = SimpleHistoryFetcher::kline(&SPOT_KLINE_HISTORY_COMMAND);
+    let spot_kline_fetch = HistoryFetcherImpl::kline(&SPOT_KLINE_HISTORY_COMMAND);
     let base_param = CommonRequestBuilder::new(symbol.to_string(), 1000, HistoryInterval::FiveMinutes);
-    let (spot_recipient, mut spot_rx) = mpsc::channel::<QueryCommand<BinanceKline>>(100);
     let _ = spot_kline_fetch
         .get_all_kline_data(
             base_param,
             Some(HistoryInterval::FiveMinutes),
             Some(start_ms),
-            Some(end_ms),
-            spot_recipient,
+            None,
+            Some(PrinterHandler::new()),
             false,
         )
         .await;
 
-    let spot_collector = tokio::spawn(async move {
-        let mut batch_count: usize = 0;
-        let mut total_klines: usize = 0;
-        while let Some(cmd) = spot_rx.recv().await {
-            match cmd {
-                QueryCommand::BatchInsert(payload) => {
-                    let symbol = payload.symbol.clone();
-                    let size = payload.data.len();
-                    info!("received BatchInsert for {:?}, size={}", symbol, size);
-                    if size > 0 {
-                        // 打印该批次的首尾时间信息
-                        print_kline_result(&payload.data, Some(HistoryInterval::FiveMinutes));
-                    }
-                    batch_count += 1;
-                    total_klines += size;
-                    // 如果需要给发送方回复，可以使用 payload.result_tx.send(...)
-                    // 目前这里不回复，直接让 result_tx 被丢弃。
-                }
-                QueryCommand::GetCount(resp) => {
-                    // 返回当前已统计的总数（示例中使用 usize -> Result<usize, YueError>）
-                    let _ = resp.send(Ok(total_klines));
-                }
-                _ => {}
-            }
-        }
-        info!("spot_rx closed: total batches = {}, total klines = {}", batch_count, total_klines);
-    });
+    info!("================ finish fetch spot btc==============");
 
-    info!("================fetch spot btc==============");
-
-    let swap_kline_fetch = SimpleHistoryFetcher::kline(&SWAP_KLINE_HISTORY_COMMAND);
-    let base_param = CommonRequestBuilder::new(symbol.to_string(), 1000, HistoryInterval::OneHour);
-
-    let (swap_recipient, mut swap_rx) = mpsc::channel::<QueryCommand<BinanceKline>>(100);
-    let _ = swap_kline_fetch
-        .get_all_kline_data(base_param, Some(HistoryInterval::OneHour), Some(start_ms), None, swap_recipient, false)
-        .await;
-    let swap_collector = tokio::spawn(async move {
-        let mut batch_count: usize = 0;
-        let mut total_klines: usize = 0;
-        while let Some(cmd) = swap_rx.recv().await {
-            match cmd {
-                QueryCommand::BatchInsert(payload) => {
-                    let symbol = payload.symbol.clone();
-                    let size = payload.data.len();
-                    info!("received BatchInsert for {:?}, size={}", symbol, size);
-                    if size > 0 {
-                        // 打印该批次的首尾时间信息
-                        print_kline_result(&payload.data, Some(HistoryInterval::FiveMinutes));
-                    }
-                    batch_count += 1;
-                    total_klines += size;
-                    // 如果需要给发送方回复，可以使用 payload.result_tx.send(...)
-                    // 目前这里不回复，直接让 result_tx 被丢弃。
-                }
-                QueryCommand::GetCount(resp) => {
-                    // 返回当前已统计的总数（示例中使用 usize -> Result<usize, YueError>）
-                    let _ = resp.send(Ok(total_klines));
-                }
-                _ => {}
-            }
-        }
-        info!("spot_rx closed: total batches = {}, total klines = {}", batch_count, total_klines);
-    });
-    info!("================fetch swap btc==============");
-    tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
-
-    // 等待 collector 任务完成，确保打印最终结果
-    let _ = spot_collector.await;
-    let _ = swap_collector.await;
-    // let swap_funding_rate_fetch = SimpleHistoryFetcher::new(&SWAP_FUNDING_RATE_COMMAND);
-    // let base_param = CommonParam::new(symbol.to_string(), 1000, HistoryInterval::OneHour);
-    // let btc_funding_rate: Result<(Vec<FundingRate>, u16), YueError> =
-    //     swap_funding_rate_fetch.get_all_kline_data(base_param, None, Some(start_ms), None).await;
-    // info!("================fetch btc funding rate ==============");
-    // print_kline_result(&btc_funding_rate, Some(HistoryInterval::OneHour));
+    // let swap_kline_fetch = SimpleHistoryFetcher::kline(&SWAP_KLINE_HISTORY_COMMAND);
+    // let base_param = CommonRequestBuilder::new(symbol.to_string(), 1000, HistoryInterval::OneHour);
+    // let _ = swap_kline_fetch
+    //     .get_all_kline_data(
+    //         base_param,
+    //         Some(HistoryInterval::OneHour),
+    //         Some(start_ms),
+    //         Some(end_ms),
+    //         PrinterExecutor::new(),
+    //         false,
+    //     )
+    //     .await;
+    // info!("================finish fetch swap btc==============");
+    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
 }
