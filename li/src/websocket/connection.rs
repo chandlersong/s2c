@@ -114,11 +114,13 @@ where
     }
 }
 
+pub type MessageHandler<M> = Box<dyn MessageHandlerTrait<M> + Send + Sync>;
+pub type ShareMessageHandler<M> = Arc<dyn MessageHandlerTrait<M> + Send + Sync>;
 ///
 /// 主要是对message做点定制化操纵的handler。比如分发消息
 ///
 #[async_trait]
-pub trait MessageHandler<M: WebSocketMessage> {
+pub trait MessageHandlerTrait<M: WebSocketMessage> {
     /// 处理收到的消息。
     async fn handle_message(&self, message: &M);
 
@@ -135,21 +137,21 @@ pub struct BroadcastMessageHandler<M: WebSocketMessage> {
 }
 
 impl<M: WebSocketMessage> BroadcastMessageHandler<M> {
-    pub fn new() -> Self {
+    pub fn new() -> ShareMessageHandler<M> {
         let (message_broadcast, _) = broadcast::channel(MESSAGE_CACHE);
-        Self { message_broadcast }
+        Arc::new(Self { message_broadcast })
     }
 }
 #[async_trait]
-impl<M: WebSocketMessage> MessageHandler<M> for BroadcastMessageHandler<M> {
+impl<M: WebSocketMessage> MessageHandlerTrait<M> for BroadcastMessageHandler<M> {
     async fn handle_message(&self, message: &M) {
         if self.message_broadcast.receiver_count() == 0 {
-            debug!("没有订阅者，消息将被丢弃");
+            trace!("没有订阅者，消息将被丢弃");
             return;
         }
         if let Err(e) = self.message_broadcast.send(message.clone()) {
             // 这个感觉会很多，所以就debug了
-            debug!("广播消息失败: {}", e);
+            error!("广播消息失败: {}", e);
         }
     }
 
@@ -179,15 +181,13 @@ impl WebSocketConnection {
         url: String,
         reconnect_interval: Duration,
         proxy: Option<String>,
-        message_handler: Option<Arc<dyn MessageHandler<M> + Send + Sync + 'static>>,
+        message_handler: Option<ShareMessageHandler<M>>,
     ) -> Arc<WebSocketInterface<M>>
     where
         M: WebSocketMessage + Send + Sync + 'static,
     {
-        let m_handler: Arc<dyn MessageHandler<M> + Send + Sync + 'static> = match message_handler {
-            Some(h) => h,
-            None => Arc::new(BroadcastMessageHandler::new()),
-        };
+        //FUTURE: 这些channel的宽度，通过参数传进来，现在写的话，感觉参数太多。
+        let m_handler = message_handler.unwrap_or_else(|| BroadcastMessageHandler::new());
         let message_tx = m_handler.get_tx();
         let (event_tx, _) = broadcast::channel(EVENT_CACHE);
         let (command_tx, mut command_rx) = mpsc::unbounded_channel();
@@ -240,7 +240,7 @@ impl WebSocketConnection {
         command_tx: &UnboundedSender<CommandMessage>,
         command_rx: &mut UnboundedReceiver<CommandMessage>,
         initial_command: &mut Vec<WsMessage>,
-        message_handler: Arc<dyn MessageHandler<M> + Send + Sync + 'static>,
+        message_handler: ShareMessageHandler<M>,
     ) -> Result<ConnectionAction, LiError> {
         let (mut ws_stream, _) = if let Some(proxy_url) = proxy {
             info!("使用代理连接: {}", proxy_url);

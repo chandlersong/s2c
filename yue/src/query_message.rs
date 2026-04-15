@@ -10,11 +10,11 @@ use tokio::sync::{mpsc, oneshot};
 ///
 
 #[async_trait]
-pub trait DataSourceExecutor<V: Send> {
+pub trait DataSourceExecutorTrait<V: Send> {
     async fn execute(&self, command: QueryCommand<V>) -> Result<(), YueError>;
 }
 
-pub type DataSourceExecutorImpl<V> = Box<dyn DataSourceExecutor<V> + Send>;
+pub type DataSourceExecutor<V> = Box<dyn DataSourceExecutorTrait<V> + Send>;
 
 pub enum QueryCommand<V: Send> {
     GetCount(oneshot::Sender<Result<usize, YueError>>), // 查询数量，返回 usize,如果-1，表示查询出错

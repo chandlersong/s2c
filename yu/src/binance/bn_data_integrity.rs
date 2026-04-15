@@ -1,11 +1,9 @@
 use crate::binance::binance_db_consts::BinanceTables;
-use crate::binance::bn_backend_service::{get_spot_kline_table, get_swap_kline_table_addr};
 use crate::data_integrity::check::ValidationStrategy;
 use crate::data_integrity::models::{RepairRequest, ValidationGap, ValidationResult};
 use crate::data_integrity::repair::RepairStrategy;
 use crate::duck_db::DBProvider;
 use crate::errors::YuError;
-use crate::exchange::{CloneHistoryFetcherFactory, HistoryFetcherFactory};
 use async_trait::async_trait;
 use governor::Jitter;
 use li::tools::time::unix_2_readable;
@@ -17,7 +15,7 @@ use tokio::sync::{RwLock, Semaphore};
 use yue::binance::bn_models::common::SymbolType;
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_restful_commands::{SPOT_KLINE_HISTORY_COMMAND, SWAP_KLINE_HISTORY_COMMAND};
-use yue::binance::restful_func::{CommonRequestBuilder, HistoryFetcher, MuteHistoryParam, SimpleHistoryFetcher};
+use yue::binance::restful_func::{CommonRequestBuilder, HistoryFetcher, MuteHistoryParam};
 use yue::models::HistoryInterval;
 
 pub const BN_SPOT_KLINE_CHECK: &str = "binance_spot_check"; // WireMock server address
@@ -556,88 +554,89 @@ impl RepairStrategy for KlineGapRepairStrategy {
     /// 3.通过SPOT_STREAM_WRITER_ADDR，获得addr，发送消息去保存
     ///
     async fn repair(&self, req: RepairRequest) -> Result<(), String> {
-        if req.gaps.is_empty() {
-            return Ok(());
-        }
-
-        let kline_fetcher = match self.symbol_type {
-            SymbolType::Spot => SimpleHistoryFetcher::kline(&SPOT_KLINE_HISTORY_COMMAND),
-            SymbolType::Swap => SimpleHistoryFetcher::kline(&SWAP_KLINE_HISTORY_COMMAND),
-            _ => {
-                return Err(format!("KlineGapRepairStrategy does not support symbol type: {:?}", self.symbol_type));
-            }
-        };
-        let fetch_factory: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonRequestBuilder, BinanceKline> =
-            CloneHistoryFetcherFactory::new(kline_fetcher);
-
-        // 并发拉取：使用 Semaphore 控制并发量，避免同时发起过多请求
-        let concurrency_limit = 10usize; // 可调整
-        let sem = Arc::new(Semaphore::new(concurrency_limit));
-
-        let mut handles = Vec::new();
-        for gap in req.gaps.into_iter() {
-            match gap {
-                ValidationGap::MissingData {
-                    symbol,
-                    start_time,
-                    end_time,
-                    table: _,
-                    ..
-                } => {
-                    let factory = fetch_factory.clone();
-                    let sem_clone = sem.clone();
-                    let reception = match self.symbol_type {
-                        SymbolType::Spot => get_spot_kline_table(),
-                        // SymbolType::Swap => get_swap_kline_table_addr(),
-                        _ => {
-                            error!("symbol type mismatch");
-                            continue;
-                        }
-                    };
-                    // spawn 一个异步任务来处理该 gap
-                    let handle = tokio::spawn(async move {
-                        // 获取信号量许可
-                        let _permit = sem_clone.acquire().await;
-
-                        let fetcher = factory.create_fetcher();
-                        let param = <CommonRequestBuilder as MuteHistoryParam>::initial(symbol.clone(), 1000, HistoryInterval::FiveMinutes);
-                        tokio::spawn(async move {
-                            let _ = fetcher
-                                .get_all_kline_data(
-                                    param,
-                                    Some(HistoryInterval::FiveMinutes),
-                                    Some(start_time),
-                                    Some(end_time),
-                                    reception,
-                                    true,
-                                )
-                                .await;
-                        });
-                        Ok::<(), String>(())
-                    });
-                    handles.push(handle);
-                }
-                other => {
-                    debug!("repair: unsupported gap variant: {:?}", other);
-                }
-            }
-        }
-
-        // 收集所有任务结果
-        let mut errors: Vec<String> = Vec::new();
-        for h in handles {
-            match h.await {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => errors.push(e),
-                Err(join_err) => errors.push(format!("join error: {}", join_err)),
-            }
-        }
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors.join("; "))
-        }
+        todo!()
+        // if req.gaps.is_empty() {
+        //     return Ok(());
+        // }
+        //
+        // let kline_fetcher = match self.symbol_type {
+        //     SymbolType::Spot => SimpleHistoryFetcher::kline(&SPOT_KLINE_HISTORY_COMMAND),
+        //     SymbolType::Swap => SimpleHistoryFetcher::kline(&SWAP_KLINE_HISTORY_COMMAND),
+        //     _ => {
+        //         return Err(format!("KlineGapRepairStrategy does not support symbol type: {:?}", self.symbol_type));
+        //     }
+        // };
+        // let fetch_factory: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonRequestBuilder, BinanceKline> =
+        //     CloneHistoryFetcherFactory::new(kline_fetcher);
+        //
+        // // 并发拉取：使用 Semaphore 控制并发量，避免同时发起过多请求
+        // let concurrency_limit = 10usize; // 可调整
+        // let sem = Arc::new(Semaphore::new(concurrency_limit));
+        //
+        // let mut handles = Vec::new();
+        // for gap in req.gaps.into_iter() {
+        //     match gap {
+        //         ValidationGap::MissingData {
+        //             symbol,
+        //             start_time,
+        //             end_time,
+        //             table: _,
+        //             ..
+        //         } => {
+        //             let factory = fetch_factory.clone();
+        //             let sem_clone = sem.clone();
+        //             let reception = match self.symbol_type {
+        //                 SymbolType::Spot => get_spot_kline_table(),
+        //                 // SymbolType::Swap => get_swap_kline_table_addr(),
+        //                 _ => {
+        //                     error!("symbol type mismatch");
+        //                     continue;
+        //                 }
+        //             };
+        //             // spawn 一个异步任务来处理该 gap
+        //             let handle = tokio::spawn(async move {
+        //                 // 获取信号量许可
+        //                 let _permit = sem_clone.acquire().await;
+        //
+        //                 let fetcher = factory.create_fetcher();
+        //                 let param = <CommonRequestBuilder as MuteHistoryParam>::initial(symbol.clone(), 1000, HistoryInterval::FiveMinutes);
+        //                 tokio::spawn(async move {
+        //                     let _ = fetcher
+        //                         .get_all_kline_data(
+        //                             param,
+        //                             Some(HistoryInterval::FiveMinutes),
+        //                             Some(start_time),
+        //                             Some(end_time),
+        //                             reception,
+        //                             true,
+        //                         )
+        //                         .await;
+        //                 });
+        //                 Ok::<(), String>(())
+        //             });
+        //             handles.push(handle);
+        //         }
+        //         other => {
+        //             debug!("repair: unsupported gap variant: {:?}", other);
+        //         }
+        //     }
+        // }
+        //
+        // // 收集所有任务结果
+        // let mut errors: Vec<String> = Vec::new();
+        // for h in handles {
+        //     match h.await {
+        //         Ok(Ok(())) => {}
+        //         Ok(Err(e)) => errors.push(e),
+        //         Err(join_err) => errors.push(format!("join error: {}", join_err)),
+        //     }
+        // }
+        //
+        // if errors.is_empty() {
+        //     Ok(())
+        // } else {
+        //     Err(errors.join("; "))
+        // }
     }
 
     fn name(&self) -> &'static str {

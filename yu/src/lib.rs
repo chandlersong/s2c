@@ -1,7 +1,5 @@
 pub mod duck_db;
 pub mod errors;
-pub mod exchange;
-
 #[cfg(test)]
 pub mod test_utils;
 

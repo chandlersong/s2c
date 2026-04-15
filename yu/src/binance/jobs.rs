@@ -1,12 +1,9 @@
 use crate::binance::binance_db_consts::ALL_BINANCE_TABLES;
-use crate::binance::bn_backend_service::{get_spot_kline_table, get_swap_funding_rate_table_addr, get_swap_kline_table_addr};
 use crate::binance::bn_dashboard::{init_market_depth_dashboard, BinanceDashboard, MarketDepthDashBoard};
-use crate::binance::history_task::HistoryDataTask;
-use crate::config::{get_config, AccountConfig, AccountType, SecurityType};
+use crate::config::{get_config, AccountConfig, AccountType, AppConfig, SecurityType};
 use crate::cron_job;
 use crate::duck_db::DBProvider;
 use crate::errors::YuError;
-use crate::exchange::CloneHistoryFetcherFactory;
 use crate::websocket::subscribers::account_sync_actor::get_account_addr;
 use crate::websocket::subscribers::storage_subscriber::get_spot_stream_writer;
 use actix::Actor;
@@ -21,19 +18,13 @@ use tokio::sync::watch;
 use yue::binance::bn_json_websocket::{StreamCommandRequest, SPOT_STREAM_WEBSOCKET, SPOT_WEBSOCKET, WS_SUBSCRIBE_COMMAND};
 use yue::binance::bn_models::common::{PortfolioSpotOrderData, PortfolioSwapOrderData, SpotOrderData, SwapOrderData, SymbolType};
 use yue::binance::bn_models::portfolio_account_websocket::BinancePortfolioWebSocketStreamResponse;
-use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_models::spot_websocket::BinanceSpotAccountWebSocketResponse;
 use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamResponse;
 use yue::binance::bn_models::swap_account_stream::BinanceSwapAccountStreamResponse;
-use yue::binance::bn_models::swap_restful::FundingRate;
-use yue::binance::bn_restful_commands::{
-    SPOT_KLINE_HISTORY_COMMAND, SWAP_FIVE_MIN_KLINE_HISTORY_COMMAND, SWAP_FUNDING_RATE_COMMAND, SWAP_KLINE_HISTORY_COMMAND,
-};
+use yue::binance::bn_restful_commands::{SWAP_FUNDING_RATE_COMMAND, SWAP_KLINE_HISTORY_COMMAND};
 use yue::binance::listen_key_client::{ListenKeyClient, NormalAccountAssignName, PortfolioAccountAssignName};
 use yue::binance::order_book::{OrderBookService, Subscribe as OrderBookSubscribe};
-use yue::binance::restful_func::{CommonRequestBuilder, SimpleHistoryFetcher};
 use yue::binance::websocket_actor::SpotAccountActor;
-use yue::models::HistoryInterval;
 use yue::tools::SnowyFlakeWrapper;
 
 ///
@@ -74,7 +65,7 @@ pub async fn start_bn_jobs() -> Result<(), YuError> {
         warn!("币安表创建失败,{}", _e);
     }
     info!("数据库创建表完成");
-    start_refresh_history_data(dash_board.clone()).await?;
+    start_refresh_history_data(dash_board.clone(), config).await?;
     // start_monitor_account().await?;
     // start_spot_websocket_stream_job().await?;
     Ok(())
@@ -345,100 +336,24 @@ async fn start_spot_websocket_stream_job() -> Result<(), YuError> {
 }
 
 ///
+/// # 关于K线的业务思考。
+/// ## 初始化和更新的区别
+/// 1. 初始化使用restful，而更新使用websocket。因为初始化需要获取历史数据，而更新只需要获取最新数据。
+/// 2. symbol的区别。只是更新在trading的数据。但是初始化，一些下架币也要更新(待定)
 ///
-async fn start_refresh_history_data(dash_board: Arc<BinanceDashboard>) -> Result<(), YuError> {
-    let build_kline_task = |request_info, dash_board, db_executor, task_name: &str, symbol_type, interval| {
-        let base_fetcher = SimpleHistoryFetcher::kline(request_info);
-        let fetcher_factory: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonRequestBuilder, BinanceKline> =
-            CloneHistoryFetcherFactory::new(base_fetcher);
-        HistoryDataTask::<_, _, BinanceKline, BinanceDashboard>::new(
-            fetcher_factory,
-            dash_board,
-            db_executor,
-            task_name.to_string(),
-            symbol_type,
-            Some(interval),
-        )
-    };
-
-    let spot_kline_table = get_spot_kline_table();
-    let spot_kline_task = build_kline_task(
-        &SPOT_KLINE_HISTORY_COMMAND,
-        dash_board.clone(),
-        spot_kline_table.clone(),
-        "refresh spot kline data",
-        SymbolType::Spot,
-        HistoryInterval::FiveMinutes,
-    );
-    spot_kline_task.initial_data().await?;
-
-    let swap_kline_table = get_swap_kline_table_addr();
-    let swap_initial_kline_task = build_kline_task(
-        &SWAP_KLINE_HISTORY_COMMAND,
-        dash_board.clone(),
-        swap_kline_table.clone(),
-        "initial swap kline data",
-        SymbolType::Swap,
-        HistoryInterval::FiveMinutes,
-    );
-    swap_initial_kline_task.initial_data().await?;
-
-    let swap_update_kline_task = build_kline_task(
-        &SWAP_FIVE_MIN_KLINE_HISTORY_COMMAND,
-        dash_board.clone(),
-        swap_kline_table.clone(),
-        "refresh swap kline data",
-        SymbolType::Swap,
-        HistoryInterval::FiveMinutes,
-    );
-
-    let funding_rate_table = get_swap_funding_rate_table_addr();
-    let funding_rate_fetcher = SimpleHistoryFetcher::funding_rate(&SWAP_FUNDING_RATE_COMMAND);
-    let funding_rate_fetcher_factory: CloneHistoryFetcherFactory<SimpleHistoryFetcher, CommonRequestBuilder, FundingRate> =
-        CloneHistoryFetcherFactory::new(funding_rate_fetcher);
-    let funding_rate_task = HistoryDataTask::<_, _, FundingRate, BinanceDashboard>::new(
-        funding_rate_fetcher_factory,
-        dash_board,
-        funding_rate_table.clone(),
-        "refresh swap funding rate".to_string(),
-        SymbolType::Swap,
-        Some(HistoryInterval::OneHour),
-    );
-    funding_rate_task.initial_data().await?;
-    //FUTURE： 更新交易所时间表达式进入Config
-    let _ = cron_job!("01 */5 * * * * *", move |_uuid, _locked| {
-        let spot_kline_refresh = spot_kline_task.clone();
-        Box::pin(async move {
-            match spot_kline_refresh.clone().execute().await {
-                Ok(_) => {}
-                Err(_) => {
-                    error!("Failed to refresh binance spot kline data");
-                }
-            }
-        })
-    });
-    // let _ = cron_job!("01 */5 * * * * *", move |_uuid, _locked| {
-    //     let swap_kline_refresh = swap_update_kline_task.clone();
-    //     Box::pin(async move {
-    //         match swap_kline_refresh.clone().execute().await {
-    //             Ok(_) => {}
-    //             Err(_) => {
-    //                 error!("Failed to refresh binance swap kline data");
-    //             }
-    //         }
-    //     })
-    // });
-    // let _ = cron_job!("01 56 * * * * *", move |_uuid, _locked| {
-    //     let funding_rate_refresh = funding_rate_task.clone();
-    //     Box::pin(async move {
-    //         match funding_rate_refresh.clone().execute().await {
-    //             Ok(_) => {}
-    //             Err(_) => {
-    //                 error!("Failed to refresh binance swap kline data");
-    //             }
-    //         }
-    //     })
-    // });
+/// # 基本流程。
+/// 1. 获取当前时间。
+/// 2. 开始监听websocket，获取最新的kline数据，并且更新到数据库中。
+/// 3。开始同步历史数据。完成后返回。同步历史数据
+///
+/// ## 同步历史数据。
+/// 1. symbol获取所有的历史数据。
+/// 2  然后通过config的data_retention_hours到现在来获取。
+///
+/// FUTURE
+/// 1. 直接去aws下载文本数据，然后再考虑处理。
+///
+async fn start_refresh_history_data(dash_board: Arc<BinanceDashboard>, config: &AppConfig) -> Result<(), YuError> {
     Ok(())
 }
 

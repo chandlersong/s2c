@@ -12,22 +12,22 @@ use tokio::sync::mpsc;
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_models::spot_websocket_stream::SpotKlineData;
 use yue::errors::YueError;
-use yue::query_message::{BatchInsertPayload, DataSourceExecutor, InsertPayload, QueryCommand};
+use yue::query_message::{BatchInsertPayload, DataSourceExecutorTrait, InsertPayload, QueryCommand};
 
-pub type DuckTableTableListener<P: DuckDBPO> = mpsc::Sender<QueryCommand<P>>;
+pub type DuckTableTableChannel<P: DuckDBPO> = mpsc::Sender<QueryCommand<P>>;
 
 #[derive(Clone)]
 pub struct BinanceKlineDataExecutor {
-    table: DuckTableTableListener<KlinePo>,
+    table: DuckTableTableChannel<KlinePo>,
 }
 
 impl BinanceKlineDataExecutor {
-    pub fn new(table: DuckTableTableListener<KlinePo>) -> Self {
+    pub fn new(table: DuckTableTableChannel<KlinePo>) -> Self {
         Self { table }
     }
 }
 #[async_trait]
-impl DataSourceExecutor<BinanceKline> for BinanceKlineDataExecutor {
+impl DataSourceExecutorTrait<BinanceKline> for BinanceKlineDataExecutor {
     async fn execute(&self, command: QueryCommand<BinanceKline>) -> Result<(), YueError> {
         match command {
             QueryCommand::GetCount(sender) => {
@@ -74,7 +74,7 @@ const DB_CHANNEL_CAPACITY: usize = 1000;
 const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 
 impl<P: DuckDBPO> DuckDBOneTable<P> {
-    pub fn start_new(table: BinanceTables) -> DuckTableTableListener<P> {
+    pub fn start_new(table: BinanceTables) -> DuckTableTableChannel<P> {
         DuckDBOneTable {
             table,
             flush_interval: FLUSH_INTERVAL,
@@ -155,7 +155,7 @@ impl<P: DuckDBPO> DuckDBOneTable<P> {
     /// # 定时检查
     /// 1. 比如BatchInsert，定期检查一下，如果1s内没有收到消息，也要能够保存。
     ///
-    pub fn start_listen(self) -> DuckTableTableListener<P> {
+    pub fn start_listen(self) -> DuckTableTableChannel<P> {
         let (tx, mut rx) = mpsc::channel(DB_CHANNEL_CAPACITY);
         let table = self.table.clone();
         let flush_interval = self.flush_interval;
@@ -215,9 +215,7 @@ impl<P: DuckDBPO> DuckDBOneTable<P> {
                         }
                     }
 
-                    // 空闲超时分支：5 分钟
                     _ = tokio::time::sleep(flush_interval) => {
-                        log::debug!("DuckDBOneTable idle timeout (5m) for table {}", table.table_name());
                         // 可在此处执行周期性 flush 或维护逻辑
                         let now = unix_time_now_u64_utc();
                         if now - last_flush_time > flush_interval.as_millis() as u64 {

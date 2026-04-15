@@ -9,7 +9,7 @@ use yue::binance::restful_func::{CommonRequestBuilder, HistoryBatchHandlerTrait,
 use yue::errors::YueError;
 use yue::http_client::init_http_client;
 use yue::models::HistoryInterval;
-use yue::query_message::{DataSourceExecutor, QueryCommand};
+use yue::query_message::{DataSourceExecutorTrait, QueryCommand};
 
 fn print_kline_result<H>(klines: &Vec<H>, interval: Option<HistoryInterval>)
 where

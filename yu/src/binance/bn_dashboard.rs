@@ -1,5 +1,4 @@
 use crate::errors::YuError;
-use crate::exchange::ExchangeDashBoard;
 use actix::{Actor, Addr, Context, Handler, Message};
 use li::errors::LiError;
 use li::tools::time::{unix_time_now_u64_utc, UnixTimeStamp};
@@ -11,36 +10,28 @@ use std::path::Path;
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
+use yue::binance::bn_models::common::SymbolInfo;
 use yue::binance::bn_models::spot_restful::ExchangeInfo;
 use yue::binance::bn_models::swap_restful::SwapExchangeInfo;
 use yue::binance::bn_restful_commands::{
     execute_json_request, BINANCE_SPOT_BASE, BINANCE_SWAP_BASE, SPOT_EXCHANGE_COMMAND, SPOT_RATE_PER_MINUTE, SWAP_EXCHANGE_COMMAND,
 };
 use yue::binance::order_book::{OrderBook, OrderBookSnapshotMsg};
-use yue::binance::restful_func::{get_trading_spot_symbols, get_trading_swap_symbols, TradingSymbolInfo, CONTRACT_TYPE_PERPETUAL};
-use yue::binance::websocket_actor::TradingSymbolRefresher;
+use yue::binance::restful_func::{get_trading_spot_symbols, get_trading_swap_symbols, CONTRACT_TYPE_PERPETUAL};
 use yue::errors::YueError;
 use yue::http_client::get_http_client;
 use yue::models::HistoryInterval;
 
-#[derive(Debug, Clone)]
-pub struct TradingSymbol {
-    pub symbol: String,
-    pub on_board_time: Option<u64>,
-    pub quote_asset: String, //报价资产
-    pub status: String,
-}
-
 type BinanceSnapshot = watch::Sender<Arc<BinanceDashboardSnapShot>>;
 #[derive(Clone)]
 pub struct BinanceDashboardSnapShot {
-    pub spot_trading_symbols: Vec<TradingSymbol>,
-    pub swap_trading_symbols: Vec<TradingSymbol>,
+    pub spot_trading_symbols: Vec<SymbolInfo>,
+    pub swap_trading_symbols: Vec<SymbolInfo>,
     pub timestamp: UnixTimeStamp,
 }
 
 impl BinanceDashboardSnapShot {
-    pub fn new(spot_trading_symbols: Vec<TradingSymbol>, swap_trading_symbols: Vec<TradingSymbol>) -> Self {
+    pub fn new(spot_trading_symbols: Vec<SymbolInfo>, swap_trading_symbols: Vec<SymbolInfo>) -> Self {
         Self {
             spot_trading_symbols,
             swap_trading_symbols,
@@ -52,10 +43,14 @@ impl BinanceDashboardSnapShot {
 pub type BinanceDashboardWatcher = watch::Sender<Arc<BinanceDashboardSnapShot>>;
 
 //FUTURE：把这些存入数据库
+///
+/// 1. 放在结构体里面保存的为全部。
+/// 2. 通过BinanceDashboardWatcher发送出去的为正在交易状态的symbol。
+///
 #[derive(Clone)]
 pub struct BinanceDashboard {
-    spot_symbols: Arc<RwLock<Vec<TradingSymbol>>>,
-    swap_symbols: Arc<RwLock<Vec<TradingSymbol>>>,
+    spot_symbols: Arc<RwLock<Vec<SymbolInfo>>>,
+    swap_symbols: Arc<RwLock<Vec<SymbolInfo>>>,
     data_retention_hours: u64,
     debug_mood: bool,
 }
@@ -86,7 +81,7 @@ impl BinanceDashboard {
         }
     }
 
-    pub fn new_with_data(spot_symbol: Vec<TradingSymbol>, swap_symbol: Vec<TradingSymbol>, data_retention_hours: u64) -> Self {
+    pub fn new_with_data(spot_symbol: Vec<SymbolInfo>, swap_symbol: Vec<SymbolInfo>, data_retention_hours: u64) -> Self {
         BinanceDashboard {
             spot_symbols: Arc::new(RwLock::new(spot_symbol)),
             swap_symbols: Arc::new(RwLock::new(swap_symbol)),
@@ -127,35 +122,16 @@ impl BinanceDashboard {
         BINANCE_SWAP_BASE.clone().refresh_rate_limit(swap_request_limit as u32, None).await;
     }
 
-    fn refresh_trading_symbol(
+    fn refresh_all_symbol(
         &self,
-        spot_res: Result<Vec<TradingSymbolInfo>, YueError>,
-        swap_res: Result<Vec<TradingSymbolInfo>, YueError>,
-    ) -> Result<(Vec<TradingSymbol>, Vec<TradingSymbol>), LiError> {
+        spot_res: Result<Vec<SymbolInfo>, YueError>,
+        swap_res: Result<Vec<SymbolInfo>, YueError>,
+    ) -> Result<(Vec<SymbolInfo>, Vec<SymbolInfo>), LiError> {
         match (spot_res, swap_res) {
             (Ok(spot_symbols), Ok(swap_symbols)) => {
-                let trading_spot_symbols: Vec<TradingSymbol> = spot_symbols
-                    .iter()
-                    .map(|sym| TradingSymbol {
-                        symbol: sym.symbol.clone(),
-                        on_board_time: None,
-                        quote_asset: sym.quote_asset.clone(),
-                        status: sym.status.clone(),
-                    })
-                    .collect();
-                let trading_swap_symbols: Vec<TradingSymbol> = swap_symbols
-                    .iter()
-                    .map(|sym| TradingSymbol {
-                        symbol: sym.symbol.clone(),
-                        on_board_time: sym.on_board_time,
-                        quote_asset: sym.quote_asset.clone(),
-                        status: sym.status.clone(),
-                    })
-                    .collect();
-
-                *self.spot_symbols.write().unwrap() = trading_spot_symbols.clone();
-                *self.swap_symbols.write().unwrap() = trading_swap_symbols.clone();
-                Ok((trading_spot_symbols, trading_swap_symbols))
+                *self.spot_symbols.write().unwrap() = spot_symbols.clone();
+                *self.swap_symbols.write().unwrap() = swap_symbols.clone();
+                Ok((spot_symbols, swap_symbols))
             }
             (Err(e), _) => {
                 error!("Error fetching trading spot symbols: {:?}", e);
@@ -189,11 +165,15 @@ impl BinanceDashboard {
                 //TODO：能正常下载后，再把这个功能加上。
                 Self::refresh_rate_limit(&spot, &swap).await;
                 // refresh symbol
-                let spot_res = get_trading_spot_symbols(spot, None).await;
+                let spot_all = get_trading_spot_symbols(spot).await;
                 let swap_res = get_trading_swap_symbols(swap, None, Some(CONTRACT_TYPE_PERPETUAL)).await;
 
-                let res = match self.refresh_trading_symbol(spot_res, swap_res) {
-                    Ok((spot_symbols, swap_symbols)) => BinanceDashboardSnapShot::new(spot_symbols, swap_symbols),
+                let res = match self.refresh_all_symbol(spot_all, swap_res) {
+                    Ok((spot_symbols, swap_symbols)) => {
+                        let trading_spot_symbols: Vec<SymbolInfo> = spot_symbols.iter().filter(|s| s.status == "TRADING").cloned().collect();
+                        let trading_swap_symbols: Vec<SymbolInfo> = swap_symbols.iter().filter(|s| s.status == "TRADING").cloned().collect();
+                        BinanceDashboardSnapShot::new(trading_spot_symbols, trading_swap_symbols)
+                    }
                     Err(e) => return Err(LiError::CustomError(format!("刷新交易符号失败: {}", e))),
                 };
 
@@ -203,70 +183,13 @@ impl BinanceDashboard {
             (_, Err(e)) => Err(LiError::CustomError(format!("获取永续交易所信息失败: {}", e))),
         }
     }
-}
 
-///
-/// 暂时所有的交易对都以USDT报价资产为准
-///
-impl TradingSymbolRefresher for BinanceDashboard {
-    fn list_spot(&self) -> Vec<String> {
-        self.spot_symbols
-            .read()
-            .unwrap()
-            .clone()
-            .iter()
-            .filter(|symbol| symbol.status == "TRADING")
-            .filter(|symbol| symbol.quote_asset == "USDT")
-            .map(|s| s.symbol.clone())
-            .collect()
-    }
-
-    fn list_swap(&self) -> Vec<String> {
-        self.swap_symbols
-            .read()
-            .unwrap()
-            .clone()
-            .iter()
-            .filter(|symbol| symbol.status == "TRADING")
-            .filter(|symbol| symbol.quote_asset == "USDT")
-            .map(|s| s.symbol.clone())
-            .collect()
-    }
-}
-
-impl ExchangeDashBoard for BinanceDashboard {
-    type TradingSymbol = TradingSymbol;
-
-    fn spot_all_symbols(&self) -> Arc<RwLock<Vec<TradingSymbol>>> {
+    fn spot_all_symbols(&self) -> Arc<RwLock<Vec<SymbolInfo>>> {
         self.spot_symbols.clone()
     }
 
-    fn swap_all_symbols(&self) -> Arc<RwLock<Vec<TradingSymbol>>> {
+    fn swap_all_symbols(&self) -> Arc<RwLock<Vec<SymbolInfo>>> {
         self.swap_symbols.clone()
-    }
-
-    fn spot_trading_symbols(&self) -> Vec<TradingSymbol> {
-        self.spot_symbols
-            .read()
-            .unwrap()
-            .clone()
-            .iter()
-            .filter(|symbol| symbol.status == "TRADING")
-            .filter(|symbol| symbol.quote_asset == "USDT")
-            .map(|s| s.clone())
-            .collect()
-    }
-
-    fn swap_trading_symbols(&self) -> Vec<TradingSymbol> {
-        self.swap_symbols
-            .read()
-            .unwrap()
-            .clone()
-            .iter()
-            .filter(|symbol| symbol.status == "TRADING")
-            .filter(|symbol| symbol.quote_asset == "USDT")
-            .map(|s| s.clone())
-            .collect()
     }
 
     ///
@@ -276,7 +199,7 @@ impl ExchangeDashBoard for BinanceDashboard {
     /// interval: 默认值是五分钟
     /// 返回标准应该保留的最大时间
     ///
-    fn get_earliest_timestamp(&self, interval: Option<HistoryInterval>) -> Option<u64> {
+    pub fn get_earliest_timestamp(&self, interval: Option<HistoryInterval>) -> Option<u64> {
         // 获取当前 Unix 毫秒时间
         let now_ms = match SystemTime::now().duration_since(UNIX_EPOCH) {
             Ok(d) => d.as_millis() as u64,

@@ -160,7 +160,7 @@ impl<T: Clone + Message + DeserializeOwned> AccountData<T> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TradingSymbolInfo {
+pub struct SymbolInfo {
     /// 交易对符号，如 "BTCUSDT"
     pub symbol: String,
     /// 交易状态，可能的值包括：TRADING, END_OF_DAY, HALT, BREAK

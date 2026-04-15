@@ -1,14 +1,14 @@
 ///
 /// 主要是集中了很多调用restful的过程。
 ///
-use crate::binance::bn_models::common::{ExchangeInfoTrait, HistoryVo, SymbolInfoTrait, ToRequestBuilder, TradingSymbolInfo};
+use crate::binance::bn_models::common::{ExchangeInfoTrait, HistoryVo, SymbolInfo, SymbolInfoTrait, ToRequestBuilder};
 use crate::binance::bn_models::spot_restful::ExchangeInfo;
 use crate::binance::bn_models::swap_restful::SwapExchangeInfo;
 use crate::binance::bn_restful_commands::{PING_COMMAND, execute_json_request};
 use crate::errors::YueError;
 use crate::http_client::{HTTP_CLIENT, get_http_client};
 use crate::models::{EmptyObject, HistoryInterval, RequestInfo};
-use crate::query_message::{BatchInsertPayload, DataSourceExecutor, DataSourceExecutorImpl, QueryCommand};
+use crate::query_message::{BatchInsertPayload, DataSourceExecutor, DataSourceExecutorTrait, QueryCommand};
 use actix::dev::MessageResponse;
 use async_trait::async_trait;
 use governor::Jitter;
@@ -17,6 +17,8 @@ use log::{debug, error, warn};
 use reqwest::RequestBuilder;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+
+pub const ALL_TYPE: &str = "ALL";
 
 pub trait MuteHistoryParam: ToRequestBuilder {
     fn initial(symbol: String, limit: u32, interval: HistoryInterval) -> Self;
@@ -121,13 +123,11 @@ pub async fn execute_ping() -> Result<(), YueError> {
     Ok(())
 }
 
-/// 通用获取交易对信息方法，支持现货和合约
-pub fn extract_trading_symbols<S: SymbolInfoTrait>(symbols: &[S], status: Option<&str>) -> Vec<TradingSymbolInfo> {
-    let filter_status = status.unwrap_or("TRADING");
+/// 把symbol换成app标准的状态。
+pub fn translate_symbols<S: SymbolInfoTrait>(symbols: &[S]) -> Vec<SymbolInfo> {
     symbols
         .iter()
-        .filter(|symbol| filter_status == "ALL" || symbol.status() == filter_status)
-        .map(|symbol| TradingSymbolInfo {
+        .map(|symbol| SymbolInfo {
             symbol: symbol.symbol().to_string(),
             status: symbol.status().to_string(),
             base_asset: symbol.base_asset().to_string(),
@@ -137,14 +137,13 @@ pub fn extract_trading_symbols<S: SymbolInfoTrait>(symbols: &[S], status: Option
             symbol_type: symbol.symbol_type().to_string(),
             on_board_time: symbol.get_on_board_time(),
         })
-        .filter(|symbol| symbol.status == "TRADING")
         .filter(|symbol| symbol.quote_asset == "USDT")
         .collect()
 }
 
 /// 获取现货交易对信息
-pub async fn get_trading_spot_symbols(exchange: ExchangeInfo, status: Option<&str>) -> Result<Vec<TradingSymbolInfo>, YueError> {
-    Ok(extract_trading_symbols(&exchange.symbols, status))
+pub async fn get_trading_spot_symbols(exchange: ExchangeInfo) -> Result<Vec<SymbolInfo>, YueError> {
+    Ok(translate_symbols(&exchange.symbols))
 }
 
 pub const CONTRACT_TYPE_PERPETUAL: &str = "PERPETUAL";
@@ -159,8 +158,8 @@ pub async fn get_trading_swap_symbols(
     exchange: SwapExchangeInfo,
     status: Option<&str>,
     type_filter: Option<&str>,
-) -> Result<Vec<TradingSymbolInfo>, YueError> {
-    let all = extract_trading_symbols(exchange.symbols(), status);
+) -> Result<Vec<SymbolInfo>, YueError> {
+    let all = translate_symbols(exchange.symbols());
     if let Some(filter) = type_filter {
         Ok(all.into_iter().filter(|s| s.symbol_type == filter).collect())
     } else {
