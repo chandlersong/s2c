@@ -4,7 +4,7 @@ use crate::config::AppConfig;
 use crate::errors::YuError;
 use async_trait::async_trait;
 use governor::Jitter;
-use li::tools::time::unix_time_now_u64_utc;
+use li::tools::time::{unix_2_readable, unix_time_now_u64_utc};
 use log::{error, info};
 use std::sync::Arc;
 use std::time::Duration;
@@ -109,7 +109,7 @@ pub async fn initial_spot_kline(
     //例如现在是36分，通过restful能够取到35～39的K线，但是未闭合。所以我直接取34.59.59.999这个时间点的K线。所以就规避了。
     let start = interval.get_close_unix_ms(now - config.get_data_retention_ms());
     let end = interval.get_close_unix_ms(now).saturating_sub(1);
-
+    info!("开始初始化数据，from {} to {}", unix_2_readable(&start), unix_2_readable(&end));
     // 使用并发任务来处理多个交易对的历史数据下载，但使用 Semaphore 限制最大并发数，
     // 等待所有任务完成后再返回。这样在低配机器上也能控制资源使用。
     let sem = Arc::new(Semaphore::new(10));
@@ -138,7 +138,7 @@ pub async fn initial_spot_kline(
                     Some(start_ts),
                     Some(end_ts),
                     Some(saver_clone),
-                    false,
+                    true,
                 )
                 .await
         });

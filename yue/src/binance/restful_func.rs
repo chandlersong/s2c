@@ -183,7 +183,7 @@ where
 /// 因为这类外部的IO类，rust下面很难写单元测试。所以也就这么搞了。
 /// 主要是一种尝试。
 ///
-pub type HistoryFetcher<O: HistoryVo + Clone + Send + Sync + 'static> = Box<dyn HistoryBatchHandlerTrait<O>>;
+pub type HistoryFetcher<O> = Box<dyn HistoryBatchHandlerTrait<O>>;
 
 #[async_trait]
 pub trait HistoryFetcherTrait<T, O>

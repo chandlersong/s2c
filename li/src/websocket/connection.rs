@@ -198,7 +198,7 @@ impl WebSocketConnection {
 
         tokio::spawn(async move {
             loop {
-                info!("正在连接到 WebSocket: {}", take_or_all_cow_with_ellipsis(url.as_str(), 20));
+                info!("正在连接到 WebSocket: {}", take_or_all_cow_with_ellipsis(url.as_str(), 50));
                 Self::broadcast_event(&event_tx, WebSocketEvent::Reconnecting);
                 let mut message_cache = vec![];
 
@@ -215,10 +215,10 @@ impl WebSocketConnection {
                 {
                     Ok(action) => match action {
                         ConnectionAction::Reconnection => {
-                            info!("连接重启：{}", take_or_all_cow_with_ellipsis(url.as_str(), 20));
+                            info!("连接重启：{}", take_or_all_cow_with_ellipsis(url.as_str(), 50));
                         }
                         ConnectionAction::Close => {
-                            info!("连接关闭：{}", take_or_all_cow_with_ellipsis(url.as_str(), 20));
+                            info!("连接关闭：{}", take_or_all_cow_with_ellipsis(url.as_str(), 50));
                             break;
                         }
                     },
