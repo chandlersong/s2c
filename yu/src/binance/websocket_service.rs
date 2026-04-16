@@ -10,6 +10,7 @@ use li::websocket::connection::{
 };
 use li::websocket::models::WebSocketMessage;
 use log::{error, info};
+use mockall::predicate::le;
 use std::sync::Arc;
 use std::time::Duration;
 use yue::binance::bn_json_websocket::{SPOT_STREAM_WEBSOCKET, SWAP_STREAM_WEBSOCKET};
@@ -39,12 +40,6 @@ impl MessageHandlerTrait<BinanceSpotWebSocketStreamWrapper> for SpotKlineSaver {
         match &message.data {
             Kline(payload) => {
                 if payload.kline.is_closed {
-                    //TODO: 为了测试目的，正式发布请删除
-                    info!(
-                        "received closed {} kline at {}",
-                        payload.symbol,
-                        unix_2_readable(&unix_time_now_u64_utc())
-                    );
                     if let Err(e) = self
                         .db
                         .send(QueryCommand::Insert(InsertPayload::new_no_replay(KlinePo::from(payload.kline.clone()))))
@@ -108,6 +103,7 @@ impl KlineSubscribeService {
             match rx.changed().await {
                 Ok(_) => {
                     let snapshot = (*rx.borrow_and_update()).clone();
+                    info!("开始重新订阅: 现在symbol树木是:{}", snapshot.spot_trading_symbols.len());
                     let command_sender = interface.command_sender();
                     if let Err(e) = command_sender.send(CommandMessage::Connection(ConnectionAction::Close)) {
                         error!("Error close prev connection: {:?}", e);

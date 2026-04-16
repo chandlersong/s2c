@@ -198,9 +198,7 @@ impl WebSocketConnection {
         tokio::spawn(async move {
             loop {
                 info!("正在连接到 WebSocket: {}", url);
-                if let Err(e) = event_tx.send(WebSocketEvent::Reconnecting) {
-                    error!("sending {}", e);
-                }
+                Self::broadcast_event(&event_tx, WebSocketEvent::Reconnecting);
                 let mut message_cache = vec![];
 
                 match Self::connect_and_run(

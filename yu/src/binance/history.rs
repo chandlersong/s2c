@@ -160,6 +160,7 @@ pub async fn initial_spot_kline(
             }
         }
     }
+    info!("spot初始化完成");
 
     Ok(())
 }
