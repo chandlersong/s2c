@@ -48,6 +48,7 @@ pub async fn start_bn_jobs() -> Result<(), YuError> {
         let dash_board_job = dash_board_refresh.clone();
         let dashboard_watch_refresher = dashboard_watch_sender.clone();
         Box::pin(async move {
+            info!("start refresh binance exchange info")
             match dash_board_job.clone().execute().await {
                 Ok(snapshot) => {
                     if let Err(e) = dashboard_watch_refresher.send(snapshot) {
