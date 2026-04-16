@@ -233,6 +233,14 @@ impl WebSocketConnection {
         res
     }
 
+    fn broadcast_event(event_tx: &broadcast::Sender<WebSocketEvent>, event: WebSocketEvent) {
+        if event_tx.receiver_count() > 0 {
+            if let Err(e) = event_tx.send(event) {
+                error!("sending websocket started event:{}", e);
+            }
+        }
+    }
+
     async fn connect_and_run<M: WebSocketMessage>(
         url: &str,
         proxy: &Option<String>,
@@ -251,10 +259,7 @@ impl WebSocketConnection {
         };
 
         info!("WebSocket 连接成功!");
-
-        if let Err(e) = event_tx.send(WebSocketEvent::Connected(command_tx.clone().into())) {
-            error!("sending websocket started event:{}", e);
-        }
+        Self::broadcast_event(event_tx, WebSocketEvent::Connected(command_tx.clone().into()));
 
         let (mut write, mut read) = ws_stream.split();
         let (ws_tx, mut ws_rx) = mpsc::unbounded_channel::<WsMessage>();
@@ -349,11 +354,8 @@ impl WebSocketConnection {
                                     trace!("收到 Pong");
                                 }
                                 WsMessage::Close(frame) => {
-                                    trace!("收到关闭帧: {:?}", frame);
-                                    if let Err(e) =event_tx.send(WebSocketEvent::Disconnected){
-                                        // 感觉这个会很多，所以也就这样处理了。
-                                        debug!("send error {}", e);
-                                    };
+                                    info!("收到关闭帧: {:?}", frame);
+                                    Self::broadcast_event(event_tx,WebSocketEvent::Disconnected);
                                     return Ok(ConnectionAction::Reconnection);
                                 }
                                 WsMessage::Frame(_) => {}
@@ -361,18 +363,12 @@ impl WebSocketConnection {
                         }
                         Some(Err(e)) => {
                             error!("接收消息错误: {}", e);
-                            if let Err(e) =event_tx.send(WebSocketEvent::Error(e.to_string())){
-                                    // 感觉这个会很多，所以也就这样处理了。
-                                    debug!("send error {}", e);
-                            };
+                            Self::broadcast_event(event_tx,WebSocketEvent::Error(e.to_string()));
                             return Err(LiError::CustomError(format!("接收消息错误: {}", e)));
                         }
                         None => {
                             warn!("WebSocket 流已关闭");
-                            if let Err(e) =event_tx.send(WebSocketEvent::Disconnected){
-                                    // 感觉这个会很多，所以也就这样处理了。
-                                    debug!("send error {}", e);
-                            };
+                            Self::broadcast_event(event_tx,WebSocketEvent::Disconnected);
                             return Ok(ConnectionAction::Reconnection);
                         }
                     }

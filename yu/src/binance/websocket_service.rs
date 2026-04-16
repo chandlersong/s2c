@@ -16,6 +16,7 @@ use yue::binance::bn_json_websocket::{SPOT_STREAM_WEBSOCKET, SWAP_STREAM_WEBSOCK
 use yue::binance::bn_models::common::{SymbolInfo, SymbolType};
 use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamResponse::Kline;
 use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamWrapper;
+use yue::models::HistoryInterval;
 use yue::query_message::{InsertPayload, QueryCommand};
 
 ///
@@ -82,6 +83,7 @@ impl KlineSubscribeService {
         db: DuckTableTableChannel<KlinePo>,
         symbol_watch: BinanceDashboardWatcher,
         proxy: Option<String>,
+        interval: HistoryInterval,
     ) -> Result<(), YuError> {
         let ws_url = match symbol_type {
             SymbolType::Spot => SPOT_STREAM_WEBSOCKET,
@@ -94,7 +96,7 @@ impl KlineSubscribeService {
         let snapshot = (*rx.borrow()).clone();
         let proxy_clone = proxy.clone();
         let saver = SpotKlineSaver::new(db);
-        let interface = match Self::subscribe_trading_kline(symbol_type, proxy, ws_url, &snapshot, saver.clone()).await {
+        let interface = match Self::subscribe_trading_kline(symbol_type, proxy, ws_url, &snapshot, saver.clone(), interval.clone()).await {
             Ok(interface) => interface,
             Err(e) => {
                 return Err(YuError::new(format!("启动监听:{}失败，因为:{}", ws_url, e).as_str()).into());
@@ -110,7 +112,8 @@ impl KlineSubscribeService {
                     if let Err(e) = command_sender.send(CommandMessage::Connection(ConnectionAction::Close)) {
                         error!("Error close prev connection: {:?}", e);
                     };
-                    if let Err(e) = Self::subscribe_trading_kline(symbol_type, proxy_clone, ws_url, &snapshot, saver.clone()).await {
+                    if let Err(e) = Self::subscribe_trading_kline(symbol_type, proxy_clone, ws_url, &snapshot, saver.clone(), interval.clone()).await
+                    {
                         error!("Error subscribing to kline: {:?}", e);
                     };
                 }
@@ -127,6 +130,7 @@ impl KlineSubscribeService {
         ws_url: &str,
         snapshot: &Arc<BinanceDashboardSnapShot>,
         handler: ShareMessageHandler<M>,
+        interval: HistoryInterval,
     ) -> Result<Arc<WebSocketInterface<M>>, YuError> {
         let symbols = match symbol_type {
             SymbolType::Spot => &snapshot.spot_trading_symbols,
@@ -136,7 +140,7 @@ impl KlineSubscribeService {
             }
         };
         let reconnect_interval = Duration::from_secs(5);
-        let final_url = format!("{}?streams={}", ws_url, Self::compose_kline_url(symbols));
+        let final_url = format!("{}?streams={}", ws_url, Self::compose_kline_url(symbols, interval));
         info!("Connecting to {}", final_url);
         let interface = WebSocketConnection::run::<M>(final_url, reconnect_interval, proxy, Some(handler)).await;
 
@@ -145,8 +149,11 @@ impl KlineSubscribeService {
         Ok(interface)
     }
 
-    fn build_streams(symbols: &[SymbolInfo]) -> Vec<String> {
-        symbols.iter().map(|s| format!("{}@kline_{}", s.symbol.to_lowercase(), "5m")).collect()
+    fn build_streams(symbols: &[SymbolInfo], interval: HistoryInterval) -> Vec<String> {
+        symbols
+            .iter()
+            .map(|s| format!("{}@kline_{}", s.symbol.to_lowercase(), interval.as_ref()))
+            .collect()
     }
 
     ///
@@ -157,14 +164,14 @@ impl KlineSubscribeService {
     /// symbol为TradingSymbol中的symbol
     /// interval为5m
     ///
-    fn compose_kline_url(symbols: &[SymbolInfo]) -> String {
+    fn compose_kline_url(symbols: &[SymbolInfo], interval: HistoryInterval) -> String {
         // 如果 symbols 为空，返回空字符串
         if symbols.is_empty() {
             return String::new();
         }
 
         // build_streams 会返回类似 `symbol@kline_5m` 的名称列表，按 Binance websocket 合并流的 path 要用 `/` 拼接
-        Self::build_streams(symbols).join("/")
+        Self::build_streams(symbols, interval).join("/")
     }
 }
 
@@ -178,7 +185,7 @@ mod tests {
     #[test]
     fn test_compose_kline_url_empty() {
         let symbols: Vec<SymbolInfo> = vec![];
-        let url = KlineSubscribeService::compose_kline_url(&symbols);
+        let url = KlineSubscribeService::compose_kline_url(&symbols, HistoryInterval::FiveMinutes);
         assert_eq!(url, "");
     }
 
@@ -196,7 +203,7 @@ mod tests {
             base_asset: "".to_string(),
             symbol_type: "".to_string(),
         }];
-        let url = KlineSubscribeService::compose_kline_url(&symbols);
+        let url = KlineSubscribeService::compose_kline_url(&symbols, HistoryInterval::FiveMinutes);
         assert_eq!(url, "btcusdt@kline_5m");
     }
 
@@ -226,7 +233,7 @@ mod tests {
                 symbol_type: "".to_string(),
             },
         ];
-        let url = KlineSubscribeService::compose_kline_url(&symbols);
+        let url = KlineSubscribeService::compose_kline_url(&symbols, HistoryInterval::FiveMinutes);
         assert_eq!(url, "btcusdt@kline_5m/ethusdt@kline_5m");
     }
 }

@@ -9,6 +9,7 @@ use yu::binance::websocket_service::KlineSubscribeService;
 use yu::config::get_config;
 use yu::errors::YuError;
 use yue::binance::bn_models::common::SymbolType;
+use yue::models::HistoryInterval;
 
 #[tokio::main]
 async fn main() -> Result<(), YuError> {
@@ -26,7 +27,7 @@ async fn main() -> Result<(), YuError> {
     let dash_board = Arc::new(BinanceDashboard::debug_mode(app_config.get_data_retention_hours()));
     let snapshot = dash_board.execute().await?;
     let (dash_board_watch, _) = watch::channel(snapshot);
-    if let Err(e) = KlineSubscribeService::startup_spot(symbol_type, spot_kline_table, dash_board_watch, proxy).await {
+    if let Err(e) = KlineSubscribeService::startup_spot(symbol_type, spot_kline_table, dash_board_watch, proxy, HistoryInterval::FiveMinutes).await {
         error!("error starting kline service: {}", e);
     }
 

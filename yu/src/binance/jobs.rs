@@ -1,5 +1,8 @@
 use crate::binance::binance_db_consts::ALL_BINANCE_TABLES;
-use crate::binance::bn_dashboard::{init_market_depth_dashboard, BinanceDashboard, MarketDepthDashBoard};
+use crate::binance::bn_backend_service::get_raw_spot_kline_table;
+use crate::binance::bn_dashboard::{init_market_depth_dashboard, BinanceDashboard, BinanceDashboardWatcher, MarketDepthDashBoard};
+use crate::binance::history::initial_spot_kline;
+use crate::binance::websocket_service::KlineSubscribeService;
 use crate::config::{get_config, AccountConfig, AccountType, AppConfig, SecurityType};
 use crate::cron_job;
 use crate::duck_db::DBProvider;
@@ -15,7 +18,7 @@ use serde_json::to_string;
 use std::sync::Arc;
 use tokio::sync::watch;
 use yue::binance::bn_json_websocket::{StreamCommandRequest, SPOT_STREAM_WEBSOCKET, SPOT_WEBSOCKET, WS_SUBSCRIBE_COMMAND};
-use yue::binance::bn_models::common::{PortfolioSpotOrderData, PortfolioSwapOrderData, SpotOrderData, SwapOrderData};
+use yue::binance::bn_models::common::{PortfolioSpotOrderData, PortfolioSwapOrderData, SpotOrderData, SwapOrderData, SymbolType};
 use yue::binance::bn_models::portfolio_account_websocket::BinancePortfolioWebSocketStreamResponse;
 use yue::binance::bn_models::spot_websocket::BinanceSpotAccountWebSocketResponse;
 use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamResponse;
@@ -23,6 +26,7 @@ use yue::binance::bn_models::swap_account_stream::BinanceSwapAccountStreamRespon
 use yue::binance::listen_key_client::{ListenKeyClient, NormalAccountAssignName, PortfolioAccountAssignName};
 use yue::binance::order_book::{OrderBookService, Subscribe as OrderBookSubscribe};
 use yue::binance::websocket_actor::SpotAccountActor;
+use yue::models::HistoryInterval;
 use yue::tools::SnowyFlakeWrapper;
 
 ///
@@ -38,15 +42,15 @@ pub async fn start_bn_jobs() -> Result<(), YuError> {
     let dash_board = Arc::new(BinanceDashboard::debug_mode(config.get_data_retention_hours()));
     let snapshot = dash_board.execute().await?;
     let (dash_board_watch, _) = watch::channel(snapshot);
-
     let dash_board_refresh = dash_board.clone();
+    let dashboard_watch_sender = dash_board_watch.clone();
     let _ = cron_job!("0 58 * * * *", move |_uuid, _locked| {
         let dash_board_job = dash_board_refresh.clone();
-        let dashboard_watch_sender = dash_board_watch.clone();
+        let dashboard_watch_refresher = dashboard_watch_sender.clone();
         Box::pin(async move {
             match dash_board_job.clone().execute().await {
                 Ok(snapshot) => {
-                    if let Err(e) = dashboard_watch_sender.send(snapshot) {
+                    if let Err(e) = dashboard_watch_refresher.send(snapshot) {
                         error!("Failed to send updated snapshot to channel: {}", e);
                     } else {
                         info!("BinanceDashboard snapshot updated and sent to channel");
@@ -63,7 +67,7 @@ pub async fn start_bn_jobs() -> Result<(), YuError> {
         warn!("币安表创建失败,{}", _e);
     }
     info!("数据库创建表完成");
-    start_refresh_history_data(dash_board.clone(), config).await?;
+    start_refresh_history_data(dash_board.clone(), config, dash_board_watch.clone()).await?;
     // start_monitor_account().await?;
     // start_spot_websocket_stream_job().await?;
     Ok(())
@@ -351,7 +355,29 @@ async fn start_spot_websocket_stream_job() -> Result<(), YuError> {
 /// FUTURE
 /// 1. 直接去aws下载文本数据，然后再考虑处理。
 ///
-async fn start_refresh_history_data(dash_board: Arc<BinanceDashboard>, config: &AppConfig) -> Result<(), YuError> {
+async fn start_refresh_history_data(
+    dash_board: Arc<BinanceDashboard>,
+    config: &AppConfig,
+    dash_board_watch: BinanceDashboardWatcher,
+) -> Result<(), YuError> {
+    let interval = HistoryInterval::FiveMinutes;
+
+    //开始websocket监听
+    let spot_kline_table = get_raw_spot_kline_table();
+    let proxy = config.proxy_url.clone();
+
+    if let Err(e) = KlineSubscribeService::startup_spot(SymbolType::Spot, spot_kline_table.clone(), dash_board_watch, proxy, interval.clone()).await {
+        error!("error starting kline service: {}", e);
+    }
+    let spot_all = dash_board.spot_all_symbols();
+    let spot_symbol: Vec<String> = spot_all
+        .read()
+        .unwrap()
+        .iter()
+        .filter(|s| s.quote_asset == "USDT")
+        .map(|s| s.symbol.clone())
+        .collect();
+    initial_spot_kline(spot_symbol, config, interval, spot_kline_table).await?;
     Ok(())
 }
 
