@@ -1,7 +1,6 @@
 use crate::errors::YueError;
 use async_trait::async_trait;
-use li::websocket::client::CommandMessage;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 
 ///
 /// 这里mod主要是为了抽象一些数据库的操作。
@@ -70,7 +69,7 @@ impl<V: Send> BatchInsertPayload<V> {
         Self { data, callback }
     }
 
-    pub fn new_no_replay(symbol: Option<String>, data: Vec<V>) -> Self {
+    pub fn new_no_replay(data: Vec<V>) -> Self {
         Self { data, callback: None }
     }
 }

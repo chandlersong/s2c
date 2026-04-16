@@ -16,6 +16,7 @@ use li::tools::time::{ONE_MILL_SECOND_MS, unix_2_readable, unix_time_now_u64_utc
 use log::{debug, error, warn};
 use reqwest::RequestBuilder;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::time::Duration;
 
 pub const ALL_TYPE: &str = "ALL";
@@ -154,11 +155,7 @@ const DEFAULT_HISTORY_START_TIME_MS: u64 = 1609459200000;
 /// PERPETUAL 为永续
 /// CURRENT_QUARTER：为下一季
 /// NEXT_QUARTER：当前季度合约
-pub async fn get_trading_swap_symbols(
-    exchange: SwapExchangeInfo,
-    status: Option<&str>,
-    type_filter: Option<&str>,
-) -> Result<Vec<SymbolInfo>, YueError> {
+pub async fn get_trading_swap_symbols(exchange: SwapExchangeInfo, type_filter: Option<&str>) -> Result<Vec<SymbolInfo>, YueError> {
     let all = translate_symbols(exchange.symbols());
     if let Some(filter) = type_filter {
         Ok(all.into_iter().filter(|s| s.symbol_type == filter).collect())
@@ -167,7 +164,8 @@ pub async fn get_trading_swap_symbols(
     }
 }
 
-pub type HistoryBatchHandler<O: HistoryVo + Clone + Send + Sync> = Box<dyn HistoryBatchHandlerTrait<O> + Send + Sync>;
+pub type HistoryBatchHandler<O> = Box<dyn HistoryBatchHandlerTrait<O> + Send + Sync>;
+pub type ShareHistoryBatchHandler<O> = Arc<dyn HistoryBatchHandlerTrait<O> + Send + Sync>;
 
 ///
 ///  因为有些需要批量的中间操作。所以这里就需要一个方法做为处理的类
@@ -204,7 +202,7 @@ where
         interval: Option<HistoryInterval>,
         start_time: Option<u64>,
         end_time: Option<u64>,
-        handler: Option<HistoryBatchHandler<O>>,
+        handler: Option<ShareHistoryBatchHandler<O>>,
         retry_on_error: bool,
     ) -> Result<u64, YueError>;
 }
@@ -261,7 +259,7 @@ where
         interval: Option<HistoryInterval>,
         start_time: Option<u64>,
         end_time: Option<u64>,
-        handler: Option<HistoryBatchHandler<O>>,
+        handler: Option<ShareHistoryBatchHandler<O>>,
         retry_1000_times: bool,
     ) -> Result<u64, YueError> {
         let symbol = base_param.get_symbol();
@@ -342,19 +340,27 @@ where
                 klines.last().map(|k| k.get_close_time())
             };
 
+            // 保留上一轮最后时间戳，用于判断本轮是否没有向前推进。
+            let previous_last_timestamp = last_timestamp;
+            if let Some(ts) = last_close_time {
+                last_timestamp = Some(ts);
+            }
+            let handler_data = klines
+                .iter()
+                .map(|k| {
+                    let mut key_with_symbol = k.clone();
+                    key_with_symbol.update_symbol(symbol);
+                    key_with_symbol
+                })
+                .collect::<Vec<_>>();
+
             if let Some(h) = &handler {
-                if let Err(e) = h.handle(klines).await {
+                if let Err(e) = h.handle(handler_data).await {
                     let jitter = Jitter::up_to(Duration::from_secs(1));
                     tokio::time::sleep(jitter + Duration::from_millis(10)).await;
                     warn!("batch handler error: {}", e);
                     continue;
                 }
-            }
-
-            // 保留上一轮最后时间戳，用于判断本轮是否没有向前推进。
-            let previous_last_timestamp = last_timestamp;
-            if let Some(ts) = last_close_time {
-                last_timestamp = Some(ts);
             }
 
             // 步骤5-1：本轮最后一条时间与上一轮相同（或倒退），说明翻页不再前进，直接退出且不计入本轮统计。
@@ -398,7 +404,7 @@ where
 mod tests {
     use crate::binance::bn_models::spot_restful::BinanceKline;
     use crate::binance::bn_restful_commands::SPOT_KLINE_HISTORY_COMMAND;
-    use crate::binance::restful_func::{CommonRequestBuilder, HistoryBatchHandler, HistoryFetcherImpl, HistoryFetcherTrait};
+    use crate::binance::restful_func::{CommonRequestBuilder, HistoryFetcherImpl, HistoryFetcherTrait, ShareHistoryBatchHandler};
     use crate::errors::YueError;
     use crate::http_client::init_http_client;
     use crate::models::HistoryInterval;
@@ -433,7 +439,7 @@ mod tests {
         mock_server
     }
 
-    fn no_handler() -> Option<HistoryBatchHandler<BinanceKline>> {
+    fn no_handler() -> Option<ShareHistoryBatchHandler<BinanceKline>> {
         None
     }
 

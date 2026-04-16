@@ -13,9 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{RwLock, Semaphore};
 use yue::binance::bn_models::common::SymbolType;
-use yue::binance::bn_models::spot_restful::BinanceKline;
-use yue::binance::bn_restful_commands::{SPOT_KLINE_HISTORY_COMMAND, SWAP_KLINE_HISTORY_COMMAND};
-use yue::binance::restful_func::{CommonRequestBuilder, HistoryFetcher, MuteHistoryParam};
+use yue::binance::restful_func::{HistoryFetcher, MuteHistoryParam};
 use yue::models::HistoryInterval;
 
 pub const BN_SPOT_KLINE_CHECK: &str = "binance_spot_check"; // WireMock server address

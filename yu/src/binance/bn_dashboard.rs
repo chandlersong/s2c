@@ -166,7 +166,7 @@ impl BinanceDashboard {
                 Self::refresh_rate_limit(&spot, &swap).await;
                 // refresh symbol
                 let spot_all = get_trading_spot_symbols(spot).await;
-                let swap_res = get_trading_swap_symbols(swap, None, Some(CONTRACT_TYPE_PERPETUAL)).await;
+                let swap_res = get_trading_swap_symbols(swap, None).await;
 
                 let res = match self.refresh_all_symbol(spot_all, swap_res) {
                     Ok((spot_symbols, swap_symbols)) => {
@@ -184,11 +184,11 @@ impl BinanceDashboard {
         }
     }
 
-    fn spot_all_symbols(&self) -> Arc<RwLock<Vec<SymbolInfo>>> {
+    pub fn spot_all_symbols(&self) -> Arc<RwLock<Vec<SymbolInfo>>> {
         self.spot_symbols.clone()
     }
 
-    fn swap_all_symbols(&self) -> Arc<RwLock<Vec<SymbolInfo>>> {
+    pub fn swap_all_symbols(&self) -> Arc<RwLock<Vec<SymbolInfo>>> {
         self.swap_symbols.clone()
     }
 

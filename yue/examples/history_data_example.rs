@@ -1,15 +1,15 @@
 use li::tools::logs::setup_logger_all;
 use li::tools::time::{unix_2_readable, unix_time_now_u64_utc};
 use log::{LevelFilter, debug, error, info};
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use yue::binance::bn_models::common::HistoryVo;
 use yue::binance::bn_models::spot_restful::BinanceKline;
-use yue::binance::bn_restful_commands::{SPOT_KLINE_HISTORY_COMMAND, SWAP_KLINE_HISTORY_COMMAND};
-use yue::binance::restful_func::{CommonRequestBuilder, HistoryBatchHandlerTrait, HistoryFetcherImpl, HistoryFetcherTrait};
+use yue::binance::bn_restful_commands::SPOT_KLINE_HISTORY_COMMAND;
+use yue::binance::restful_func::{CommonRequestBuilder, HistoryBatchHandlerTrait, HistoryFetcherImpl, HistoryFetcherTrait, ShareHistoryBatchHandler};
 use yue::errors::YueError;
 use yue::http_client::init_http_client;
 use yue::models::HistoryInterval;
-use yue::query_message::{DataSourceExecutorTrait, QueryCommand};
 
 fn print_kline_result<H>(klines: &Vec<H>, interval: Option<HistoryInterval>)
 where
@@ -65,8 +65,8 @@ where
 struct PrinterHandler;
 
 impl PrinterHandler {
-    pub fn new() -> Box<dyn HistoryBatchHandlerTrait<BinanceKline> + Send> {
-        Box::new(Self {}) as Box<dyn HistoryBatchHandlerTrait<BinanceKline> + Send>
+    pub fn new() -> ShareHistoryBatchHandler<BinanceKline> {
+        Arc::new(Self {}) as Arc<dyn HistoryBatchHandlerTrait<BinanceKline> + Send>
     }
 }
 
@@ -97,7 +97,6 @@ async fn main() {
     let now_ms = unix_time_now_u64_utc();
     let one_hour: u64 = 60 * 60 * 1000;
     let start_ms = now_ms - 10 * one_hour;
-    let end_ms = now_ms - 10 * 1000 * 60;
     info!("Now  = {}, start_time  = {}", unix_2_readable(&now_ms), unix_2_readable(&start_ms));
     let symbol = "BTCUSDT";
     let spot_kline_fetch = HistoryFetcherImpl::kline(&SPOT_KLINE_HISTORY_COMMAND);

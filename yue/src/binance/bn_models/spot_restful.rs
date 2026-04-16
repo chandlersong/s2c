@@ -240,6 +240,10 @@ impl HistoryVo for BinanceKline {
     fn get_open_time(&self) -> u64 {
         self.open_time
     }
+
+    fn update_symbol(&mut self, symbol: &str) {
+        self.symbol = Some(symbol.to_string())
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

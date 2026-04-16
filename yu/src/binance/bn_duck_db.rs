@@ -1,58 +1,16 @@
 use crate::binance::binance_db_consts::BinanceTables;
-use crate::binance::models::po::{DuckDBPO, KlinePo};
+use crate::binance::models::po::DuckDBPO;
 use crate::duck_db::get_connection;
-use async_trait::async_trait;
 use duckdb::DropBehavior;
 use li::tools::time::unix_time_now_u64_utc;
 use log::error;
 use std::marker::PhantomData;
 use std::time::Duration;
-use thiserror::Error;
 use tokio::sync::mpsc;
-use yue::binance::bn_models::spot_restful::BinanceKline;
-use yue::binance::bn_models::spot_websocket_stream::SpotKlineData;
 use yue::errors::YueError;
-use yue::query_message::{BatchInsertPayload, DataSourceExecutorTrait, InsertPayload, QueryCommand};
+use yue::query_message::QueryCommand;
 
-pub type DuckTableTableChannel<P: DuckDBPO> = mpsc::Sender<QueryCommand<P>>;
-
-#[derive(Clone)]
-pub struct BinanceKlineDataExecutor {
-    table: DuckTableTableChannel<KlinePo>,
-}
-
-impl BinanceKlineDataExecutor {
-    pub fn new(table: DuckTableTableChannel<KlinePo>) -> Self {
-        Self { table }
-    }
-}
-#[async_trait]
-impl DataSourceExecutorTrait<BinanceKline> for BinanceKlineDataExecutor {
-    async fn execute(&self, command: QueryCommand<BinanceKline>) -> Result<(), YueError> {
-        match command {
-            QueryCommand::GetCount(sender) => {
-                if let Err(e) = self.table.send(QueryCommand::GetCount(sender)).await {
-                    return Err(YueError::CustomError("tokio error".to_string()));
-                };
-            }
-            QueryCommand::BatchInsert(payload) => {
-                let data: Vec<KlinePo> = payload.data.iter().map(|source| KlinePo::from(source.clone())).collect();
-                let command_payload = BatchInsertPayload::new_all(data, payload.callback);
-                if let Err(e) = self.table.send(QueryCommand::BatchInsert(command_payload)).await {
-                    return Err(YueError::CustomError("tokio error".to_string()));
-                };
-            }
-            QueryCommand::Insert(payload) => {
-                let record = KlinePo::from(payload.data);
-                let command_payload = InsertPayload::new_all(record, payload.callback);
-                if let Err(e) = self.table.send(QueryCommand::Insert(command_payload)).await {
-                    return Err(YueError::CustomError("tokio error".to_string()));
-                };
-            }
-        }
-        Ok(())
-    }
-}
+pub type DuckTableTableChannel<P> = mpsc::Sender<QueryCommand<P>>;
 
 ///
 /// 基于DuckDB对一张表

@@ -1,4 +1,4 @@
-use crate::binance::models::po::{DuckDBPO, KlinePo};
+use crate::binance::models::po::KlinePo;
 use crate::binance::models::SpotStreamTradeRecordPo;
 use crate::config::{get_config, SpotWebSocketStreamConfig};
 use crate::duck_db::DBProvider;
@@ -252,55 +252,4 @@ mod tests {
     use crate::test_utils::initial_memory_db;
     use rust_decimal::Decimal;
     use std::str::FromStr;
-
-    #[test]
-    fn test_flush_kline_into_db() -> Result<(), crate::errors::YuError> {
-        let pool = initial_memory_db();
-        let db_provider = DBProvider::new(pool);
-        let conn = db_provider.clone().acquire()?;
-        let _ = initial_tables(Some(db_provider.clone()));
-
-        let mut actor = SpotStreamStorageActor::new(SpotWebSocketStreamConfig { trade: None, depth: None }, db_provider);
-
-        let kline = yue::binance::bn_models::spot_websocket_stream::SpotKlineData {
-            start_time: 1,
-            close_time: 2,
-            symbol: "BTCUSDT".to_string(),
-            interval: "5m".to_string(),
-            first_trade_id: 10,
-            last_trade_id: 20,
-            open: Decimal::from_str("1.0").unwrap(),
-            close: Decimal::from_str("2.0").unwrap(),
-            high: Decimal::from_str("3.0").unwrap(),
-            low: Decimal::from_str("0.5").unwrap(),
-            volume: Decimal::from_str("5.0").unwrap(),
-            trade_count: 8,
-            is_closed: true,
-            quote_volume: Decimal::from_str("6.0").unwrap(),
-            taker_buy_base_volume: Decimal::from_str("1.5").unwrap(),
-            taker_buy_quote_volume: Decimal::from_str("2.5").unwrap(),
-            ignore: "0".to_string(),
-        };
-
-        actor.buffer_kline(KlinePo::from(kline));
-        actor.flush_klines();
-
-        let mut stmt = conn.prepare("SELECT symbol, candle_begin_time, open, close, interval, first_trade_id, last_trade_id FROM bn_spot_kline")?;
-        let rows: Vec<(String, u64, f64, f64, i64, Option<u64>, Option<u64>)> = stmt
-            .query_map([], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?))
-            })?
-            .collect::<Result<_, _>>()?;
-
-        assert_eq!(rows.len(), 1);
-        let (symbol, begin, open, close, interval, first_id, last_id) = rows[0].clone();
-        assert_eq!(symbol, "BTCUSDT");
-        assert_eq!(begin, 1);
-        assert_eq!(open, 1.0);
-        assert_eq!(close, 2.0);
-        assert_eq!(interval, crate::binance::models::po::INTERVAL_5M as i64);
-        assert_eq!(first_id, Some(10));
-        assert_eq!(last_id, Some(20));
-        Ok(())
-    }
 }

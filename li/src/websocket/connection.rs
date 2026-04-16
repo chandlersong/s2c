@@ -242,7 +242,7 @@ impl WebSocketConnection {
         initial_command: &mut Vec<WsMessage>,
         message_handler: ShareMessageHandler<M>,
     ) -> Result<ConnectionAction, LiError> {
-        let (mut ws_stream, _) = if let Some(proxy_url) = proxy {
+        let (ws_stream, _) = if let Some(proxy_url) = proxy {
             info!("使用代理连接: {}", proxy_url);
             Self::connect_with_proxy(url, proxy_url).await?
         } else {

@@ -43,6 +43,9 @@ pub trait HistoryVo: DeserializeOwned + Sync + Send + Clone {
     fn get_close_time(&self) -> u64;
 
     fn get_open_time(&self) -> u64;
+
+    //有些需要更新，有些则不需要。
+    fn update_symbol(&mut self, _: &str) {}
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

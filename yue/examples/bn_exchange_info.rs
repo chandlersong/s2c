@@ -5,7 +5,7 @@ use yue::binance::bn_models::common::SymbolInfo;
 use yue::binance::bn_models::spot_restful::ExchangeInfo;
 use yue::binance::bn_models::swap_restful::SwapExchangeInfo;
 use yue::binance::bn_restful_commands::{SPOT_EXCHANGE_COMMAND, SWAP_EXCHANGE_COMMAND, execute_json_request};
-use yue::binance::restful_func::{CONTRACT_TYPE_PERPETUAL, get_trading_spot_symbols, get_trading_swap_symbols};
+use yue::binance::restful_func::{get_trading_spot_symbols, get_trading_swap_symbols};
 use yue::http_client::{get_http_client, init_http_client};
 
 /// 将symbols写入CSV文件
@@ -70,7 +70,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let swap_exchange = execute_json_request::<SwapExchangeInfo>(&SWAP_EXCHANGE_COMMAND, rb, None)
         .await
         .expect("获取U本位合约交易对信息失败");
-    let swap_symbols = get_trading_swap_symbols(swap_exchange, Some("ALL"), Some(CONTRACT_TYPE_PERPETUAL)).await?;
+    let swap_symbols = get_trading_swap_symbols(swap_exchange, Some("ALL")).await?;
     println!("成功获取到 {} 个U本位合约交易对信息", swap_symbols.len());
     write_symbols_to_csv("binance_swap_symbols.csv", &swap_symbols, true)?;
     println!("U本位合约数据已保存到 binance_swap_symbols.csv");
