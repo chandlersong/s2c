@@ -27,6 +27,7 @@ cron = "0.15.0"
 reqwest = { workspace = true }
 reqwest-retry = { workspace = true }
 reqwest-middleware = { workspace = true }
+unicode-segmentation = "1.13.1"
 
 [features]
 default = []

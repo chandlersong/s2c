@@ -1,4 +1,5 @@
 use crate::errors::LiError;
+use crate::tools::words::take_or_all_cow_with_ellipsis;
 use crate::websocket::models::WebSocketMessage;
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
@@ -197,7 +198,7 @@ impl WebSocketConnection {
 
         tokio::spawn(async move {
             loop {
-                info!("正在连接到 WebSocket: {}", url);
+                info!("正在连接到 WebSocket: {}", take_or_all_cow_with_ellipsis(url.as_str(), 20));
                 Self::broadcast_event(&event_tx, WebSocketEvent::Reconnecting);
                 let mut message_cache = vec![];
 
@@ -214,10 +215,10 @@ impl WebSocketConnection {
                 {
                     Ok(action) => match action {
                         ConnectionAction::Reconnection => {
-                            info!("连接重启：{}", url);
+                            info!("连接重启：{}", take_or_all_cow_with_ellipsis(url.as_str(), 20));
                         }
                         ConnectionAction::Close => {
-                            info!("连接关闭：{}", url);
+                            info!("连接关闭：{}", take_or_all_cow_with_ellipsis(url.as_str(), 20));
                             break;
                         }
                     },
