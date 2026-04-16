@@ -9,7 +9,7 @@ use li::websocket::connection::{
     CommandMessage, ConnectionAction, MessageHandler, MessageHandlerTrait, ShareMessageHandler, WebSocketConnection, WebSocketInterface,
 };
 use li::websocket::models::WebSocketMessage;
-use log::{error, info};
+use log::{debug, error, info};
 use mockall::predicate::le;
 use std::sync::Arc;
 use std::time::Duration;
@@ -141,7 +141,7 @@ impl KlineSubscribeService {
         };
         let reconnect_interval = Duration::from_secs(5);
         let final_url = format!("{}?streams={}", ws_url, Self::compose_kline_url(symbols, interval));
-        info!("Connecting to {}", final_url);
+        debug!("Connecting to {}", final_url);
         let interface = WebSocketConnection::run::<M>(final_url, reconnect_interval, proxy, Some(handler)).await;
 
         info!("initial subscribe symbols num: {:?}", symbols.len());
