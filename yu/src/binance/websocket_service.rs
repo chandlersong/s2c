@@ -100,20 +100,24 @@ impl KlineSubscribeService {
 
         //每次symbol更新，重新订阅
         tokio::spawn(async move {
-            match rx.changed().await {
-                Ok(_) => {
-                    let snapshot = (*rx.borrow_and_update()).clone();
-                    info!("开始重新订阅: 现在symbol树木是:{}", snapshot.spot_trading_symbols.len());
-                    let command_sender = interface.command_sender();
-                    if let Err(e) = command_sender.send(CommandMessage::Connection(ConnectionAction::Close)) {
-                        error!("Error close prev connection: {:?}", e);
-                    };
-                    if let Err(e) = Self::subscribe_trading_kline(symbol_type, proxy_clone, ws_url, &snapshot, saver.clone(), interval.clone()).await
-                    {
-                        error!("Error subscribing to kline: {:?}", e);
-                    };
+            let update_proxy = proxy_clone;
+            loop {
+                match rx.changed().await {
+                    Ok(_) => {
+                        let snapshot = (*rx.borrow()).clone();
+                        info!("开始重新订阅: 现在symbol数目是:{}", snapshot.spot_trading_symbols.len());
+                        let command_sender = interface.command_sender();
+                        if let Err(e) = command_sender.send(CommandMessage::Connection(ConnectionAction::Close)) {
+                            error!("Error close prev connection: {:?}", e);
+                        };
+                        if let Err(e) =
+                            Self::subscribe_trading_kline(symbol_type, update_proxy.clone(), ws_url, &snapshot, saver.clone(), interval.clone()).await
+                        {
+                            error!("Error subscribing to kline: {:?}", e);
+                        };
+                    }
+                    Err(_) => {}
                 }
-                Err(_) => {}
             }
         });
 
