@@ -39,7 +39,7 @@ use yue::tools::SnowyFlakeWrapper;
 ///
 pub async fn start_bn_jobs() -> Result<(), YuError> {
     let config = get_config();
-    let dash_board = Arc::new(BinanceDashboard::debug_mode(config.get_data_retention_hours()));
+    let dash_board = Arc::new(BinanceDashboard::new(config.get_data_retention_hours()));
     let snapshot = dash_board.execute().await?;
     let (dash_board_watch, _) = watch::channel(snapshot);
     let dash_board_refresh = dash_board.clone();
