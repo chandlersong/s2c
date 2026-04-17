@@ -215,11 +215,11 @@ impl WebSocketConnection {
                 {
                     Ok(action) => match action {
                         ConnectionAction::Reconnection => {
-                            info!("连接重启：{}", take_or_all_cow_with_ellipsis(url.as_str(), 50));
+                            info!("主动连接重启：{}", take_or_all_cow_with_ellipsis(url.as_str(), 50));
                         }
                         ConnectionAction::Close => {
-                            info!("连接关闭：{}", take_or_all_cow_with_ellipsis(url.as_str(), 50));
-                            break;
+                            info!("主动连接关闭：{}", take_or_all_cow_with_ellipsis(url.as_str(), 50));
+                            return;
                         }
                     },
                     Err(e) => error!("连接错误: {}", e),
@@ -285,16 +285,11 @@ impl WebSocketConnection {
                                 reason: "See you soon".into(),
                             });
 
-                            if let Err(e) = write.send(WsMessage::Close(close_frame)).await {
-                                error!("Failed to send close frame: {},url:{}", e, url);
-                            }
-                               // 可选：显式关闭 sink（有助于 flush 并关闭）
                             if let Err(e) = write.close().await {
-                                error!("调用 write.close() 失败: {},url:{}", e, url);
+                                error!("调用 write.close() 失败: {},url:{}", e, take_or_all_cow_with_ellipsis(url, 50));
                             } else {
-                                debug!("connection关闭:{}",url);
+                                info!("主动关闭connection关闭:{}",take_or_all_cow_with_ellipsis(url, 50));
                             }
-                            info!("关闭websocket连接:{}", url);
                             return Ok(action);
                         }
                         CommandMessage::ToServer(to_server_message) => {

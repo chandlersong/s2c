@@ -81,8 +81,9 @@ impl MessageHandlerTrait<BinanceSpotWebSocketStreamWrapper> for SpotKlineSaver {
                     let start_time = payload.kline.start_time;
 
                     // FUTURE: 发现close的Kline都会重复发的。需要写一个版本，两个都存，然后比较一下有没有区别。
+                    //TODO： 找寻问题，如果解决，改成debug。甚至删除代码。
                     if !self.need_save(&symbol, start_time) {
-                        debug!("{} 在 {} 重复发送!", symbol, unix_2_readable(&start_time));
+                        info!("{} 在 {} 重复发送!", symbol, unix_2_readable(&start_time));
                         return;
                     }
 
