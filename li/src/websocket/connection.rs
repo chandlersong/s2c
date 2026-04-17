@@ -294,6 +294,7 @@ impl WebSocketConnection {
                             } else {
                                 debug!("connection关闭:{}",url);
                             }
+                            info!("关闭websocket连接:{}", url);
                             return Ok(action);
                         }
                         CommandMessage::ToServer(to_server_message) => {
