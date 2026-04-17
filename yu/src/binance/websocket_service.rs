@@ -5,6 +5,7 @@ use crate::errors::YuError;
 use crate::errors::YuError::NotSupportError;
 use async_trait::async_trait;
 use dashmap::DashMap;
+use governor::Jitter;
 use li::tools::time::{unix_2_readable, unix_time_now_u64_utc};
 use li::websocket::connection::{
     CommandMessage, ConnectionAction, MessageHandler, MessageHandlerTrait, ShareMessageHandler, WebSocketConnection, WebSocketInterface,
@@ -16,6 +17,7 @@ use std::collections::HashMap;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::mpsc::UnboundedSender;
 use yue::binance::bn_json_websocket::{SPOT_STREAM_WEBSOCKET, SWAP_STREAM_WEBSOCKET};
 use yue::binance::bn_models::common::{SymbolInfo, SymbolType};
 use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamResponse::Kline;
@@ -154,14 +156,27 @@ impl KlineSubscribeService {
                         let snapshot = (*rx.borrow()).clone();
                         info!("开始重新订阅: 现在symbol数目是:{}", snapshot.spot_trading_symbols.len());
                         let command_sender = interface.command_sender();
-                        if let Err(e) = command_sender.send(CommandMessage::Connection(ConnectionAction::Close)) {
-                            error!("Error close prev connection: {:?}", e);
-                        };
-                        if let Err(e) =
-                            Self::subscribe_trading_kline(symbol_type, update_proxy.clone(), ws_url, &snapshot, saver.clone(), interval.clone()).await
-                        {
-                            error!("Error subscribing to kline: {:?}", e);
-                        };
+
+                        match Self::close_connection(command_sender, 10).await {
+                            Ok(_) => {
+                                //发送失败，就等待定时间重试，
+                                if let Err(e) = Self::subscribe_trading_kline(
+                                    symbol_type,
+                                    update_proxy.clone(),
+                                    ws_url,
+                                    &snapshot,
+                                    saver.clone(),
+                                    interval.clone(),
+                                )
+                                .await
+                                {
+                                    error!("Error subscribing to kline: {:?}", e);
+                                };
+                            }
+                            Err(e) => {
+                                error!("关闭之前连接发送消息失败，跳过此次的做法可能会导致资源泄露，建议调查原因并修复: {}", e);
+                            }
+                        }
                     }
                     Err(_) => {}
                 }
@@ -169,6 +184,40 @@ impl KlineSubscribeService {
         });
 
         Ok(())
+    }
+
+    async fn close_connection(command_sender: UnboundedSender<CommandMessage>, max_retries: usize) -> Result<(), YuError> {
+        let mut attempt = 0usize;
+        loop {
+            attempt += 1;
+            // 每次构造新的命令实例，这样即使 CommandMessage 没有 Clone 也可以重试
+            let cmd = CommandMessage::Connection(ConnectionAction::Close);
+
+            match command_sender.send(cmd) {
+                Ok(_) => {
+                    info!("Sent Close command to previous connection (attempt {})", attempt);
+                    return Ok(());
+                }
+                Err(e) => {
+                    // 记录更详细的信息：不仅打印错误，还打印将要发送的命令（可被 Debug 展示）
+                    // 这样能避免日志仅显示 `SendError { .. }` 无法追踪要发送的 payload 的情况
+                    error!(
+                        "Error close prev connection on attempt {}: error={}. CommandMessage being sent: ",
+                        attempt, e
+                    );
+
+                    if attempt >= max_retries {
+                        error!("Giving up closing previous connection after {} attempts. Last error: {}", max_retries, e);
+                        return Err(YuError::new("max retries").into());
+                    } else {
+                        // 简单指数退避：500ms * attempt
+                        let jitter = Jitter::up_to(Duration::from_millis(500));
+                        tokio::time::sleep(jitter + Duration::ZERO).await;
+                        // 然后重试
+                    }
+                }
+            }
+        }
     }
 
     async fn subscribe_trading_kline<M: WebSocketMessage>(
