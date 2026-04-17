@@ -44,7 +44,7 @@ pub async fn start_bn_jobs() -> Result<(), YuError> {
     let (dash_board_watch, _) = watch::channel(snapshot);
     let dash_board_refresh = dash_board.clone();
     let dashboard_watch_sender = dash_board_watch.clone();
-    let _ = cron_job!("0 58 * * * *", move |_uuid, _locked| {
+    let _ = cron_job!("0 01 * * * *", move |_uuid, _locked| {
         let dash_board_job = dash_board_refresh.clone();
         let dashboard_watch_refresher = dashboard_watch_sender.clone();
         Box::pin(async move {

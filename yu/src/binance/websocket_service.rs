@@ -6,14 +6,12 @@ use crate::errors::YuError::NotSupportError;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use governor::Jitter;
-use li::tools::time::{unix_2_readable, unix_time_now_u64_utc};
+use li::tools::time::unix_2_readable;
 use li::websocket::connection::{
-    CommandMessage, ConnectionAction, MessageHandler, MessageHandlerTrait, ShareMessageHandler, WebSocketConnection, WebSocketInterface,
+    CommandMessage, ConnectionAction, MessageHandlerTrait, ShareMessageHandler, WebSocketConnection, WebSocketInterface,
 };
 use li::websocket::models::WebSocketMessage;
 use log::{debug, error, info};
-use mockall::predicate::le;
-use std::collections::HashMap;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Duration;
@@ -140,7 +138,7 @@ impl KlineSubscribeService {
         let snapshot = (*rx.borrow()).clone();
         let proxy_clone = proxy.clone();
         let saver = SpotKlineSaver::new(db);
-        let interface = match Self::subscribe_trading_kline(symbol_type, proxy, ws_url, &snapshot, saver.clone(), interval.clone()).await {
+        let mut interface = match Self::subscribe_trading_kline(symbol_type, proxy, ws_url, &snapshot, saver.clone(), interval.clone()).await {
             Ok(interface) => interface,
             Err(e) => {
                 return Err(YuError::new(format!("启动监听:{}失败，因为:{}", ws_url, e).as_str()).into());
@@ -149,33 +147,41 @@ impl KlineSubscribeService {
 
         //每次symbol更新，重新订阅
         tokio::spawn(async move {
+            // 更新的逻辑。主要保持一致有一条连接在。这种做法，
+            // 可能会导致重叠，然后丢一点数据。因为db flush的时候，可能引起duplicate key。
+            // 概率极低
+            // 1.根据建立新连接
+            // 2.如果成功，那么就关闭老连接
+            // 3.建立失败，就用老连接。
             let update_proxy = proxy_clone;
             loop {
                 match rx.changed().await {
                     Ok(_) => {
                         let snapshot = (*rx.borrow()).clone();
                         info!("开始重新订阅: 现在symbol数目是:{}", snapshot.spot_trading_symbols.len());
-                        let command_sender = interface.command_sender();
 
-                        match Self::close_connection(command_sender, 10).await {
-                            Ok(_) => {
-                                //发送失败，就等待定时间重试，
-                                if let Err(e) = Self::subscribe_trading_kline(
-                                    symbol_type,
-                                    update_proxy.clone(),
-                                    ws_url,
-                                    &snapshot,
-                                    saver.clone(),
-                                    interval.clone(),
-                                )
-                                .await
-                                {
-                                    error!("Error subscribing to kline: {:?}", e);
-                                };
+                        match Self::subscribe_trading_kline(symbol_type, update_proxy.clone(), ws_url, &snapshot, saver.clone(), interval.clone())
+                            .await
+                        {
+                            Ok(new_interface) => {
+                                //建立成功，开始关闭老连接
+                                let command_sender = interface.command_sender();
+                                match Self::close_connection(command_sender, 10).await {
+                                    Ok(_) => {
+                                        //关闭成功，换了连接
+                                        interface = new_interface;
+                                    }
+                                    Err(e) => {
+                                        //关闭失败，保持老连接
+                                        new_interface
+                                            .command_sender()
+                                            .send(CommandMessage::Connection(ConnectionAction::Close))
+                                            .ok();
+                                        error!("关闭之前连接发送消息失败，跳过此次的做法可能会导致资源泄露，建议调查原因并修复: {}", e);
+                                    }
+                                }
                             }
-                            Err(e) => {
-                                error!("关闭之前连接发送消息失败，跳过此次的做法可能会导致资源泄露，建议调查原因并修复: {}", e);
-                            }
+                            _ => {}
                         }
                     }
                     Err(_) => {}
@@ -213,7 +219,6 @@ impl KlineSubscribeService {
                         // 简单指数退避：500ms * attempt
                         let jitter = Jitter::up_to(Duration::from_millis(500));
                         tokio::time::sleep(jitter + Duration::ZERO).await;
-                        // 然后重试
                     }
                 }
             }

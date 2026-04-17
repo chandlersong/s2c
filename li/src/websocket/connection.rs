@@ -174,6 +174,8 @@ impl<M: WebSocketMessage> MessageHandlerTrait<M> for BroadcastMessageHandler<M> 
 pub struct WebSocketConnection {}
 
 impl WebSocketConnection {
+    /// FUTURE: 等待连接之后再返回，否则容易误触。
+    ///
     /// 启动 WebSocket 连接管理器。
     ///
     /// 如果 `message_handler` 为 Some(...) 则使用用户提供的处理器；否则使用
