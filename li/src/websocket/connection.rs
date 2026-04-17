@@ -351,6 +351,11 @@ impl WebSocketConnection {
                                 WsMessage::Close(frame) => {
                                     info!("收到关闭帧: {:?}", frame);
                                     Self::broadcast_event(event_tx,WebSocketEvent::Disconnected);
+                                    if let Err(e) = write.close().await {
+                                        error!("调用 write.close() 失败: {},url:{}", e, take_or_all_cow_with_ellipsis(url, 50));
+                                    } else {
+                                        info!("关闭connection关闭:{}",take_or_all_cow_with_ellipsis(url, 50));
+                                    }
                                     return Ok(ConnectionAction::Reconnection);
                                 }
                                 WsMessage::Frame(_) => {}
@@ -359,10 +364,20 @@ impl WebSocketConnection {
                         Some(Err(e)) => {
                             error!("接收消息错误: {}", e);
                             Self::broadcast_event(event_tx,WebSocketEvent::Error(e.to_string()));
+                            if let Err(e) = write.close().await {
+                                error!("调用 write.close() 失败: {},url:{}", e, take_or_all_cow_with_ellipsis(url, 50));
+                            } else {
+                                info!("关闭connection关闭:{}",take_or_all_cow_with_ellipsis(url, 50));
+                            }
                             return Err(LiError::CustomError(format!("接收消息错误: {}", e)));
                         }
                         None => {
                             warn!("WebSocket 流已关闭");
+                            if let Err(e) = write.close().await {
+                                error!("调用 write.close() 失败: {},url:{}", e, take_or_all_cow_with_ellipsis(url, 50));
+                            } else {
+                                info!("关闭connection关闭:{}",take_or_all_cow_with_ellipsis(url, 50));
+                            }
                             Self::broadcast_event(event_tx,WebSocketEvent::Disconnected);
                             return Ok(ConnectionAction::Reconnection);
                         }
