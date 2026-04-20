@@ -19,7 +19,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use yue::binance::bn_json_websocket::{SPOT_STREAM_WEBSOCKET, SWAP_STREAM_WEBSOCKET};
 use yue::binance::bn_models::common::{SymbolInfo, SymbolType};
 use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamResponse::Kline;
-use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamWrapper;
+use yue::binance::bn_models::spot_websocket_stream::{BinanceSpotWebSocketStreamResponse, BinanceSpotWebSocketStreamWrapper};
 use yue::models::HistoryInterval;
 use yue::query_message::{InsertPayload, QueryCommand};
 ///
@@ -29,46 +29,11 @@ use yue::query_message::{InsertPayload, QueryCommand};
 
 struct SpotKlineSaver {
     db: DuckTableTableChannel<KlinePo>,
-    last_update: DashMap<String, AtomicU64>,
 }
 
 impl SpotKlineSaver {
     fn new(db: DuckTableTableChannel<KlinePo>) -> ShareMessageHandler<BinanceSpotWebSocketStreamWrapper> {
-        Arc::new(SpotKlineSaver {
-            db,
-            last_update: DashMap::new(),
-        })
-    }
-    /// 比较并在必要时更新 map 中的时间戳。
-    ///
-    /// 返回值：
-    /// - true: 表示当前 close_time 与 map 中的值不同（或不存在），需要保存该 message
-    /// - false: 表示 map 中已有相同的 close_time，应该跳过保存
-    fn need_save(&self, symbol: &str, close_time: u64) -> bool {
-        use dashmap::mapref::entry::Entry;
-        use std::sync::atomic::Ordering;
-
-        match self.last_update.entry(symbol.to_string()) {
-            Entry::Occupied(occ) => {
-                let atomic = occ.get();
-                // 使用 compare_exchange 循环，做到原子性的比较并更新
-                loop {
-                    let prev = atomic.load(Ordering::SeqCst);
-                    if prev == close_time {
-                        // 相同，跳过
-                        return false;
-                    }
-                    match atomic.compare_exchange(prev, close_time, Ordering::SeqCst, Ordering::SeqCst) {
-                        Ok(_) => return true, // 更新成功，需保存
-                        Err(_) => continue,   // 竞争发生，重试
-                    }
-                }
-            }
-            Entry::Vacant(vac) => {
-                vac.insert(AtomicU64::new(close_time));
-                true
-            }
-        }
+        Arc::new(SpotKlineSaver { db })
     }
 }
 #[async_trait]
@@ -77,16 +42,6 @@ impl MessageHandlerTrait<BinanceSpotWebSocketStreamWrapper> for SpotKlineSaver {
         match &message.data {
             Kline(payload) => {
                 if payload.kline.is_closed {
-                    let symbol = payload.kline.symbol.clone();
-                    let start_time = payload.kline.start_time;
-
-                    // FUTURE: 发现close的Kline都会重复发的。需要写一个版本，两个都存，然后比较一下有没有区别。
-                    //TODO： 找寻问题，如果解决，改成debug。甚至删除代码。
-                    if !self.need_save(&symbol, start_time) {
-                        info!("{} 在 {} 重复发送!", symbol, unix_2_readable(&start_time));
-                        return;
-                    }
-
                     if let Err(e) = self
                         .db
                         .send(QueryCommand::Insert(InsertPayload::new_no_replay(KlinePo::from(payload.kline.clone()))))
@@ -101,6 +56,19 @@ impl MessageHandlerTrait<BinanceSpotWebSocketStreamWrapper> for SpotKlineSaver {
             }
         }
     }
+}
+
+struct SwapKlineSaver {}
+
+impl SwapKlineSaver {
+    fn new() -> ShareMessageHandler<BinanceSpotWebSocketStreamWrapper> {
+        todo!()
+    }
+}
+
+#[async_trait]
+impl MessageHandlerTrait<BinanceSpotWebSocketStreamResponse> for SwapKlineSaver {
+    async fn handle_message(&self, message: &BinanceSpotWebSocketStreamResponse) {}
 }
 
 ///
@@ -281,33 +249,6 @@ mod tests {
     use super::*;
     use tokio::sync::mpsc;
     use yue::binance::bn_models::common::SymbolInfo;
-
-    /// 单元测试：测试 `SpotKlineSaver::need_save` 的行为
-    #[test]
-    fn test_need_save_logic() {
-        // 构造一个假的 db sender，用于创建 SpotKlineSaver 实例
-        let (tx, _rx) = mpsc::channel::<QueryCommand<KlinePo>>(4);
-        let saver = SpotKlineSaver {
-            db: tx,
-            last_update: DashMap::new(),
-        };
-
-        // 初次插入应返回 true（需要保存）
-        assert!(saver.need_save("BTCUSDT", 1000));
-
-        // 相同时间再次判断应返回 false（跳过）
-        assert!(!saver.need_save("BTCUSDT", 1000));
-
-        // 不同时间应返回 true（更新并保存）
-        assert!(saver.need_save("BTCUSDT", 2000));
-
-        // 更新后再次用相同时间返回 false
-        assert!(!saver.need_save("BTCUSDT", 2000));
-
-        // 不同的 symbol 不相互影响
-        assert!(saver.need_save("ETHUSDT", 3000));
-        assert!(!saver.need_save("ETHUSDT", 3000));
-    }
 
     /// 单元测试：测试 `compose_kline_url` 对空输入的返回值。
     /// 预期行为：传入空 slice 时返回空字符串。
