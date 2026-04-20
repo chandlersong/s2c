@@ -6,4 +6,4 @@ pub mod spot_websocket;
 pub mod spot_websocket_stream;
 pub mod swap_account_stream;
 pub mod swap_restful;
-mod swap_websocket_stream;
+pub mod swap_websocket_stream;

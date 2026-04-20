@@ -16,10 +16,12 @@ use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::watch::Receiver;
 use yue::binance::bn_json_websocket::{SPOT_STREAM_WEBSOCKET, SWAP_STREAM_WEBSOCKET};
 use yue::binance::bn_models::common::{SymbolInfo, SymbolType};
 use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamResponse::Kline;
 use yue::binance::bn_models::spot_websocket_stream::{BinanceSpotWebSocketStreamResponse, BinanceSpotWebSocketStreamWrapper};
+use yue::binance::bn_models::swap_websocket_stream::{BinanceSwapWebSocketStreamResponse, BinanceSwapWebSocketStreamWrapper};
 use yue::models::HistoryInterval;
 use yue::query_message::{InsertPayload, QueryCommand};
 ///
@@ -58,17 +60,43 @@ impl MessageHandlerTrait<BinanceSpotWebSocketStreamWrapper> for SpotKlineSaver {
     }
 }
 
-struct SwapKlineSaver {}
+struct SwapKlineSaver {
+    db: DuckTableTableChannel<KlinePo>,
+}
 
 impl SwapKlineSaver {
-    fn new() -> ShareMessageHandler<BinanceSpotWebSocketStreamWrapper> {
-        todo!()
+    fn new(db: DuckTableTableChannel<KlinePo>) -> ShareMessageHandler<BinanceSwapWebSocketStreamWrapper> {
+        Arc::new(SwapKlineSaver { db })
     }
 }
 
 #[async_trait]
-impl MessageHandlerTrait<BinanceSpotWebSocketStreamResponse> for SwapKlineSaver {
-    async fn handle_message(&self, message: &BinanceSpotWebSocketStreamResponse) {}
+impl MessageHandlerTrait<BinanceSwapWebSocketStreamWrapper> for SwapKlineSaver {
+    async fn handle_message(&self, message: &BinanceSwapWebSocketStreamWrapper) {
+        match &message.data {
+            BinanceSwapWebSocketStreamResponse::Kline(payload) => {
+                match &message.data {
+                    BinanceSwapWebSocketStreamResponse::Kline(payload) => {
+                        if payload.kline.is_close {
+                            if let Err(e) = self
+                                .db
+                                .send(QueryCommand::Insert(InsertPayload::new_no_replay(KlinePo::from(payload.kline.clone()))))
+                                .await
+                            {
+                                error!("Error save spot kline: {}", e);
+                            }
+                        }
+                    }
+                    _ => {
+                        //ignore other message types
+                    }
+                }
+            }
+            _ => {
+                //ignore other message types
+            }
+        }
+    }
 }
 
 ///
@@ -89,30 +117,55 @@ impl KlineSubscribeService {
     ///  2. 重新订阅
     ///
     pub async fn startup_spot(
-        symbol_type: SymbolType,
         db: DuckTableTableChannel<KlinePo>,
         symbol_watch: BinanceDashboardWatcher,
         proxy: Option<String>,
         interval: HistoryInterval,
     ) -> Result<(), YuError> {
-        let ws_url = match symbol_type {
-            SymbolType::Spot => SPOT_STREAM_WEBSOCKET,
-            SymbolType::Swap => SWAP_STREAM_WEBSOCKET,
-            _ => {
-                return Err(NotSupportError(format!("symbol type {:?} not support", symbol_type)).into());
-            }
-        };
+        let ws_url = SPOT_STREAM_WEBSOCKET;
+        let saver = SpotKlineSaver::new(db);
+        if let Some(value) = Self::start_listen_kline(SymbolType::Spot, proxy, interval, ws_url, &symbol_watch, saver).await {
+            return value;
+        }
+
+        Ok(())
+    }
+
+    pub async fn startup_swap(
+        db: DuckTableTableChannel<KlinePo>,
+        symbol_watch: BinanceDashboardWatcher,
+        proxy: Option<String>,
+        interval: HistoryInterval,
+    ) -> Result<(), YuError> {
+        let ws_url = SWAP_STREAM_WEBSOCKET;
+        let saver = SwapKlineSaver::new(db);
+        if let Some(value) = Self::start_listen_kline(SymbolType::Swap, proxy, interval, ws_url, &symbol_watch, saver).await {
+            return value;
+        }
+
+        Ok(())
+    }
+
+    async fn start_listen_kline<M: WebSocketMessage>(
+        symbol_type: SymbolType,
+        proxy: Option<String>,
+        interval: HistoryInterval,
+        ws_url: &str,
+        symbol_watch: &BinanceDashboardWatcher,
+        saver: ShareMessageHandler<M>,
+    ) -> Option<Result<(), YuError>> {
         let mut rx = symbol_watch.subscribe();
         let snapshot = (*rx.borrow()).clone();
         let proxy_clone = proxy.clone();
-        let saver = SpotKlineSaver::new(db);
+
         let mut interface = match Self::subscribe_trading_kline(symbol_type, proxy, ws_url, &snapshot, saver.clone(), interval.clone()).await {
             Ok(interface) => interface,
             Err(e) => {
-                return Err(YuError::new(format!("启动监听:{}失败，因为:{}", ws_url, e).as_str()).into());
+                return Some(Err(YuError::new(format!("启动监听:{}失败，因为:{}", ws_url, e).as_str()).into()));
             }
         };
 
+        let ws_for_reconnect = ws_url.to_string();
         //每次symbol更新，重新订阅
         tokio::spawn(async move {
             // 更新的逻辑。主要保持一致有一条连接在。这种做法，
@@ -128,8 +181,15 @@ impl KlineSubscribeService {
                         let snapshot = (*rx.borrow()).clone();
                         info!("开始重新订阅: 现在symbol数目是:{}", snapshot.spot_trading_symbols.len());
 
-                        match Self::subscribe_trading_kline(symbol_type, update_proxy.clone(), ws_url, &snapshot, saver.clone(), interval.clone())
-                            .await
+                        match Self::subscribe_trading_kline(
+                            symbol_type,
+                            update_proxy.clone(),
+                            ws_for_reconnect.as_str(),
+                            &snapshot,
+                            saver.clone(),
+                            interval.clone(),
+                        )
+                        .await
                         {
                             Ok(new_interface) => {
                                 //建立成功，开始关闭老连接
@@ -156,8 +216,7 @@ impl KlineSubscribeService {
                 }
             }
         });
-
-        Ok(())
+        None
     }
 
     async fn close_connection(command_sender: UnboundedSender<CommandMessage>, max_retries: usize) -> Result<(), YuError> {

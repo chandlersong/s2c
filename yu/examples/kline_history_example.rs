@@ -1,7 +1,7 @@
 use li::tools::logs::setup_logger;
 use log::{info, warn, LevelFilter};
 use std::collections::HashMap;
-use yu::binance::bn_backend_service::get_raw_spot_kline_table;
+use yu::binance::bn_backend_service::get_spot_kline_table;
 use yu::binance::bn_dashboard::BinanceDashboard;
 use yu::binance::history::initial_spot_kline;
 use yu::binance::jobs::initial_tables;
@@ -41,7 +41,7 @@ async fn main() -> Result<(), YuError> {
         .filter(|s| s.quote_asset == "USDT")
         .map(|s| s.symbol.clone())
         .collect();
-    let db = get_raw_spot_kline_table();
+    let db = get_spot_kline_table();
     initial_spot_kline(spot_symbol, app_config, HistoryInterval::OneHour, db).await?;
 
     Ok(())

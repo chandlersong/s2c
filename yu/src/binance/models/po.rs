@@ -7,6 +7,7 @@ use yue::binance::bn_models::common::{HistoryVo, PortfolioSpotOrderData, Portfol
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_models::spot_websocket_stream::{SpotKlineData, TradeStreamPayload};
 use yue::binance::bn_models::swap_restful::FundingRate;
+use yue::binance::bn_models::swap_websocket_stream::{SwapWebsocketKlineData, SwapWebsocketKlinePayload};
 use yue::tools::{get_snow_flake_id_u64, SnowyFlakeWrapper};
 
 pub trait DuckDBPO: Debug + Clone + DeserializeOwned + 'static + Send + Sync {
@@ -106,6 +107,29 @@ impl From<BinanceKline> for KlinePo {
             taker_buy_base_asset_volume: source.taker_buy_base_asset_volume.to_f64().unwrap(),
             taker_buy_quote_asset_volume: source.taker_buy_quote_asset_volume.to_f64().unwrap(),
             close_time: source.close_time,
+            interval: 0,
+            first_trade_id: Some(-1),
+            last_trade_id: Some(-1),
+        }
+    }
+}
+
+impl From<SwapWebsocketKlineData> for KlinePo {
+    fn from(value: SwapWebsocketKlineData) -> Self {
+        KlinePo {
+            id: get_snow_flake_id_u64() as i64,
+            symbol: value.symbol,
+            candle_begin_time: value.start_time,
+            open: value.open.to_f64().unwrap(),
+            high: value.high.to_f64().unwrap(),
+            low: value.low.to_f64().unwrap(),
+            close: value.close.to_f64().unwrap(),
+            volume: value.volume.to_f64().unwrap(),
+            quote_volume: value.quote_asset_volume.to_f64().unwrap(),
+            number_of_trades: value.number_of_trades,
+            taker_buy_base_asset_volume: value.taker_buy_base_asset_volume.to_f64().unwrap(),
+            taker_buy_quote_asset_volume: value.taker_buy_quote_asset_volume.to_f64().unwrap(),
+            close_time: value.close.to_u64().unwrap(),
             interval: 0,
             first_trade_id: Some(-1),
             last_trade_id: Some(-1),

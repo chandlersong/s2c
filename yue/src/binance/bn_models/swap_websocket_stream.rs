@@ -29,7 +29,7 @@ pub enum BinanceSwapWebSocketStreamResponse {
     AggTrade(AggTradePayload),
     MarkPrice(MarkPricePayload),
     AllMarketPrice(Vec<MarkPricePayload>),
-    Kline(KlinePayload),
+    Kline(SwapWebsocketKlinePayload),
     ContinuousKline(ContinuousKlinePayload),
     MiniTicker(MiniTickerPayload),
     AllMarketMiniTicker(Vec<MiniTickerPayload>),
@@ -207,7 +207,7 @@ pub struct MarkPricePayload {
 ///
 ///
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct KlinePayload {
+pub struct SwapWebsocketKlinePayload {
     /// 事件类型
     #[serde(rename = "e")]
     pub event: String,
@@ -222,11 +222,11 @@ pub struct KlinePayload {
 
     /// K线数据
     #[serde(rename = "k")]
-    pub kline: KlineData,
+    pub kline: SwapWebsocketKlineData,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct KlineData {
+pub struct SwapWebsocketKlineData {
     /// 这根K线的起始时间
     #[serde(rename = "t")]
     pub start_time: u64,
@@ -269,15 +269,15 @@ pub struct KlineData {
 
     /// 这根K线期间成交量（字符串数值）
     #[serde(rename = "v", with = "string_to_decimal")]
-    pub base_asset_volume: Decimal,
+    pub volume: Decimal,
 
     /// 这根K线期间成交笔数
     #[serde(rename = "n")]
-    pub trade_count: u64,
+    pub number_of_trades: u64,
 
     /// 这根K线是否完结
     #[serde(rename = "x")]
-    pub is_final: bool,
+    pub is_close: bool,
 
     /// 这根K线期间成交额（字符串数值）
     #[serde(rename = "q", with = "string_to_decimal")]
@@ -285,11 +285,11 @@ pub struct KlineData {
 
     /// 主动买入的成交量（字符串数值）
     #[serde(rename = "V", with = "string_to_decimal")]
-    pub active_buy_base_asset_volume: Decimal,
+    pub taker_buy_base_asset_volume: Decimal,
 
     /// 主动买入的成交额（字符串数值）
     #[serde(rename = "Q", with = "string_to_decimal")]
-    pub active_buy_quote_asset_volume: Decimal,
+    pub taker_buy_quote_asset_volume: Decimal,
 
     /// 忽略此参数
     #[serde(rename = "B", with = "string_to_option_decimal")]

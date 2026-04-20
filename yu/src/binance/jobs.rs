@@ -1,5 +1,5 @@
 use crate::binance::binance_db_consts::ALL_BINANCE_TABLES;
-use crate::binance::bn_backend_service::get_raw_spot_kline_table;
+use crate::binance::bn_backend_service::{get_spot_kline_table, get_swap_kline_table};
 use crate::binance::bn_dashboard::{init_market_depth_dashboard, BinanceDashboard, BinanceDashboardWatcher, MarketDepthDashBoard};
 use crate::binance::history::initial_spot_kline;
 use crate::binance::websocket_service::KlineSubscribeService;
@@ -364,11 +364,16 @@ async fn start_refresh_history_data(
     let interval = HistoryInterval::FiveMinutes;
 
     //开始websocket监听
-    let spot_kline_table = get_raw_spot_kline_table();
+    let spot_kline_table = get_spot_kline_table();
     let proxy = config.proxy_url.clone();
 
-    if let Err(e) = KlineSubscribeService::startup_spot(SymbolType::Spot, spot_kline_table.clone(), dash_board_watch, proxy, interval.clone()).await {
+    if let Err(e) = KlineSubscribeService::startup_spot(spot_kline_table.clone(), dash_board_watch.clone(), proxy.clone(), interval.clone()).await {
         error!("error starting kline service: {}", e);
+    }
+
+    let swap_kline_table = get_swap_kline_table();
+    if let Err(e) = KlineSubscribeService::startup_swap(swap_kline_table, dash_board_watch.clone(), proxy, interval.clone()).await {
+        error!("error starting swap kline service: {}", e);
     }
     let spot_all = dash_board.spot_all_symbols();
     let spot_symbol: Vec<String> = spot_all
