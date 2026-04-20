@@ -10,25 +10,26 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{oneshot, OwnedSemaphorePermit, Semaphore};
 use tokio::time::timeout;
+use yue::binance::bn_models::common::SymbolType;
 use yue::binance::bn_models::spot_restful::BinanceKline;
-use yue::binance::bn_restful_commands::SPOT_KLINE_HISTORY_COMMAND;
+use yue::binance::bn_restful_commands::{SPOT_KLINE_HISTORY_COMMAND, SWAP_KLINE_HISTORY_COMMAND};
 use yue::binance::restful_func::{CommonRequestBuilder, HistoryBatchHandlerTrait, HistoryFetcherImpl, HistoryFetcherTrait, ShareHistoryBatchHandler};
 use yue::errors::YueError;
 use yue::models::HistoryInterval;
 use yue::query_message::{BatchInsertPayload, QueryCommand};
 
-struct SpotHistoryKlineSaver {
+struct HistoryKlineSaver {
     db: DuckTableTableChannel<KlinePo>,
 }
 
-impl SpotHistoryKlineSaver {
+impl HistoryKlineSaver {
     pub fn new(db: DuckTableTableChannel<KlinePo>) -> ShareHistoryBatchHandler<BinanceKline> {
         Arc::new(Self { db }) as Arc<dyn HistoryBatchHandlerTrait<BinanceKline> + Send>
     }
 }
 
 #[async_trait]
-impl HistoryBatchHandlerTrait<BinanceKline> for SpotHistoryKlineSaver {
+impl HistoryBatchHandlerTrait<BinanceKline> for HistoryKlineSaver {
     async fn handle(&self, batch_data: Vec<BinanceKline>) -> Result<(), YueError> {
         let po_vec = batch_data.iter().map(|v| KlinePo::from(v.clone())).collect::<Vec<KlinePo>>();
 
@@ -81,7 +82,8 @@ async fn acquire_permit_with_retry(sem: Arc<Semaphore>) -> Result<OwnedSemaphore
 ///     - 开始时间: now之前的保存时间一个的时间周期。
 ///     - 结束时间，上个周期的-1ms
 ///
-pub async fn initial_spot_kline(
+pub async fn initial_kline(
+    symbol_type: SymbolType,
     spot_symbols: Vec<String>,
     config: &AppConfig,
     interval: HistoryInterval,
@@ -113,7 +115,7 @@ pub async fn initial_spot_kline(
     // 使用并发任务来处理多个交易对的历史数据下载，但使用 Semaphore 限制最大并发数，
     // 等待所有任务完成后再返回。这样在低配机器上也能控制资源使用。
     let sem = Arc::new(Semaphore::new(10));
-    let saver = SpotHistoryKlineSaver::new(db);
+    let saver = HistoryKlineSaver::new(db);
     let mut handles = Vec::with_capacity(spot_symbols.len());
     for spot_symbol in spot_symbols {
         let sem = sem.clone();
@@ -128,7 +130,12 @@ pub async fn initial_spot_kline(
                 error!("初始化spot kline的获取锁出错: {}", e);
             }
 
-            let spot_kline_fetch = HistoryFetcherImpl::kline(&SPOT_KLINE_HISTORY_COMMAND);
+            let spot_kline_fetch = match symbol_type {
+                SymbolType::Spot => HistoryFetcherImpl::kline(&SPOT_KLINE_HISTORY_COMMAND),
+                SymbolType::Swap => HistoryFetcherImpl::kline(&SWAP_KLINE_HISTORY_COMMAND),
+                _ => return Err(YueError::new("类型不支持")),
+            };
+
             let base_param = CommonRequestBuilder::new(symbol.to_string(), 1000, HistoryInterval::FiveMinutes);
 
             spot_kline_fetch

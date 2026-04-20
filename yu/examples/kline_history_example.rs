@@ -1,12 +1,13 @@
 use li::tools::logs::setup_logger;
 use log::{info, warn, LevelFilter};
 use std::collections::HashMap;
-use yu::binance::bn_backend_service::get_spot_kline_table;
+use yu::binance::bn_backend_service::{get_spot_kline_table, get_swap_kline_table};
 use yu::binance::bn_dashboard::BinanceDashboard;
-use yu::binance::history::initial_spot_kline;
+use yu::binance::history::initial_kline;
 use yu::binance::jobs::initial_tables;
 use yu::config::get_config;
 use yu::errors::YuError;
+use yue::binance::bn_models::common::SymbolType;
 use yue::http_client::init_http_client;
 use yue::models::HistoryInterval;
 
@@ -34,6 +35,7 @@ async fn main() -> Result<(), YuError> {
     let dash_board = BinanceDashboard::debug_mode(app_config.get_data_retention_hours());
     dash_board.execute().await?;
     let spot_all = dash_board.spot_all_symbols();
+    let swap_all = dash_board.swap_all_symbols();
     let spot_symbol: Vec<String> = spot_all
         .read()
         .unwrap()
@@ -41,8 +43,17 @@ async fn main() -> Result<(), YuError> {
         .filter(|s| s.quote_asset == "USDT")
         .map(|s| s.symbol.clone())
         .collect();
-    let db = get_spot_kline_table();
-    initial_spot_kline(spot_symbol, app_config, HistoryInterval::OneHour, db).await?;
+    let swap_symbol: Vec<String> = swap_all
+        .read()
+        .unwrap()
+        .iter()
+        .filter(|s| s.quote_asset == "USDT")
+        .map(|s| s.symbol.clone())
+        .collect();
+    let spot_db = get_spot_kline_table();
+    let swap_db = get_swap_kline_table();
+    initial_kline(SymbolType::Spot, spot_symbol, app_config, HistoryInterval::OneHour, spot_db).await?;
+    initial_kline(SymbolType::Swap, swap_symbol, app_config, HistoryInterval::OneHour, swap_db).await?;
 
     Ok(())
 }

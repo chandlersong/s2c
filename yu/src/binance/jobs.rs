@@ -1,7 +1,7 @@
 use crate::binance::binance_db_consts::ALL_BINANCE_TABLES;
 use crate::binance::bn_backend_service::{get_spot_kline_table, get_swap_kline_table};
 use crate::binance::bn_dashboard::{init_market_depth_dashboard, BinanceDashboard, BinanceDashboardWatcher, MarketDepthDashBoard};
-use crate::binance::history::initial_spot_kline;
+use crate::binance::history::initial_kline;
 use crate::binance::websocket_service::KlineSubscribeService;
 use crate::config::{get_config, AccountConfig, AccountType, AppConfig, SecurityType};
 use crate::cron_job;
@@ -372,10 +372,11 @@ async fn start_refresh_history_data(
     }
 
     let swap_kline_table = get_swap_kline_table();
-    if let Err(e) = KlineSubscribeService::startup_swap(swap_kline_table, dash_board_watch.clone(), proxy, interval.clone()).await {
+    if let Err(e) = KlineSubscribeService::startup_swap(swap_kline_table.clone(), dash_board_watch.clone(), proxy, interval.clone()).await {
         error!("error starting swap kline service: {}", e);
     }
     let spot_all = dash_board.spot_all_symbols();
+    let swap_all = dash_board.swap_all_symbols();
     let spot_symbol: Vec<String> = spot_all
         .read()
         .unwrap()
@@ -383,7 +384,15 @@ async fn start_refresh_history_data(
         .filter(|s| s.quote_asset == "USDT")
         .map(|s| s.symbol.clone())
         .collect();
-    initial_spot_kline(spot_symbol, config, interval, spot_kline_table).await?;
+    let swap_symbol: Vec<String> = swap_all
+        .read()
+        .unwrap()
+        .iter()
+        .filter(|s| s.quote_asset == "USDT")
+        .map(|s| s.symbol.clone())
+        .collect();
+    initial_kline(SymbolType::Spot, spot_symbol, config, interval, spot_kline_table).await?;
+    initial_kline(SymbolType::Swap, swap_symbol, config, HistoryInterval::OneHour, swap_kline_table).await?;
     Ok(())
 }
 
