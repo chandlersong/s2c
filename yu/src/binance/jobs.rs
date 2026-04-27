@@ -1,7 +1,7 @@
 use crate::binance::binance_db_consts::ALL_BINANCE_TABLES;
 use crate::binance::bn_backend_service::{get_spot_kline_table, get_swap_kline_table};
 use crate::binance::bn_dashboard::{init_market_depth_dashboard, BinanceDashboard, BinanceDashboardWatcher, MarketDepthDashBoard};
-use crate::binance::history::initial_kline;
+use crate::binance::history::{initial_kline, start_sync_funding_rate};
 use crate::binance::websocket_service::KlineSubscribeService;
 use crate::config::{get_config, AccountConfig, AccountType, AppConfig, SecurityType};
 use crate::cron_job;
@@ -392,7 +392,9 @@ async fn start_refresh_history_data(
         .map(|s| s.symbol.clone())
         .collect();
     initial_kline(SymbolType::Spot, spot_symbol, config, interval, spot_kline_table).await?;
-    initial_kline(SymbolType::Swap, swap_symbol, config, HistoryInterval::OneHour, swap_kline_table).await?;
+    initial_kline(SymbolType::Swap, swap_symbol.clone(), config, HistoryInterval::OneHour, swap_kline_table).await?;
+
+    start_sync_funding_rate(swap_symbol, config, HistoryInterval::OneHour, dash_board_watch).await?;
     Ok(())
 }
 
