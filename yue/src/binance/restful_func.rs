@@ -4,7 +4,7 @@
 use crate::binance::bn_models::common::{ExchangeInfoTrait, HistoryVo, SymbolInfo, SymbolInfoTrait, ToRequestBuilder};
 use crate::binance::bn_models::spot_restful::ExchangeInfo;
 use crate::binance::bn_models::swap_restful::SwapExchangeInfo;
-use crate::binance::bn_restful_commands::{PING_COMMAND, execute_json_request};
+use crate::binance::bn_restful_commands::{PING_COMMAND, SWAP_FUNDING_RATE_COMMAND, execute_json_request};
 use crate::errors::YueError;
 use crate::http_client::{HTTP_CLIENT, get_http_client};
 use crate::models::{EmptyObject, HistoryInterval, RequestInfo};
@@ -216,6 +216,12 @@ impl HistoryFetcherImpl {
     pub fn kline(request_info: &RequestInfo) -> Self {
         Self {
             request_info: request_info.clone(),
+        }
+    }
+
+    pub fn swap_funding_rate() -> Self {
+        Self {
+            request_info: SWAP_FUNDING_RATE_COMMAND.clone(),
         }
     }
 }
