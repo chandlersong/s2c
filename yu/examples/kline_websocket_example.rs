@@ -15,10 +15,10 @@ use yue::models::HistoryInterval;
 async fn main() -> Result<(), YuError> {
     let app_config = get_config();
     let mut special_log = HashMap::new();
-    special_log.insert("li".to_string(), LevelFilter::Debug);
-    special_log.insert("yu".to_string(), LevelFilter::Debug);
-    special_log.insert("kline_websocket_example".to_string(), LevelFilter::Debug);
-    special_log.insert("yue".to_string(), LevelFilter::Debug);
+    special_log.insert("li".to_string(), LevelFilter::Trace);
+    special_log.insert("yu".to_string(), LevelFilter::Trace);
+    special_log.insert("kline_websocket_example".to_string(), LevelFilter::Trace);
+    special_log.insert("yue".to_string(), LevelFilter::Trace);
     setup_logger(Some(LevelFilter::Warn), special_log).unwrap();
 
     let symbol_type = SymbolType::Spot;

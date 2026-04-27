@@ -18,7 +18,7 @@ pub const SPOT_STREAM_WEBSOCKET: &str = "wss://stream.testnet.binance.vision:944
 pub const SPOT_STREAM_WEBSOCKET: &str = "wss://stream.binance.com:9443/stream";
 
 pub const SWAP_WEBSOCKET: &str = "wss://fstream.binance.com/ws";
-pub const SWAP_STREAM_WEBSOCKET: &str = "wss://fstream.binance.com/stream";
+pub const SWAP_MARKET_STREAM_WEBSOCKET: &str = "wss://fstream.binance.com/market/stream";
 pub const PORTFOLIO_MARGIN_STREAM_WEBSOCKET: &str = "wss://fstream.binance.com/pm/ws";
 
 pub const SPOT_DATA_STREAM_WEBSOCKET: &str = "wss://data-stream.binance.vision";

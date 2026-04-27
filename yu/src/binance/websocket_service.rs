@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::watch::Receiver;
-use yue::binance::bn_json_websocket::{SPOT_STREAM_WEBSOCKET, SWAP_STREAM_WEBSOCKET};
+use yue::binance::bn_json_websocket::{SPOT_STREAM_WEBSOCKET, SWAP_MARKET_STREAM_WEBSOCKET};
 use yue::binance::bn_models::common::{SymbolInfo, SymbolType};
 use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamResponse::Kline;
 use yue::binance::bn_models::spot_websocket_stream::{BinanceSpotWebSocketStreamResponse, BinanceSpotWebSocketStreamWrapper};
@@ -137,7 +137,7 @@ impl KlineSubscribeService {
         proxy: Option<String>,
         interval: HistoryInterval,
     ) -> Result<(), YuError> {
-        let ws_url = SWAP_STREAM_WEBSOCKET;
+        let ws_url = SWAP_MARKET_STREAM_WEBSOCKET;
         let saver = SwapKlineSaver::new(db);
         if let Some(value) = Self::start_listen_kline(SymbolType::Swap, proxy, interval, ws_url, &symbol_watch, saver).await {
             return value;
