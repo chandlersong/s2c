@@ -241,7 +241,7 @@ pub async fn start_sync_funding_rate(
                     }
                 }
                 Err(e) => {
-                    error!("订阅错误，跳过本次:{}", e);
+                    error!("同步sync funding rate订阅错误，跳过本次:{}", e);
                 }
             }
         }

@@ -444,7 +444,7 @@ impl<'a> From<FundingRate> for FundingRatePo {
         let id = snow_flake.next_id_u64() as i64;
         FundingRatePo {
             id,
-            symbol: "".to_string(),
+            symbol: source.symbol,
             funding_rate: source.funding_rate,
             funding_time: source.funding_time,
             mark_price: source.mark_price,

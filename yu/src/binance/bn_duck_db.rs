@@ -158,10 +158,12 @@ impl<P: DuckDBPO> DuckDBOneTable<P> {
                                         let cond1 = (now - last_flush_time) < flush_interval.as_millis() as u64;
                                         let cond2 = cache_count >= flush_count;
                                         if cond1||cond2 {
-                                            Self::flush_data(table.clone(),single_cache);
-                                            single_cache = vec![];
-                                            cache_count = 0;
-                                            last_flush_time = now;
+                                            if single_cache.len() > 0 {
+                                                   Self::flush_data(table.clone(),single_cache);
+                                                    single_cache = vec![];
+                                                    cache_count = 0;
+                                                    last_flush_time = now;
+                                            }
                                         };
                                     }}
                             }
@@ -176,7 +178,7 @@ impl<P: DuckDBPO> DuckDBOneTable<P> {
                     _ = tokio::time::sleep(flush_interval) => {
                         // 可在此处执行周期性 flush 或维护逻辑
                         let now = unix_time_now_u64_utc();
-                        if now - last_flush_time > flush_interval.as_millis() as u64 {
+                        if now - last_flush_time > flush_interval.as_millis() as u64 && !single_cache.is_empty(){
                              Self::flush_data(table.clone(),single_cache);
                              single_cache = vec![];
                              cache_count = 0;
