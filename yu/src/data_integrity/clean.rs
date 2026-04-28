@@ -89,13 +89,18 @@ impl AsyncRepeatTask for TableCleaner {
             .db_provider
             .acquire()
             .map_err(|e| LiError::CustomError(format!("Failed to acquire db connection: {}", e)))?;
-
+        if let Err(e) = conn.execute_batch("SET preserve_insertion_order=false") {
+            error!("TableCleaner failed to set preserve_insertion_order: error={}", e);
+        }
         for item in &self.info {
             let sql = format!("DELETE FROM {} WHERE {} < ?", item.table_name, item.time_col_name);
             if let Err(e) = conn.execute(&sql, params![earliest]) {
                 error!("TableCleaner delete failed: table={}, error={}", item.table_name, e);
                 return Err(LiError::CustomError(format!("Failed to execute clean sql: {}", e)));
             }
+        }
+        if let Err(e) = conn.execute_batch("SET preserve_insertion_order=true") {
+            error!("TableCleaner failed to set preserve_insertion_order: error={}", e);
         }
 
         Ok(())
