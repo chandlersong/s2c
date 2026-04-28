@@ -100,6 +100,7 @@ impl actix::prelude::Message for RepairRequest {
     type Result = ();
 }
 
+/// FUTURE: 后面这些在以后关于数据库状态使用比较好。
 /// 修复状态。
 /// 我觉得这里有点过度设计。感觉有一个两个状态就够了。现阶段先保留SKIPPED
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]

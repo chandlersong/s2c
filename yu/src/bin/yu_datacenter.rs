@@ -1,9 +1,12 @@
 use actix::System;
+use li::actix_jobs::AsyncRepeatTask;
 use li::tools::logs::{parse_level, setup_logger};
 use log::{error, info, LevelFilter};
 use std::collections::HashMap;
 use yu::binance::jobs::start_bn_jobs;
 use yu::config::get_config;
+use yu::cron_job;
+use yu::data_integrity::clean::TableCleaner;
 use yue::http_client::init_http_client;
 
 #[tokio::main(flavor = "multi_thread")]
@@ -40,13 +43,17 @@ async fn main() {
         }
     }
 
-    // match start_check_data_integrity_jobs().await {
-    //     Ok(_) => {}
-    //     Err(e) => {
-    //         error!("Failed to start check data integrity jobs: {}", e);
-    //         panic!("stop process");
-    //     }
-    // }
+    let retain_ms = app_config.get_data_retention_hours();
+    //clean job
+    let _ = cron_job!("0 08 * * * *", move |_uuid, _locked| {
+        Box::pin(async move {
+            info!("start clean data job");
+            let cleaner = TableCleaner::new(retain_ms);
+            if let Err(e) = cleaner.execute().await {
+                error!("clean data clean: {}", e);
+            }
+        })
+    });
 
     match yu::arrow_flight_server::start_flight_server("0.0.0.0:8815").await {
         Ok(()) => {

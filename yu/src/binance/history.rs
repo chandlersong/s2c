@@ -22,7 +22,7 @@ use yue::errors::YueError;
 use yue::models::HistoryInterval;
 use yue::query_message::{BatchInsertPayload, QueryCommand};
 
-struct HistoryKlineSaver {
+pub(crate) struct HistoryKlineSaver {
     db: DuckTableTableChannel<KlinePo>,
 }
 
