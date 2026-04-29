@@ -103,7 +103,7 @@ impl AsyncRepeatTask for TableCleaner {
             error!("TableCleaner failed to set preserve_insertion_order: error={}", e);
         }
         for item in &self.info {
-            if let Err(e) = Self::batch_delete(&conn, &item.table_name, &item.time_col_name, earliest, 1000) {
+            if let Err(e) = Self::batch_delete(&conn, &item.table_name, &item.time_col_name, earliest) {
                 error!("TableCleaner delete failed: table={}, error={}", item.table_name, e);
                 return Err(LiError::CustomError(format!("Failed to execute clean sql: {}", e)));
             }
