@@ -43,11 +43,12 @@ async fn main() {
         }
     }
 
-    let retain_ms = app_config.get_data_retention_hours();
+    let retain_hour = app_config.get_data_retention_hours();
     //clean job
     let _ = cron_job!("0 08 * * * *", move |_uuid, _locked| {
         Box::pin(async move {
             info!("start clean data job");
+            let retain_ms = retain_hour * 60 * 60 * 1000;
             let cleaner = TableCleaner::new(retain_ms);
             if let Err(e) = cleaner.execute().await {
                 error!("clean data clean: {}", e);
