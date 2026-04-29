@@ -1,11 +1,12 @@
 use crate::binance::binance_db_consts::BinanceTables;
 use crate::duck_db::DBProvider;
 use async_trait::async_trait;
-use duckdb::params;
+use duckdb::{params, DuckdbConnectionManager};
 use li::actix_jobs::AsyncRepeatTask;
 use li::errors::LiError;
 use li::tools::time::unix_time_now_u64_utc;
 use log::{error, info};
+use r2d2::PooledConnection;
 use yue::models::HistoryInterval;
 
 #[derive(Clone)]
@@ -67,6 +68,40 @@ impl TableCleaner {
             db_provider,
         }
     }
+
+    pub fn batch_delete(
+        conn: &PooledConnection<DuckdbConnectionManager>,
+        table_name: &str,
+        column_name: &str,
+        earliest: u64,
+        batch_size: i64,
+    ) -> Result<(), LiError> {
+        let max_try = 5;
+        let mut try_count = 0;
+        let mut total_clean = 0;
+        let sql = format!("DELETE FROM {} WHERE {} < ? limit {}", table_name, column_name, batch_size);
+        loop {
+            // 每次删除batch_size条记录
+            let rows_affected = match conn.execute(&sql, params![earliest]) {
+                Ok(rows_affected) => rows_affected,
+                Err(e) => {
+                    try_count = try_count + 1;
+                    if try_count >= max_try {
+                        error!("TableCleaner delete failed: table={}, error={}", table_name, e);
+                        return Err(LiError::CustomError(format!("Failed to execute clean sql: {}", e)));
+                    }
+                    continue;
+                }
+            };
+            total_clean += rows_affected;
+            // 如果本批次没有删除任何记录，说明已经删完了
+            if rows_affected == 0 {
+                info!("table {} 清理了{}条记录", table_name, total_clean);
+                break;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -93,8 +128,7 @@ impl AsyncRepeatTask for TableCleaner {
             error!("TableCleaner failed to set preserve_insertion_order: error={}", e);
         }
         for item in &self.info {
-            let sql = format!("DELETE FROM {} WHERE {} < ?", item.table_name, item.time_col_name);
-            if let Err(e) = conn.execute(&sql, params![earliest]) {
+            if let Err(e) = Self::batch_delete(&conn, &item.table_name, &item.time_col_name, earliest, 1000) {
                 error!("TableCleaner delete failed: table={}, error={}", item.table_name, e);
                 return Err(LiError::CustomError(format!("Failed to execute clean sql: {}", e)));
             }
