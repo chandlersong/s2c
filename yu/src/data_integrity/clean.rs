@@ -79,7 +79,10 @@ impl TableCleaner {
         let max_try = 5;
         let mut try_count = 0;
         let mut total_clean = 0;
-        let sql = format!("DELETE FROM {} WHERE {} < ? limit {}", table_name, column_name, batch_size);
+        let sql = format!(
+            "DELETE FROM {} WHERE {} < ?  ORDER BY {} ASC limit {}",
+            table_name, column_name, column_name, batch_size
+        );
         loop {
             // 每次删除batch_size条记录
             let rows_affected = match conn.execute(&sql, params![earliest]) {
