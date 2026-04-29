@@ -69,40 +69,12 @@ impl TableCleaner {
         }
     }
 
-    pub fn batch_delete(
-        conn: &PooledConnection<DuckdbConnectionManager>,
-        table_name: &str,
-        column_name: &str,
-        earliest: u64,
-        batch_size: i64,
-    ) -> Result<(), LiError> {
-        let max_try = 5;
-        let mut try_count = 0;
-        let mut total_clean = 0;
-        let sql = format!(
-            "DELETE FROM {} WHERE {} < ?  ORDER BY {} ASC limit {}",
-            table_name, column_name, column_name, batch_size
-        );
-        loop {
-            // 每次删除batch_size条记录
-            let rows_affected = match conn.execute(&sql, params![earliest]) {
-                Ok(rows_affected) => rows_affected,
-                Err(e) => {
-                    try_count = try_count + 1;
-                    if try_count >= max_try {
-                        error!("TableCleaner delete failed: table={}, error={}", table_name, e);
-                        return Err(LiError::CustomError(format!("Failed to execute clean sql: {}", e)));
-                    }
-                    continue;
-                }
-            };
-            total_clean += rows_affected;
-            // 如果本批次没有删除任何记录，说明已经删完了
-            if rows_affected == 0 {
-                info!("table {} 清理了{}条记录", table_name, total_clean);
-                break;
-            }
-        }
+    pub fn batch_delete(conn: &PooledConnection<DuckdbConnectionManager>, table_name: &str, column_name: &str, earliest: u64) -> Result<(), LiError> {
+        let sql = format!("DELETE FROM {} WHERE {} < ? ", table_name, column_name);
+        if let Err(e) = conn.execute(&sql, params![earliest]) {
+            error!("TableCleaner delete failed: table={}, error={}", table_name, e);
+            return Err(LiError::CustomError(format!("Failed to execute clean sql: {}", e)));
+        };
         Ok(())
     }
 }
