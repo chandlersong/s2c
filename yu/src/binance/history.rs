@@ -220,7 +220,27 @@ pub async fn start_sync_funding_rate(
     let start = interval.get_close_unix_ms(now - config.get_data_retention_ms());
     let end = interval.get_close_unix_ms(now).saturating_sub(1);
     info!("开始资金费率初始化数据，from {} to {}", unix_2_readable(&start), unix_2_readable(&end));
-    sync_funding_rate(symbols.clone(), start, end, interval.clone()).await?;
+    let (tx, rx) = oneshot::channel();
+    let db = get_swap_funding_rate_table();
+    if let Err(e) = db.send(QueryCommand::GetCount(tx)).await {
+        error!("binance funding rate query count error {:?}", e);
+    }
+
+    match rx.await {
+        Ok(Ok(count)) => {
+            if count > 0 {
+                info!("binance funding rate table非空，现存{}，跳过初始化", count);
+                return Ok(());
+            } else {
+                info!("binance funding rate table为空空，开始初始化");
+                sync_funding_rate(symbols.clone(), start, end, interval.clone()).await?;
+            }
+        }
+        _ => {
+            return Err(YuError::new("FundingRateHistoryKline query count error"));
+        }
+    }
+
     let mut rx = dash_board_watch.subscribe();
 
     tokio::spawn(async move {
@@ -251,26 +271,7 @@ pub async fn start_sync_funding_rate(
 }
 
 pub async fn sync_funding_rate(symbols: Vec<String>, start: u64, end: u64, interval: HistoryInterval) -> Result<(), YuError> {
-    let (tx, rx) = oneshot::channel();
     let db = get_swap_funding_rate_table();
-    if let Err(e) = db.send(QueryCommand::GetCount(tx)).await {
-        error!("binance funding rate query count error {:?}", e);
-    }
-
-    match rx.await {
-        Ok(Ok(count)) => {
-            if count > 0 {
-                info!("binance funding rate table非空，现存{}，跳过初始化", count);
-                return Ok(());
-            }
-        }
-        _ => {
-            return Err(YuError::new("FundingRateHistoryKline query count error"));
-        }
-    }
-    //kline会有一个会取到未闭合K线的问题。所以我这里也就去取上一根K线的之前的一毫秒。
-    //例如现在是36分，通过restful能够取到35～39的K线，但是未闭合。所以我直接取34.59.59.999这个时间点的K线。所以就规避了。
-
     // 使用并发任务来处理多个交易对的历史数据下载，但使用 Semaphore 限制最大并发数，
     // 等待所有任务完成后再返回。这样在低配机器上也能控制资源使用。
     let sem = Arc::new(Semaphore::new(5));

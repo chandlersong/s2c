@@ -91,7 +91,7 @@ impl AsyncRepeatTask for TableCleaner {
     /// 2. 然后loop本地的info。对于每个表，执行delete from table where time_col_name < earliest
     ///
     async fn execute(&self) -> Result<(), LiError> {
-        info!("TableCleaner executing");
+        // info!("TableCleaner executing");
         let now_ms = unix_time_now_u64_utc();
         let earliest_raw = now_ms.saturating_sub(self.retain_ms);
         let earliest = HistoryInterval::OneHour.get_close_unix_ms(earliest_raw);
@@ -111,7 +111,7 @@ impl AsyncRepeatTask for TableCleaner {
         if let Err(e) = conn.execute_batch("SET preserve_insertion_order=true") {
             error!("TableCleaner failed to set preserve_insertion_order: error={}", e);
         }
-
+        info!("TableCleaner finished");
         Ok(())
     }
 
