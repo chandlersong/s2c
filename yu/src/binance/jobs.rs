@@ -75,6 +75,7 @@ pub async fn start_bn_jobs() -> Result<(), YuError> {
     start_refresh_history_data(dash_board.clone(), config, dash_board_watch.clone()).await?;
     // start_monitor_account().await?;
     // start_spot_websocket_stream_job().await?;
+    start_data_integrity_jobs(config).await?;
     Ok(())
 }
 
