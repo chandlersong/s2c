@@ -855,8 +855,8 @@ pub struct ConditionalRejectOrder {
 /// 条件订单交易更新推送
 /// [条件订单交易更新推送](https://developers.binance.com/docs/zh-CN/derivatives/usds-margined-futures/user-data-streams/Event-Algo-Order-Update)
 ///
-/// ''‘json
-////{
+/// ```json
+/// {
 ///   "e":"ALGO_UPDATE",  // 事件类型
 ///   "T":1750515742297,  // 撮合时间
 ///   "E":1750515742303,  // 事件时间

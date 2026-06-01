@@ -60,6 +60,7 @@ impl WebSocketMessage for BinanceSwapWebSocketStreamResponse {
 ///
 ///  [归集交易]https://developers.binance.com/docs/zh-CN/derivatives/usds-margined-futures/websocket-market-streams/Aggregate-Trade-Streams)
 ///
+/// ```json
 /// {
 ///   "e": "aggTrade",  // 事件类型
 ///   "E": 123456789,   // 事件时间
@@ -73,6 +74,7 @@ impl WebSocketMessage for BinanceSwapWebSocketStreamResponse {
 ///   "T": 123456785,   // 成交时间
 ///   "m": true         // 买方是否是做市方。如true，则此次成交是一个主动卖出单，否则是一个主动买入单。
 /// }
+/// ```
 ///
 ///
 ///
@@ -125,6 +127,7 @@ pub struct AggTradePayload {
 
 ///
 ///  [标记价格](https://developers.binance.com/docs/zh-CN/derivatives/usds-margined-futures/websocket-market-streams/Mark-Price-Stream)
+/// ```json
 ///    {
 ///     "e": "markPriceUpdate",  	// 事件类型
 ///     "E": 1562305380000,      	// 事件时间
@@ -136,6 +139,7 @@ pub struct AggTradePayload {
 ///     "r": "0.00038167",       	// 资金费率
 ///     "T": 1562306400000       	// 下次资金时间
 ///   }
+/// ```
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct MarkPricePayload {
     /// 事件类型
@@ -178,7 +182,7 @@ pub struct MarkPricePayload {
 ///
 /// [K线数据](https://developers.binance.com/docs/zh-CN/derivatives/usds-margined-futures/websocket-market-streams/Kline-Candlestick-Streams)
 ///
-/// """
+/// ```json
 /// {
 ///   "e": "kline",     // 事件类型
 ///   "E": 123456789,   // 事件时间
@@ -203,7 +207,7 @@ pub struct MarkPricePayload {
 ///     "B": "123456"   // 忽略此参数
 ///   }
 /// }
-/// """
+/// ```
 ///
 ///
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -299,7 +303,7 @@ pub struct SwapWebsocketKlineData {
 ///
 ///  [连续K线数据](https://developers.binance.com/docs/zh-CN/derivatives/usds-margined-futures/websocket-market-streams/Continuous-Kline-Candlestick-Streams)
 ///
-/// “”“
+/// ```json
 /// {
 ///   "e":"continuous_kline",	// 事件类型
 ///   "E":1607443058651,		// 事件时间
@@ -324,7 +328,7 @@ pub struct SwapWebsocketKlineData {
 ///     "B":"0"					// 忽略此参数
 ///   }
 /// }
-/// ”“”
+/// ```
 ///
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ContinuousKlinePayload {
@@ -419,7 +423,7 @@ pub struct ContinuousKlineData {
 ///
 /// [按交易对的精简Ticker](https://developers.binance.com/docs/zh-CN/derivatives/usds-margined-futures/websocket-market-streams/Individual-Symbol-Mini-Ticker-Stream)
 ///
-/// """
+/// ```json
 ///   {
 ///     "e": "24hrMiniTicker",  // 事件类型
 ///     "E": 123456789,         // 事件时间(毫秒)
@@ -431,7 +435,7 @@ pub struct ContinuousKlineData {
 ///     "v": "10000",           // 成交量
 ///     "q": "18"               // 成交额
 ///   }
-/// """
+/// ```
 ///
 ///
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -476,7 +480,7 @@ pub struct MiniTickerPayload {
 ///
 /// [按Symbol的完整Ticker](https://developers.binance.com/docs/zh-CN/derivatives/usds-margined-futures/websocket-market-streams/Individual-Symbol-Ticker-Streams)
 ///
-/// """
+/// ```json
 /// {
 ///   "e": "24hrTicker",  // 事件类型
 ///   "E": 123456789,     // 事件时间
@@ -497,7 +501,7 @@ pub struct MiniTickerPayload {
 ///   "L": 18150,         // 24小时内最后一笔成交交易ID
 ///   "n": 18151          // 24小时内成交数
 /// }
-/// """
+/// ```
 ///
 ///
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -577,7 +581,7 @@ pub struct TickerPayload {
 
 ///
 /// [全市场最优挂单信息](https://developers.binance.com/docs/zh-CN/derivatives/usds-margined-futures/websocket-market-streams/All-Book-Tickers-Stream)
-/// """
+/// ```json
 ///{
 ///  "e":"bookTicker",		// 事件类型
 ///   "u":400900217,     	// 更新ID
@@ -589,7 +593,7 @@ pub struct TickerPayload {
 ///   "a":"25.36520000", 	// 卖单最优挂单价格
 ///   "A":"40.66000000"  	// 卖单最优挂单数量
 /// }
-/// """
+/// ```
 ///
 ///
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -636,7 +640,7 @@ pub struct BookTickerPayload {
 /// 推送特定symbol的强平订单快照信息。 1000ms内至多仅推送**一条最大的强平**订单作为快照
 ///
 ///
-/// """
+/// ```json
 /// {
 ///
 /// 	"e":"forceOrder",                   // 事件类型
@@ -655,7 +659,7 @@ pub struct BookTickerPayload {
 /// 		"T":1568014460893,          	 // 交易时间
 /// 	}
 /// }
-/// """
+/// ```
 ///
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ForceOrderPayload {
@@ -723,7 +727,7 @@ pub struct ForceOrderInfo {
 /// [全市场强平订单](https://developers.binance.com/docs/zh-CN/derivatives/usds-margined-futures/websocket-market-streams/All-Market-Liquidation-Order-Streams)
 /// 推送全市场强平订单快照信息 每个symbol，1000ms内至多仅推送**一条最大的强平订单**作为快照
 ///
-/// """
+/// ```json
 ///{
 /// 	"e":"forceOrder",                   // 事件类型
 /// 	"E":1568014460893,                  // 事件时间
@@ -741,7 +745,7 @@ pub struct ForceOrderInfo {
 /// 		"T":1568014460893,          	 // 交易时间
 ///	}
 /// }
-/// """
+/// ```
 ///
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct AllMarketForceOrderPayload {
@@ -760,7 +764,7 @@ pub struct AllMarketForceOrderPayload {
 /// [有限档深度信息](https://developers.binance.com/docs/zh-CN/derivatives/usds-margined-futures/websocket-market-streams/Partial-Book-Depth-Streams)
 /// 推送有限档深度信息。levels表示几档买卖单信息, 可选 5/10/20档
 ///
-/// """
+/// ```json
 /// {
 ///   "e": "depthUpdate", 			// 事件类型
 ///   "E": 1571889248277, 			// 事件时间
@@ -814,7 +818,7 @@ pub struct AllMarketForceOrderPayload {
 ///     ]
 ///   ]
 /// }
-/// """
+/// ```
 ///
 ///
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -859,7 +863,7 @@ pub struct DepthPayload {
 ///
 /// [增量深度信息](https://developers.binance.com/docs/zh-CN/derivatives/usds-margined-futures/websocket-market-streams/Diff-Book-Depth-Streams)
 ///
-/// """
+/// ```json
 /// {
 ///   "e": "depthUpdate", 	// 事件类型
 ///   "E": 123456789,     	// 事件时间
@@ -881,7 +885,7 @@ pub struct DepthPayload {
 ///     ]
 ///   ]
 /// }
-/// """
+/// ```
 ///
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct DepthUpdatePayload {
@@ -925,7 +929,7 @@ pub struct DepthUpdatePayload {
 ///
 /// [RPI增量深度信息](https://developers.binance.com/docs/zh-CN/derivatives/usds-margined-futures/websocket-market-streams/Diff-Book-Depth-Streams-RPI)
 ///
-/// """
+/// ```json
 /// {
 ///   "e": "depthUpdate", 	// 事件类型
 ///   "E": 123456789,     	// 事件时间
@@ -947,7 +951,7 @@ pub struct DepthUpdatePayload {
 ///     ]
 ///   ]
 /// }
-/// """
+/// ```
 ///
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct RpiDepthPayload {
@@ -991,7 +995,7 @@ pub struct RpiDepthPayload {
 ///
 /// [综合指数交易对信息流](https://developers.binance.com/docs/zh-CN/derivatives/usds-margined-futures/websocket-market-streams/Composite-Index-Symbol-Information-Streams)
 ///
-/// """
+/// ```json
 /// {
 ///   "e":"compositeIndex",		// 事件类型
 ///   "E":1602310596000,		// 事件事件
@@ -1015,7 +1019,7 @@ pub struct RpiDepthPayload {
 ///     }
 ///   ]
 /// }
-/// ""'
+/// ```
 ///
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct CompositeIndexPayload {
@@ -1070,7 +1074,7 @@ pub struct CompositeComponent {
 ///
 /// [交易对信息信息流](https://developers.binance.com/docs/zh-CN/derivatives/usds-margined-futures/websocket-market-streams/Contract-Info-Stream)
 ///
-/// """
+/// ```json
 /// {
 ///     "e":"contractInfo",      // 事件类型
 ///     "E":1669356423908,       // 事件时间
@@ -1101,7 +1105,7 @@ pub struct CompositeComponent {
 ///         }
 ///     ]
 /// }
-///"""
+/// ```
 ///
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ContractInfoPayload {
@@ -1175,7 +1179,7 @@ pub struct BracketLimit {
 
 ///
 /// [多资产模式资产汇率指数](https://developers.binance.com/docs/zh-CN/derivatives/usds-margined-futures/websocket-market-streams/Multi-Assets-Mode-Asset-Index)
-/// """
+/// ```json
 /// [
 ///     {
 ///       "e":"assetIndexUpdate",
@@ -1206,7 +1210,7 @@ pub struct BracketLimit {
 ///       "G":"0.99997689"
 ///     }
 /// ]
-/// """
+/// ```
 ///
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct AssetIndexPayload {
@@ -1262,7 +1266,7 @@ pub struct AssetIndexPayload {
 ///
 /// [当前交易时段](https://developers.binance.com/docs/zh-CN/derivatives/usds-margined-futures/websocket-market-streams/Trading-Session-Stream)
 ///
-/// “”“
+/// ```json
 ///   {
 ///     "e": "EquityUpdate",  	// 事件类型, 也可以是CommodityUpdate
 ///     "E": 1765244143062,     // 事件时间
@@ -1270,7 +1274,7 @@ pub struct AssetIndexPayload {
 ///     "T": 1765270800000,		  // 交易时段结束时间
 ///     "S": "OVERNIGHT"        // 交易时段类型
 ///   }
-/// ”“”
+/// ```
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TradingSessionPayload {
     /// 事件类型
