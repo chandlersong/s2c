@@ -39,7 +39,6 @@
 | HTTP 请求      | `.github/INSTRUCTIONS/05_HTTP请求框架.md` |
 | 数据库操作        | `.github/INSTRUCTIONS/03_数据库操作.md` |
 | 定义数据模型       | `.github/INSTRUCTIONS/02_领域对象定义.md` |
-| 定义 Actor     | `.github/INSTRUCTIONS/06_Actor模式.md` |
 | 错误处理         | `.github/INSTRUCTIONS/07_错误处理.md` |
 | 配置管理         | `.github/INSTRUCTIONS/08_配置管理.md` |
 | 架构问题         | `.github/INSTRUCTIONS/01_架构概览.md` |
@@ -73,7 +72,6 @@ li（礼）- 基础设施层：RocksDB、定时任务、通知、AWS
 | **Decimal** | 金融级精度数值类型 | 02_领域对象定义.md |
 | **WebSocketClient** | WebSocket 连接管理 | 04_WebSocket数据流.md |
 | **WsMessageBus** | 事件总线：解析+广播 | 04_WebSocket数据流.md |
-| **Actor** | Actix 并发单位 | 06_Actor模式.md |
 | **DBProvider** | DuckDB 连接池管理 | 03_数据库操作.md |
 | **RollingKVDB** | 按天轮转的 RocksDB | 03_数据库操作.md |
 
@@ -112,16 +110,6 @@ bus.do_send(Subscribe { subscriber: subscriber.recipient() });
 client.send(SubscribeToEvents { recipient: bus.recipient() }).await?;
 ```
 
-### 定义 Actor
-```rust
-impl Handler<Message> for MyActor {
-    type Result = ();
-    fn handle(&mut self, msg: Message, _ctx: &mut Context<Self>) {
-        // 处理消息
-    }
-}
-```
-
 ### 错误处理
 ```rust
 use yue::errors::YueError;
@@ -146,7 +134,6 @@ Err(YueError::new("错误信息"))?
 4. `.github/INSTRUCTIONS/03_数据库操作.md` - DuckDB/RocksDB 用法
 5. `.github/INSTRUCTIONS/04_WebSocket数据流.md` - 实时数据处理
 6. `.github/INSTRUCTIONS/05_HTTP请求框架.md` - REST API 调用
-7. `.github/INSTRUCTIONS/06_Actor模式.md` - Actix 框架详解
 8. `.github/INSTRUCTIONS/07_错误处理.md` - 错误管理策略
 9. `.github/INSTRUCTIONS/08_配置管理.md` - 配置与环境变量
 
