@@ -299,26 +299,7 @@ async fn start_spot_websocket_stream_job() -> Result<(), YuError> {
     // 步骤2.5: 只有开启 depth 时，才初始化 OrderBookService 和 MarketDepthDashBoard
     if let Some(depth_config) = &spot_config.depth {
         if depth_config.enabled() && !depth_config.symbols.is_empty() {
-            let depth = depth_config.levels.unwrap_or(20).to_u16().unwrap_or_else(|| 20);
-            let order_book_service = OrderBookService::new().with_market_depth(depth).start();
-            info!("✓ OrderBookService 已启动 (market_depth=20)");
-
-            let market_depth_dashboard = MarketDepthDashBoard::new().start();
-            info!("✓ MarketDepthDashBoard 已启动");
-
-            // 初始化全局MarketDepthDashBoard单例
-            if let Err(_) = init_market_depth_dashboard(market_depth_dashboard.clone()) {
-                info!("⚠ MarketDepthDashBoard已初始化过，跳过重复初始化");
-            }
-            info!("✓ 全局MarketDepthDashBoard单例已初始化");
-
-            // MarketDepthDashBoard 订阅 OrderBookService 的订单簿快照
-            order_book_service.do_send(OrderBookSubscribe {
-                recipient: market_depth_dashboard.recipient(),
-            });
-            info!("✓ MarketDepthDashBoard 已订阅 OrderBookService");
-            subscribe_event_addr!(client_addr, order_book_service, BinanceSpotWebSocketStreamResponse);
-            info!("✓ OrderBookService 已订阅 WsMessageBus");
+            todo!()
         } else {
             info!("binance_websocket.spot.depth 未启用或没有配置symbols，跳过OrderBookService初始化");
         }

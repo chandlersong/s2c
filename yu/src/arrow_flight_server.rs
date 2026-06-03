@@ -238,25 +238,25 @@ impl FlightService for DuckDBFlightServer {
                 info!("Processing depth command for symbol: {}", symbol);
                 tokio::task::spawn(async move {
                     let result: Result<(), String> = async {
-                        let dashboard = get_market_depth_dashboard().map_err(|e| format!("Failed to get MarketDepthDashBoard: {}", e))?;
-
-                        let order_book_arc = dashboard
-                            .send(QueryDepth { symbol: symbol.clone() })
-                            .await
-                            .map_err(|e| format!("Failed to send query to dashboard: {}", e))?;
-
-                        let order_book = order_book_arc.ok_or_else(|| format!("OrderBook not found for symbol: {}", symbol))?;
-
-                        let batch = convert_order_book_to_record_batch(&order_book, Some(20))?;
-                        let schema = batch.schema();
-                        let flight_data_vec = flight_utils::batches_to_flight_data(schema.as_ref(), vec![batch])
-                            .map_err(|e| format!("Failed to convert batches to FlightData: {}", e))?;
-
-                        for d in flight_data_vec {
-                            if let Err(send_err) = tx_clone.send(Ok(d)).await {
-                                return Err(format!("Failed to send FlightData: {}", send_err));
-                            }
-                        }
+                        // let dashboard = get_market_depth_dashboard().map_err(|e| format!("Failed to get MarketDepthDashBoard: {}", e))?;
+                        //
+                        // let order_book_arc = dashboard
+                        //     .send(QueryDepth { symbol: symbol.clone() })
+                        //     .await
+                        //     .map_err(|e| format!("Failed to send query to dashboard: {}", e))?;
+                        //
+                        // let order_book = order_book_arc.ok_or_else(|| format!("OrderBook not found for symbol: {}", symbol))?;
+                        //
+                        // let batch = convert_order_book_to_record_batch(&order_book, Some(20))?;
+                        // let schema = batch.schema();
+                        // let flight_data_vec = flight_utils::batches_to_flight_data(schema.as_ref(), vec![batch])
+                        //     .map_err(|e| format!("Failed to convert batches to FlightData: {}", e))?;
+                        //
+                        // for d in flight_data_vec {
+                        //     if let Err(send_err) = tx_clone.send(Ok(d)).await {
+                        //         return Err(format!("Failed to send FlightData: {}", send_err));
+                        //     }
+                        // }
                         Ok(())
                     }
                     .await;

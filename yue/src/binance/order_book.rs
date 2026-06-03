@@ -1,15 +1,22 @@
+use crate::binance::bn_json_websocket::{SPOT_STREAM_WEBSOCKET, StreamCommandRequest, WS_SUBSCRIBE_COMMAND};
 use crate::binance::bn_models::common::ToRequestBuilder;
 use crate::binance::bn_models::spot_restful::Depth;
-use crate::binance::bn_models::spot_websocket_stream::{BinanceSpotWebSocketStreamResponse, DepthUpdateStreamPayload};
+use crate::binance::bn_models::spot_websocket_stream::{
+    BinanceSpotWebSocketStreamResponse, BinanceSpotWebSocketStreamWrapper, DepthUpdateStreamPayload,
+};
 use crate::binance::bn_restful_commands::{SPOT_DEPTH_1000_COMMAND, execute_json_request};
 use crate::binance::restful_func::CommonRequestBuilder;
+use crate::errors::YueError;
 use actix::{Actor, ActorFutureExt, Addr, AsyncContext, Context, Handler, Message as ActixMessage, Recipient, WrapFuture};
+use async_trait::async_trait;
+use li::websocket::connection::{CommandMessage, MessageHandlerTrait, ToServerMessage, WebSocketConnection, WebSocketInterface};
 use log::{debug, error, info, trace, warn};
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
+use serde_json::json;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 /// 关于orderbook。
@@ -82,6 +89,7 @@ impl ActixMessage for BufferedDepthUpdate {
 
 /// 初始化Actor，负责处理订单簿的初始化
 /// 包括：获取初始Depth、缓存更新消息、应用缓存更新
+#[deprecated]
 struct InitActor {
     /// 正在初始化的symbol及其缓存的更新消息
     pending_inits: HashMap<String, VecDeque<DepthUpdateStreamPayload>>,
@@ -216,6 +224,14 @@ impl Handler<BufferedDepthUpdate> for InitActor {
     }
 }
 
+struct OrderBookHandler;
+#[async_trait]
+impl MessageHandlerTrait<BinanceSpotWebSocketStreamWrapper> for OrderBookHandler {
+    async fn handle_message(&self, message: &BinanceSpotWebSocketStreamWrapper) {
+        info!("Received WebSocket message: {:?}", message);
+    }
+}
+
 /// 订单簿服务，管理订阅者和快照分发。
 /// 负责维护订阅者列表，并将订单簿快照发送给所有订阅者。
 /// # 维护订单簿实体。
@@ -230,61 +246,50 @@ impl Handler<BufferedDepthUpdate> for InitActor {
 /// 7， 初始化订单簿，使用RESTful API获取初始的Depth数据，然后通过WebSocket的增量更新来维护订单簿的最新状态。具体使用。yue::binance::bn_restful_commands::SPOT_DEPTH_1000_COMMAND
 /// 8. DepthUpdateStreamPayload通过其他的Actor获得。也就是需要写基于我现在写的handle
 pub struct OrderBookService {
-    /// 订阅者列表
-    subscribers: Vec<Recipient<OrderBookSnapshotMsg>>,
     /// 市场深度（广播时���剪的档位数）
     market_depth: u16,
     /// 所有symbol的订单簿快照
     order_books: HashMap<String, Arc<OrderBook>>,
-    /// 正在初始化的symbol集合（避免重复初始化）
-    initializing: HashMap<String, bool>,
-    /// 初始化Actor的地址
-    init_actor: Option<Addr<InitActor>>,
-}
-
-impl Actor for OrderBookService {
-    type Context = Context<Self>;
-
-    ///
-    /// 1. 启动一条维护的协程。所有订单簿的全集，只能在这个协程里面维护。
-    ///    - 在这条线程里面，抱有所有symbol的订单簿的快照的合集。
-    ///    - 发现有不存在和过期的symbol，发送消息给初始化协程，更新订单簿。
-    ///       - 在此期限，把所有收到的DepthUpdateStreamPayload，发给初始化协程。
-    ///       - 一旦触发自流程，不要重复发送初始化消息。只是发送DepthUpdateStreamPayload就可以了。
-    ///    - 接收初始化的协程单独symbol的订单快照，更新全集。
-    ///    - 更新后，根据market_depth，发送有限的订单簿副本，给订阅者
-    /// 2. 启动一条初始化的协程，来处理订单簿的初始化
-    ///    - 初始化不存在和过期的symbol的订单簿，通过SPOT_DEPTH_1000_COMMAND来更新原始版本
-    ///    - 同时，接收发来的DepthUpdateStreamPayload，缓存需要更新的symbol的部分
-    ///    - 等到初始化完毕，则利用上一步缓存的DepthUpdateStreamPayload，来更新订单簿
-    ///    - 完成后，发还给维护的协程
-    ///
-    fn started(&mut self, ctx: &mut Self::Context) {
-        info!("OrderBookService 启动");
-
-        // 启动初始化Actor
-
-        ctx.set_mailbox_capacity(1000);
-        let service_addr = ctx.address().recipient();
-        let init_actor = InitActor::new(service_addr);
-        let init_addr = init_actor.start();
-        self.init_actor = Some(init_addr);
-        info!("InitActor 已启动");
-    }
-
-    fn stopped(&mut self, _ctx: &mut Self::Context) {
-        info!("OrderBookService 停止");
-    }
+    web_socket_interface: Arc<WebSocketInterface<BinanceSpotWebSocketStreamWrapper>>,
 }
 
 impl OrderBookService {
-    pub fn new() -> Self {
+    pub async fn spot(proxy: Option<String>) -> Self {
+        let reconnect_interval = Duration::from_secs(5);
+        let handler = Arc::new(OrderBookHandler {});
+        let interface = WebSocketConnection::run::<BinanceSpotWebSocketStreamWrapper>(
+            SPOT_STREAM_WEBSOCKET.to_string(),
+            reconnect_interval,
+            proxy,
+            Some(handler),
+        )
+        .await;
         Self {
-            subscribers: Vec::new(),
             market_depth: 20,
             order_books: HashMap::new(),
-            initializing: HashMap::new(),
-            init_actor: None,
+            web_socket_interface: interface,
+        }
+    }
+
+    //     let subscribe_request = StreamCommandRequest {
+    //     method: WS_SUBSCRIBE_COMMAND.to_string(),
+    //     params: vec!["btcusdt@depth@100ms".to_string()],
+    //     id: 1,
+    // };
+    pub fn subscribe_order_book(&self, symbol: &str, frequency: &str) -> Result<(), YueError> {
+        let subscribe_request = StreamCommandRequest {
+            method: WS_SUBSCRIBE_COMMAND.to_string(),
+            params: vec!["btcusdt@depth@100ms".to_string()],
+            id: 1,
+        };
+        let command_test = serde_json::to_string(&subscribe_request)?;
+        match self
+            .web_socket_interface
+            .command_sender()
+            .send(CommandMessage::ToServer(ToServerMessage::text(command_test)))
+        {
+            Ok(_) => Ok(()),
+            Err(e) => Err(YueError::new(format!("Failed to send subscribe command: {}", e).as_str())),
         }
     }
 
@@ -295,22 +300,10 @@ impl OrderBookService {
 
     /// 广播订单簿快照给所有订阅者
     fn broadcast_snapshot(&self, order_book: Arc<OrderBook>) {
-        // 根据market_depth裁剪订单簿
-        let snapshot = match order_book.get_sub_order_book(self.market_depth) {
-            Ok(sub_book) => Arc::new(sub_book),
-            Err(e) => {
-                error!("裁剪订单簿失败 {}: {:?}", order_book.symbol, e);
-                return;
-            }
-        };
-
-        let msg = OrderBookSnapshotMsg(snapshot);
-        for subscriber in &self.subscribers {
-            subscriber.do_send(msg.clone());
-        }
+        todo!()
     }
 
-    fn handle_depth_update(&mut self, update: DepthUpdateStreamPayload, _ctx: &mut Context<Self>) {
+    fn handle_depth_update(&mut self, update: DepthUpdateStreamPayload) {
         let symbol = update.symbol.clone();
 
         // 检查订单簿是否存在
@@ -340,90 +333,7 @@ impl OrderBookService {
 
     /// 触发订单簿初始化
     fn trigger_init(&mut self, symbol: &str, update: Option<DepthUpdateStreamPayload>) {
-        // 检查是否已经在初始化中
-        if self.initializing.contains_key(symbol) {
-            // 已经在初始化中，只需要缓存更新消息
-            if let Some(update) = update {
-                if let Some(ref init_actor) = self.init_actor {
-                    init_actor.do_send(BufferedDepthUpdate {
-                        symbol: symbol.to_string(),
-                        update,
-                    });
-                }
-            }
-            return;
-        }
-
-        // 标记为正在初始化
-        self.initializing.insert(symbol.to_string(), true);
-
-        // 如果有更新消息，先缓存
-        if let Some(update) = update {
-            if let Some(ref init_actor) = self.init_actor {
-                init_actor.do_send(BufferedDepthUpdate {
-                    symbol: symbol.to_string(),
-                    update,
-                });
-            }
-        }
-
-        // ���送初始化请求
-        if let Some(ref init_actor) = self.init_actor {
-            init_actor.do_send(InitRequest { symbol: symbol.to_string() });
-        }
-    }
-}
-
-// Handler: Subscribe
-impl Handler<Subscribe> for OrderBookService {
-    type Result = ();
-
-    fn handle(&mut self, msg: Subscribe, _ctx: &mut Context<Self>) -> Self::Result {
-        self.subscribers.push(msg.recipient);
-        info!("新订阅者注册，当前订阅者数量: {}", self.subscribers.len());
-    }
-}
-
-// Handler: Unsubscribe
-impl Handler<Unsubscribe> for OrderBookService {
-    type Result = ();
-
-    fn handle(&mut self, msg: Unsubscribe, _ctx: &mut Context<Self>) -> Self::Result {
-        if msg.recipient_id < self.subscribers.len() {
-            self.subscribers.remove(msg.recipient_id);
-            info!("订阅者取消，当前订阅者数量: {}", self.subscribers.len());
-        }
-    }
-}
-
-// Handler: InitComplete
-impl Handler<InitComplete> for OrderBookService {
-    type Result = ();
-
-    fn handle(&mut self, msg: InitComplete, _ctx: &mut Context<Self>) -> Self::Result {
-        let symbol = msg.order_book.symbol.clone();
-
-        // 清除初始化标记
-        self.initializing.remove(&symbol);
-
-        // 保存订单簿
-        self.order_books.insert(symbol.clone(), msg.order_book.clone());
-
-        // 广播快照
-        self.broadcast_snapshot(msg.order_book);
-
-        info!("订单簿 {} 初始化完成并广播", symbol);
-    }
-}
-
-// Handler: BinanceSpotWebSocketStreamResponse
-impl Handler<BinanceSpotWebSocketStreamResponse> for OrderBookService {
-    type Result = ();
-
-    fn handle(&mut self, msg: BinanceSpotWebSocketStreamResponse, ctx: &mut Context<Self>) -> Self::Result {
-        if let BinanceSpotWebSocketStreamResponse::DepthUpdate(update) = msg {
-            self.handle_depth_update(update, ctx);
-        }
+        todo!()
     }
 }
 
