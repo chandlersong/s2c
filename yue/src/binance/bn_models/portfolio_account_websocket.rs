@@ -515,7 +515,7 @@ pub struct AccountBalance {
 ///  "e": "liabilityChange",       //Event Type
 ///   "E": 1573200697110,           //Event Time
 ///   "a": "BTC",                   //Asset
-///   "t": “BORROW”                 //Type
+///   "t": "BORROW",                //Type
 ///   "T": 1352286576452864727,    //Transaction ID
 ///   "p": "1.03453430",            //Principal
 ///   "i": "0",                     //Interest
