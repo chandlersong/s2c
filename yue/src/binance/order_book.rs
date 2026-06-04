@@ -1,13 +1,11 @@
 use crate::binance::bn_json_websocket::{SPOT_STREAM_WEBSOCKET, StreamCommandRequest, WS_SUBSCRIBE_COMMAND};
 use crate::binance::bn_models::common::ToRequestBuilder;
 use crate::binance::bn_models::spot_restful::Depth;
-use crate::binance::bn_models::spot_websocket_stream::{
-    BinanceSpotWebSocketStreamResponse, BinanceSpotWebSocketStreamWrapper, DepthUpdateStreamPayload,
-};
+use crate::binance::bn_models::spot_websocket_stream::{BinanceSpotWebSocketStreamWrapper, DepthUpdateStreamPayload};
 use crate::binance::bn_restful_commands::{SPOT_DEPTH_1000_COMMAND, execute_json_request};
 use crate::binance::restful_func::CommonRequestBuilder;
 use crate::errors::YueError;
-use actix::{Actor, ActorFutureExt, Addr, AsyncContext, Context, Handler, Message as ActixMessage, Recipient, WrapFuture};
+use actix::{Actor, ActorFutureExt, AsyncContext, Context, Handler, Message as ActixMessage, Recipient, WrapFuture};
 use async_trait::async_trait;
 use li::websocket::connection::{CommandMessage, MessageHandlerTrait, ToServerMessage, WebSocketConnection, WebSocketInterface};
 use log::{debug, error, info, trace, warn};
