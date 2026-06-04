@@ -113,6 +113,12 @@ where
     pub fn command_sender(&self) -> UnboundedSender<CommandMessage> {
         self.command_sender.clone()
     }
+
+    pub fn send_command(&self, command: CommandMessage) {
+        if let Err(e) = self.command_sender.send(command) {
+            error!("send command error: {}", e);
+        }
+    }
 }
 
 pub type MessageHandler<M> = Box<dyn MessageHandlerTrait<M> + Send + Sync>;

@@ -13,11 +13,11 @@ use li::websocket::connection::{CommandMessage, MessageHandlerTrait, ToServerMes
 use log::{debug, error, info, trace, warn};
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
-use serde_json::json;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
+use tokio::sync::mpsc;
 
 /// 关于orderbook。
 /// spot币安交易所的orderbook维护说明：
@@ -224,9 +224,103 @@ impl Handler<BufferedDepthUpdate> for InitActor {
     }
 }
 
-struct OrderBookHandler;
+enum OrderBookEvent {
+    DepthUpdate(DepthUpdateStreamPayload),
+    NewOrderBook(OrderBook),
+}
+
+///
+/// 初始化订单簿的流程：
+///
+/// FUTURE
+/// 1.又一个小问题，就是在初始化的时候，还有depth进来。不过这个也就不用管了。
+pub async fn initial_order_book(symbol: String, mut depth_rx: mpsc::UnboundedReceiver<DepthUpdateStreamPayload>) -> OrderBook {
+    // 缓存 websocket 的增量更新，直到 REST 返回快照
+    let params = CommonRequestBuilder::symbol_and_limit(symbol.to_uppercase().clone(), 1000);
+    // 使用 Pin<Box<_>> 便于在失败后重建并重新 pin
+    let mut depth_request = Box::pin(execute_json_request::<Depth>(
+        &SPOT_DEPTH_1000_COMMAND,
+        params.to_request_builder(&SPOT_DEPTH_1000_COMMAND),
+        None,
+    ));
+
+    let mut depth_vec = VecDeque::new();
+    loop {
+        tokio::select! {
+            Some(depth) = depth_rx.recv() => {
+               depth_vec.push_back(depth);
+            }
+            depth_res = depth_request.as_mut() => {
+                match depth_res {
+                    Ok(depth) => {
+                        debug!("成功获取 {} 的Depth数据, lastUpdateId={}", symbol, depth.last_update_id);
+                        return match OrderBook::new(symbol.clone(), depth) {
+                            Ok(mut order_book) => {
+                                if !depth_vec.is_empty() {
+                                    info!("[initial_order_book] 应用缓存的 {} 条更新", depth_vec.len());
+                                    let mut update_fail = false;
+                                    for (idx, update) in depth_vec.iter().enumerate() {
+                                        info!("[initial_order_book] 应用第 {} 条更新: first_update_id={}, final_update_id={}", idx, update.first_update_id, update.final_update_id);
+                                        if let Err(e) = order_book.apply_snapshot(update.clone()) {
+                                            info!("[initial_order_book] 应用缓存更新失败 {}: {:?}", symbol, e);
+                                            update_fail= true;
+                                            break;
+                                        } else {
+                                            trace!("[initial_order_book] 成功应用更新，current local_update_id={}", order_book.local_update_id);
+
+                                        }
+                                    }
+                                    if update_fail {
+                                          depth_request = Box::pin(execute_json_request::<Depth>(
+                                            &SPOT_DEPTH_1000_COMMAND,
+                                            params.to_request_builder(&SPOT_DEPTH_1000_COMMAND),
+                                            None,
+                                        ));
+                                        depth_vec.clear();
+                                        continue;
+                                    }
+                                }
+
+                                order_book
+                            }
+                            Err(e) => {
+                                error!("[initial_order_book] 创建 OrderBook 失败 {}: {:?}", symbol, e);
+                                tokio::time::sleep(Duration::from_millis(500)).await;
+                                depth_request = Box::pin(execute_json_request::<Depth>(
+                                    &SPOT_DEPTH_1000_COMMAND,
+                                    params.to_request_builder(&SPOT_DEPTH_1000_COMMAND),
+                                    None,
+                                ));
+                                depth_vec.clear();
+                                continue;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("[initial_order_book] 获取 REST Depth 失败 {}: {:?}, retry after backoff", symbol, e);
+                        // 简单重试：等待一段时间后重新创建请求并继续循环
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        depth_request = Box::pin(execute_json_request::<Depth>(
+                            &SPOT_DEPTH_1000_COMMAND,
+                            params.to_request_builder(&SPOT_DEPTH_1000_COMMAND),
+                            None,
+                        ));
+                        depth_vec.clear();
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+订单簿的管理，其中包括
+1. 订单簿的更新
+2. 订单簿的查询
+**/
+struct OrderBookCenter {}
 #[async_trait]
-impl MessageHandlerTrait<BinanceSpotWebSocketStreamWrapper> for OrderBookHandler {
+impl MessageHandlerTrait<BinanceSpotWebSocketStreamWrapper> for OrderBookCenter {
     async fn handle_message(&self, message: &BinanceSpotWebSocketStreamWrapper) {
         info!("Received WebSocket message: {:?}", message);
     }
@@ -256,7 +350,7 @@ pub struct OrderBookService {
 impl OrderBookService {
     pub async fn spot(proxy: Option<String>) -> Self {
         let reconnect_interval = Duration::from_secs(5);
-        let handler = Arc::new(OrderBookHandler {});
+        let handler = Arc::new(OrderBookCenter {});
         let interface = WebSocketConnection::run::<BinanceSpotWebSocketStreamWrapper>(
             SPOT_STREAM_WEBSOCKET.to_string(),
             reconnect_interval,
@@ -277,20 +371,16 @@ impl OrderBookService {
     //     id: 1,
     // };
     pub fn subscribe_order_book(&self, symbol: &str, frequency: &str) -> Result<(), YueError> {
+        let subscribe_symbol = format!("{}@depth@{}", symbol.to_lowercase(), frequency);
         let subscribe_request = StreamCommandRequest {
             method: WS_SUBSCRIBE_COMMAND.to_string(),
-            params: vec!["btcusdt@depth@100ms".to_string()],
+            params: vec![subscribe_symbol],
             id: 1,
         };
         let command_test = serde_json::to_string(&subscribe_request)?;
-        match self
-            .web_socket_interface
-            .command_sender()
-            .send(CommandMessage::ToServer(ToServerMessage::text(command_test)))
-        {
-            Ok(_) => Ok(()),
-            Err(e) => Err(YueError::new(format!("Failed to send subscribe command: {}", e).as_str())),
-        }
+        self.web_socket_interface
+            .send_command(CommandMessage::ToServer(ToServerMessage::text(command_test)));
+        Ok(())
     }
 
     pub fn with_market_depth(mut self, depth: u16) -> Self {
