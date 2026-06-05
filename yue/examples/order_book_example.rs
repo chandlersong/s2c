@@ -5,17 +5,12 @@
 /// 2. 连接到币安 WebSocket 获取深度更新数据
 /// 3. 订阅 OrderBook 快照并打印
 /// 4. 自动处理订单簿的初始化和增量更新
-use actix::{Actor, Context, Handler};
-use li::subscribe_event_addr;
 use li::tools::logs::setup_logger;
-use li::websocket::client::{CommandMessage, WebSocketClient};
-use li::websocket::connection::WebSocketEvent::Error;
+use li::tools::time::unix_2_readable;
 use log::{LevelFilter, error, info};
-use serde_json::to_string;
 use std::collections::HashMap;
-use yue::binance::bn_json_websocket::{SPOT_STREAM_WEBSOCKET, StreamCommandRequest, WS_SUBSCRIBE_COMMAND};
-use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamResponse;
-use yue::binance::order_book::{OrderBookService, OrderBookSnapshotMsg, Subscribe};
+use yue::binance::bn_json_websocket::{StreamCommandRequest, WS_SUBSCRIBE_COMMAND};
+use yue::binance::order_book::{OrderBookService, Subscribe};
 use yue::http_client::init_http_client;
 
 #[tokio::main]
@@ -38,41 +33,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 步骤 1: 创建并启动 OrderBookService
     // market_depth 设置为 20，表示广播时只保留前 20 档
     let order_book_service = OrderBookService::spot(Some(proxy.unwrap().to_string())).await;
-    info!("✓ OrderBookService 已启动");
     if let Err(e) = order_book_service.subscribe_order_book("ethusdt", "100ms") {
-        error!("{}", e);
+        error!("订阅失败{}", e);
     }
-
-    info!("✓ 订阅请求已发送");
-
-    info!("\n等待订单簿数据...");
-    info!("OrderBookService 将自动:");
-    info!("  1. 检测到新的 symbol (BTCUSDT)");
-    info!("  2. 通过 RESTful API 获取初始深度快照");
-    info!("  3. 应用 WebSocket 增量更新");
-    info!("  4. 广播订单簿快照给所有订阅者\n");
-
-    // 运行 30 秒，观察订单簿更新
-    tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
-
-    // 可选：订阅更多交易对
-    info!("\n📤 订阅 ETHUSDT 深度更新流");
-    let subscribe_eth = StreamCommandRequest {
-        method: WS_SUBSCRIBE_COMMAND.to_string(),
-        params: vec!["ethusdt@depth@100ms".to_string()],
-        id: 2,
-    };
-    info!("✓ ETHUSDT 订阅请求已发送");
-
-    // 再运行 30 秒
-    tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
-
-    info!("\n========== 示例结束 ==========");
-    info!("提示:");
-    info!("  - OrderBookService 自动管理所有 symbol 的订单簿");
-    info!("  - 支持多个订阅者同时接收订单簿快照");
-    info!("  - 自动处理订单簿过期和重新初始化");
-    info!("  - 可通过 with_market_depth() 设置广播的档位数");
+    info!("✓ OrderBookService 已启动");
+    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+    info!("✓ 开始查询order book");
+    if let Ok(eth_order_book) = order_book_service.query_order_book("ethusdt", 20).await {
+        info!("order eth book received: {:?}", unix_2_readable(&eth_order_book.last_update_time));
+        info!("order asks num:{},bids:{}", eth_order_book.asks().len(), eth_order_book.bids().len());
+    }
 
     Ok(())
 }

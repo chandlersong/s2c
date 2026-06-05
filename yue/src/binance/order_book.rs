@@ -322,12 +322,12 @@ pub struct QueryPayload {
 }
 
 impl QueryPayload {
-    pub fn new_depth_20(symbol: String, tx: oneshot::Sender<OrderBookSnapshotMsg>) -> Self {
+    pub fn new_depth_20(symbol: String, tx: oneshot::Sender<Result<OrderBook, YueError>>) -> OrderBookEvent {
         Self::new(symbol, 20, tx)
     }
 
-    pub fn new(symbol: String, depth: u16, tx: oneshot::Sender<OrderBookSnapshotMsg>) -> Self {
-        Self { symbol, depth, tx }
+    pub fn new(symbol: String, depth: u16, tx: oneshot::Sender<Result<OrderBook, YueError>>) -> OrderBookEvent {
+        OrderBookEvent::QueryOrderBook(Self { symbol, depth, tx })
     }
 }
 
@@ -337,7 +337,7 @@ impl QueryPayload {
 2. 订单簿的查询
 **/
 struct OrderBookCenter {
-    tx: mpsc::UnboundedSender<OrderBookEvent>,
+    tx: UnboundedSender<OrderBookEvent>,
 }
 
 impl OrderBookCenter {
@@ -357,7 +357,7 @@ impl OrderBookCenter {
     /// ##
     ///
     ///
-    async fn loop_update(tx: mpsc::UnboundedSender<OrderBookEvent>, mut rx: mpsc::UnboundedReceiver<OrderBookEvent>) {
+    async fn loop_update(tx: UnboundedSender<OrderBookEvent>, mut rx: mpsc::UnboundedReceiver<OrderBookEvent>) {
         let mut order_books: HashMap<String, OrderBook> = HashMap::new();
         let mut depth_snapshot: HashMap<String, mpsc::UnboundedSender<DepthUpdateStreamPayload>> = HashMap::new();
         loop {
@@ -422,6 +422,17 @@ impl OrderBookCenter {
         }
     }
 
+    pub async fn query_order_book(&self, symbol: &str, depth: u16) -> Result<OrderBook, YueError> {
+        let (tx, rx) = oneshot::channel();
+        let request = QueryPayload::new(symbol.to_string(), depth, tx);
+        self.tx.send(request).map_or_else(
+            |e| Err(YueError::CustomError(format!("failed to send order book query: {}", e))),
+            |_| Ok(()),
+        )?;
+        rx.await
+            .unwrap_or_else(|e| Err(YueError::CustomError(format!("failed to receive order book query result: {}", e))))
+    }
+
     pub fn initial_order_book(
         symbol: String,
         result_tx: mpsc::UnboundedSender<OrderBookEvent>,
@@ -461,36 +472,28 @@ impl MessageHandlerTrait<BinanceSpotWebSocketStreamWrapper> for OrderBookCenter 
 /// 订单簿服务，管理订阅者和快照分发。
 /// 负责维护订阅者列表，并将订单簿快照发送给所有订阅者。
 pub struct OrderBookService {
-    /// 市场深度（广播时���剪的档位数）
-    market_depth: u16,
     /// 所有symbol的订单簿快照
-    order_books: HashMap<String, Arc<OrderBook>>,
     web_socket_interface: Arc<WebSocketInterface<BinanceSpotWebSocketStreamWrapper>>,
+    order_book_center: Arc<OrderBookCenter>,
 }
 
 impl OrderBookService {
     pub async fn spot(proxy: Option<String>) -> Self {
         let reconnect_interval = Duration::from_secs(5);
-        let handler = Arc::new(OrderBookCenter::new());
+        let center = Arc::new(OrderBookCenter::new());
         let interface = WebSocketConnection::run::<BinanceSpotWebSocketStreamWrapper>(
             SPOT_STREAM_WEBSOCKET.to_string(),
             reconnect_interval,
             proxy,
-            Some(handler),
+            Some(center.clone()),
         )
         .await;
         Self {
-            market_depth: 20,
-            order_books: HashMap::new(),
             web_socket_interface: interface,
+            order_book_center: center,
         }
     }
 
-    //     let subscribe_request = StreamCommandRequest {
-    //     method: WS_SUBSCRIBE_COMMAND.to_string(),
-    //     params: vec!["btcusdt@depth@100ms".to_string()],
-    //     id: 1,
-    // };
     pub fn subscribe_order_book(&self, symbol: &str, frequency: &str) -> Result<(), YueError> {
         let subscribe_symbol = format!("{}@depth@{}", symbol.to_lowercase(), frequency);
         let subscribe_request = StreamCommandRequest {
@@ -504,42 +507,13 @@ impl OrderBookService {
         Ok(())
     }
 
-    pub fn with_market_depth(mut self, depth: u16) -> Self {
-        self.market_depth = depth;
-        self
+    pub async fn query_order_book(&self, symbol: &str, depth: u16) -> Result<OrderBook, YueError> {
+        self.order_book_center.query_order_book(symbol, depth).await
     }
 
     /// 广播订单簿快照给所有订阅者
     fn broadcast_snapshot(&self, order_book: Arc<OrderBook>) {
         todo!()
-    }
-
-    fn handle_depth_update(&mut self, update: DepthUpdateStreamPayload) {
-        let symbol = update.symbol.clone();
-
-        // 检查订单簿是否存在
-        if let Some(order_book_arc) = self.order_books.get(&symbol) {
-            // 订单簿存在，尝试更新
-            let mut order_book = (**order_book_arc).clone();
-
-            match order_book.apply_snapshot(update.clone()) {
-                Ok(_) => {
-                    // 更新成功，保存并广播
-                    let new_arc = Arc::new(order_book);
-                    self.order_books.insert(symbol.clone(), new_arc.clone());
-                    self.broadcast_snapshot(new_arc);
-                }
-                Err(OrderBookError::DeprecateError { .. }) => {
-                    // 订单簿过期，需要重新初始化
-                    warn!("订单簿过期，触发重新初始化: {}", symbol);
-                    self.trigger_init(&symbol, Some(update));
-                }
-            }
-        } else {
-            // 订单簿不存在，触发初始化
-            debug!("收到未知symbol的更新，触发初始化: {}", symbol);
-            self.trigger_init(&symbol, Some(update));
-        }
     }
 
     /// 触发订单簿初始化
