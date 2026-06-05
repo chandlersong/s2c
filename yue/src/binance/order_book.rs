@@ -1,7 +1,9 @@
 use crate::binance::bn_json_websocket::{SPOT_STREAM_WEBSOCKET, StreamCommandRequest, WS_SUBSCRIBE_COMMAND};
 use crate::binance::bn_models::common::ToRequestBuilder;
 use crate::binance::bn_models::spot_restful::Depth;
-use crate::binance::bn_models::spot_websocket_stream::{BinanceSpotWebSocketStreamWrapper, DepthUpdateStreamPayload};
+use crate::binance::bn_models::spot_websocket_stream::{
+    BinanceSpotWebSocketStreamResponse, BinanceSpotWebSocketStreamWrapper, DepthUpdateStreamPayload,
+};
 use crate::binance::bn_restful_commands::{SPOT_DEPTH_1000_COMMAND, execute_json_request};
 use crate::binance::restful_func::CommonRequestBuilder;
 use crate::errors::YueError;
@@ -15,7 +17,8 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::{mpsc, oneshot};
 
 /// 关于orderbook。
 /// spot币安交易所的orderbook维护说明：
@@ -222,11 +225,6 @@ impl Handler<BufferedDepthUpdate> for InitActor {
     }
 }
 
-enum OrderBookEvent {
-    DepthUpdate(DepthUpdateStreamPayload),
-    NewOrderBook(OrderBook),
-}
-
 ///
 /// 初始化订单簿的流程：
 ///
@@ -311,32 +309,157 @@ pub async fn initial_order_book(symbol: String, mut depth_rx: mpsc::UnboundedRec
     }
 }
 
+pub enum OrderBookEvent {
+    DepthUpdate(DepthUpdateStreamPayload),
+    QueryOrderBook(QueryPayload),
+    NewOrderBook(OrderBook),
+}
+
+pub struct QueryPayload {
+    pub symbol: String,
+    pub depth: u16,
+    pub tx: oneshot::Sender<Result<OrderBook, YueError>>,
+}
+
+impl QueryPayload {
+    pub fn new_depth_20(symbol: String, tx: oneshot::Sender<OrderBookSnapshotMsg>) -> Self {
+        Self::new(symbol, 20, tx)
+    }
+
+    pub fn new(symbol: String, depth: u16, tx: oneshot::Sender<OrderBookSnapshotMsg>) -> Self {
+        Self { symbol, depth, tx }
+    }
+}
+
 /**
 订单簿的管理，其中包括
 1. 订单簿的更新
 2. 订单簿的查询
 **/
-struct OrderBookCenter {}
+struct OrderBookCenter {
+    tx: mpsc::UnboundedSender<OrderBookEvent>,
+}
+
+impl OrderBookCenter {
+    fn new() -> Self {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let tx_sync = tx.clone();
+        tokio::task::spawn(async move {
+            Self::loop_update(tx_sync, rx).await;
+        });
+        OrderBookCenter { tx }
+    }
+
+    /// 本方法是维护订单簿实体逻辑的基本说明。
+    /// # 基本规则
+    /// 1. 一个symbol一个orderbook。
+    ///
+    /// ##
+    ///
+    ///
+    async fn loop_update(tx: mpsc::UnboundedSender<OrderBookEvent>, mut rx: mpsc::UnboundedReceiver<OrderBookEvent>) {
+        let mut order_books: HashMap<String, OrderBook> = HashMap::new();
+        let mut depth_snapshot: HashMap<String, mpsc::UnboundedSender<DepthUpdateStreamPayload>> = HashMap::new();
+        loop {
+            if let Some(event) = rx.recv().await {
+                match event {
+                    OrderBookEvent::DepthUpdate(update) => {
+                        let symbol = update.symbol.to_uppercase();
+                        match order_books.get_mut(&symbol) {
+                            Some(order_book) => {
+                                if let Err(e) = order_book.apply_snapshot(update.clone()) {
+                                    //这里就表示已经过期，那么应该重新开始那个更新操作。
+                                    // 1. 开始创建新的order book
+                                    // 2. 加入更新
+                                    let rx = Self::initial_order_book(symbol.clone(), tx.clone(), update);
+                                    order_books.remove(symbol.as_str());
+                                    depth_snapshot.insert(symbol.clone(), rx);
+                                }
+                            }
+                            None => {
+                                //如果没有两种情况
+                                //1. 正在更新
+                                //2。 完全是新的。
+                                match depth_snapshot.get_mut(&symbol) {
+                                    None => {
+                                        let rx = Self::initial_order_book(symbol.clone(), tx.clone(), update);
+                                        depth_snapshot.insert(symbol.clone(), rx);
+                                    }
+                                    Some(tx) => {
+                                        //正在更新
+                                        if let Err(e) = tx.send(update.clone()) {
+                                            error!("failed to send update order books: {}", e);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    OrderBookEvent::QueryOrderBook(query) => {
+                        let symbol = query.symbol.to_uppercase();
+                        match order_books.get_mut(&symbol) {
+                            Some(order_book) => {
+                                let res = order_book
+                                    .get_sub_order_book(query.depth)
+                                    .map_err(|e| YueError::CustomError(format!("failed to get sub order book: {}", e)));
+                                if let Err(e) = query.tx.send(res) {
+                                    error!("failed to send sub order book to query");
+                                }
+                            }
+                            None => {
+                                let res = Err(YueError::CustomError("no sub order book".to_string()));
+                                if let Err(e) = query.tx.send(res) {
+                                    error!("failed to send sub order book to query");
+                                }
+                            }
+                        }
+                    }
+                    OrderBookEvent::NewOrderBook(order_book) => {
+                        order_books.insert(order_book.symbol.to_uppercase().clone(), order_book);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn initial_order_book(
+        symbol: String,
+        result_tx: mpsc::UnboundedSender<OrderBookEvent>,
+        update: DepthUpdateStreamPayload,
+    ) -> mpsc::UnboundedSender<DepthUpdateStreamPayload> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            let order_books = initial_order_book(symbol, rx).await;
+            if let Err(e) = result_tx.send(OrderBookEvent::NewOrderBook(order_books)) {
+                error!("failed to send initial order books: {}", e);
+            }
+        });
+        if let Err(e) = tx.send(update) {
+            error!("failed to send update order books: {}", e);
+        }
+        tx
+    }
+}
+
 #[async_trait]
 impl MessageHandlerTrait<BinanceSpotWebSocketStreamWrapper> for OrderBookCenter {
     async fn handle_message(&self, message: &BinanceSpotWebSocketStreamWrapper) {
-        info!("Received WebSocket message: {:?}", message);
+        trace!("Received WebSocket message: {:?}", message);
+        match &message.data {
+            BinanceSpotWebSocketStreamResponse::DepthUpdate(update) => {
+                if let Err(e) = self.tx.send(OrderBookEvent::DepthUpdate(update.clone())) {
+                    error!("failed to send depth update to OrderBookCenter: {}", e);
+                }
+            }
+            _ => {
+                trace!("Received non-depth update message, ignoring");
+            }
+        }
     }
 }
 
 /// 订单簿服务，管理订阅者和快照分发。
 /// 负责维护订阅者列表，并将订单簿快照发送给所有订阅者。
-/// # 维护订单簿实体。
-/// 1. 维护一类交易标的，比如swap/spot/option/future等所有symbol的订单簿。
-/// 2. 每个symbol都有自己独立的OrderBook进行维护
-/// 3. 每次更新订单簿后，生成该订单簿的快照，并分发给所有订阅者。订阅者可以收到所有symbol的订单簿。
-/// 4. 订阅者通过注册成为订阅者，也就是subscribers来接收快照消息。
-/// 5. 本地的订单簿，通过DepthUpdateStreamPayload来更新，因为频率很高，实现的时候，尽量的少用锁
-///     - 如果更新失败，比如出现OrderBookError::DeprecateError，则需要重新初始化订单簿。
-///     - 如果收到不存在的symbol的更新消息，则初始化相对应的订单簿。
-/// 6. OrderBookService作为一个单独的Actor运行，处理来自WebSocket的消息，并更新相应的OrderBook实体。
-/// 7， 初始化订单簿，使用RESTful API获取初始的Depth数据，然后通过WebSocket的增量更新来维护订单簿的最新状态。具体使用。yue::binance::bn_restful_commands::SPOT_DEPTH_1000_COMMAND
-/// 8. DepthUpdateStreamPayload通过其他的Actor获得。也就是需要写基于我现在写的handle
 pub struct OrderBookService {
     /// 市场深度（广播时���剪的档位数）
     market_depth: u16,
@@ -348,7 +471,7 @@ pub struct OrderBookService {
 impl OrderBookService {
     pub async fn spot(proxy: Option<String>) -> Self {
         let reconnect_interval = Duration::from_secs(5);
-        let handler = Arc::new(OrderBookCenter {});
+        let handler = Arc::new(OrderBookCenter::new());
         let interface = WebSocketConnection::run::<BinanceSpotWebSocketStreamWrapper>(
             SPOT_STREAM_WEBSOCKET.to_string(),
             reconnect_interval,
