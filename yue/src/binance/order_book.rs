@@ -335,6 +335,8 @@ impl QueryPayload {
 订单簿的管理，其中包括
 1. 订单簿的更新
 2. 订单簿的查询
+
+FUTURE: 加入有推送机制的order book
 **/
 struct OrderBookCenter {
     tx: UnboundedSender<OrderBookEvent>,
@@ -352,11 +354,11 @@ impl OrderBookCenter {
 
     /// 本方法是维护订单簿实体逻辑的基本说明。
     /// # 基本规则
-    /// 1. 一个symbol一个orderbook。
+    /// 1. 一个symbol一个order book。
     ///
-    /// ##
-    ///
-    ///
+    /// # 重制的规则
+    /// 1. order book过期
+    /// 2。有新的order book
     async fn loop_update(tx: UnboundedSender<OrderBookEvent>, mut rx: mpsc::UnboundedReceiver<OrderBookEvent>) {
         let mut order_books: HashMap<String, OrderBook> = HashMap::new();
         let mut depth_snapshot: HashMap<String, mpsc::UnboundedSender<DepthUpdateStreamPayload>> = HashMap::new();

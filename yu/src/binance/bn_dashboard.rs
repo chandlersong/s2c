@@ -1,10 +1,9 @@
-use crate::errors::YuError;
-use actix::{Actor, Addr, Context, Handler, Message};
+use crate::binance::bn_duck_db::DuckTableTableChannel;
+use crate::binance::models::po::FundingRatePo;
 use li::errors::LiError;
 use li::tools::time::{unix_time_now_u64_utc, UnixTimeStamp};
 use log::{error, info};
 use serde::de::DeserializeOwned;
-use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, OnceLock, RwLock};
@@ -16,13 +15,12 @@ use yue::binance::bn_models::swap_restful::SwapExchangeInfo;
 use yue::binance::bn_restful_commands::{
     execute_json_request, BINANCE_SPOT_BASE, BINANCE_SWAP_BASE, SPOT_EXCHANGE_COMMAND, SPOT_RATE_PER_MINUTE, SWAP_EXCHANGE_COMMAND,
 };
-use yue::binance::order_book::{OrderBook, OrderBookSnapshotMsg};
+use yue::binance::order_book::{OrderBook, OrderBookService, OrderBookSnapshotMsg};
 use yue::binance::restful_func::{get_trading_spot_symbols, get_trading_swap_symbols, CONTRACT_TYPE_PERPETUAL};
 use yue::errors::YueError;
 use yue::http_client::get_http_client;
 use yue::models::HistoryInterval;
 
-type BinanceSnapshot = watch::Sender<Arc<BinanceDashboardSnapShot>>;
 #[derive(Clone)]
 pub struct BinanceDashboardSnapShot {
     pub spot_trading_symbols: Vec<SymbolInfo>,
@@ -217,108 +215,5 @@ impl BinanceDashboard {
         let aligned = interval_to_use.get_close_unix_ms(earliest);
 
         Some(aligned)
-    }
-}
-
-#[derive(Message)]
-#[rtype(result = "Option<Arc<OrderBook>>")]
-pub struct QueryDepth {
-    pub symbol: String,
-}
-
-#[derive(Message)]
-#[rtype(result = "Vec<String>")]
-pub struct QueryAllSymbols;
-
-#[derive(Message)]
-#[rtype(result = "Vec<Arc<OrderBook>>")]
-pub struct QueryBatchDepths {
-    pub symbols: Vec<String>,
-}
-
-/// 全局MarketDepthDashBoard单例存储
-static MARKET_DEPTH_DASHBOARD: OnceLock<Addr<MarketDepthDashBoard>> = OnceLock::new();
-
-/// 初始化全局MarketDepthDashBoard单例
-/// 应该在应用启动时调用一次
-pub fn init_market_depth_dashboard(addr: Addr<MarketDepthDashBoard>) -> Result<(), Addr<MarketDepthDashBoard>> {
-    MARKET_DEPTH_DASHBOARD.set(addr)
-}
-
-/// 获取全局MarketDepthDashBoard单例
-/// 如果未初始化，返回错误
-pub fn get_market_depth_dashboard() -> Result<Addr<MarketDepthDashBoard>, YuError> {
-    MARKET_DEPTH_DASHBOARD
-        .get()
-        .cloned()
-        .ok_or_else(|| YuError::CustomError("MarketDepthDashBoard未初始化，请先调用init_market_depth_dashboard".to_string()))
-}
-
-/// 市场深度仪表盘，负责存储和查询订单簿快照。
-///
-/// 这个Actor接收来自OrderBookService的订单簿快照，并提供同步查询接口。
-///
-/// 性能设计说明：
-/// - 与OrderBookService保持分离的Actor线程，避免互相阻塞
-/// - OrderBookService处理高频深度更新（websocket实时推送）
-/// - MarketDepthDashBoard处理查询请求（纯读操作）
-/// - 通过Arc<OrderBook>共享数据，无复制成本
-///
-/// 不推荐合并的原因：
-/// 1. 深度更新是高频消息（每秒数千条），查询是阻塞操作
-/// 2. 如果合并，查询请求会阻塞深度更新处理，导致订单簿更新延迟
-/// 3. 在高交易量场景下，这个延迟会积累，最坏情况下从毫秒级增加到秒级
-/// 4. 分离设计允许独立优化：OrderBookService专注写操作，MarketDepthDashBoard专注读操作
-pub struct MarketDepthDashBoard {
-    depths: HashMap<String, Arc<OrderBook>>,
-}
-
-impl MarketDepthDashBoard {
-    pub fn new() -> Self {
-        MarketDepthDashBoard { depths: HashMap::new() }
-    }
-}
-
-impl Actor for MarketDepthDashBoard {
-    type Context = Context<Self>;
-    fn started(&mut self, ctx: &mut Self::Context) {
-        info!("OrderBookService 启动");
-
-        // 启动初始化Actor
-
-        ctx.set_mailbox_capacity(1000);
-    }
-}
-
-impl Handler<OrderBookSnapshotMsg> for MarketDepthDashBoard {
-    type Result = ();
-
-    fn handle(&mut self, msg: OrderBookSnapshotMsg, _ctx: &mut Context<Self>) -> Self::Result {
-        let order_book = msg.0;
-        self.depths.insert(order_book.symbol.clone(), order_book);
-    }
-}
-
-impl Handler<QueryDepth> for MarketDepthDashBoard {
-    type Result = Option<Arc<OrderBook>>;
-
-    fn handle(&mut self, msg: QueryDepth, _ctx: &mut Context<Self>) -> Self::Result {
-        self.depths.get(&msg.symbol).cloned()
-    }
-}
-
-impl Handler<QueryAllSymbols> for MarketDepthDashBoard {
-    type Result = Vec<String>;
-
-    fn handle(&mut self, _msg: QueryAllSymbols, _ctx: &mut Context<Self>) -> Self::Result {
-        self.depths.keys().cloned().collect()
-    }
-}
-
-impl Handler<QueryBatchDepths> for MarketDepthDashBoard {
-    type Result = Vec<Arc<OrderBook>>;
-
-    fn handle(&mut self, msg: QueryBatchDepths, _ctx: &mut Context<Self>) -> Self::Result {
-        msg.symbols.iter().filter_map(|symbol| self.depths.get(symbol).cloned()).collect()
     }
 }

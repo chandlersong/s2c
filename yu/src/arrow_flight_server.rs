@@ -1,4 +1,3 @@
-use crate::binance::bn_dashboard::{get_market_depth_dashboard, QueryDepth};
 use crate::duck_db::DBProvider;
 use crate::errors::YuError;
 use arrow::array::{ArrayRef, Float64Array, Int64Array, StringArray, UInt32Array};
@@ -235,39 +234,34 @@ impl FlightService for DuckDBFlightServer {
         // 解析命令
         match parse_command(&ticket_str) {
             Ok(CommandType::Depth(symbol)) => {
-                info!("Processing depth command for symbol: {}", symbol);
-                tokio::task::spawn(async move {
-                    let result: Result<(), String> = async {
-                        // let dashboard = get_market_depth_dashboard().map_err(|e| format!("Failed to get MarketDepthDashBoard: {}", e))?;
-                        //
-                        // let order_book_arc = dashboard
-                        //     .send(QueryDepth { symbol: symbol.clone() })
-                        //     .await
-                        //     .map_err(|e| format!("Failed to send query to dashboard: {}", e))?;
-                        //
-                        // let order_book = order_book_arc.ok_or_else(|| format!("OrderBook not found for symbol: {}", symbol))?;
-                        //
-                        // let batch = convert_order_book_to_record_batch(&order_book, Some(20))?;
-                        // let schema = batch.schema();
-                        // let flight_data_vec = flight_utils::batches_to_flight_data(schema.as_ref(), vec![batch])
-                        //     .map_err(|e| format!("Failed to convert batches to FlightData: {}", e))?;
-                        //
-                        // for d in flight_data_vec {
-                        //     if let Err(send_err) = tx_clone.send(Ok(d)).await {
-                        //         return Err(format!("Failed to send FlightData: {}", send_err));
-                        //     }
-                        // }
-                        Ok(())
-                    }
-                    .await;
-
-                    if let Err(err_msg) = result {
-                        let status = Status::internal(err_msg.clone());
-                        let _ = tx_clone.send(Err(status)).await;
-                        error!("Depth command failed: {}", err_msg);
-                    }
-                    drop(tx_clone);
-                });
+                // info!("Processing depth command for symbol: {}", symbol);
+                // tokio::task::spawn(async move {
+                //     let result: Result<(), String> = async {
+                //
+                //
+                //         let order_book = order_book_arc.ok_or_else(|| format!("OrderBook not found for symbol: {}", symbol))?;
+                //
+                //         let batch = convert_order_book_to_record_batch(&order_book, Some(20))?;
+                //         let schema = batch.schema();
+                //         let flight_data_vec = flight_utils::batches_to_flight_data(schema.as_ref(), vec![batch])
+                //             .map_err(|e| format!("Failed to convert batches to FlightData: {}", e))?;
+                //
+                //         for d in flight_data_vec {
+                //             if let Err(send_err) = tx_clone.send(Ok(d)).await {
+                //                 return Err(format!("Failed to send FlightData: {}", send_err));
+                //             }
+                //         }
+                //         Ok(())
+                //     }
+                //     .await;
+                //
+                //     if let Err(err_msg) = result {
+                //         let status = Status::internal(err_msg.clone());
+                //         let _ = tx_clone.send(Err(status)).await;
+                //         error!("Depth command failed: {}", err_msg);
+                //     }
+                //     drop(tx_clone);
+                // });
             }
             Ok(CommandType::Sql(sql)) => {
                 // 处理 SQL 命令
