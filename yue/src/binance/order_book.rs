@@ -253,10 +253,10 @@ pub async fn initial_order_book(symbol: String, mut depth_rx: mpsc::UnboundedRec
                         return match OrderBook::new(symbol.clone(), depth) {
                             Ok(mut order_book) => {
                                 if !depth_vec.is_empty() {
-                                    info!("[initial_order_book] 应用缓存的 {} 条更新", depth_vec.len());
+                                    info!("[initial_order_book] {} 应用缓存的 {} 条更新", symbol,depth_vec.len());
                                     let mut update_fail = false;
                                     for (idx, update) in depth_vec.iter().enumerate() {
-                                        info!("[initial_order_book] 应用第 {} 条更新: first_update_id={}, final_update_id={}", idx, update.first_update_id, update.final_update_id);
+                                        trace!("[initial_order_book] 应用第 {} 条更新: first_update_id={}, final_update_id={}", idx, update.first_update_id, update.final_update_id);
                                         if let Err(e) = order_book.apply_snapshot(update.clone()) {
                                             info!("[initial_order_book] 应用缓存更新失败 {}: {:?}", symbol, e);
                                             update_fail= true;
