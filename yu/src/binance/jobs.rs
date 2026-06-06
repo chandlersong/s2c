@@ -1,5 +1,5 @@
 use crate::binance::binance_db_consts::ALL_BINANCE_TABLES;
-use crate::binance::bn_backend_service::{get_spot_kline_table, get_spot_order_book, get_swap_kline_table};
+use crate::binance::bn_backend_service::{get_spot_kline_table, get_spot_order_book_service, get_swap_kline_table};
 use crate::binance::bn_dashboard::{BinanceDashboard, BinanceDashboardWatcher};
 use crate::binance::bn_data_integrity::{KlineGapRepairStrategy, SpotCheckStrategy};
 use crate::binance::history::{initial_kline, start_sync_funding_rate};
@@ -12,24 +12,16 @@ use crate::data_integrity::repair::RepairStrategyTrait;
 use crate::duck_db::DBProvider;
 use crate::errors::YuError;
 use crate::websocket::subscribers::account_sync_actor::get_account_addr;
-use crate::websocket::subscribers::storage_subscriber::get_spot_stream_writer;
 use actix::Actor;
 use li::subscribe_event_addr;
-use li::websocket::client::{CommandMessage, WebSocketClient};
 use log::{error, info, warn};
-use serde_json::to_string;
 use std::sync::Arc;
 use tokio::sync::watch;
-use yue::binance::bn_json_websocket::{StreamCommandRequest, SPOT_STREAM_WEBSOCKET, SPOT_WEBSOCKET, WS_SUBSCRIBE_COMMAND};
-use yue::binance::bn_models::common::{PortfolioSpotOrderData, PortfolioSwapOrderData, SpotOrderData, SwapOrderData, SymbolType};
+use yue::binance::bn_json_websocket::{SPOT_WEBSOCKET, WS_SUBSCRIBE_COMMAND};
+use yue::binance::bn_models::common::{PortfolioSpotOrderData, PortfolioSwapOrderData, SymbolType};
 use yue::binance::bn_models::portfolio_account_websocket::BinancePortfolioWebSocketStreamResponse;
-use yue::binance::bn_models::spot_websocket::BinanceSpotAccountWebSocketResponse;
-use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamResponse;
-use yue::binance::bn_models::swap_account_stream::BinanceSwapAccountStreamResponse;
-use yue::binance::listen_key_client::{ListenKeyClient, NormalAccountAssignName, PortfolioAccountAssignName};
-use yue::binance::websocket_actor::SpotAccountActor;
+use yue::binance::listen_key_client::{ListenKeyClient, PortfolioAccountAssignName};
 use yue::models::HistoryInterval;
-use yue::tools::SnowyFlakeWrapper;
 
 ///
 /// NEXT: 加入的功能
@@ -192,49 +184,50 @@ async fn start_monitor_portfolio_account(portfolio_account: Vec<AccountConfig>) 
 }
 
 async fn start_monitor_normal_account(normal_account: Vec<AccountConfig>) {
-    if normal_account.is_empty() {
-        info!("没有配置需要监控的币安普通账户，跳过账户监控任务");
-        return;
-    }
-
-    let config = get_config();
-
-    let acc_infos = normal_account
-        .iter()
-        .filter_map(|acc: &AccountConfig| {
-            if acc.secret_type == SecurityType::Ed25519 {
-                info!("开始监听币安普通账户{}开始监听", acc.account_name);
-                Some(acc.clone().into())
-            } else {
-                info!("无法监听币安普通账户{}开始监听，其密钥不是Ed25519", acc.account_name);
-                None
-            }
-        })
-        .collect::<Vec<_>>();
-
-    if !acc_infos.is_empty() {
-        info!("开始监听币安普通账户的现货账户，数量: {}", acc_infos.len());
-        let mut client_builder = WebSocketClient::new(SPOT_WEBSOCKET);
-
-        if let Some(proxy) = &config.proxy_url {
-            client_builder = client_builder.with_proxy(proxy);
-            info!("✓ WebSocket 使用代理: {}", proxy);
-        }
-        let client_addr = client_builder.with_reconnect_interval(std::time::Duration::from_secs(5)).start();
-        info!("✓ WebSocket 客户端已启动: {}", SPOT_WEBSOCKET);
-        let spot_account_addr = SpotAccountActor::new(acc_infos).start();
-        subscribe_event_addr!(client_addr, spot_account_addr.clone(), BinanceSpotAccountWebSocketResponse);
-        subscribe_event_addr!(spot_account_addr, get_account_addr(), SpotOrderData);
-        info!("✓ WsMessageBus 订阅 WebSocketClient 事件");
-    }
-
-    for acc in normal_account.iter() {
-        info!("开始监听币安普通账户的swap交易");
-        let addr = ListenKeyClient::swap(&acc.account_name, None, &acc.api_key, &acc.value, config.proxy_url.clone()).start();
-        let name_assign_addr = NormalAccountAssignName::new(acc.account_name.as_ref()).start();
-        subscribe_event_addr!(addr, name_assign_addr.clone(), BinanceSwapAccountStreamResponse);
-        subscribe_event_addr!(name_assign_addr, get_account_addr(), SwapOrderData);
-    }
+    todo!()
+    // if normal_account.is_empty() {
+    //     info!("没有配置需要监控的币安普通账户，跳过账户监控任务");
+    //     return;
+    // }
+    //
+    // let config = get_config();
+    //
+    // let acc_infos = normal_account
+    //     .iter()
+    //     .filter_map(|acc: &AccountConfig| {
+    //         if acc.secret_type == SecurityType::Ed25519 {
+    //             info!("开始监听币安普通账户{}开始监听", acc.account_name);
+    //             Some(acc.clone().into())
+    //         } else {
+    //             info!("无法监听币安普通账户{}开始监听，其密钥不是Ed25519", acc.account_name);
+    //             None
+    //         }
+    //     })
+    //     .collect::<Vec<_>>();
+    //
+    // if !acc_infos.is_empty() {
+    //     info!("开始监听币安普通账户的现货账户，数量: {}", acc_infos.len());
+    //     let mut client_builder = WebSocketClient::new(SPOT_WEBSOCKET);
+    //
+    //     if let Some(proxy) = &config.proxy_url {
+    //         client_builder = client_builder.with_proxy(proxy);
+    //         info!("✓ WebSocket 使用代理: {}", proxy);
+    //     }
+    //     let client_addr = client_builder.with_reconnect_interval(std::time::Duration::from_secs(5)).start();
+    //     info!("✓ WebSocket 客户端已启动: {}", SPOT_WEBSOCKET);
+    //     let spot_account_addr = SpotAccountActor::new(acc_infos).start();
+    //     subscribe_event_addr!(client_addr, spot_account_addr.clone(), BinanceSpotAccountWebSocketResponse);
+    //     subscribe_event_addr!(spot_account_addr, get_account_addr(), SpotOrderData);
+    //     info!("✓ WsMessageBus 订阅 WebSocketClient 事件");
+    // }
+    //
+    // for acc in normal_account.iter() {
+    //     info!("开始监听币安普通账户的swap交易");
+    //     let addr = ListenKeyClient::swap(&acc.account_name, None, &acc.api_key, &acc.value, config.proxy_url.clone()).start();
+    //     let name_assign_addr = NormalAccountAssignName::new(acc.account_name.as_ref()).start();
+    //     subscribe_event_addr!(addr, name_assign_addr.clone(), BinanceSwapAccountStreamResponse);
+    //     subscribe_event_addr!(name_assign_addr, get_account_addr(), SwapOrderData);
+    // }
 }
 
 /// 启动后台的websocket任务，然后根据配置来配置需要的内容
@@ -262,7 +255,7 @@ async fn start_spot_websocket_stream_job() -> Result<(), YuError> {
         }
     };
 
-    let order_service = get_spot_order_book().await;
+    let order_service = get_spot_order_book_service().await;
     // 根据配置订阅深度流
     if let Some(depth_config) = &spot_config.depth {
         if depth_config.enabled() && !depth_config.symbols.is_empty() {

@@ -19,7 +19,7 @@ pub(crate) static SWAP_BINANCE_KLINE_TABLE: OnceLock<DuckTableTableChannel<Kline
 pub(crate) static SWAP_FUNDING_RATE_TABLE: OnceLock<DuckTableTableChannel<FundingRatePo>> = OnceLock::new();
 pub(crate) static SPOT_ORDER_BOOK: OnceCell<OrderBookService> = OnceCell::const_new();
 
-pub async fn get_spot_order_book() -> &'static OrderBookService {
+pub async fn get_spot_order_book_service() -> &'static OrderBookService {
     SPOT_ORDER_BOOK
         .get_or_init(init_spot_order_book) // ← 这里会自动异步初始化，只执行一次
         .await
