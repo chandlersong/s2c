@@ -276,7 +276,7 @@ pub async fn initial_order_book(symbol: String, mut depth_rx: mpsc::UnboundedRec
                                         continue;
                                     }
                                 }
-
+                                info!("[initial_order_book] 创建 OrderBook {} 完成", symbol);
                                 order_book
                             }
                             Err(e) => {
