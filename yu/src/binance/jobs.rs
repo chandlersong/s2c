@@ -1,5 +1,5 @@
 use crate::binance::binance_db_consts::ALL_BINANCE_TABLES;
-use crate::binance::bn_backend_service::{get_spot_kline_table, get_spot_order_book_service, get_swap_kline_table};
+use crate::binance::bn_backend_service::{get_spot_kline_table, get_spot_order_book_service, get_spot_trading_service, get_swap_kline_table};
 use crate::binance::bn_dashboard::{BinanceDashboard, BinanceDashboardWatcher};
 use crate::binance::bn_data_integrity::{KlineGapRepairStrategy, SpotCheckStrategy};
 use crate::binance::history::{initial_kline, start_sync_funding_rate};
@@ -272,6 +272,21 @@ async fn start_spot_websocket_stream_job() -> Result<(), YuError> {
         }
     } else {
         info!("binance_websocket.spot.depth 配置未启用，跳过深度流订阅");
+    }
+
+    if let Some(trade_config) = &spot_config.trade {
+        if trade_config.enabled.unwrap() && !trade_config.symbols.is_empty() {
+            let trading_service = get_spot_trading_service().await;
+            for symbol in trade_config.symbols.iter() {
+                if let Err(e) = trading_service.subscribe_trade(symbol.clone()).await {
+                    error!("在订阅{}的交易流时出错{}", symbol, e);
+                    continue;
+                }
+                info!("订阅{}的交易流", symbol);
+            }
+        } else {
+            info!("binance_websocket.spot.trade 未启用或没有配置symbols，跳过交易流订阅");
+        }
     }
 
     Ok(())

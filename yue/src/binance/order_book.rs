@@ -512,16 +512,6 @@ impl OrderBookService {
     pub async fn query_order_book(&self, symbol: &str, depth: u16) -> Result<OrderBook, YueError> {
         self.order_book_center.query_order_book(symbol, depth).await
     }
-
-    /// 广播订单簿快照给所有订阅者
-    fn broadcast_snapshot(&self, order_book: Arc<OrderBook>) {
-        todo!()
-    }
-
-    /// 触发订单簿初始化
-    fn trigger_init(&mut self, symbol: &str, update: Option<DepthUpdateStreamPayload>) {
-        todo!()
-    }
 }
 
 /// 订单簿结构体,负责维护和更新相应的订单数据。

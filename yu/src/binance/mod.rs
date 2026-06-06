@@ -7,4 +7,5 @@ pub mod bn_mcp;
 pub mod history;
 pub mod jobs;
 pub mod models;
+pub mod trading_service;
 pub mod websocket_service;

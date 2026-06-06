@@ -27,6 +27,22 @@ pub struct SpotStreamTradeRecordPo {
     pub created_at: i64,
 }
 
+impl DuckDBPO for SpotStreamTradeRecordPo {
+    fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>> {
+        appender_params_from_iter(vec![
+            &self.id as &dyn duckdb::ToSql,
+            &self.event_time as &dyn duckdb::ToSql,
+            &self.symbol as &dyn duckdb::ToSql,
+            &self.trade_id as &dyn duckdb::ToSql,
+            &self.price as &dyn duckdb::ToSql,
+            &self.qty as &dyn duckdb::ToSql,
+            &self.trade_time as &dyn duckdb::ToSql,
+            &self.is_buyer_maker as &dyn duckdb::ToSql,
+            &self.created_at as &dyn duckdb::ToSql,
+        ])
+    }
+}
+
 impl From<TradeStreamPayload> for SpotStreamTradeRecordPo {
     fn from(payload: TradeStreamPayload) -> Self {
         SpotStreamTradeRecordPo {
