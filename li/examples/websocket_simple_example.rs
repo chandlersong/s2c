@@ -49,7 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tokio::spawn(async move {
         while let Ok(message) = message_rx.recv().await {
-            info!("Received message: {:?}", message);
+            info!("Received message: {:?}", message.0);
         }
     });
 

@@ -1,8 +1,6 @@
 use crate::binance::binance_db_consts::BinanceTables;
 use crate::binance::bn_backend_service::{get_spot_kline_table, get_swap_kline_table};
-use crate::binance::bn_duck_db::DuckTableTableChannel;
 use crate::binance::history::HistoryKlineSaver;
-use crate::binance::models::po::KlinePo;
 use crate::data_integrity::check::ValidationStrategyTrait;
 use crate::data_integrity::models::{RepairRequest, ValidationGap, ValidationResult};
 use crate::data_integrity::repair::RepairStrategyTrait;
@@ -18,7 +16,7 @@ use std::time::Duration;
 use tokio::sync::{RwLock, Semaphore};
 use yue::binance::bn_models::common::SymbolType;
 use yue::binance::bn_restful_commands::{SPOT_KLINE_HISTORY_COMMAND, SWAP_KLINE_HISTORY_COMMAND};
-use yue::binance::restful_func::{CommonRequestBuilder, HistoryFetcher, HistoryFetcherImpl, HistoryFetcherTrait, MuteHistoryParam};
+use yue::binance::restful_func::{CommonRequestBuilder, HistoryFetcherImpl, HistoryFetcherTrait};
 use yue::errors::YueError;
 use yue::models::HistoryInterval;
 

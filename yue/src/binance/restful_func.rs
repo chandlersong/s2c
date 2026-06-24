@@ -8,8 +8,6 @@ use crate::binance::bn_restful_commands::{PING_COMMAND, SWAP_FUNDING_RATE_COMMAN
 use crate::errors::YueError;
 use crate::http_client::{HTTP_CLIENT, get_http_client};
 use crate::models::{EmptyObject, HistoryInterval, RequestInfo};
-use crate::query_message::{BatchInsertPayload, DataSourceExecutor, DataSourceExecutorTrait, QueryCommand};
-use actix::dev::MessageResponse;
 use async_trait::async_trait;
 use governor::Jitter;
 use li::tools::time::{ONE_MILL_SECOND_MS, unix_2_readable, unix_time_now_u64_utc};

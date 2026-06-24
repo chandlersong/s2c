@@ -1,0 +1,44 @@
+syntax = "proto3";
+package generated;
+
+// 服务器端和客户端同步的服务
+service SyncServer {
+  // 双向流：Client 发送命令，Server 推送消息
+  rpc sync(stream ClientMessage) returns (stream ServerMessage) {}
+}
+
+// ================== Client -> Server ==================
+message ClientMessage {
+  oneof payload {
+    Initial initial = 1;           // 初始化消息
+  }
+}
+
+// 客户端给服务器端发送的消息。
+message Initial {
+  int64 local_max_timestamp = 2; //本地服务器最大的时间戳
+}
+
+message ServerMessage {
+  oneof payload {
+    PolyMarketHistoryList polymarket_history = 1;     // 批量
+  }
+}
+
+message PolyMarketHistory {
+    string series_id=1;
+    string series_slug= 2;
+    string event_id= 3;
+    string event_slug= 4;
+    string market_id= 5;
+    string market_slug= 6;
+    string asset_id= 7;
+    string asset_slug= 8;
+    int64 timestamp= 9;
+    double price= 10;
+}
+
+message PolyMarketHistoryList {
+  repeated PolyMarketHistory history_list = 1;
+  int64 timestamp = 2;
+}

@@ -2,7 +2,6 @@ use li::tools::logs::setup_logger_all;
 use li::tools::time::{unix_2_readable, unix_time_now_u64_utc};
 use log::{LevelFilter, debug, error, info};
 use std::sync::Arc;
-use tokio::sync::mpsc;
 use yue::binance::bn_models::common::HistoryVo;
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_restful_commands::SPOT_KLINE_HISTORY_COMMAND;

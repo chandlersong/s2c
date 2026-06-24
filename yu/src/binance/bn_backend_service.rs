@@ -3,10 +3,9 @@ use crate::binance::binance_db_consts::BinanceTables;
 use crate::binance::bn_duck_db::{DuckDBOneTable, DuckTableTableChannel};
 use crate::binance::models::po::{FundingRatePo, KlinePo};
 use crate::binance::models::SpotStreamTradeRecordPo;
-use crate::binance::trading_service::{TradingSaver, TradingService};
+use crate::binance::trading_service::TradingService;
 use crate::config::get_config;
-use once_cell::unsync::Lazy;
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 use tokio::sync::OnceCell;
 use yue::binance::order_book::OrderBookService;
 

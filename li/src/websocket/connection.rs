@@ -288,7 +288,7 @@ impl WebSocketConnection {
                     // 使用 clone() 发出去，保留原始 msg 以便在需要时缓存。
                     match command {
                         CommandMessage::Connection(action) => {
-                            let close_frame = Some(CloseFrame {
+                            let _close_frame = Some(CloseFrame {
                                 code: CloseCode::Normal,           // 1000: 正常关闭
                                 reason: "See you soon".into(),
                             });

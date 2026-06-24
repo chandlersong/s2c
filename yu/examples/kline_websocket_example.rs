@@ -8,7 +8,6 @@ use yu::binance::bn_dashboard::BinanceDashboard;
 use yu::binance::websocket_service::KlineSubscribeService;
 use yu::config::get_config;
 use yu::errors::YuError;
-use yue::binance::bn_models::common::SymbolType;
 use yue::models::HistoryInterval;
 
 #[tokio::main]

@@ -3,8 +3,6 @@ use serde::Deserialize;
 use std::env;
 use std::path::Path;
 use std::sync::OnceLock;
-use yue::binance::websocket_actor::SpotStreamAccountWebsocketInfo;
-use yue::tools::load_ed25519_signing_key;
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -35,24 +33,6 @@ pub struct AccountConfig {
     pub value: String,
     pub secret_type: SecurityType,
     pub account_type: AccountType,
-}
-
-impl Into<SpotStreamAccountWebsocketInfo> for AccountConfig {
-    fn into(self) -> SpotStreamAccountWebsocketInfo {
-        match self.secret_type {
-            SecurityType::Ed25519 => {
-                let private_key = load_ed25519_signing_key(self.value.as_ref()).expect("加载私钥失败");
-                SpotStreamAccountWebsocketInfo {
-                    account_name: self.account_name.clone(),
-                    api_key: self.api_key.clone(),
-                    private_key,
-                }
-            }
-            _ => {
-                panic!("to SpotStreamAccountWebsocketInfo only support Ed25519 account");
-            }
-        }
-    }
 }
 
 // Binance 配置结构体

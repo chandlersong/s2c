@@ -156,12 +156,6 @@ impl SpotStreamStorageActor {
         let conn = self.db.acquire()?;
         let mut appender = conn.appender("bn_spot_kline")?;
 
-        for kline in &self.kline_buffer {
-            // if let Err(e) = appender.append_row(kline.to_params()) {
-            //     error!("Failed to append kline to db: {:?}", e);
-            // }
-        }
-
         if let Err(e) = appender.flush() {
             error!("Failed to flush kline to db: {:?}", e);
         }
@@ -243,13 +237,4 @@ impl Handler<BinanceSpotWebSocketStreamResponse> for SpotStreamStorageActor {
             }
         }
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::binance::jobs::initial_tables;
-    use crate::test_utils::initial_memory_db;
-    use rust_decimal::Decimal;
-    use std::str::FromStr;
 }

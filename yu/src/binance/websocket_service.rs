@@ -4,23 +4,19 @@ use crate::binance::models::po::KlinePo;
 use crate::errors::YuError;
 use crate::errors::YuError::NotSupportError;
 use async_trait::async_trait;
-use dashmap::DashMap;
 use governor::Jitter;
-use li::tools::time::unix_2_readable;
 use li::websocket::connection::{
     CommandMessage, ConnectionAction, MessageHandlerTrait, ShareMessageHandler, WebSocketConnection, WebSocketInterface,
 };
 use li::websocket::models::WebSocketMessage;
 use log::{debug, error, info};
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::watch::Receiver;
 use yue::binance::bn_json_websocket::{SPOT_STREAM_WEBSOCKET, SWAP_MARKET_STREAM_WEBSOCKET};
 use yue::binance::bn_models::common::{SymbolInfo, SymbolType};
 use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamResponse::Kline;
-use yue::binance::bn_models::spot_websocket_stream::{BinanceSpotWebSocketStreamResponse, BinanceSpotWebSocketStreamWrapper};
+use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamWrapper;
 use yue::binance::bn_models::swap_websocket_stream::{BinanceSwapWebSocketStreamResponse, BinanceSwapWebSocketStreamWrapper};
 use yue::models::HistoryInterval;
 use yue::query_message::{InsertPayload, QueryCommand};
@@ -74,13 +70,13 @@ impl SwapKlineSaver {
 impl MessageHandlerTrait<BinanceSwapWebSocketStreamWrapper> for SwapKlineSaver {
     async fn handle_message(&self, message: &BinanceSwapWebSocketStreamWrapper) {
         match &message.data {
-            BinanceSwapWebSocketStreamResponse::Kline(payload) => {
+            BinanceSwapWebSocketStreamResponse::Kline(_payload) => {
                 match &message.data {
-                    BinanceSwapWebSocketStreamResponse::Kline(payload) => {
-                        if payload.kline.is_close {
+                    BinanceSwapWebSocketStreamResponse::Kline(_payload) => {
+                        if _payload.kline.is_close {
                             if let Err(e) = self
                                 .db
-                                .send(QueryCommand::Insert(InsertPayload::new_no_replay(KlinePo::from(payload.kline.clone()))))
+                                .send(QueryCommand::Insert(InsertPayload::new_no_replay(KlinePo::from(_payload.kline.clone()))))
                                 .await
                             {
                                 error!("Error save spot kline: {}", e);
@@ -306,7 +302,6 @@ impl KlineSubscribeService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::sync::mpsc;
     use yue::binance::bn_models::common::SymbolInfo;
 
     /// 单元测试：测试 `compose_kline_url` 对空输入的返回值。

@@ -2,8 +2,8 @@
 use li::tools::logs::setup_logger;
 use log::{info, LevelFilter};
 use std::collections::HashMap;
-use yu::binance::bn_data_integrity::{KlineGapRepairStrategy, SpotCheckStrategy, BN_SPOT_KLINE_CHECK};
-use yu::config::{get_config, DataIntegrityConfig};
+use yu::binance::bn_data_integrity::{KlineGapRepairStrategy, SpotCheckStrategy};
+use yu::config::get_config;
 use yu::data_integrity::check::ValidationStrategyTrait;
 use yu::data_integrity::models::RepairRequest;
 use yu::data_integrity::repair::RepairStrategyTrait;
@@ -24,12 +24,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         init_http_client(None);
     }
-
-    let config = DataIntegrityConfig {
-        startup_check_timeout_ms: 5 * 60 * 1000, // 5 mins
-        periodic_check_interval_cron: "* 0 * * * * *".to_string(),
-        repair_backoff: Default::default(),
-    };
 
     let data_retention_time = app_config.get_data_retention_ms();
     let repair_spot_kline_strategy = KlineGapRepairStrategy::spot();

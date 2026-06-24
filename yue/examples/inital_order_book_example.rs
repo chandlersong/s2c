@@ -25,11 +25,7 @@ struct WebsocketSubscribe {
     tx: mpsc::UnboundedSender<DepthUpdateStreamPayload>,
 }
 
-impl WebsocketSubscribe {
-    fn new(tx: mpsc::UnboundedSender<DepthUpdateStreamPayload>) -> WebsocketSubscribe {
-        Self { tx }
-    }
-}
+impl WebsocketSubscribe {}
 #[async_trait]
 impl MessageHandlerTrait<BinanceSpotWebSocketStreamWrapper> for WebsocketSubscribe {
     async fn handle_message(&self, message: &BinanceSpotWebSocketStreamWrapper) {

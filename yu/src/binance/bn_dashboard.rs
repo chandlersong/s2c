@@ -1,12 +1,10 @@
-use crate::binance::bn_duck_db::DuckTableTableChannel;
-use crate::binance::models::po::FundingRatePo;
 use li::errors::LiError;
 use li::tools::time::{unix_time_now_u64_utc, UnixTimeStamp};
 use log::{error, info};
 use serde::de::DeserializeOwned;
 use std::fs;
 use std::path::Path;
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 use yue::binance::bn_models::common::SymbolInfo;
@@ -15,8 +13,7 @@ use yue::binance::bn_models::swap_restful::SwapExchangeInfo;
 use yue::binance::bn_restful_commands::{
     execute_json_request, BINANCE_SPOT_BASE, BINANCE_SWAP_BASE, SPOT_EXCHANGE_COMMAND, SPOT_RATE_PER_MINUTE, SWAP_EXCHANGE_COMMAND,
 };
-use yue::binance::order_book::{OrderBook, OrderBookService, OrderBookSnapshotMsg};
-use yue::binance::restful_func::{get_trading_spot_symbols, get_trading_swap_symbols, CONTRACT_TYPE_PERPETUAL};
+use yue::binance::restful_func::{get_trading_spot_symbols, get_trading_swap_symbols};
 use yue::errors::YueError;
 use yue::http_client::get_http_client;
 use yue::models::HistoryInterval;

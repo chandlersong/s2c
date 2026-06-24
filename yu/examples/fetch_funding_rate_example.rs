@@ -1,36 +1,14 @@
 use li::tools::logs::setup_logger;
 use log::{info, warn, LevelFilter};
 use std::collections::HashMap;
-use std::sync::Arc;
 use tokio::sync::watch;
 use yu::binance::bn_dashboard::BinanceDashboard;
 use yu::binance::history::start_sync_funding_rate;
 use yu::binance::jobs::initial_tables;
 use yu::config::get_config;
 use yu::errors::YuError;
-use yue::binance::bn_models::spot_restful::BinanceKline;
-use yue::binance::bn_models::swap_restful::FundingRate;
-use yue::binance::restful_func::{CommonRequestBuilder, HistoryBatchHandlerTrait, HistoryFetcherImpl, HistoryFetcherTrait, ShareHistoryBatchHandler};
-use yue::errors::YueError;
 use yue::http_client::init_http_client;
 use yue::models::HistoryInterval;
-
-struct PrinterFundingRateHandler;
-
-impl PrinterFundingRateHandler {
-    pub fn new() -> ShareHistoryBatchHandler<FundingRate> {
-        Arc::new(Self {}) as Arc<dyn HistoryBatchHandlerTrait<FundingRate> + Send>
-    }
-}
-
-#[async_trait::async_trait]
-impl HistoryBatchHandlerTrait<FundingRate> for PrinterFundingRateHandler {
-    async fn handle(&self, batch_data: Vec<FundingRate>) -> Result<(), YueError> {
-        let size = batch_data.len();
-
-        Ok(())
-    }
-}
 
 /// 建立这个例子，主要是在初始化的时候，发现GRASSUSDT一直取不到数据
 /// 所以也就在这里用了一下

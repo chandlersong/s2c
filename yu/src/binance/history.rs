@@ -1,5 +1,5 @@
 use crate::binance::bn_backend_service::get_swap_funding_rate_table;
-use crate::binance::bn_dashboard::{BinanceDashboard, BinanceDashboardWatcher};
+use crate::binance::bn_dashboard::BinanceDashboardWatcher;
 use crate::binance::bn_duck_db::DuckTableTableChannel;
 use crate::binance::models::po::{FundingRatePo, KlinePo};
 use crate::config::AppConfig;
@@ -10,7 +10,6 @@ use li::tools::time::{unix_2_readable, unix_time_now_u64_utc};
 use log::{error, info};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::watch::error::RecvError;
 use tokio::sync::{oneshot, OwnedSemaphorePermit, Semaphore};
 use tokio::time::timeout;
 use yue::binance::bn_models::common::SymbolType;

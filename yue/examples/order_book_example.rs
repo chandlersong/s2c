@@ -9,8 +9,7 @@ use li::tools::logs::setup_logger;
 use li::tools::time::unix_2_readable;
 use log::{LevelFilter, error, info};
 use std::collections::HashMap;
-use yue::binance::bn_json_websocket::{StreamCommandRequest, WS_SUBSCRIBE_COMMAND};
-use yue::binance::order_book::{OrderBookService, Subscribe};
+use yue::binance::order_book::OrderBookService;
 use yue::http_client::init_http_client;
 
 #[tokio::main]
