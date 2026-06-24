@@ -38,21 +38,13 @@ actix-rt = "2.11.0"
 tokio-tungstenite = { version = "0.28.0", features = ["native-tls"] }
 tokio-native-tls = "0.3"
 futures-util = "0.3.30"
-tonic = { version = "0.12.3", default-features = false, features = ["transport", "codegen", "prost", "router"] }
+tonic = "0.14.5"
+tonic-prost = "0.14.5"          # ← 必须添加这一行
+tonic-prost-build = "0.14.5"
 governor = { version = "0.10.4", features = ["std"] }
 
 ### DEV ####
 mockall = { version = "0.13.1" }
-
-# Arrow ecosystem - align versions workspace-wide to avoid multiple-arrow-version
-# type mismatches (e.g. duckdb or other crates pulling different arrow versions).
-arrow = { version = "55.2.0" , features = ["prettyprint"] }
-arrow-array = { version = "55.2.0", features = ['flight-sql'] }
-arrow-buffer = { version = "55.2.0" }
-arrow-data = { version = "55.2.0" }
-arrow-ipc = { version = "55.2.0" }
-arrow-schema = { version = "55.2.0" }
-arrow-flight = { version = "55.2.0" }
 
 # 网络库
 reqwest = { version = "0.12.23", features = ["json", "rustls-tls"] }

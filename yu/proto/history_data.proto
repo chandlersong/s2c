@@ -1,5 +1,5 @@
 syntax = "proto3";
-package generated;
+package grpc_sync;
 
 // 服务器端和客户端同步的服务
 service SyncServer {

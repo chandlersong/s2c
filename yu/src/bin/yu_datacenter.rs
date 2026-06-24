@@ -56,16 +56,6 @@ async fn main() {
         })
     });
 
-    match yu::arrow_flight_server::start_flight_server("0.0.0.0:8815").await {
-        Ok(()) => {
-            info!("✅ Arrow Flight Server successfully started on 0.0.0.0:8815");
-        }
-        Err(e) => {
-            error!("❌ Failed to start Arrow Flight Server: {}", e);
-            panic!("Flight server startup failed, aborting");
-        }
-    }
-
     // Wait for Ctrl+C in the actix (main) runtime, then signal the flight server to shut down.
     match tokio::signal::ctrl_c().await {
         Ok(()) => {
