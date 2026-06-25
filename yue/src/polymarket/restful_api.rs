@@ -1,6 +1,5 @@
-use crate::binance::bn_restful_commands::execute_json_request;
 use crate::errors::YueError;
-use crate::http_client::HTTP_CLIENT;
+use crate::http_client::{HTTP_CLIENT, execute_public_json_request};
 use crate::models::{HostInfo, RequestInfo, create_share_rate_limiter};
 use crate::polymarket::restful_models::{Event, Market, Series};
 use std::sync::{Arc, LazyLock};
@@ -53,7 +52,7 @@ pub async fn query_series_by_id(id: &str, include_chat: Option<bool>) -> Result<
         .map_err(|e| YueError::new(&format!("构造请求信息失败: {}", e)))?;
 
     let rb = client.get(req_info.as_ref().as_str());
-    let series = execute_json_request::<Series>(&req_info, rb, None).await?;
+    let series = execute_public_json_request::<Series>(&req_info, rb).await?;
     Ok(series)
 }
 
@@ -86,7 +85,7 @@ pub async fn query_event_id(id: &str, include_chat: Option<bool>, include_templa
         .map_err(|e| YueError::new(&format!("构造请求信息失败: {}", e)))?;
 
     let rb = client.get(req_info.as_ref().as_str());
-    let ev = execute_json_request::<Event>(&req_info, rb, None).await?;
+    let ev = execute_public_json_request::<Event>(&req_info, rb).await?;
     Ok(ev)
 }
 
@@ -110,6 +109,7 @@ pub async fn query_market_id(id: &str, include_tag: Option<bool>) -> Result<Mark
         .map_err(|e| YueError::new(&format!("构造请求信息失败: {}", e)))?;
 
     let rb = client.get(req_info.as_ref().as_str());
-    let mkt = execute_json_request::<Market>(&req_info, rb, None).await?;
+    // TODO：execute_json_request变成共方法
+    let mkt = execute_public_json_request::<Market>(&req_info, rb).await?;
     Ok(mkt)
 }

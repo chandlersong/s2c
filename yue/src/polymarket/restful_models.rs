@@ -527,6 +527,7 @@ mod tests {
         let js = json!({
             "id": "m1",
             "conditionId": "c1",
+            "slug":"mm",
             "marketMakerAddress": "addr",
             "endDate": "2026-04-27T04:02:44.780078Z",
             "startDate": "2026-04-27T03:00:00Z"
@@ -549,6 +550,7 @@ mod tests {
         let js = json!({
             "id": "e1",
             "endDate": null,
+            "slug":"mm",
             "startDate": "2026-05-01T12:34:56.123Z"
         });
         let e: Event = from_value(js).expect("deserialize event");
@@ -564,6 +566,7 @@ mod tests {
     fn test_series_dates_empty_string() {
         let js = json!({
             "id": "s1",
+            "slug":"mm",
             "startDate": ""
         });
         let s: Series = from_value(js).expect("deserialize series");
@@ -574,6 +577,7 @@ mod tests {
     fn test_invalid_date_fails() {
         let js = json!({
             "id": "m2",
+            "slug":"mm",
             "conditionId": "c2",
             "marketMakerAddress": "addr",
             "endDate": "not-a-date"
@@ -586,6 +590,7 @@ mod tests {
     fn test_parse_stringified_array_fields() {
         let js = json!({
             "id": "m3",
+            "slug":"mm",
             "conditionId": "c3",
             "marketMakerAddress": "addr",
             "outcomes": "[\"Yes\", \"No\"]",
@@ -605,6 +610,7 @@ mod tests {
     fn test_parse_actual_array_fields() {
         let js = json!({
             "id": "m4",
+            "slug":"mm",
             "conditionId": "c4",
             "marketMakerAddress": "addr",
             "outcomes": ["A","B"],
