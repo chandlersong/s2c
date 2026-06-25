@@ -112,6 +112,11 @@ pub fn unix_time_now_u64_utc() -> UnixTimeStamp {
     now.timestamp_millis() as u64
 }
 
+pub fn unix_time_now_u64_utc_seconds() -> UnixTimeStamp {
+    let now = Utc::now();
+    now.timestamp() as u64
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tools::time::{get_next_utc_day_begin, get_next_utc_hour_begin, get_prev_utc_hour_end, instant_to_datetime, unix_2_readable};
