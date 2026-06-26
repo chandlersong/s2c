@@ -511,8 +511,91 @@ pub struct Series {
     pub chats: Option<Vec<Value>>,
 }
 
-// 为接口返回命名的别名
-pub type GetSeriesByIdResponse = Series;
+/// Polymarket CLOB: GET /prices-history
+/// 文档: https://docs.polymarket.com/api-reference/markets/get-prices-history
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MarketPriceHistoryPoint {
+    /// Unix 时间戳（秒）
+    pub t: u64,
+    /// 该时间点价格
+    pub p: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetPricesHistoryResponse {
+    pub history: Vec<MarketPriceHistoryPoint>,
+}
+
+/// Polymarket CLOB: GET /prices-history 查询参数
+/// 文档: https://docs.polymarket.com/api-reference/markets/get-prices-history
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPricesHistoryQuery {
+    /// 市场 token ID (必须)
+    pub market: String,
+    /// 开始时间戳 (Unix seconds, 可选)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_ts: Option<u64>,
+    /// 结束时间戳 (Unix seconds, 可选)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_ts: Option<u64>,
+    /// 时间间隔: max, 1w, 1d, 6h, 1h (可选)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interval: Option<String>,
+    /// 精度 (分钟, 默认 1, 可选)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fidelity: Option<u32>,
+}
+
+impl GetPricesHistoryQuery {
+    pub fn new(market: String) -> Self {
+        Self {
+            market,
+            start_ts: None,
+            end_ts: None,
+            interval: None,
+            fidelity: None,
+        }
+    }
+
+    pub fn start_ts(mut self, ts: u64) -> Self {
+        self.start_ts = Some(ts);
+        self
+    }
+
+    pub fn end_ts(mut self, ts: u64) -> Self {
+        self.end_ts = Some(ts);
+        self
+    }
+
+    pub fn interval(mut self, interval: &str) -> Self {
+        self.interval = Some(interval.to_string());
+        self
+    }
+
+    pub fn fidelity(mut self, fidelity: u32) -> Self {
+        self.fidelity = Some(fidelity);
+        self
+    }
+
+    /// 转换为 query string，用于拼接到 URL
+    pub fn to_query_string(&self) -> String {
+        let mut params = vec![format!("market={}", self.market)];
+        if let Some(ts) = self.start_ts {
+            params.push(format!("startTs={}", ts));
+        }
+        if let Some(ts) = self.end_ts {
+            params.push(format!("endTs={}", ts));
+        }
+        if let Some(ref interval) = self.interval {
+            params.push(format!("interval={}", interval));
+        }
+        if let Some(fidelity) = self.fidelity {
+            params.push(format!("fidelity={}", fidelity));
+        }
+        params.join("&")
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -623,5 +706,36 @@ mod tests {
         assert_eq!(prices, vec![0.5_f64, 1.5_f64]);
         let ids = m.clob_token_ids.unwrap();
         assert_eq!(ids, vec!["t1".to_string(), "t2".to_string()]);
+    }
+
+    #[test]
+    fn test_get_prices_history_response_deserialize() {
+        let js = json!({
+            "history": [
+                { "t": 1710000000, "p": 0.42 },
+                { "t": 1710000060, "p": 0.43 }
+            ]
+        });
+        let resp: GetPricesHistoryResponse = from_value(js).expect("deserialize prices history");
+        assert_eq!(resp.history.len(), 2);
+        assert_eq!(resp.history[0].t, 1710000000);
+        assert_eq!(resp.history[0].p, 0.42_f64);
+        assert_eq!(resp.history[1].t, 1710000060);
+        assert_eq!(resp.history[1].p, 0.43_f64);
+    }
+
+    #[test]
+    fn test_get_prices_history_query_builder() {
+        let query = GetPricesHistoryQuery::new("token123".to_string())
+            .start_ts(1710000000)
+            .end_ts(1710003600)
+            .interval("1h")
+            .fidelity(60);
+        let qs = query.to_query_string();
+        assert!(qs.contains("market=token123"));
+        assert!(qs.contains("startTs=1710000000"));
+        assert!(qs.contains("endTs=1710003600"));
+        assert!(qs.contains("interval=1h"));
+        assert!(qs.contains("fidelity=60"));
     }
 }

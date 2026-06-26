@@ -1,12 +1,13 @@
 use crate::errors::YueError;
 use crate::http_client::{HTTP_CLIENT, execute_public_json_request};
 use crate::models::{HostInfo, RequestInfo, create_share_rate_limiter};
-use crate::polymarket::restful_models::{Event, Market, Series};
+use crate::polymarket::restful_models::{Event, GetPricesHistoryQuery, GetPricesHistoryResponse, Market, Series};
 use std::sync::{Arc, LazyLock};
 
 //[速率限制](https://docs.polymarket.com/cn/trading/overview#%E9%80%9F%E7%8E%87%E9%99%90%E5%88%B6)
 //调试小了
 pub static CLOB_OPEN_LIMIT: u32 = 15000;
+pub static CLOB_API_LIMIT: u32 = 10000; // CLOB API prices-history 限流
 
 pub const POLYMARKET_GAMMA: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
     Arc::new(HostInfo::new(
@@ -16,9 +17,18 @@ pub const POLYMARKET_GAMMA: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
     ))
 });
 
+pub const POLYMARKET_CLOB: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
+    Arc::new(HostInfo::new(
+        "https://clob.polymarket.com",
+        CLOB_API_LIMIT,
+        create_share_rate_limiter(CLOB_API_LIMIT, Some(CLOB_API_LIMIT / 60)),
+    ))
+});
+
 pub const SERIES_BY_ID: &str = "/series/{id}";
 pub const EVEN_BY_ID: &str = "/events/{id}";
 pub const MARKET_BY_ID: &str = "/markets/{id}";
+pub const PRICES_HISTORY: &str = "/prices-history";
 
 pub static SERIES_BY_ID_COMMAND: LazyLock<RequestInfo> =
     LazyLock::new(|| RequestInfo::from_base_path(POLYMARKET_GAMMA.clone(), SERIES_BY_ID, false, 1, None, None).unwrap());
@@ -28,6 +38,9 @@ pub static EVENT_BY_ID_COMMAND: LazyLock<RequestInfo> =
 
 pub static MARKET_BY_ID_COMMAND: LazyLock<RequestInfo> =
     LazyLock::new(|| RequestInfo::from_base_path(POLYMARKET_GAMMA.clone(), MARKET_BY_ID, false, 1, None, None).unwrap());
+
+pub static PRICES_HISTORY_COMMAND: LazyLock<RequestInfo> =
+    LazyLock::new(|| RequestInfo::from_base_path(POLYMARKET_CLOB.clone(), PRICES_HISTORY, false, 1, None, None).unwrap());
 
 pub async fn query_series_by_id(id: &str, include_chat: Option<bool>) -> Result<Series, YueError> {
     let client = HTTP_CLIENT.get().ok_or(YueError::new("HTTP 客户端没有初始化"))?;
@@ -112,4 +125,20 @@ pub async fn query_market_id(id: &str, include_tag: Option<bool>) -> Result<Mark
     // TODO：execute_json_request变成共方法
     let mkt = execute_public_json_request::<Market>(&req_info, rb).await?;
     Ok(mkt)
+}
+
+pub async fn query_prices_history(query: GetPricesHistoryQuery) -> Result<GetPricesHistoryResponse, YueError> {
+    let client = HTTP_CLIENT.get().ok_or(YueError::new("HTTP 客户端没有初始化"))?;
+    let base_info: &RequestInfo = &*PRICES_HISTORY_COMMAND;
+
+    // 构造 URL，将查询参数拼接到 query string 中
+    let query_string = query.to_query_string();
+    let url = format!("{}?{}", base_info.as_ref().as_str(), query_string);
+
+    let req_info = RequestInfo::new_full_url(url, base_info.host.clone(), base_info.has_security, base_info.weight, None, None)
+        .map_err(|e| YueError::new(&format!("构造请求信息失败: {}", e)))?;
+
+    let rb = client.get(req_info.as_ref().as_str());
+    let resp = execute_public_json_request::<GetPricesHistoryResponse>(&req_info, rb).await?;
+    Ok(resp)
 }
