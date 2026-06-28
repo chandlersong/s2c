@@ -1,6 +1,6 @@
+use crate::duck_db::DuckDBPO;
 use duckdb::appender_params_from_iter;
 use rust_decimal::prelude::ToPrimitive;
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display};
 use yue::binance::bn_models::common::{PortfolioSpotOrderData, PortfolioSwapOrderData, SpotOrderData, SwapOrderData};
@@ -9,10 +9,6 @@ use yue::binance::bn_models::spot_websocket_stream::{SpotKlineData, TradeStreamP
 use yue::binance::bn_models::swap_restful::FundingRate;
 use yue::binance::bn_models::swap_websocket_stream::SwapWebsocketKlineData;
 use yue::tools::{get_snow_flake_id_u64, SnowyFlakeWrapper};
-
-pub trait DuckDBPO: Debug + Clone + DeserializeOwned + 'static + Send + Sync {
-    fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>>;
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpotStreamTradeRecordPo {

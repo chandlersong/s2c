@@ -3,7 +3,13 @@ use crate::errors::YuError;
 use duckdb::DuckdbConnectionManager;
 use r2d2;
 use r2d2::{Pool, PooledConnection};
+use serde::de::DeserializeOwned;
+use std::fmt::Debug;
 use std::sync::OnceLock;
+
+pub trait DuckDBPO: Debug + Clone + DeserializeOwned + 'static + Send + Sync {
+    fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>>;
+}
 
 pub(crate) static CONNECTION_POOL: OnceLock<Pool<DuckdbConnectionManager>> = OnceLock::new();
 

@@ -1,6 +1,6 @@
 use crate::binance::bn_dashboard::{BinanceDashboardSnapShot, BinanceDashboardWatcher};
-use crate::binance::bn_duck_db::DuckTableTableChannel;
 use crate::binance::models::po::KlinePo;
+use crate::duck_db_tables::DuckTableTableChannel;
 use crate::errors::YuError;
 use crate::errors::YuError::NotSupportError;
 use async_trait::async_trait;

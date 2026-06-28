@@ -1,6 +1,6 @@
 use crate::binance::bn_backend_service::get_spot_trading_table;
-use crate::binance::bn_duck_db::DuckTableTableChannel;
 use crate::binance::models::SpotStreamTradeRecordPo;
+use crate::duck_db_tables::DuckTableTableChannel;
 use async_trait::async_trait;
 use li::websocket::connection::{CommandMessage, MessageHandlerTrait, ToServerMessage, WebSocketConnection, WebSocketInterface};
 use log::{error, trace};

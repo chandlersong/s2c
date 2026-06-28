@@ -1,6 +1,5 @@
 use crate::binance::binance_db_consts::BinanceTables;
-use crate::binance::models::po::DuckDBPO;
-use crate::duck_db::get_connection;
+use crate::duck_db::{get_connection, DuckDBPO};
 use duckdb::DropBehavior;
 use li::tools::time::unix_time_now_u64_utc;
 use log::error;
