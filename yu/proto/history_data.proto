@@ -34,11 +34,11 @@ message PolyMarketHistory {
     string market_slug= 6;
     string asset_id= 7;
     string asset_slug= 8;
-    int64 timestamp= 9;
+    uint64 timestamp= 9;
     double price= 10;
 }
 
 message PolyMarketHistoryList {
   repeated PolyMarketHistory history_list = 1;
-  int64 timestamp = 2;
+  uint64 timestamp = 2;
 }

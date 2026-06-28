@@ -4,7 +4,7 @@ use governor::clock::DefaultClock;
 use governor::middleware::{StateInformationMiddleware, StateSnapshot};
 use governor::state::{InMemoryState, NotKeyed};
 use governor::{Jitter, Quota};
-use li::tools::time::{UnixTimeStamp, unix_time_now_u64_utc};
+use li::tools::time::{UnixTimeStamp, unix_time_now_u64_utc, unix_time_now_u64_utc_seconds};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 #[cfg(not(test))]
 use std::cmp::max;
@@ -467,6 +467,14 @@ impl HistoryInterval {
         }
     }
 
+    pub fn to_second(&self) -> u64 {
+        match self {
+            HistoryInterval::OneMinute => 60,
+            HistoryInterval::FiveMinutes => 5 * 60,
+            HistoryInterval::OneHour => 60 * 60,
+        }
+    }
+
     ///
     /// 获得传入一个时间戳，最近的时间符合的时间unix mill second
     /// 比如传入 10:12:33
@@ -482,8 +490,22 @@ impl HistoryInterval {
         (timestamp / interval_ms) * interval_ms
     }
 
+    ///
+    /// 得传入一个时间戳，最近的时间符合的时间unix second
+    ///
+    pub fn get_close_unix_sec(&self, timestamp_sec: u64) -> u64 {
+        // 将传入的毫秒时间戳四舍五入到最近的秒
+        let interval_s = self.to_second();
+        // 向下取整到 interval 边界（秒）
+        (timestamp_sec / interval_s) * interval_s
+    }
+
     pub fn get_now_close_unix_ms_utc(&self) -> u64 {
         self.get_close_unix_ms(unix_time_now_u64_utc())
+    }
+
+    pub fn get_now_close_unix_sec_utc(&self) -> u64 {
+        self.get_close_unix_sec(unix_time_now_u64_utc_seconds())
     }
 }
 
