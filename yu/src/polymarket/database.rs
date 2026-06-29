@@ -1,8 +1,11 @@
+use crate::binance::binance_db_consts::BinanceTables;
+use crate::binance::bn_backend_service::SPOT_BINANCE_KLINE_TABLE;
 use crate::binance::models::po::KlinePo;
 use crate::duck_db::DBProvider;
-use crate::duck_db_tables::DuckTableTableChannel;
+use crate::duck_db_tables::{DuckDBOneTable, DuckTableTableChannel};
 use crate::errors::YuError;
 use crate::polymarket::db_consts::ALL_POLYMARKET_TABLES;
+use crate::polymarket::po::PolyMarketHistoryPo;
 use log::info;
 use std::sync::OnceLock;
 
@@ -23,4 +26,10 @@ pub fn initial_tables(provider: Option<DBProvider>) -> Result<(), YuError> {
     Ok(())
 }
 
-pub(crate) static POLYMARKET_PRICE_HISTORY: OnceLock<DuckTableTableChannel<KlinePo>> = OnceLock::new();
+pub(crate) static POLYMARKET_PRICE_HISTORY: OnceLock<DuckTableTableChannel<PolyMarketHistoryPo>> = OnceLock::new();
+
+pub fn get_polymarket_price_history_table() -> DuckTableTableChannel<PolyMarketHistoryPo> {
+    POLYMARKET_PRICE_HISTORY
+        .get_or_init(|| DuckDBOneTable::<PolyMarketHistoryPo>::start_new(BinanceTables::SpotKline))
+        .clone()
+}

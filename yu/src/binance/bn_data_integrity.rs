@@ -636,7 +636,7 @@ impl RepairStrategyTrait for KlineGapRepairStrategy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::binance::binance_db_consts::CREATE_SPOT_KLINE_TABLE;
+    use crate::binance::db_constants::CREATE_SPOT_KLINE_TABLE;
     use crate::data_integrity::models::ValidationGap;
     use crate::errors::YuError;
     use crate::test_utils::create_memory_db_provider;

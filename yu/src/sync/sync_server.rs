@@ -14,6 +14,11 @@ pub mod grpc_sync {
 #[derive(Default)]
 pub struct YuSyncServer {}
 
+impl YuSyncServer {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
 #[tonic::async_trait]
 impl SyncServer for YuSyncServer {
     type syncStream = Pin<Box<dyn tokio_stream::Stream<Item = Result<ServerMessage, Status>> + Send + 'static>>;

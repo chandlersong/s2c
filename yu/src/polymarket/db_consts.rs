@@ -1,5 +1,3 @@
-use crate::binance::binance_db_consts::BinanceTables;
-
 #[derive(Clone)]
 pub enum PolyMarketTables {
     PriceHistory,

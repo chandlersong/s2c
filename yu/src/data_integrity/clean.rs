@@ -1,4 +1,4 @@
-use crate::binance::binance_db_consts::BinanceTables;
+use crate::binance::db_constants::BinanceTables;
 use crate::duck_db::DBProvider;
 use async_trait::async_trait;
 use duckdb::{params, DuckdbConnectionManager};
