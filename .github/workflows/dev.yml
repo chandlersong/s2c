@@ -1,18 +1,21 @@
 name: unit test
+
 on:
   push:
-    branches:
-      - dev
+    branches: [ dev ]
   pull_request:
-    branches:
-      - dev
+    branches: [ dev ]
+
 jobs:
   test:
     runs-on: ubuntu-latest
-    container:
-      # Use deps-cache image as test container so compiled deps are available
-      image: chandlersong/yu_deps:buildx-cache # 替换为已推送的 deps-cache 镜像
     steps:
       - uses: actions/checkout@v4
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "s2c-v1"
+
       - name: Run cargo test
-        run: cargo test --all-features
+        run: cargo test --all-features --all-targets
