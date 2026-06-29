@@ -30,10 +30,7 @@ RUN cargo install cargo-chef
 FROM chef AS planner
 WORKDIR /app
 
-COPY Cargo.toml Cargo.lock ./
-COPY yue/Cargo.toml yue/Cargo.toml
-COPY li/Cargo.toml li/Cargo.toml
-COPY yu/Cargo.toml yu/Cargo.toml
+COPY . .
 
 RUN cargo chef prepare --recipe-path recipe.json
 
