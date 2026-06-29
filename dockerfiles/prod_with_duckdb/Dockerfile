@@ -23,17 +23,15 @@ ENV CARGO_PROFILE_RELEASE_DEBUG=0
 
 FROM chef AS planner
 WORKDIR /app
-RUN cargo install cargo-chef
 
 COPY . .
-
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
 WORKDIR /app
 
 COPY --from=planner /app/recipe.json recipe.json
-RUN cargo install cargo-chef
+
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/app/target \
@@ -44,7 +42,7 @@ COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/app/target \
-    cargo build --release --bin ${APP_NAME}
+    cargo build --release
 
 # ====================== Runtime Stage ======================
 FROM chandlersong/rust_runtime:1.93-slim-bookworm AS runtime
