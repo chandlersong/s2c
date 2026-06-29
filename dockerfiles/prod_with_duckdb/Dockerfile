@@ -60,9 +60,6 @@ WORKDIR /app
 
 COPY dockerscripts/start.sh /app/start.sh
 RUN chmod +x /app/start.sh
-COPY --from=builder /app/target/* /app/target
-RUN ls target
-RUN ls target/release
 
 COPY --from=builder /opt/libduckdb /opt/libduckdb
 RUN --mount=type=cache,target=/app/target \
