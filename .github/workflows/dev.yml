@@ -13,9 +13,5 @@ jobs:
       image: chandlersong/rust_ci:1.93-slim-bookworm
     steps:
       - uses: actions/checkout@v4
-      - name: Install protoc
-        run: |
-          apt-get update
-          apt-get install -y protobuf-compiler
       - name: Run cargo test
         run: cargo test --all-features

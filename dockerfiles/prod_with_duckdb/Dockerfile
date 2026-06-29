@@ -33,7 +33,7 @@ FROM chef AS builder
 WORKDIR /app
 
 COPY --from=planner /app/recipe.json recipe.json
-
+RUN cargo install cargo-chef
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/app/target \
