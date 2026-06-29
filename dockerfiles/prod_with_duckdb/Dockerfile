@@ -26,7 +26,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy dependency files first for better caching
-COPY Cargo.toml Cargo.lock ./
+#COPY Cargo.toml Cargo.lock ./
 COPY yue/Cargo.toml yue/Cargo.toml
 COPY li/Cargo.toml li/Cargo.toml
 COPY yu/Cargo.toml yu/Cargo.toml
