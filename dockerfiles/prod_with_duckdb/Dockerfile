@@ -27,6 +27,7 @@ RUN apt-get update && \
 
 # Copy dependency files first for better caching
 #COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock ./
 COPY yue/Cargo.toml yue/Cargo.toml
 COPY li/Cargo.toml li/Cargo.toml
 COPY yu/Cargo.toml yu/Cargo.toml
@@ -41,7 +42,7 @@ RUN mkdir -p yue/src li/src yu/src && \
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/app/target \
-     cargo build --release --bin ${APP_NAME} || true
+     cargo build --release --bin ${APP_NAME}
 
 # 现在复制真实源码（只有这里变化时才会重新编译）
 COPY . .
