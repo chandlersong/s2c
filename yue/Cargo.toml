@@ -17,9 +17,10 @@ tokio = { workspace = true }
 sonyflake = { workspace = true }
 prost = { workspace = true }
 reqwest = { workspace = true }
-thiserror = {workspace = true}
+thiserror = { workspace = true }
 async-trait = { workspace = true }
 governor = { workspace = true }
+polars = { workspace = true }  # 根据需要添加 feature
 
 moka = { version = "0.12.10", features = ["future"] }
 

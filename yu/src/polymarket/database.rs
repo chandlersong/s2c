@@ -1,7 +1,10 @@
+use crate::binance::models::po::KlinePo;
 use crate::duck_db::DBProvider;
+use crate::duck_db_tables::DuckTableTableChannel;
 use crate::errors::YuError;
 use crate::polymarket::db_consts::ALL_POLYMARKET_TABLES;
 use log::info;
+use std::sync::OnceLock;
 
 pub fn initial_tables(provider: Option<DBProvider>) -> Result<(), YuError> {
     let db_provider = provider.unwrap_or_else(|| DBProvider::default());
@@ -19,3 +22,5 @@ pub fn initial_tables(provider: Option<DBProvider>) -> Result<(), YuError> {
     info!("initial polymarket tables done");
     Ok(())
 }
+
+pub(crate) static POLYMARKET_PRICE_HISTORY: OnceLock<DuckTableTableChannel<KlinePo>> = OnceLock::new();

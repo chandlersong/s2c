@@ -1,5 +1,8 @@
 use crate::errors::YueError;
 use async_trait::async_trait;
+use polars::prelude::DataFrame;
+use serde_json::Value;
+use std::collections::HashMap;
 use tokio::sync::oneshot;
 
 ///
@@ -17,6 +20,7 @@ pub type DataSourceExecutor<V> = Box<dyn DataSourceExecutorTrait<V> + Send>;
 
 pub enum QueryCommand<V: Send> {
     GetCount(oneshot::Sender<Result<usize, YueError>>), // 查询数量，返回 usize,如果-1，表示查询出错
+    ExecuteSQL(ExecuteSQLPayload),                      // 查询数量，返回 usize,如果-1，表示查询出错
     BatchInsert(BatchInsertPayload<V>),
     Insert(InsertPayload<V>),
     // Add more commands as needed...
@@ -26,6 +30,30 @@ pub enum QueryCommand<V: Send> {
 /// 查询有多少条记录
 ///
 pub struct Count {}
+
+pub struct ExecuteSQLPayload {
+    pub sql: String,
+    pub params: Option<HashMap<String, Value>>,
+    pub callback: Option<oneshot::Sender<Result<DataFrame, YueError>>>,
+}
+
+impl ExecuteSQLPayload {
+    pub fn new(sql: &str, params: Option<HashMap<String, Value>>, callback: oneshot::Sender<Result<DataFrame, YueError>>) -> Self {
+        Self {
+            sql: sql.to_string(),
+            params,
+            callback: Some(callback),
+        }
+    }
+
+    pub fn new_no_replay(sql: &str, params: Option<HashMap<String, Value>>) -> Self {
+        Self {
+            sql: sql.to_string(),
+            params,
+            callback: None,
+        }
+    }
+}
 
 pub struct InsertPayload<V: Send> {
     pub data: V,

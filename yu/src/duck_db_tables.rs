@@ -3,11 +3,14 @@ use crate::duck_db::{get_connection, DuckDBPO};
 use duckdb::DropBehavior;
 use li::tools::time::unix_time_now_u64_utc;
 use log::error;
+use polars::prelude::DataFrame;
+use serde_json::Value;
+use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use yue::errors::YueError;
-use yue::query_message::QueryCommand;
+use yue::query_message::{ExecuteSQLPayload, QueryCommand};
 
 pub type DuckTableTableChannel<P> = mpsc::Sender<QueryCommand<P>>;
 
@@ -71,6 +74,35 @@ impl<P: DuckDBPO> DuckDBOneTable<P> {
         Ok(res)
     }
 
+    pub fn query_to_dataframe(payload: &ExecuteSQLPayload) -> Result<DataFrame, YueError> {
+        let conn = get_connection().map_err(|e| YueError::CustomError(e.to_string()))?;
+        let mut stmt = conn.prepare(payload.sql.as_str())?;
+
+        // 如果 params 是 None，直接执行无参数查询
+        let polars_iter = if let Some(params_map) = payload.params {
+            // 过滤 Null 并转换为 duckdb 参数
+            let filtered: HashMap<&str, &dyn duckdb::ToSql> = params_map
+                .iter()
+                .filter_map(|(key, value)| {
+                    if matches!(value, Value::Null) {
+                        None
+                    } else {
+                        to_sql_value(value).map(|v| (key.as_str(), v))
+                    }
+                })
+                .collect();
+
+            stmt.query_polars(&filtered)?
+        } else {
+            stmt.query_polars([])?
+        };
+
+        // 取出第一个 DataFrame（通常查询结果只有一块）
+        match polars_iter.into_iter().next() {
+            Some(df) => Ok(df.into()),
+            None => Ok(DataFrame::default()), // 返回空 DataFrame
+        }
+    }
     fn count_table(table: BinanceTables) -> Result<usize, YueError> {
         // 如果表没有提供 query_lastest_record SQL，则认为没有可查询的最新记录
         let query_sql_opt = table.count_records();
@@ -164,6 +196,14 @@ impl<P: DuckDBPO> DuckDBOneTable<P> {
                                                     last_flush_time = now;
                                             }
                                         };
+                                    }QueryCommand::ExecuteSQL(payload) => {
+                                        let result = Self::query_to_dataframe(&payload);
+                                        if let Some(callback) = payload.callback {
+                                             if let Err(_unsent) = callback.send(result) {
+                                                 error!("在发送查询{}数量的时候出错：receiver 已关闭。", table.table_name());
+                                             }
+                                        }
+
                                     }}
                             }
                             None => {
@@ -188,5 +228,24 @@ impl<P: DuckDBPO> DuckDBOneTable<P> {
             }
         });
         tx
+    }
+}
+
+// 辅助函数：把 serde_json::Value 转为 duckdb::ToSql
+fn to_sql_value(value: &Value) -> Option<&dyn duckdb::ToSql> {
+    match value {
+        Value::Bool(b) => Some(b),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Some(&i as &dyn duckdb::ToSql)
+            } else if let Some(f) = n.as_f64() {
+                Some(&f as &dyn duckdb::ToSql)
+            } else {
+                None
+            }
+        }
+        Value::String(s) => Some(s),
+        // 可以根据需要扩展 Array、Object 等复杂类型
+        _ => None, // Null 已在前面过滤，复杂类型暂不支持
     }
 }
