@@ -67,6 +67,6 @@ RUN ls target
 RUN ls target/release
 
 COPY --from=builder /opt/libduckdb /opt/libduckdb
-COPY --from=builder /app/target/release/${APP_NAME} /app/app
-
+RUN --mount=type=cache,target=/app/target \
+    cp /app/target/release/${APP_NAME} /app/app
 CMD ["sh", "/app/start.sh"]
