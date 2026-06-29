@@ -40,10 +40,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 COPY . .
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/app/target \
-    cargo build --release
+RUN cargo build --release
 
 # ====================== Runtime Stage ======================
 FROM chandlersong/rust_runtime:1.93-slim-bookworm AS runtime
