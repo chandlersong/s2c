@@ -20,15 +20,10 @@ ENV OPENSSL_LIB_DIR=/usr/lib/${LIBDIR}
 ENV CARGO_INCREMENTAL=0
 ENV CARGO_PROFILE_RELEASE_DEBUG=0
 
-RUN apt-get update && \
-    apt-get install -y clang llvm libgflags-dev protobuf-compiler libssl-dev && \
-    rm -rf /var/lib/apt/lists/*
-
-# cargo-chef
-RUN cargo install cargo-chef
 
 FROM chef AS planner
 WORKDIR /app
+RUN cargo install cargo-chef
 
 COPY . .
 
