@@ -12,6 +12,22 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v4
+      - name: Cache cargo registry and git
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+      - name: Cache target directory
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-target-${{ hashFiles('**/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-target-${{ hashFiles('**/Cargo.lock') }}-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Login to Docker Registry
@@ -30,6 +46,8 @@ jobs:
             APP_NAME=yu_datacenter
             LIBDIR=x86_64-linux-gnu
           platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
   build-arm64:
     runs-on: ubuntu-24.04-arm
     steps:
