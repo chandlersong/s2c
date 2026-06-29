@@ -42,7 +42,7 @@ RUN mkdir -p yue/src li/src yu/src && \
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/app/target \
-     cargo build --release --bin ${APP_NAME}
+     cargo build --release
 
 # 现在复制真实源码（只有这里变化时才会重新编译）
 COPY . .
