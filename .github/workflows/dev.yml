@@ -13,11 +13,6 @@ jobs:
       image: chandlersong/rust_ci:1.93-slim-bookworm
     steps:
       - uses: actions/checkout@v4
-
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          prefix-key: "s2c-v1-ci"
       - name: Install protoc
         run: |
           apt-get update
