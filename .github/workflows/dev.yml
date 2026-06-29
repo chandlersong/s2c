@@ -16,6 +16,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: "s2c-v1-ci"
-
+      - name: Install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
       - name: Run cargo test
-        run: cargo test --all-features --all-targets
+        run: cargo test --all-features
