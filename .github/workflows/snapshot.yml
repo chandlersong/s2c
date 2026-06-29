@@ -47,9 +47,6 @@ jobs:
           build-args: |
             APP_NAME=yu_datacenter
             LIBDIR=x86_64-linux-gnu
-          build-args: |
-            APP_NAME=yu_datacenter
-            LIBDIR=x86_64-linux-gnu
             BUILDKIT_INLINE_CACHE=1
           platforms: linux/amd64
           cache-from: type=registry,ref=chandlersong/yu_datacenter:buildx-cache
