@@ -1,4 +1,4 @@
-use crate::binance::binance_db_consts::BinanceTables;
+use crate::binance::db_consts::BinanceTables;
 
 use crate::binance::models::po::{FundingRatePo, KlinePo};
 use crate::binance::models::SpotStreamTradeRecordPo;
@@ -48,24 +48,24 @@ async fn init_spot_trading_service() -> TradingService {
 
 pub fn get_spot_kline_table() -> DuckTableTableChannel<KlinePo> {
     SPOT_BINANCE_KLINE_TABLE
-        .get_or_init(|| DuckDBOneTable::<KlinePo>::start_new(BinanceTables::SpotKline))
+        .get_or_init(|| DuckDBOneTable::<KlinePo, BinanceTables>::start_new(BinanceTables::SpotKline))
         .clone()
 }
 
 pub fn get_spot_trading_table() -> DuckTableTableChannel<SpotStreamTradeRecordPo> {
     SPOT_TRADE_TABLE
-        .get_or_init(|| DuckDBOneTable::<SpotStreamTradeRecordPo>::start_new(BinanceTables::SpotTrade))
+        .get_or_init(|| DuckDBOneTable::<SpotStreamTradeRecordPo, BinanceTables>::start_new(BinanceTables::SpotTrade))
         .clone()
 }
 
 pub fn get_swap_kline_table() -> DuckTableTableChannel<KlinePo> {
     SWAP_BINANCE_KLINE_TABLE
-        .get_or_init(|| DuckDBOneTable::<KlinePo>::start_new(BinanceTables::SwapKline))
+        .get_or_init(|| DuckDBOneTable::<KlinePo, BinanceTables>::start_new(BinanceTables::SwapKline))
         .clone()
 }
 
 pub fn get_swap_funding_rate_table() -> DuckTableTableChannel<FundingRatePo> {
     SWAP_FUNDING_RATE_TABLE
-        .get_or_init(|| DuckDBOneTable::<FundingRatePo>::start_new(BinanceTables::SwapFundingRate))
+        .get_or_init(|| DuckDBOneTable::<FundingRatePo, BinanceTables>::start_new(BinanceTables::SwapFundingRate))
         .clone()
 }

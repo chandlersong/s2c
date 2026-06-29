@@ -1,5 +1,6 @@
-use crate::binance::binance_db_consts::BinanceTables;
+use crate::binance::db_consts::BinanceTables;
 use crate::duck_db::DBProvider;
+use crate::duck_db_tables::DuckDbTableTrait;
 use async_trait::async_trait;
 use duckdb::{params, DuckdbConnectionManager};
 use li::actix_jobs::AsyncRepeatTask;

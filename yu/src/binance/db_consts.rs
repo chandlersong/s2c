@@ -1,5 +1,7 @@
 // 2020年1月1日零点的毫秒时间戳
 
+use crate::duck_db_tables::DuckDbTableTrait;
+
 pub static QUERY_LATEST_SPOT_KLINE_SQL: &str = "select symbol,max(close_time) as latest from bn_spot_kline group by symbol;";
 pub static QUERY_LATEST_SWAP_KLINE_SQL: &str = "select symbol,max(close_time) as latest from bn_swap_kline group by symbol;";
 
@@ -15,8 +17,8 @@ pub enum BinanceTables {
     SwapOrderEvents,
 }
 
-impl BinanceTables {
-    pub fn table_name(&self) -> String {
+impl DuckDbTableTrait for BinanceTables {
+    fn table_name(&self) -> String {
         match self {
             BinanceTables::SpotKline => String::from("bn_spot_kline"),
             BinanceTables::SwapKline => String::from("bn_swap_kline"),
@@ -27,7 +29,7 @@ impl BinanceTables {
         }
     }
 
-    pub fn create_table_statement(&self) -> String {
+    fn create_table_statement(&self) -> String {
         match self {
             BinanceTables::SpotKline => String::from(CREATE_SPOT_KLINE_TABLE),
             BinanceTables::SwapKline => String::from(CREATE_SWAP_KLINE_TABLE),
@@ -38,17 +40,13 @@ impl BinanceTables {
         }
     }
 
-    pub fn query_lastest_record(&self) -> Option<String> {
+    fn query_lastest_record(&self) -> Option<String> {
         match self {
             BinanceTables::SpotKline => Some(String::from(QUERY_LATEST_SPOT_KLINE_SQL)),
             BinanceTables::SwapKline => Some(String::from(QUERY_LATEST_SWAP_KLINE_SQL)),
             BinanceTables::SwapFundingRate => Some(String::from(QUERY_LATEST_FUNDING_RATE_SQL)),
             _ => None,
         }
-    }
-
-    pub fn count_records(&self) -> Option<String> {
-        format!("select count(*) from {}", self.table_name()).into()
     }
 }
 

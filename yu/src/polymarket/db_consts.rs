@@ -1,23 +1,25 @@
+use crate::duck_db_tables::DuckDbTableTrait;
+
 #[derive(Clone)]
 pub enum PolyMarketTables {
     PriceHistory,
 }
 
-impl PolyMarketTables {
-    pub fn table_name(&self) -> String {
+impl DuckDbTableTrait for PolyMarketTables {
+    fn table_name(&self) -> String {
         match self {
             PolyMarketTables::PriceHistory => String::from("poly_market_price_history"),
         }
     }
 
-    pub fn create_table_statement(&self) -> String {
+    fn create_table_statement(&self) -> String {
         match self {
             PolyMarketTables::PriceHistory => String::from(CREATE_POLYMARKET_PRICE_HISTORY_TABLE),
         }
     }
 
-    pub fn count_records(&self) -> Option<String> {
-        format!("select count(*) from {}", self.table_name()).into()
+    fn query_lastest_record(&self) -> Option<String> {
+        todo!()
     }
 }
 

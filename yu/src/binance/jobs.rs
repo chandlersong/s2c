@@ -1,7 +1,7 @@
-use crate::binance::binance_db_consts::ALL_BINANCE_TABLES;
 use crate::binance::bn_backend_service::{get_spot_kline_table, get_spot_order_book_service, get_spot_trading_service, get_swap_kline_table};
 use crate::binance::bn_dashboard::{BinanceDashboard, BinanceDashboardWatcher};
 use crate::binance::bn_data_integrity::{KlineGapRepairStrategy, SpotCheckStrategy};
+use crate::binance::db_consts::ALL_BINANCE_TABLES;
 use crate::binance::history::{initial_kline, start_sync_funding_rate};
 use crate::binance::websocket_service::KlineSubscribeService;
 use crate::config::{get_config, AccountType, AppConfig, SecurityType};
@@ -10,6 +10,7 @@ use crate::data_integrity::check::ValidationStrategyTrait;
 use crate::data_integrity::models::RepairRequest;
 use crate::data_integrity::repair::RepairStrategyTrait;
 use crate::duck_db::DBProvider;
+use crate::duck_db_tables::DuckDbTableTrait;
 use crate::errors::YuError;
 use log::{error, info, warn};
 use std::sync::Arc;

@@ -1,10 +1,11 @@
-use crate::binance::binance_db_consts::BinanceTables;
 use crate::binance::bn_backend_service::{get_spot_kline_table, get_swap_kline_table};
+use crate::binance::db_consts::BinanceTables;
 use crate::binance::history::HistoryKlineSaver;
 use crate::data_integrity::check::ValidationStrategyTrait;
 use crate::data_integrity::models::{RepairRequest, ValidationGap, ValidationResult};
 use crate::data_integrity::repair::RepairStrategyTrait;
 use crate::duck_db::DBProvider;
+use crate::duck_db_tables::DuckDbTableTrait;
 use crate::errors::YuError;
 use async_trait::async_trait;
 use governor::Jitter;
@@ -636,7 +637,7 @@ impl RepairStrategyTrait for KlineGapRepairStrategy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::binance::binance_db_consts::CREATE_SPOT_KLINE_TABLE;
+    use crate::binance::db_consts::CREATE_SPOT_KLINE_TABLE;
     use crate::data_integrity::models::ValidationGap;
     use crate::errors::YuError;
     use crate::test_utils::create_memory_db_provider;

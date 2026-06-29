@@ -1,4 +1,3 @@
-use crate::binance::binance_db_consts::BinanceTables;
 use crate::duck_db::{get_connection, DuckDBPO};
 use duckdb::DropBehavior;
 use li::tools::time::unix_time_now_u64_utc;
@@ -6,6 +5,7 @@ use log::error;
 use polars::prelude::DataFrame;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::format;
 use std::marker::PhantomData;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -14,14 +14,22 @@ use yue::query_message::{ExecuteSQLPayload, QueryCommand};
 
 pub type DuckTableTableChannel<P> = mpsc::Sender<QueryCommand<P>>;
 
+pub trait DuckDbTableTrait: Send + Clone + 'static {
+    fn table_name(&self) -> String;
+    fn create_table_statement(&self) -> String;
+    fn query_lastest_record(&self) -> Option<String>;
+    fn count_records(&self) -> Option<String> {
+        format!("select count(*) from {}", self.table_name()).into()
+    }
+}
 ///
 /// 基于DuckDB对一张表
 /// 为了简化现有的代码。大致为两层。
 /// 1. 外层负责VO->PO的转换。因为这是一个业务相关的。而且会有很多不同的变种。
 /// 2. 内层，也就该类，主要则PO的操作。
 ///
-pub struct DuckDBOneTable<P: DuckDBPO> {
-    table: BinanceTables,
+pub struct DuckDBOneTable<P: DuckDBPO, T: DuckDbTableTrait> {
+    table: T,
     // use a raw pointer PhantomData to avoid imposing auto trait bounds (like Unpin) on V and P
     // PhantomData only accepts one type parameter; use a tuple to hold multiple types.
     flush_interval: Duration,
@@ -33,8 +41,8 @@ pub struct DuckDBOneTable<P: DuckDBPO> {
 const DB_CHANNEL_CAPACITY: usize = 1000;
 const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 
-impl<P: DuckDBPO> DuckDBOneTable<P> {
-    pub fn start_new(table: BinanceTables) -> DuckTableTableChannel<P> {
+impl<P: DuckDBPO, T: DuckDbTableTrait> DuckDBOneTable<P, T> {
+    pub fn start_new(table: T) -> DuckTableTableChannel<P> {
         DuckDBOneTable {
             table,
             flush_interval: FLUSH_INTERVAL,
@@ -43,7 +51,7 @@ impl<P: DuckDBPO> DuckDBOneTable<P> {
         }
         .start_listen()
     }
-    fn write_batch(table: BinanceTables, data: Vec<P>) -> Result<usize, YueError> {
+    fn write_batch(table: T, data: Vec<P>) -> Result<usize, YueError> {
         if data.is_empty() {
             return Ok(0);
         }
@@ -108,7 +116,7 @@ impl<P: DuckDBPO> DuckDBOneTable<P> {
             None => Ok(DataFrame::default()), // 返回空 DataFrame
         }
     }
-    fn count_table(table: BinanceTables) -> Result<usize, YueError> {
+    fn count_table(table: T) -> Result<usize, YueError> {
         // 如果表没有提供 query_lastest_record SQL，则认为没有可查询的最新记录
         let query_sql_opt = table.count_records();
         if query_sql_opt.is_none() {
@@ -132,7 +140,7 @@ impl<P: DuckDBPO> DuckDBOneTable<P> {
         Err(YueError::CustomError(format!("Table {:?} 数据库访问失败", table.table_name())))
     }
 
-    fn flush_data(table: BinanceTables, data: Vec<P>) {
+    fn flush_data(table: T, data: Vec<P>) {
         tokio::spawn(async move { Self::write_batch(table, data) });
     }
 
