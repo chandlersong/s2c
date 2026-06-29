@@ -47,7 +47,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 COPY . .
 
 # 真实构建（依赖已编译好，速度会快很多）
-RUN cargo build --release --bin ${APP_NAME}
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/app/target \
+    cargo build --release --bin ${APP_NAME}
 
 # ====================== Runtime Stage ======================
 FROM chandlersong/rust_runtime:1.93-slim-bookworm AS runtime
