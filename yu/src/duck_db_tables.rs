@@ -76,25 +76,30 @@ impl<P: DuckDBPO> DuckDBOneTable<P> {
 
     pub fn query_to_dataframe(payload: &ExecuteSQLPayload) -> Result<DataFrame, YueError> {
         let conn = get_connection().map_err(|e| YueError::CustomError(e.to_string()))?;
-        let mut stmt = conn.prepare(payload.sql.as_str())?;
+        let mut stmt = conn.prepare(payload.sql.as_str()).map_err(|e| YueError::CustomError(e.to_string()))?;
 
         // 如果 params 是 None，直接执行无参数查询
-        let polars_iter = if let Some(params_map) = payload.params {
-            // 过滤 Null 并转换为 duckdb 参数
-            let filtered: HashMap<&str, &dyn duckdb::ToSql> = params_map
-                .iter()
-                .filter_map(|(key, value)| {
-                    if matches!(value, Value::Null) {
-                        None
-                    } else {
-                        to_sql_value(value).map(|v| (key.as_str(), v))
-                    }
-                })
-                .collect();
+        let polars_iter = if let Some(params_map) = &payload.params {
+            // 为了避免返回对临时值的引用，我们把转换后的参数放到一个 Vec<Box<dyn ToSql>> 中持有
+            // 先把所有可转换的参数收集到一个 vec 中（避免在持有引用时再扩容/移动）
+            let mut kvs: Vec<(&str, Box<dyn duckdb::ToSql>)> = Vec::with_capacity(params_map.len());
+            for (key, value) in params_map.iter() {
+                if matches!(value, Value::Null) {
+                    continue;
+                }
+                if let Some(b) = to_sql_value(value) {
+                    kvs.push((key.as_str(), b));
+                }
+            }
+            // 然后从 kvs 构建最终的引用 map，kvs 在此作用域内保持不变，因此引用是安全的
+            let mut filtered: HashMap<&str, &dyn duckdb::ToSql> = HashMap::with_capacity(kvs.len());
+            for (k, boxed) in kvs.iter() {
+                filtered.insert(*k, boxed.as_ref());
+            }
 
-            stmt.query_polars(&filtered)?
+            stmt.query_polars(&filtered).map_err(|e| YueError::CustomError(e.to_string()))?
         } else {
-            stmt.query_polars([])?
+            stmt.query_polars([]).map_err(|e| YueError::CustomError(e.to_string()))?
         };
 
         // 取出第一个 DataFrame（通常查询结果只有一块）
@@ -232,20 +237,29 @@ impl<P: DuckDBPO> DuckDBOneTable<P> {
 }
 
 // 辅助函数：把 serde_json::Value 转为 duckdb::ToSql
-fn to_sql_value(value: &Value) -> Option<&dyn duckdb::ToSql> {
+fn to_sql_value(value: &Value) -> Option<Box<dyn duckdb::ToSql>> {
     match value {
-        Value::Bool(b) => Some(b),
+        Value::Bool(b) => Some(Box::new(*b) as Box<dyn duckdb::ToSql>),
         Value::Number(n) => {
             if let Some(i) = n.as_i64() {
-                Some(&i as &dyn duckdb::ToSql)
+                Some(Box::new(i) as Box<dyn duckdb::ToSql>)
             } else if let Some(f) = n.as_f64() {
-                Some(&f as &dyn duckdb::ToSql)
+                Some(Box::new(f) as Box<dyn duckdb::ToSql>)
+            } else if let Some(u) = n.as_u64() {
+                // prefer i64 when possible, otherwise use f64 fallback; here u64 -> i64 may overflow, so use f64
+                Some(Box::new(u as f64) as Box<dyn duckdb::ToSql>)
             } else {
                 None
             }
         }
-        Value::String(s) => Some(s),
-        // 可以根据需要扩展 Array、Object 等复杂类型
-        _ => None, // Null 已在前面过滤，复杂类型暂不支持
+        Value::String(s) => Some(Box::new(s.clone()) as Box<dyn duckdb::ToSql>),
+        Value::Array(_) | Value::Object(_) => {
+            // 将复杂类型序列化为 JSON 字符串传入（可以在 SQL 中解析或当作文本存储）
+            match serde_json::to_string(value) {
+                Ok(s) => Some(Box::new(s) as Box<dyn duckdb::ToSql>),
+                Err(_) => None,
+            }
+        }
+        Value::Null => None,
     }
 }
