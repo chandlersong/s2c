@@ -5,7 +5,7 @@ ARG TARGETARCH
 ENV LIBDIR=${LIBDIR}
 ENV TARGETARCH=${TARGETARCH}
 RUN apt-get  update &&\
-    apt-get  install -y clang llvm libgflags-dev protobuf-compiler libssl-dev unzip wget
+    apt-get  install -y clang llvm libgflags-dev protobuf-compiler libssl-dev unzip wget build-essential pkg-config
 # install rocksdb
 
 
