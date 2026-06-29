@@ -33,10 +33,14 @@ COPY li/Cargo.toml li/Cargo.toml
 COPY yu/Cargo.toml yu/Cargo.toml
 
 # Create dummy source files to build dependencies
-RUN mkdir -p yue/src li/src yu/src && \
+RUN mkdir -p yue/src li/src yu/src yu/src/bin && \
     echo "fn main() {}" > yue/src/main.rs && \
     echo "fn main() {}" > li/src/lib.rs && \
-    echo "fn main() {}" > yu/src/main.rs
+    echo "fn main() {}" > yu/src/lib.rs && \
+    echo "fn main() {}" > yu/src/bin/yu_datacenter.rs && \
+    echo "fn main() {}" > yu/src/bin/yu_mcp.rs && \
+    echo "fn main() {}" > yu/src/bin/yu_sync_client.rs && \
+    echo "fn main() {}" > yu/src/bin/yu_sync_server.rs
 
 # Pre-build dependencies (这一层会强烈缓存)
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
