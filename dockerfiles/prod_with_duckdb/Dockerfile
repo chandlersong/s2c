@@ -28,6 +28,7 @@ COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
+RUN cargo install cargo-chef
 WORKDIR /app
 
 COPY --from=planner /app/recipe.json recipe.json
