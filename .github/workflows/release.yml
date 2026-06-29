@@ -48,10 +48,11 @@ jobs:
           build-args: |
             APP_NAME=yu_datacenter
             LIBDIR=x86_64-linux-gnu
+            BUILDKIT_INLINE_CACHE=1
           platforms: linux/amd64
-          # Use GitHub Actions cache for buildx to speed up rebuilding Rust layers
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Use registry cache so different runners (amd64/arm64) can share build cache
+          cache-from: type=registry,ref=chandlersong/yu_datacenter:buildx-cache
+          cache-to: type=registry,ref=chandlersong/yu_datacenter:buildx-cache,mode=max
   build-arm64:
     runs-on: ubuntu-24.04-arm
     steps:
@@ -74,7 +75,10 @@ jobs:
           build-args: |
             APP_NAME=yu_datacenter
             LIBDIR=aarch64-linux-gnu
+            BUILDKIT_INLINE_CACHE=1
           platforms: linux/arm64
+          cache-from: type=registry,ref=chandlersong/yu_datacenter:buildx-cache
+          cache-to: type=registry,ref=chandlersong/yu_datacenter:buildx-cache,mode=max
   build_manifest:
     runs-on: ubuntu-latest
     needs: [build-arm64, build-amd64]
