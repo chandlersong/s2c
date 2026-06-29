@@ -40,7 +40,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 COPY . .
 
-RUN cargo build --release
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/app/target \
+    cargo build --release
 
 # ====================== Runtime Stage ======================
 FROM chandlersong/rust_runtime:1.93-slim-bookworm AS runtime
@@ -59,6 +62,9 @@ WORKDIR /app
 
 COPY dockerscripts/start.sh /app/start.sh
 RUN chmod +x /app/start.sh
+COPY --from=builder /app/target/* /app/target
+RUN ls target
+RUN ls target/release
 
 COPY --from=builder /opt/libduckdb /opt/libduckdb
 COPY --from=builder /app/target/release/${APP_NAME} /app/app
