@@ -5,7 +5,6 @@ use log::{error, info, trace, warn};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
-use yue::binance::order_book::QueryPayload;
 use yue::models::HistoryInterval;
 use yue::polymarket::restful_api::{query_event_id, query_prices_history, query_series_by_id};
 use yue::polymarket::restful_models::{GetPricesHistoryQuery, Market};

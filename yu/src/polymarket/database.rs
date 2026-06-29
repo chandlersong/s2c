@@ -1,6 +1,4 @@
 use crate::binance::binance_db_consts::BinanceTables;
-use crate::binance::bn_backend_service::SPOT_BINANCE_KLINE_TABLE;
-use crate::binance::models::po::KlinePo;
 use crate::duck_db::DBProvider;
 use crate::duck_db_tables::{DuckDBOneTable, DuckTableTableChannel};
 use crate::errors::YuError;
