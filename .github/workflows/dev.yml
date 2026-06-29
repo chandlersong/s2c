@@ -10,7 +10,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     container:
-      image: chandlersong/rust_ci:1.93-slim-bookworm # 替换为你的镜像
+      # Use deps-cache image as test container so compiled deps are available
+      image: chandlersong/yu_deps:buildx-cache # 替换为已推送的 deps-cache 镜像
     steps:
       - uses: actions/checkout@v4
       - name: Run cargo test
