@@ -29,7 +29,7 @@ rocksdb = "0.23.0"
 prost = "0.14.1"
 prost-build = "0.12"
 backon = "1.5.2"
-duckdb = { version = "~1.10503.1", features = ["r2d2", "polars"] }
+duckdb = { version = "~1.10503.1", features = ["bundled", "r2d2", "polars"] }
 polars = { version = "0.49.1", features = ["lazy"] }  # 根据需要添加 feature
 thiserror = "2.0.16"
 rs-snowflake = "0.6.0"
