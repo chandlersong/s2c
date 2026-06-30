@@ -1,8 +1,7 @@
-use crate::binance::db_consts::BinanceTables;
 use crate::duck_db::DBProvider;
 use crate::duck_db_tables::{DuckDBOneTable, DuckDbTableTrait, DuckTableTableChannel};
 use crate::errors::YuError;
-use crate::polymarket::db_consts::{PolyMarketTables, ALL_POLYMARKET_TABLES};
+use crate::polymarket::db_consts::{ALL_POLYMARKET_TABLES, PolyMarketTables};
 use crate::polymarket::po::PolyMarketHistoryPo;
 use log::info;
 use std::sync::OnceLock;
