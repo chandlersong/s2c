@@ -59,9 +59,9 @@ jobs:
             APP_NAME=yu_datacenter
             LIBDIR=aarch64-linux-gnu
             SCCACHE_GHA_ENABLED: "true"
-          platforms: linux/arm64,scope=s2cDockerArm64
+          platforms: linux/arm64
           cache-from: type=gha,scope=s2cDockerArm64
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,mode=max,scope=s2cDockerArm64
   build_manifest:
     runs-on: ubuntu-latest
     needs: [ build-arm64, build-amd64 ]
