@@ -1,8 +1,11 @@
+# =============================================
+# Chef Stage
+# =============================================
 FROM chandlersong/rust_ci:1.93-slim-bookworm AS chef
 WORKDIR /app
 
 # 安装 cargo-chef
-RUN cargo install cargo-chef
+RUN cargo install cargo-chef --locked
 
 # =============================================
 # Planner Stage
@@ -20,7 +23,6 @@ ARG LIBDIR
 ARG APP_NAME=yu_datacenter
 ARG TARGETARCH
 
-# 你的原始环境变量
 ENV LIBDIR=${LIBDIR}
 ENV ROCKSDB_LIB_DIR=/usr/lib/${LIBDIR}
 ENV OPENSSL_INCLUDE_DIR=/usr/include/openssl
@@ -36,15 +38,17 @@ ENV CARGO_PROFILE_RELEASE_DEBUG=0
 ENV RUSTC_WRAPPER=sccache
 ENV SCCACHE_CACHE_SIZE="10G"
 
-# ===================== 依赖预编译 (chef) =====================
+# ===================== 依赖预编译 =====================
 COPY --from=planner /app/recipe.json recipe.json
-RUN --mount=type=cache,target=/root/.cache/sccache \
-    cargo chef cook --release --recipe-path recipe.json
 
-# ===================== 真实源码编译 =====================
+# 增加 --locked 并使用 cache mount
+RUN --mount=type=cache,target=/root/.cache/sccache \
+    cargo chef cook --release --recipe-path recipe.json --locked
+
+# ===================== 源码编译 =====================
 COPY . .
 RUN --mount=type=cache,target=/root/.cache/sccache \
-    cargo build --release
+    cargo build --release  --locked
 
 # =============================================
 # Runtime Stage
