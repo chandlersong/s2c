@@ -28,5 +28,5 @@ ENV VCPKGRS_DYNAMIC=1
 ENV OPENSSL_INCLUDE_DIR=/usr/include/openssl
 ENV OPENSSL_LIB_DIR=/usr/lib/${LIBDIR}
 
-RUN cargo install cargo-chef
+RUN cargo install cargo-chef sccache
 
