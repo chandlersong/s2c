@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     # 优先使用 deps 镜像（已包含很多编译好的依赖）
     container:
-      image: chandlersong/rust_ci:1.93-slim-bookworm
+      image: chandlersong/rust_ci:1.96-slim-bookworm
 
     steps:
       - uses: actions/checkout@v4
