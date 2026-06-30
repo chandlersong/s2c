@@ -5,19 +5,32 @@ FROM chandlersong/rust_ci:1.93-slim-bookworm AS chef
 WORKDIR /app
 
 # 安装 cargo-chef
-RUN cargo install cargo-chef --locked
+
 
 # =============================================
 # Planner Stage
 # =============================================
-FROM chef AS planner
-COPY . .
+FROM chef AS builder
+RUN cargo install cargo-chef sccache --locked
+COPY Cargo.toml Cargo.lock ./
+COPY yue/Cargo.toml yue/Cargo.toml
+COPY li/Cargo.toml li/Cargo.toml
+COPY yu/Cargo.toml yu/Cargo.toml
+
+ENV RUSTC_WRAPPER=sccache
+ENV SCCACHE_CACHE_SIZE=5G
+
+# Create dummy source files to build dependencies
+RUN mkdir -p yue/src li/src yu/src && \
+    echo "fn main() {}" > yue/src/main.rs && \
+    echo "fn main() {}" > li/src/lib.rs && \
+    echo "fn main() {}" > yu/src/main.rs
 RUN cargo chef prepare --recipe-path recipe.json
 
 # =============================================
 # Builder Stage
 # =============================================
-FROM chef AS builder
+
 
 ARG LIBDIR
 ARG APP_NAME=yu_datacenter
@@ -37,12 +50,17 @@ ENV CARGO_INCREMENTAL=0
 ENV CARGO_PROFILE_RELEASE_DEBUG=0
 
 # ===================== 依赖预编译 =====================
-COPY --from=planner /app/recipe.json recipe.json
-RUN cargo chef cook --release --recipe-path recipe.json --locked
+RUN --mount=type=cache,target=/app/target \
+    --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/root/.cache/sccache \
+    cargo chef cook --release --recipe-path recipe.json --locked
 
 # ===================== 源码编译 =====================
 COPY . .
-RUN cargo build --release --bin ${APP_NAME} --locked
+RUN --mount=type=cache,target=/app/target \
+    --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/root/.cache/sccache \
+    cargo build --release --bin ${APP_NAME} --locked
 
 # =============================================
 # Runtime Stage
