@@ -19,7 +19,7 @@ COPY yu/Cargo.toml yu/Cargo.toml
 
 ENV RUSTC_WRAPPER=sccache
 ENV SCCACHE_CACHE_SIZE=5G
-
+COPY Cargo.toml Cargo.lock ./
 # Create dummy source files to build dependencies
 RUN mkdir -p yue/src li/src yu/src && \
     echo "fn main() {}" > yue/src/main.rs && \
@@ -83,6 +83,7 @@ COPY dockerscripts/start.sh /app/start.sh
 RUN chmod +x /app/start.sh
 
 COPY --from=builder /opt/libduckdb /opt/libduckdb
-COPY --from=builder /app/target/release/${APP_NAME} /app/app
+RUN --mount=type=cache,target=/app/target \
+    cp /app/target/release/${APP_NAME} /app/app
 
 CMD ["sh", "/app/start.sh"]
