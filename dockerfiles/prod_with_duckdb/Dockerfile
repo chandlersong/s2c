@@ -1,24 +1,18 @@
 # =============================================
 # Chef Stage
 # =============================================
-FROM chandlersong/rust_ci:1.93-slim-bookworm AS chef
+FROM chandlersong/rust_ci:1.93-slim-bookworm AS builder
 WORKDIR /app
-
-# 安装 cargo-chef
-
-
-# =============================================
-# Planner Stage
-# =============================================
-FROM chef AS builder
+ENV RUSTC_WRAPPER=sccache
+ENV SCCACHE_CACHE_SIZE=5G
+ENV SCCACHE_DIR=/app/target/.sccache
+ENV SCCACHE_GHA_ENABLED=true
 COPY Cargo.toml Cargo.lock ./
 COPY yue/Cargo.toml yue/Cargo.toml
 COPY li/Cargo.toml li/Cargo.toml
 COPY yu/Cargo.toml yu/Cargo.toml
 
-ENV RUSTC_WRAPPER=sccache
-ENV SCCACHE_CACHE_SIZE=5G
-ENV SCCACHE_DIR=/app/target/.sccache
+
 # Create dummy source files to build dependencies
 RUN mkdir -p yue/src li/src yu/src && \
     echo "fn main() {}" > yue/src/main.rs && \
