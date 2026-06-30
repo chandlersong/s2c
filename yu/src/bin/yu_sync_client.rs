@@ -14,7 +14,7 @@ pub mod grpc_sync {
 async fn main() -> Result<(), Box<dyn Error>> {
     // 连接服务器
     let mut client = SyncServerClient::connect("http://[::1]:50051").await?;
-    println!("已连接到 gRPC 服务端");
+    println!("已连接到 gRPC 服务端成功");
 
     // 创建用于发送消息的 channel
     let (tx, rx) = mpsc::channel::<ClientMessage>(32);
