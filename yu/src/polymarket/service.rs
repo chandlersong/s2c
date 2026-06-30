@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, broadcast};
 use yue::models::HistoryInterval;
-use yue::polymarket::restful_api::{PolymarketAPI, PolymarketApiTrait};
+use yue::polymarket::restful_api::PolymarketAPI;
 use yue::polymarket::restful_models::{GetPricesHistoryQuery, Market};
 pub struct MarketWithAddition {
     market: Market,
@@ -121,7 +121,7 @@ async fn batch_split_series_markets_with_client(
 pub trait SeriesHistoryMarketServiceTrait: Send + Sync {
     async fn refresh_open_markets(&self) -> Result<(), YuError>;
 
-    async fn initial_data(&self, start_timestamps: HashMap<&str, u64>) -> Result<(), YuError>;
+    async fn initial_data(&self, start_timestamps: HashMap<String, u64>) -> Result<(), YuError>;
 
     async fn query_and_broadcast(&self, query_payload: GetPricesHistoryQuery, asset_index: usize, market: &MarketWithAddition);
 
@@ -203,7 +203,7 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
         Ok(())
     }
 
-    async fn initial_data(&self, start_timestamps: HashMap<&str, u64>) -> Result<(), YuError> {
+    async fn initial_data(&self, start_timestamps: HashMap<String, u64>) -> Result<(), YuError> {
         let now = self.interval.get_now_close_unix_sec_utc();
         let fidelity = self.interval.to_second() / 60;
         for market in self.open_markets.read().await.iter() {
@@ -449,8 +449,8 @@ mod tests {
         let svc = super::SeriesHistoryMarketServiceImpl::new(series_ids, interval, tx.clone(), client).await;
 
         // 构造 start_timestamps，覆盖 tokenA 的起始时间
-        let mut start_ts_map: std::collections::HashMap<&str, u64> = std::collections::HashMap::new();
-        start_ts_map.insert("tokenA", 900u64);
+        let mut start_ts_map: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+        start_ts_map.insert("tokenA".to_string(), 900u64);
 
         // 调用 initial_data，会使用 mock 返回的 history 并通过 broadcast 发送
         svc.initial_data(start_ts_map).await?;
@@ -511,8 +511,8 @@ mod tests {
         let interval = HistoryInterval::OneMinute;
         let svc = super::SeriesHistoryMarketServiceImpl::new(series_ids, interval, tx.clone(), client).await;
 
-        let mut start_ts_map: std::collections::HashMap<&str, u64> = std::collections::HashMap::new();
-        start_ts_map.insert("tokenA", 900u64);
+        let mut start_ts_map: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+        start_ts_map.insert("tokenA".to_string(), 900u64);
 
         svc.initial_data(start_ts_map).await?;
 
@@ -575,7 +575,7 @@ mod tests {
         let svc = super::SeriesHistoryMarketServiceImpl::new(series_ids, interval, tx.clone(), client).await;
 
         // 传入空的 start_ts_map
-        let start_ts_map: std::collections::HashMap<&str, u64> = std::collections::HashMap::new();
+        let start_ts_map: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
         svc.initial_data(start_ts_map).await?;
 
         let received = rx.recv().await.expect("should receive history");
