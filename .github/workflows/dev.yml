@@ -1,17 +1,23 @@
 name: unit test
-
 on:
   push:
     branches: [ dev ]
   pull_request:
     branches: [ dev ]
-
 jobs:
   test:
     runs-on: ubuntu-latest
+    # 优先使用 deps 镜像（已包含很多编译好的依赖）
     container:
       image: chandlersong/rust_ci:1.93-slim-bookworm
+
     steps:
       - uses: actions/checkout@v4
-      - name: Run cargo test
-        run: cargo test --all-features
+
+      - name: Rust Cache   # 即使在 container 里也能工作
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "s2c-v1-dev"
+          # workspaces: "."   # 如果需要可打开
+      - name: Run tests
+        run: cargo test --all-features --all-targets
