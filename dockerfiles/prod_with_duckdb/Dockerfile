@@ -36,9 +36,6 @@ ENV VCPKGRS_DYNAMIC=1
 ENV CARGO_INCREMENTAL=0
 ENV CARGO_PROFILE_RELEASE_DEBUG=0
 
-ENV RUSTC_WRAPPER=sccache
-ENV SCCACHE_CACHE_SIZE="10G"
-
 # ===================== 依赖预编译 =====================
 COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json --locked
