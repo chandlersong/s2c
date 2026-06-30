@@ -6,7 +6,8 @@ WORKDIR /app
 ENV RUSTC_WRAPPER=sccache
 ENV SCCACHE_CACHE_SIZE=5G
 ENV SCCACHE_DIR=/app/target/.sccache
-ENV SCCACHE_GHA_ENABLED=true
+ARG SCCACHE_GHA_ENABLED="false"
+ENV SCCACHE_GHA_ENABLED=${SCCACHE_GHA_ENABLED}
 COPY Cargo.toml Cargo.lock ./
 COPY yue/Cargo.toml yue/Cargo.toml
 COPY li/Cargo.toml li/Cargo.toml
@@ -43,7 +44,7 @@ ENV CARGO_INCREMENTAL=0
 ENV CARGO_PROFILE_RELEASE_DEBUG=0
 
 # ===================== 依赖预编译 =====================
-RUN  cargo chef cook --release --recipe-path recipe.json --locked
+RUN cargo chef cook --release --recipe-path recipe.json --locked
 
 # ===================== 源码编译 =====================
 COPY . .
