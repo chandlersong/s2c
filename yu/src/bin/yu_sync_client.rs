@@ -1,7 +1,7 @@
 use std::error::Error;
 use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt;
+use tokio_stream::wrappers::ReceiverStream;
 use yu::sync::sync_server::grpc_sync::client_message::Payload;
 use yu::sync::sync_server::grpc_sync::sync_server_client::SyncServerClient;
 use yu::sync::sync_server::grpc_sync::{ClientMessage, Initial, ServerMessage};
@@ -14,7 +14,7 @@ pub mod grpc_sync {
 async fn main() -> Result<(), Box<dyn Error>> {
     // 连接服务器
     let mut client = SyncServerClient::connect("http://[::1]:50051").await?;
-    println!("已连接到 gRPC 服务端成功");
+    println!("已连接到 gRPC 服务端成功123");
 
     // 创建用于发送消息的 channel
     let (tx, rx) = mpsc::channel::<ClientMessage>(32);
