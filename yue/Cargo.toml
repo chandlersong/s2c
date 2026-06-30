@@ -31,9 +31,9 @@ actix = { workspace = true }
 ed25519-dalek = { version = "2", features = ["pkcs8", "pem", "std"] }  # pem feature 自动带上 pkcs8 和 alloc
 # 如果需要 base64 解码或其他辅助
 base64 = "0.22.1"
+mockall = { version = "0.13.0", optional = true }
 
 [dev-dependencies]
-mockall = "0.13.0"
 wiremock = "0.6.5"
 serial_test = "3.2.0"
 
@@ -56,3 +56,6 @@ prost-build = "0.14.1"
 # 启用此特性将会把币安 API 的基地址切换到测试网 (Testnet)。
 # 它会自动激活 `binance` 特性，因为测试网是币安功能的一部分。
 binance-testnet = []
+
+# 启用 mockable 特性将在编译时生成并导出 mock 类型（供其它 crate 在测试时使用）
+mockable = ["mockall"]

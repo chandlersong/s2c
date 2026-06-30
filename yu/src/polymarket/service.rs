@@ -4,11 +4,10 @@ use li::tools::time::unix_time_now_u64_utc_seconds;
 use log::{error, info, trace, warn};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{RwLock, broadcast};
 use yue::models::HistoryInterval;
-use yue::polymarket::restful_api::{query_event_id, query_prices_history, query_series_by_id};
-use yue::polymarket::restful_models::{GetPricesHistoryQuery, Market};
-
+use yue::polymarket::restful_api::{PolymarketAPI, PolymarketApiTrait};
+use yue::polymarket::restful_models::{Event, GetPricesHistoryQuery, Market};
 pub struct MarketWithAddition {
     market: Market,
     series_id: String,
@@ -22,11 +21,20 @@ type MarketList = Arc<RwLock<Vec<MarketWithAddition>>>;
 把series id下所有的market分成open和close的。
 返回顺序是open，和close
 **/
-async fn split_series_markets(series_id: &str) -> Result<(Vec<MarketWithAddition>, Vec<MarketWithAddition>), YuError> {
+async fn split_series_markets_with_client(
+    client: Arc<dyn PolymarketApiTrait>,
+    series_id: String,
+) -> Result<(Vec<MarketWithAddition>, Vec<MarketWithAddition>), YuError> {
     let mut open_markets: Vec<MarketWithAddition> = Vec::new();
     let mut close_markets: Vec<MarketWithAddition> = Vec::new();
-    let series = query_series_by_id(series_id, Some(false)).await?;
-    let series_id = series.id;
+    let series = match client.query_series_by_id(&series_id, Some(false)).await {
+        Ok(s) => s,
+        Err(e) => {
+            error!("query_series_by_id error: {:?}", e);
+            return Err(crate::errors::YuError::from(e));
+        }
+    };
+    let series_id_val = series.id;
     let series_slug = series.slug;
     let now = unix_time_now_u64_utc_seconds();
     if let Some(events) = series.events {
@@ -34,7 +42,7 @@ async fn split_series_markets(series_id: &str) -> Result<(Vec<MarketWithAddition
         for event_in_series in events {
             let event_id = event_in_series.id;
             let event_slug = event_in_series.slug;
-            match query_event_id(&event_id, None, None).await {
+            match client.query_event_id(&event_id, None, None).await {
                 Ok(event) => {
                     if let Some(markets) = event.markets {
                         trace!("event:{},market num:{}", event_slug, markets.len());
@@ -44,7 +52,7 @@ async fn split_series_markets(series_id: &str) -> Result<(Vec<MarketWithAddition
                             let end_data = market.end_date.unwrap_or(now - 1);
                             let market_with_addition = MarketWithAddition {
                                 market: market.clone(),
-                                series_id: series_id.clone(),
+                                series_id: series_id_val.clone(),
                                 series_slug: series_slug.clone(),
                                 event_id: event_id.clone(),
                                 event_slug: event_slug.clone(),
@@ -77,7 +85,10 @@ async fn split_series_markets(series_id: &str) -> Result<(Vec<MarketWithAddition
     Ok((open_markets, close_markets))
 }
 
-async fn batch_split_series_markets(series_ids: &Vec<String>) -> Result<(Vec<MarketWithAddition>, Vec<MarketWithAddition>), YuError> {
+async fn batch_split_series_markets_with_client(
+    series_ids: &Vec<String>,
+    client: Arc<dyn PolymarketApiTrait>,
+) -> Result<(Vec<MarketWithAddition>, Vec<MarketWithAddition>), YuError> {
     let mut open_markets: Vec<MarketWithAddition> = vec![];
     let mut close_markets: Vec<MarketWithAddition> = vec![];
 
@@ -85,7 +96,10 @@ async fn batch_split_series_markets(series_ids: &Vec<String>) -> Result<(Vec<Mar
     let mut handles = Vec::with_capacity(series_ids.len());
     for id in series_ids {
         let id_cloned = id.clone();
-        handles.push(tokio::spawn(async move { split_series_markets(&id_cloned).await }));
+        let client_cloned = client.clone();
+        handles.push(tokio::spawn(
+            async move { split_series_markets_with_client(client_cloned, id_cloned).await },
+        ));
     }
 
     for handle in handles {
@@ -115,11 +129,17 @@ pub struct SeriesHistoryMarketService {
     interval: HistoryInterval,
     open_markets: MarketList,
     history_broadcast: broadcast::Sender<PolyMarketHistory>,
+    client: PolymarketAPI,
 }
 
 impl SeriesHistoryMarketService {
-    pub async fn new(series_ids: Vec<String>, interval: HistoryInterval, history_broadcast: broadcast::Sender<PolyMarketHistory>) -> Self {
-        let (open_markets, _) = match batch_split_series_markets(&series_ids).await {
+    pub async fn new(
+        series_ids: Vec<String>,
+        interval: HistoryInterval,
+        history_broadcast: broadcast::Sender<PolyMarketHistory>,
+        client: PolymarketAPI,
+    ) -> Self {
+        let (open_markets, _) = match batch_split_series_markets_with_client(&series_ids, client.clone()).await {
             Ok((open_markets, close_markets)) => (open_markets, close_markets),
             Err(e) => panic!("batch_split_series_markets error: {:?}", e),
         };
@@ -133,11 +153,12 @@ impl SeriesHistoryMarketService {
             interval,
             open_markets: Arc::new(RwLock::new(open_markets)),
             history_broadcast,
+            client,
         }
     }
 
     pub async fn refresh_open_markets(&self) -> Result<(), YuError> {
-        match batch_split_series_markets(&self.series_ids).await {
+        match batch_split_series_markets_with_client(&self.series_ids, self.client.clone()).await {
             Ok((open_markets, _)) => {
                 // 把 self.open_markets 替换成新的 open_markets
                 let count = open_markets.len();
@@ -194,7 +215,7 @@ impl SeriesHistoryMarketService {
                 format!("{}_{}", market.market.slug, outcomes[asset_index])
             }
         };
-        let history = query_prices_history(query_payload).await;
+        let history = self.client.query_prices_history(query_payload).await;
         match history {
             Ok(history) => {
                 for h in history.history {
@@ -245,6 +266,98 @@ impl SeriesHistoryMarketService {
                 }
             }
         }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::errors::YuError;
+    use serde_json::from_value;
+    use serde_json::json;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::sync::Mutex;
+    use yue::models::HistoryInterval;
+    use yue::polymarket::restful_api::MockPolymarketApiTrait;
+    use yue::polymarket::restful_models::{Event, GetPricesHistoryResponse, Market, MarketPriceHistoryPoint, Series};
+
+    // 防止并行测试互相覆盖全局 mock
+    static MTX: Mutex<()> = Mutex::new(());
+
+    #[tokio::test]
+    pub async fn test_series_history_service_with_mock_client() -> Result<(), YuError> {
+        let _guard = MTX.lock().unwrap();
+
+        // 构造 Series / Event / Market JSON 并反序列化为结构体
+        let series_json = json!({
+            "id": "s1",
+            "slug": "series1",
+            "events": [ { "id": "e1", "slug": "event1" } ]
+        });
+        let series: Series = from_value(series_json).expect("deserialize series");
+
+        let market_json = json!({
+            "id": "m1",
+            "slug": "market1",
+            "conditionId": "c1",
+            "marketMakerAddress": "addr",
+            "startDate": "2026-01-01T00:00:00Z",
+            "endDate": "2027-01-01T00:00:00Z",
+            "clobTokenIds": ["tokenA"],
+            "outcomes": ["Yes", "No"]
+        });
+        // 仅保留 market_json 以便嵌入 event_json；无需单独绑定 market 变量
+        let event_json = json!({
+            "id": "e1",
+            "slug": "event1",
+            "markets": [ market_json.clone() ]
+        });
+        let event: Event = from_value(event_json).expect("deserialize event");
+
+        // prices history response
+        let history_resp = GetPricesHistoryResponse {
+            history: vec![MarketPriceHistoryPoint { t: 1000, p: 0.42 }],
+        };
+
+        // 设置 MockPolymarketClient
+        let mut mock = MockPolymarketApiTrait::new();
+
+        // query_series_by_id -> return series with minimal info
+        let series_clone = series.clone();
+        mock.expect_query_series_by_id().returning(move |_id, _| {
+            let s = series_clone.clone();
+            Ok(s)
+        });
+
+        // query_event_id -> return event with markets
+        let event_clone = event.clone();
+        mock.expect_query_event_id().returning(move |_id, _inc_chat, _inc_tmplt| {
+            let e = event_clone.clone();
+            Ok(e)
+        });
+
+        // query_prices_history -> return history_resp
+        let history_clone = history_resp.clone();
+        mock.expect_query_prices_history().returning(move |_q| {
+            let r = history_clone.clone();
+            Ok(r)
+        });
+
+        let client: Arc<dyn yue::polymarket::restful_api::PolymarketApiTrait> = Arc::new(mock);
+
+        let (tx, mut rx) = tokio::sync::broadcast::channel(16);
+        let series_ids = vec!["s1".to_string()];
+        let interval = HistoryInterval::OneMinute;
+
+        let svc = super::SeriesHistoryMarketService::new(series_ids, interval, tx.clone(), client).await;
+
+        // 调用 fetch_last_one_hour_data，会使用 mock 返回的 history 并通过 broadcast 发送
+        svc.fetch_last_one_hour_data().await?;
+
+        // 接收一条消息
+        let received = rx.recv().await.expect("should receive history");
+        assert_eq!(received.price, 0.42_f64);
         Ok(())
     }
 }

@@ -2,16 +2,27 @@ use crate::errors::YueError;
 use crate::http_client::{HTTP_CLIENT, execute_public_json_request};
 use crate::models::{HostInfo, RequestInfo, create_share_rate_limiter};
 use crate::polymarket::restful_models::{Event, GetPricesHistoryQuery, GetPricesHistoryResponse, Market, Series};
-use std::sync::{Arc, LazyLock};
+use async_trait::async_trait;
+use std::sync::{Arc, LazyLock, OnceLock};
 
 //[速率限制](https://docs.polymarket.com/cn/trading/overview#%E9%80%9F%E7%8E%87%E9%99%90%E5%88%B6)
 //调试小了
 pub static CLOB_OPEN_LIMIT: u32 = 15000;
 pub static CLOB_API_LIMIT: u32 = 10000; // CLOB API prices-history 限流
+#[cfg(not(test))]
+pub const POLYMARKET_GAMMA_HOST: &str = "https://gamma-api.polymarket.com";
+#[cfg(test)]
+pub const POLYMARKET_GAMMA_HOST: &str = "http://127.0.0.1:20002";
+// 默认生产/运行时的 CLOB host
+#[cfg(not(test))]
+pub const POLYMARKET_CLOB_HOST: &str = "https://clob.polymarket.com";
+// 测试时使用的 CLOB host（可以指向本地 mock server 或测试环境）
+#[cfg(test)]
+pub const POLYMARKET_CLOB_HOST: &str = "http://127.0.0.1:20001";
 
 pub const POLYMARKET_GAMMA: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
     Arc::new(HostInfo::new(
-        "https://gamma-api.polymarket.com",
+        POLYMARKET_GAMMA_HOST,
         CLOB_OPEN_LIMIT,
         create_share_rate_limiter(CLOB_OPEN_LIMIT, Some(CLOB_OPEN_LIMIT / 60)),
     ))
@@ -19,7 +30,7 @@ pub const POLYMARKET_GAMMA: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
 
 pub const POLYMARKET_CLOB: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
     Arc::new(HostInfo::new(
-        "https://clob.polymarket.com",
+        POLYMARKET_CLOB_HOST,
         CLOB_API_LIMIT,
         create_share_rate_limiter(CLOB_API_LIMIT, Some(CLOB_API_LIMIT / 60)),
     ))
@@ -141,4 +152,35 @@ pub async fn query_prices_history(query: GetPricesHistoryQuery) -> Result<GetPri
     let rb = client.get(req_info.as_ref().as_str());
     let resp = execute_public_json_request::<GetPricesHistoryResponse>(&req_info, rb).await?;
     Ok(resp)
+}
+
+// 为 SeriesHistoryMarketService 添加可注入的客户端抽象，便于在测试中注入 mock
+#[cfg_attr(feature = "mockable", mockall::automock)]
+#[async_trait]
+pub trait PolymarketApiTrait: Send + Sync {
+    async fn query_series_by_id(&self, id: &str, include_chat: Option<bool>) -> Result<Series, YueError>;
+    async fn query_event_id(&self, id: &str, include_chat: Option<bool>, include_template: Option<bool>) -> Result<Event, YueError>;
+    async fn query_prices_history(&self, query: GetPricesHistoryQuery) -> Result<GetPricesHistoryResponse, YueError>;
+}
+
+pub struct PolymarketClientImpl;
+
+#[async_trait]
+impl PolymarketApiTrait for PolymarketClientImpl {
+    async fn query_series_by_id(&self, id: &str, include_chat: Option<bool>) -> Result<Series, YueError> {
+        query_series_by_id(id, include_chat).await
+    }
+    async fn query_event_id(&self, id: &str, include_chat: Option<bool>, include_template: Option<bool>) -> Result<Event, YueError> {
+        query_event_id(id, include_chat, include_template).await
+    }
+    async fn query_prices_history(&self, query: GetPricesHistoryQuery) -> Result<GetPricesHistoryResponse, YueError> {
+        query_prices_history(query).await
+    }
+}
+
+pub type PolymarketAPI = Arc<dyn PolymarketApiTrait>;
+
+pub(crate) static SHARE_POLYMARKET_API: OnceLock<Arc<PolymarketClientImpl>> = OnceLock::new();
+pub fn default_polymarket_api() -> PolymarketAPI {
+    SHARE_POLYMARKET_API.get_or_init(|| Arc::new(PolymarketClientImpl)).clone()
 }
