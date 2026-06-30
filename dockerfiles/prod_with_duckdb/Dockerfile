@@ -16,8 +16,12 @@ COPY yu/Cargo.toml yu/Cargo.toml
 
 # Create dummy source files to build dependencies
 RUN mkdir -p yue/src li/src yu/src && \
-    echo "fn main() {}" > yue/src/main.rs && \
+    # yue is a workspace library dependency and must provide a lib target (lib.rs). \
+    # Otherwise cargo will warn: "ignoring invalid dependency `yue` which is missing a lib target". \
+    echo "pub fn __dummy_yue_lib() {}" > yue/src/lib.rs && \
+    echo "pub fn __dummy_yue_lib() {}" > li/src/lib.rs && \
     echo "fn main() {}" > li/src/lib.rs && \
+    echo "fn main() {}" > yue/src/lib.rs && \
     echo "fn main() {}" > yu/src/main.rs
 RUN cargo chef prepare --recipe-path recipe.json
 
