@@ -23,6 +23,7 @@ ARG LIBDIR
 ARG APP_NAME=yu_datacenter
 ARG TARGETARCH
 
+# 环境变量（保持你原来的配置）
 ENV LIBDIR=${LIBDIR}
 ENV ROCKSDB_LIB_DIR=/usr/lib/${LIBDIR}
 ENV OPENSSL_INCLUDE_DIR=/usr/include/openssl
@@ -40,15 +41,11 @@ ENV SCCACHE_CACHE_SIZE="10G"
 
 # ===================== 依赖预编译 =====================
 COPY --from=planner /app/recipe.json recipe.json
-
-# 增加 --locked 并使用 cache mount
-RUN --mount=type=cache,target=/root/.cache/sccache \
-    cargo chef cook --release --recipe-path recipe.json --locked
+RUN cargo chef cook --release --recipe-path recipe.json --locked
 
 # ===================== 源码编译 =====================
 COPY . .
-RUN --mount=type=cache,target=/root/.cache/sccache \
-    cargo build --release  --locked
+RUN cargo build --release --bin ${APP_NAME} --locked
 
 # =============================================
 # Runtime Stage
