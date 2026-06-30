@@ -1,7 +1,7 @@
 # =============================================
 # Chef Stage
 # =============================================
-FROM chandlersong/rust_ci:1.93-slim-bookworm AS builder
+FROM chandlersong/rust_ci:1.96-slim-bookworm AS builder
 WORKDIR /app
 ENV RUSTC_WRAPPER=sccache
 ENV SCCACHE_CACHE_SIZE=5G
@@ -57,7 +57,7 @@ RUN cargo build --release --locked
 # =============================================
 # Runtime Stage
 # =============================================
-FROM chandlersong/rust_runtime:1.93-slim-bookworm AS runtime
+FROM chandlersong/rust_runtime:1.96-slim-bookworm AS runtime
 
 ARG APP_NAME=yu_datacenter
 ARG LIBDIR

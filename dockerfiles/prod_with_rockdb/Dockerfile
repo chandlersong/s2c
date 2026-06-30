@@ -1,6 +1,6 @@
 # Dockerfile
 FROM chandlersong/rocksdb:bookworm-slim-9.9.3 AS rocksdb
-FROM chandlersong/rust_ci:1.93-slim-bookworm AS builder
+FROM chandlersong/rust_ci:1.96-slim-bookworm AS builder
 WORKDIR /app
 COPY ../.. .
 ARG LIBDIR
