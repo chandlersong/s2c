@@ -1,8 +1,6 @@
 use li::tools::logs::setup_logger;
 use log::{LevelFilter, info};
-use rmcp::ServiceExt;
 use std::collections::HashMap;
-use std::sync::Arc;
 use tokio::sync::broadcast;
 use yu::config::get_config;
 use yu::errors::YuError;

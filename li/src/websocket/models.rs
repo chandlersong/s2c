@@ -1,8 +1,7 @@
 use crate::errors::LiError;
-use actix::Message as ActixMessage;
 use log::warn;
 
-pub trait WebSocketMessage: ActixMessage<Result = ()> + Send + Sync + Clone + 'static {
+pub trait WebSocketMessage: Send + Sync + Clone + 'static {
     fn from_text(_: &str) -> Result<Self, LiError> {
         warn!("binary messages are not supported by default. Please implement from_binary for your message type.");
         Err(LiError::CustomError(

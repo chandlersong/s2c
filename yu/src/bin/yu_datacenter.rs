@@ -1,7 +1,6 @@
-use actix::System;
 use li::actix_jobs::AsyncRepeatTask;
 use li::tools::logs::{parse_level, setup_logger};
-use log::{error, info, LevelFilter};
+use log::{LevelFilter, error, info};
 use std::collections::HashMap;
 use yu::binance::jobs::start_bn_jobs;
 use yu::config::get_config;
@@ -65,6 +64,4 @@ async fn main() {
             error!("Signal handler error: {}", e);
         }
     }
-
-    System::current().stop(); // 优雅停止
 }

@@ -1,4 +1,3 @@
-use actix::Message;
 /// 最简单的 WebSocketClient 使用示例
 ///
 /// 这个示例展示如何：
@@ -14,9 +13,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 use tokio::sync::broadcast::Receiver;
 
-#[derive(Clone, Message)]
-#[rtype(result = "()")]
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct TextMessage(String);
 
 impl WebSocketMessage for TextMessage {

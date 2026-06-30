@@ -11,12 +11,9 @@ tokio-cron-scheduler = { workspace = true }
 yue = { path = "../yue" }
 li = { path = "../li" }
 thiserror = { workspace = true }
-mockall = { workspace = true }
 async-trait = { workspace = true }
 log = { workspace = true }
 config = { workspace = true }
-actix = { workspace = true }
-actix-rt = { workspace = true }
 prost = { workspace = true }
 rust_decimal = { workspace = true }
 rmcp = { version = "0.8.1", features = ["transport-sse-server"] }  # 根据最新版本调整，从 GitHub crate 获取

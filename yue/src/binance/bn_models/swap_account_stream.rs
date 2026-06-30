@@ -3,7 +3,6 @@
 use crate::models::Decimal;
 use crate::tools::string_to_decimal;
 use crate::tools::string_to_option_decimal;
-use actix::{Message as ActixMessage, Message};
 use li::errors::LiError;
 use li::websocket::models::WebSocketMessage;
 use serde::{Deserialize, Serialize};
@@ -33,10 +32,6 @@ impl WebSocketMessage for BinanceSwapAccountStreamResponse {
     fn from_text(text: &str) -> Result<Self, LiError> {
         serde_json::from_str(text).map_err(|e| LiError::from(e))
     }
-}
-
-impl ActixMessage for BinanceSwapAccountStreamResponse {
-    type Result = ();
 }
 
 impl BinanceSwapAccountStreamResponse {
@@ -332,13 +327,11 @@ pub struct MarginPosition {
 ///}
 /// ```
 ///
-#[derive(Debug, Deserialize, Serialize, Clone, Message)]
-#[rtype(result = "()")]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct OrderTradeUpdatePayload {
     /// 事件类型
     #[serde(rename = "e")]
     pub event: String,
-
     /// 事件类型时间戳（撮合时间）
     #[serde(rename = "E")]
     pub event_time: u64,

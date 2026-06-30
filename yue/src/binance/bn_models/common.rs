@@ -1,6 +1,5 @@
 use crate::binance::bn_models::spot_websocket::ExecutionReportPayload;
 use crate::models::{Decimal, RequestInfo};
-use actix::Message;
 use li::tools::time::{UnixTimeStamp, unix_time_now_u64_utc};
 use reqwest::RequestBuilder;
 use serde::de::{DeserializeOwned, Error};
@@ -146,14 +145,13 @@ pub type SpotOrderData = AccountData<ExecutionReportPayload>;
 pub type SwapOrderData = AccountData<crate::binance::bn_models::swap_account_stream::OrderTradeUpdatePayload>;
 pub type PortfolioSpotOrderData = AccountData<crate::binance::bn_models::portfolio_account_websocket::ExecutionReportPayload>; // 先用同一个结构体占位，后续如果需要可以改成不同的结构体
 pub type PortfolioSwapOrderData = AccountData<crate::binance::bn_models::portfolio_account_websocket::OrderTradeUpdatePayload>; // 先用同一个结构体占位，后续如果需要可以改成不同的结构体
-#[derive(Debug, Serialize, Clone, Message)]
-#[rtype(result = "()")]
-pub struct AccountData<T: Clone + Message + DeserializeOwned> {
+#[derive(Debug, Serialize, Clone)]
+pub struct AccountData<T: Clone + DeserializeOwned> {
     pub account_name: String,
     pub data: T,
 }
 
-impl<T: Clone + Message + DeserializeOwned> AccountData<T> {
+impl<T: Clone + DeserializeOwned> AccountData<T> {
     pub fn new(account_name: &str, data: T) -> Self {
         Self {
             account_name: account_name.to_string(),

@@ -10,8 +10,6 @@ log = { workspace = true }
 chrono = { workspace = true }
 fern = { workspace = true }
 humantime = { workspace = true }
-actix = { workspace = true }
-actix-rt = { workspace = true }
 tokio-tungstenite = { workspace = true }
 tokio-native-tls = { workspace = true }
 futures-util = { workspace = true }

@@ -2,15 +2,13 @@
 
 use crate::models::Decimal;
 use crate::tools::{string_to_decimal, string_to_option_decimal};
-use actix::Message;
 use li::errors::LiError;
 use li::websocket::models::WebSocketMessage;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// 统一账户信息的websocket推送
-#[derive(Debug, Deserialize, Serialize, Clone, Message)]
-#[rtype(result = "()")]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(untagged)]
 pub enum BinancePortfolioWebSocketStreamResponse {
     ConditionalOrderTradeUpdate(ConditionalOrderTradeUpdatePayload),
@@ -595,8 +593,7 @@ pub struct LiabilityChangePayload {
 ///
 ///
 
-#[derive(Debug, Deserialize, Serialize, Clone, Message)]
-#[rtype(result = "()")]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ExecutionReportPayload {
     #[serde(rename = "e")]
     pub event: String, // 事件类型，例如 "executionReport"
@@ -749,8 +746,7 @@ pub struct ExecutionReportPayload {
 /// ```
 ///
 
-#[derive(Debug, Deserialize, Serialize, Clone, Message)]
-#[rtype(result = "()")]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct OrderTradeUpdatePayload {
     #[serde(rename = "e")]
     pub event: String, // 事件类型，例如 "ORDER_TRADE_UPDATE"
@@ -768,8 +764,7 @@ pub struct OrderTradeUpdatePayload {
     pub order: OrderTradeInfo, // 订单信息（可选）
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone, Message)]
-#[rtype(result = "()")]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct OrderTradeInfo {
     #[serde(rename = "s")]
     pub symbol: String, // 交易对（可选）

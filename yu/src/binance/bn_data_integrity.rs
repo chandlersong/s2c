@@ -10,7 +10,7 @@ use crate::errors::YuError;
 use async_trait::async_trait;
 use governor::Jitter;
 use li::tools::time::unix_2_readable;
-use log::{debug, error, info, trace, Level};
+use log::{Level, debug, error, info, trace};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -646,7 +646,7 @@ mod tests {
     /// 场景: 在表中连续插入 5 个按 interval 对齐的时间槽数据，范围为 [start, end]
     /// 输入: 连续的 candle_begin_time（没有缺失）
     /// 预期: 调用 find_gaps_rec 后 gaps 为空（没有发现缺失区间）
-    #[actix_rt::test]
+    #[tokio::test]
     async fn test_find_gaps_rec_no_gap() -> Result<(), YuError> {
         let db = create_memory_db_provider();
         let mut conn = db.acquire()?;
@@ -658,7 +658,10 @@ mod tests {
         for i in 0..5 {
             let ts = t0 + i * interval_ms;
             let close_time = ts + interval_ms - 1;
-            let sql = format!("INSERT INTO bn_spot_kline (id, symbol, candle_begin_time, open, high, low, close, volume, quote_volume, number_of_trades, taker_buy_base_asset_volume, taker_buy_quote_asset_volume, close_time, interval, first_trade_id, last_trade_id) VALUES ({}, '{}', {}, 0,0,0,0,0,0,0,0,0,{}, 1, 0, 0);", i, symbol, ts, close_time);
+            let sql = format!(
+                "INSERT INTO bn_spot_kline (id, symbol, candle_begin_time, open, high, low, close, volume, quote_volume, number_of_trades, taker_buy_base_asset_volume, taker_buy_quote_asset_volume, close_time, interval, first_trade_id, last_trade_id) VALUES ({}, '{}', {}, 0,0,0,0,0,0,0,0,0,{}, 1, 0, 0);",
+                i, symbol, ts, close_time
+            );
             conn.execute_batch(&sql)?;
         }
 
@@ -680,7 +683,7 @@ mod tests {
     /// 场景: 在一段连续时间序列中刻意跳过中间一个时间槽（slot），其他槽均插入
     /// 输入: 插入 0,1,3,4 四个槽的数据，缺少第 2 个槽
     /// 预期: find_gaps_rec 能检测到至少一个 MissingData gap 覆盖缺失槽的时间点
-    #[actix_rt::test]
+    #[tokio::test]
     async fn test_find_gaps_rec_missing_gap() -> Result<(), YuError> {
         let db = create_memory_db_provider();
         let mut conn = db.acquire()?;
@@ -695,7 +698,10 @@ mod tests {
             }
             let ts = t0 + i * interval_ms;
             let close_time = ts + interval_ms - 1;
-            let sql = format!("INSERT INTO bn_spot_kline (id, symbol, candle_begin_time, open, high, low, close, volume, quote_volume, number_of_trades, taker_buy_base_asset_volume, taker_buy_quote_asset_volume, close_time, interval, first_trade_id, last_trade_id) VALUES ({}, '{}', {}, 0,0,0,0,0,0,0,0,0,{}, 1, 0, 0);", i, expected_symbol, ts, close_time);
+            let sql = format!(
+                "INSERT INTO bn_spot_kline (id, symbol, candle_begin_time, open, high, low, close, volume, quote_volume, number_of_trades, taker_buy_base_asset_volume, taker_buy_quote_asset_volume, close_time, interval, first_trade_id, last_trade_id) VALUES ({}, '{}', {}, 0,0,0,0,0,0,0,0,0,{}, 1, 0, 0);",
+                i, expected_symbol, ts, close_time
+            );
             conn.execute_batch(&sql)?;
         }
         let check_strategy = SpotCheckStrategy::spot_check_strategy(
@@ -743,7 +749,7 @@ mod tests {
     /// 场景: 数据库中有两列不同的symbol。BTCUSDT和ETHUSDT，在一段连续时间序列中刻意跳过中间一个时间槽（slot），其他槽均插入
     /// 输入: BTCUSDT 插入 0,1,3,4 四个槽的数据，缺少第 2 号槽，ETH为全部槽都是满的
     /// 预期: find_gaps_rec 能检测到一个 MissingData gap 覆盖缺失槽的时间点，且为BTCUSDT
-    #[actix_rt::test]
+    #[tokio::test]
     async fn test_find_gaps_rec_missing_gap_d_symbol() -> Result<(), YuError> {
         let db = create_memory_db_provider();
         let mut conn = db.acquire()?;
@@ -759,7 +765,10 @@ mod tests {
                 debug!("missing data from {} to {}", ts, close_time);
                 continue;
             }
-            let sql = format!("INSERT INTO bn_spot_kline (id, symbol, candle_begin_time, open, high, low, close, volume, quote_volume, number_of_trades, taker_buy_base_asset_volume, taker_buy_quote_asset_volume, close_time, interval, first_trade_id, last_trade_id) VALUES ({}, '{}', {}, 0,0,0,0,0,0,0,0,0,{}, 1, 0, 0);", i, expected_symbol, ts, close_time);
+            let sql = format!(
+                "INSERT INTO bn_spot_kline (id, symbol, candle_begin_time, open, high, low, close, volume, quote_volume, number_of_trades, taker_buy_base_asset_volume, taker_buy_quote_asset_volume, close_time, interval, first_trade_id, last_trade_id) VALUES ({}, '{}', {}, 0,0,0,0,0,0,0,0,0,{}, 1, 0, 0);",
+                i, expected_symbol, ts, close_time
+            );
             conn.execute_batch(&sql)?;
         }
 
@@ -770,7 +779,10 @@ mod tests {
             }
             let ts = t0 + i * interval_ms;
             let close_time = ts + interval_ms - 1;
-            let sql = format!("INSERT INTO bn_spot_kline (id, symbol, candle_begin_time, open, high, low, close, volume, quote_volume, number_of_trades, taker_buy_base_asset_volume, taker_buy_quote_asset_volume, close_time, interval, first_trade_id, last_trade_id) VALUES ({}, '{}', {}, 0,0,0,0,0,0,0,0,0,{}, 1, 0, 0);", i, expected_second_symbol, ts, close_time);
+            let sql = format!(
+                "INSERT INTO bn_spot_kline (id, symbol, candle_begin_time, open, high, low, close, volume, quote_volume, number_of_trades, taker_buy_base_asset_volume, taker_buy_quote_asset_volume, close_time, interval, first_trade_id, last_trade_id) VALUES ({}, '{}', {}, 0,0,0,0,0,0,0,0,0,{}, 1, 0, 0);",
+                i, expected_second_symbol, ts, close_time
+            );
             conn.execute_batch(&sql)?;
         }
         let check_strategy = SpotCheckStrategy::spot_check_strategy(
@@ -818,7 +830,7 @@ mod tests {
     /// 场景: 完整数据是 0-9 共10个槽，刻意缺失多个槽（2,3,6,7,9）
     /// 输入: 插入 0,1,4,5,8 五个槽的数据，缺少 2,3,6,7,9 五个槽
     /// 预期: find_gaps_rec 能检测到至少一个 MissingData gap 覆盖缺失槽的时间点
-    #[actix_rt::test]
+    #[tokio::test]
     async fn test_find_gaps_rec_missing_multi_gap() -> Result<(), YuError> {
         let db = create_memory_db_provider();
         let mut conn = db.acquire()?;
@@ -835,7 +847,10 @@ mod tests {
             }
             let ts = t0 + i * interval_ms;
             let close_time = ts + interval_ms - 1;
-            let sql = format!("INSERT INTO bn_spot_kline (id, symbol, candle_begin_time, open, high, low, close, volume, quote_volume, number_of_trades, taker_buy_base_asset_volume, taker_buy_quote_asset_volume, close_time, interval, first_trade_id, last_trade_id) VALUES ({}, '{}', {}, 0,0,0,0,0,0,0,0,0,{}, 1, 0, 0);", i, expected_symbol, ts, close_time);
+            let sql = format!(
+                "INSERT INTO bn_spot_kline (id, symbol, candle_begin_time, open, high, low, close, volume, quote_volume, number_of_trades, taker_buy_base_asset_volume, taker_buy_quote_asset_volume, close_time, interval, first_trade_id, last_trade_id) VALUES ({}, '{}', {}, 0,0,0,0,0,0,0,0,0,{}, 1, 0, 0);",
+                i, expected_symbol, ts, close_time
+            );
             conn.execute_batch(&sql)?;
         }
         let check_strategy = SpotCheckStrategy::spot_check_strategy(

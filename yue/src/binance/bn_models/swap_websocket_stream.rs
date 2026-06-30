@@ -1,7 +1,6 @@
 use crate::models::Decimal;
 use crate::tools::string_to_decimal;
 use crate::tools::string_to_option_decimal;
-use actix::Message as ActixMessage;
 use li::errors::LiError;
 use li::websocket::models::WebSocketMessage;
 use serde::{Deserialize, Serialize};
@@ -10,10 +9,6 @@ use serde::{Deserialize, Serialize};
 pub struct BinanceSwapWebSocketStreamWrapper {
     pub stream: String,
     pub data: BinanceSwapWebSocketStreamResponse,
-}
-
-impl ActixMessage for BinanceSwapWebSocketStreamWrapper {
-    type Result = ();
 }
 
 impl WebSocketMessage for BinanceSwapWebSocketStreamWrapper {
@@ -44,10 +39,6 @@ pub enum BinanceSwapWebSocketStreamResponse {
     ContractInfo(ContractInfoPayload),
     AssetIndex(AssetIndexPayload),
     TradingSession(TradingSessionPayload),
-}
-
-impl ActixMessage for BinanceSwapWebSocketStreamResponse {
-    type Result = ();
 }
 
 impl WebSocketMessage for BinanceSwapWebSocketStreamResponse {

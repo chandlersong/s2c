@@ -1,7 +1,6 @@
 use crate::binance::bn_models::common::map_depth_levels;
 use crate::models::Decimal;
 use crate::tools::string_to_decimal;
-use actix::Message as ActixMessage;
 use li::errors::LiError;
 use li::websocket::models::WebSocketMessage;
 use serde::{Deserialize, Serialize};
@@ -12,9 +11,6 @@ pub struct BinanceSpotWebSocketStreamWrapper {
     pub data: BinanceSpotWebSocketStreamResponse,
 }
 
-impl ActixMessage for BinanceSpotWebSocketStreamWrapper {
-    type Result = ();
-}
 impl WebSocketMessage for BinanceSpotWebSocketStreamWrapper {
     fn from_text(text: &str) -> Result<Self, LiError> {
         serde_json::from_str(text).map_err(|e| LiError::from(e))
@@ -48,10 +44,6 @@ impl WebSocketMessage for BinanceSpotWebSocketStreamResponse {
     fn from_text(text: &str) -> Result<Self, LiError> {
         serde_json::from_str(text).map_err(|e| LiError::from(e))
     }
-}
-
-impl ActixMessage for BinanceSpotWebSocketStreamResponse {
-    type Result = ();
 }
 
 impl BinanceSpotWebSocketStreamResponse {

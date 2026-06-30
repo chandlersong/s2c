@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tokio::sync::{RwLock, broadcast};
 use yue::models::HistoryInterval;
 use yue::polymarket::restful_api::{PolymarketAPI, PolymarketApiTrait};
-use yue::polymarket::restful_models::{Event, GetPricesHistoryQuery, Market};
+use yue::polymarket::restful_models::{GetPricesHistoryQuery, Market};
 pub struct MarketWithAddition {
     market: Market,
     series_id: String,
@@ -275,7 +275,6 @@ mod tests {
     use crate::errors::YuError;
     use serde_json::from_value;
     use serde_json::json;
-    use std::collections::HashMap;
     use std::sync::Arc;
     use std::sync::Mutex;
     use yue::models::HistoryInterval;

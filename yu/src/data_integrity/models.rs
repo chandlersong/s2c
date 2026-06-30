@@ -1,4 +1,3 @@
-use actix::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 use yue::tools::get_snow_flake_id_u64;
@@ -82,10 +81,6 @@ impl ValidationResult {
     }
 }
 
-impl Message for ValidationResult {
-    type Result = ();
-}
-
 /// 修复请求，通常由 ValidationResult 转化后放入 RepairExecutor。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepairRequest {
@@ -93,11 +88,6 @@ pub struct RepairRequest {
     pub strategy: String,
     #[serde(default)]
     pub gaps: Vec<ValidationGap>,
-}
-
-// 为 RepairRequest 实现 actix Message trait，以便可以通过 Recipient 发送
-impl actix::prelude::Message for RepairRequest {
-    type Result = ();
 }
 
 /// FUTURE: 后面这些在以后关于数据库状态使用比较好。

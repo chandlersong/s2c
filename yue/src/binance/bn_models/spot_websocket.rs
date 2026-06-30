@@ -1,6 +1,5 @@
 use crate::models::Decimal;
 use crate::tools::{string_to_decimal, string_to_option_decimal};
-use actix::{Message as ActixMessage, Message};
 use li::websocket::models::WebSocketMessage;
 use serde::{Deserialize, Serialize};
 
@@ -22,10 +21,6 @@ impl WebSocketMessage for BinanceSpotAccountWebSocketResponse {
     fn from_text(text: &str) -> Result<Self, li::errors::LiError> {
         serde_json::from_str(text).map_err(|e| li::errors::LiError::from(e))
     }
-}
-
-impl ActixMessage for BinanceSpotAccountWebSocketResponse {
-    type Result = ();
 }
 
 impl BinanceSpotAccountWebSocketResponse {
@@ -93,8 +88,7 @@ pub struct BalanceUpdatePayload {
 }
 /// 订单执行报告载荷，对应 executionReport。
 /// [现货术语表](https://developers.binance.com/docs/zh-CN/binance-spot-api-docs/faqs/spot_glossary)
-#[derive(Debug, Deserialize, Serialize, Clone, Message)]
-#[rtype(result = "()")]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ExecutionReportPayload {
     // === 按示例顺序排列（必填或常见字段在前） ===
     /// 事件类型: executionReport
