@@ -1,5 +1,6 @@
 use crate::errors::YuError;
 use crate::sync::sync_server::grpc_sync::PolyMarketHistory;
+use async_trait::async_trait;
 use li::tools::time::unix_time_now_u64_utc_seconds;
 use log::{error, info, trace, warn};
 use std::collections::HashMap;
@@ -22,12 +23,12 @@ type MarketList = Arc<RwLock<Vec<MarketWithAddition>>>;
 返回顺序是open，和close
 **/
 async fn split_series_markets_with_client(
-    client: Arc<dyn PolymarketApiTrait>,
+    api: PolymarketAPI,
     series_id: String,
 ) -> Result<(Vec<MarketWithAddition>, Vec<MarketWithAddition>), YuError> {
     let mut open_markets: Vec<MarketWithAddition> = Vec::new();
     let mut close_markets: Vec<MarketWithAddition> = Vec::new();
-    let series = match client.query_series_by_id(&series_id, Some(false)).await {
+    let series = match api.query_series_by_id(&series_id, Some(false)).await {
         Ok(s) => s,
         Err(e) => {
             error!("query_series_by_id error: {:?}", e);
@@ -42,7 +43,7 @@ async fn split_series_markets_with_client(
         for event_in_series in events {
             let event_id = event_in_series.id;
             let event_slug = event_in_series.slug;
-            match client.query_event_id(&event_id, None, None).await {
+            match api.query_event_id(&event_id, None, None).await {
                 Ok(event) => {
                     if let Some(markets) = event.markets {
                         trace!("event:{},market num:{}", event_slug, markets.len());
@@ -87,7 +88,7 @@ async fn split_series_markets_with_client(
 
 async fn batch_split_series_markets_with_client(
     series_ids: &Vec<String>,
-    client: Arc<dyn PolymarketApiTrait>,
+    api: PolymarketAPI,
 ) -> Result<(Vec<MarketWithAddition>, Vec<MarketWithAddition>), YuError> {
     let mut open_markets: Vec<MarketWithAddition> = vec![];
     let mut close_markets: Vec<MarketWithAddition> = vec![];
@@ -96,7 +97,7 @@ async fn batch_split_series_markets_with_client(
     let mut handles = Vec::with_capacity(series_ids.len());
     for id in series_ids {
         let id_cloned = id.clone();
-        let client_cloned = client.clone();
+        let client_cloned = api.clone();
         handles.push(tokio::spawn(
             async move { split_series_markets_with_client(client_cloned, id_cloned).await },
         ));
@@ -115,6 +116,29 @@ async fn batch_split_series_markets_with_client(
     Ok((open_markets, close_markets))
 }
 
+#[cfg_attr(feature = "mockable", mockall::automock)]
+#[async_trait]
+pub trait SeriesHistoryMarketServiceTrait: Send + Sync {
+    async fn refresh_open_markets(&self) -> Result<(), YuError>;
+
+    async fn initial_data(&self, start_timestamps: HashMap<&str, u64>) -> Result<(), YuError>;
+
+    async fn query_and_broadcast(&self, query_payload: GetPricesHistoryQuery, asset_index: usize, market: &MarketWithAddition);
+
+    async fn fetch_last_one_hour_data(&self) -> Result<(), YuError>;
+}
+
+pub type SeriesHistoryMarketService = Arc<dyn SeriesHistoryMarketServiceTrait>;
+
+pub async fn new_series_history_market_service(
+    series_ids: Vec<String>,
+    interval: HistoryInterval,
+    history_broadcast: broadcast::Sender<PolyMarketHistory>,
+    client: PolymarketAPI,
+) -> SeriesHistoryMarketService {
+    Arc::new(SeriesHistoryMarketServiceImpl::new(series_ids, interval, history_broadcast, client).await)
+}
+
 /**
 1. series_ids下的close market的历史数据Kline数据
 2. series_ids下，定时刷新还是运行的market的价格数据，
@@ -124,7 +148,7 @@ async fn batch_split_series_markets_with_client(
 1. 时间都是到秒。而不是毫秒
 2. History的时间戳。一般也不会整点。会慢歌几秒
 **/
-pub struct SeriesHistoryMarketService {
+pub struct SeriesHistoryMarketServiceImpl {
     series_ids: Vec<String>,
     interval: HistoryInterval,
     open_markets: MarketList,
@@ -132,7 +156,7 @@ pub struct SeriesHistoryMarketService {
     client: PolymarketAPI,
 }
 
-impl SeriesHistoryMarketService {
+impl SeriesHistoryMarketServiceImpl {
     pub async fn new(
         series_ids: Vec<String>,
         interval: HistoryInterval,
@@ -156,8 +180,13 @@ impl SeriesHistoryMarketService {
             client,
         }
     }
+}
 
-    pub async fn refresh_open_markets(&self) -> Result<(), YuError> {
+/// 服务接口：抽象出 trait 方便在测试或其它模块中 mock
+
+#[async_trait]
+impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
+    async fn refresh_open_markets(&self) -> Result<(), YuError> {
         match batch_split_series_markets_with_client(&self.series_ids, self.client.clone()).await {
             Ok((open_markets, _)) => {
                 // 把 self.open_markets 替换成新的 open_markets
@@ -174,7 +203,7 @@ impl SeriesHistoryMarketService {
         Ok(())
     }
 
-    pub async fn initial_data(&self, start_timestamps: HashMap<&str, u64>) -> Result<(), YuError> {
+    async fn initial_data(&self, start_timestamps: HashMap<&str, u64>) -> Result<(), YuError> {
         let now = self.interval.get_now_close_unix_sec_utc();
         let fidelity = self.interval.to_second() / 60;
         for market in self.open_markets.read().await.iter() {
@@ -205,7 +234,7 @@ impl SeriesHistoryMarketService {
         Ok(())
     }
 
-    pub async fn query_and_broadcast(&self, query_payload: GetPricesHistoryQuery, asset_index: usize, market: &MarketWithAddition) {
+    async fn query_and_broadcast(&self, query_payload: GetPricesHistoryQuery, asset_index: usize, market: &MarketWithAddition) {
         let asset_id = query_payload.market.clone();
         let asset_slug = match &market.market.outcomes {
             None => {
@@ -242,7 +271,7 @@ impl SeriesHistoryMarketService {
         }
     }
 
-    pub async fn fetch_last_one_hour_data(&self) -> Result<(), YuError> {
+    async fn fetch_last_one_hour_data(&self) -> Result<(), YuError> {
         let now = self.interval.get_now_close_unix_sec_utc();
         let fidelity = self.interval.to_second() / 60;
         for market in self.open_markets.read().await.iter() {
@@ -272,22 +301,17 @@ impl SeriesHistoryMarketService {
 
 #[cfg(test)]
 mod tests {
+    use super::SeriesHistoryMarketServiceTrait;
     use crate::errors::YuError;
     use serde_json::from_value;
     use serde_json::json;
     use std::sync::Arc;
-    use std::sync::Mutex;
     use yue::models::HistoryInterval;
-    use yue::polymarket::restful_api::MockPolymarketApiTrait;
-    use yue::polymarket::restful_models::{Event, GetPricesHistoryResponse, Market, MarketPriceHistoryPoint, Series};
-
-    // 防止并行测试互相覆盖全局 mock
-    static MTX: Mutex<()> = Mutex::new(());
+    use yue::polymarket::restful_api::{MockPolymarketApiTrait, PolymarketAPI};
+    use yue::polymarket::restful_models::{Event, GetPricesHistoryQuery, GetPricesHistoryResponse, MarketPriceHistoryPoint, Series};
 
     #[tokio::test]
     pub async fn test_series_history_service_with_mock_client() -> Result<(), YuError> {
-        let _guard = MTX.lock().unwrap();
-
         // 构造 Series / Event / Market JSON 并反序列化为结构体
         let series_json = json!({
             "id": "s1",
@@ -343,13 +367,13 @@ mod tests {
             Ok(r)
         });
 
-        let client: Arc<dyn yue::polymarket::restful_api::PolymarketApiTrait> = Arc::new(mock);
+        let client: PolymarketAPI = Arc::new(mock);
 
         let (tx, mut rx) = tokio::sync::broadcast::channel(16);
         let series_ids = vec!["s1".to_string()];
         let interval = HistoryInterval::OneMinute;
 
-        let svc = super::SeriesHistoryMarketService::new(series_ids, interval, tx.clone(), client).await;
+        let svc = super::SeriesHistoryMarketServiceImpl::new(series_ids, interval, tx.clone(), client).await;
 
         // 调用 fetch_last_one_hour_data，会使用 mock 返回的 history 并通过 broadcast 发送
         svc.fetch_last_one_hour_data().await?;
@@ -357,6 +381,205 @@ mod tests {
         // 接收一条消息
         let received = rx.recv().await.expect("should receive history");
         assert_eq!(received.price, 0.42_f64);
+        Ok(())
+    }
+
+    #[tokio::test]
+    pub async fn test_initial_data_with_mock_client() -> Result<(), YuError> {
+        // 构造 Series / Event / Market JSON 并反序列化为结构体
+        let series_json = json!({
+            "id": "s1",
+            "slug": "series1",
+            "events": [ { "id": "e1", "slug": "event1" } ]
+        });
+        let series: Series = from_value(series_json).expect("deserialize series");
+
+        let market_json = json!({
+            "id": "m1",
+            "slug": "market1",
+            "conditionId": "c1",
+            "marketMakerAddress": "addr",
+            "startDate": "2026-01-01T00:00:00Z",
+            "endDate": "2027-01-01T00:00:00Z",
+            "clobTokenIds": ["tokenA"],
+            "outcomes": ["Yes", "No"]
+        });
+        let event_json = json!({
+            "id": "e1",
+            "slug": "event1",
+            "markets": [ market_json.clone() ]
+        });
+        let event: Event = from_value(event_json).expect("deserialize event");
+
+        // prices history response
+        let history_resp = GetPricesHistoryResponse {
+            history: vec![MarketPriceHistoryPoint { t: 1000, p: 0.42 }],
+        };
+
+        // 设置 MockPolymarketClient
+        let mut mock = MockPolymarketApiTrait::new();
+
+        // query_series_by_id -> return series with minimal info
+        let series_clone = series.clone();
+        mock.expect_query_series_by_id().returning(move |_id, _| {
+            let s = series_clone.clone();
+            Ok(s)
+        });
+
+        // query_event_id -> return event with markets
+        let event_clone = event.clone();
+        mock.expect_query_event_id().returning(move |_id, _inc_chat, _inc_tmplt| {
+            let e = event_clone.clone();
+            Ok(e)
+        });
+
+        // query_prices_history -> return history_resp
+        let history_clone = history_resp.clone();
+        mock.expect_query_prices_history().returning(move |_q| {
+            let r = history_clone.clone();
+            Ok(r)
+        });
+
+        let client: PolymarketAPI = Arc::new(mock);
+
+        let (tx, mut rx) = tokio::sync::broadcast::channel(16);
+        let series_ids = vec!["s1".to_string()];
+        let interval = HistoryInterval::OneMinute;
+
+        let svc = super::SeriesHistoryMarketServiceImpl::new(series_ids, interval, tx.clone(), client).await;
+
+        // 构造 start_timestamps，覆盖 tokenA 的起始时间
+        let mut start_ts_map: std::collections::HashMap<&str, u64> = std::collections::HashMap::new();
+        start_ts_map.insert("tokenA", 900u64);
+
+        // 调用 initial_data，会使用 mock 返回的 history 并通过 broadcast 发送
+        svc.initial_data(start_ts_map).await?;
+
+        // 接收一条消息
+        let received = rx.recv().await.expect("should receive history");
+        assert_eq!(received.price, 0.42_f64);
+        Ok(())
+    }
+
+    // 测试1：当 start_ts_map 包含 token 的时候，应该使用 start_ts_map 提供的起始时间
+    #[tokio::test]
+    pub async fn test_initial_data_uses_start_ts_map() -> Result<(), YuError> {
+        let series_json = json!({
+            "id": "s1",
+            "slug": "series1",
+            "events": [ { "id": "e1", "slug": "event1" } ]
+        });
+        let series: Series = from_value(series_json).expect("deserialize series");
+
+        let market_json = json!({
+            "id": "m1",
+            "slug": "market1",
+            "conditionId": "c1",
+            "marketMakerAddress": "addr",
+            "startDate": "2026-01-01T00:00:00Z",
+            "endDate": "2027-01-01T00:00:00Z",
+            "clobTokenIds": ["tokenA"],
+            "outcomes": ["Yes", "No"]
+        });
+        let event_json = json!({
+            "id": "e1",
+            "slug": "event1",
+            "markets": [ market_json.clone() ]
+        });
+        let event: Event = from_value(event_json).expect("deserialize event");
+
+        let history_resp = GetPricesHistoryResponse {
+            history: vec![MarketPriceHistoryPoint { t: 1000, p: 0.42 }],
+        };
+
+        // 用 mock 检查传入的 query.start_ts 是否等于 start_ts_map - 1
+        let mut mock = MockPolymarketApiTrait::new();
+        let series_clone = series.clone();
+        mock.expect_query_series_by_id().returning(move |_id, _| Ok(series_clone.clone()));
+        let event_clone = event.clone();
+        mock.expect_query_event_id()
+            .returning(move |_id, _inc_chat, _inc_tmplt| Ok(event_clone.clone()));
+
+        let history_clone = history_resp.clone();
+        mock.expect_query_prices_history()
+            .withf(move |q: &GetPricesHistoryQuery| q.market == "tokenA" && q.start_ts == Some(900u64 - 1))
+            .returning(move |_q| Ok(history_clone.clone()));
+
+        let client: PolymarketAPI = Arc::new(mock);
+        let (tx, mut rx) = tokio::sync::broadcast::channel(16);
+        let series_ids = vec!["s1".to_string()];
+        let interval = HistoryInterval::OneMinute;
+        let svc = super::SeriesHistoryMarketServiceImpl::new(series_ids, interval, tx.clone(), client).await;
+
+        let mut start_ts_map: std::collections::HashMap<&str, u64> = std::collections::HashMap::new();
+        start_ts_map.insert("tokenA", 900u64);
+
+        svc.initial_data(start_ts_map).await?;
+
+        let received = rx.recv().await.expect("should receive history");
+        assert_eq!(received.price, 0.42_f64);
+        Ok(())
+    }
+
+    // 测试2：当 start_ts_map 不包含 token 时，应该使用 market.start_date（如果存在）作为起始时间
+    #[tokio::test]
+    pub async fn test_initial_data_uses_market_start_date_if_missing() -> Result<(), YuError> {
+        let series_json = json!({
+            "id": "s1",
+            "slug": "series1",
+            "events": [ { "id": "e1", "slug": "event1" } ]
+        });
+        let series: Series = from_value(series_json).expect("deserialize series");
+
+        let market_json = json!({
+            "id": "m1",
+            "slug": "market1",
+            "conditionId": "c1",
+            "marketMakerAddress": "addr",
+            "startDate": "2026-01-01T00:00:00Z",
+            "endDate": "2027-01-01T00:00:00Z",
+            "clobTokenIds": ["tokenA"],
+            "outcomes": ["Yes", "No"]
+        });
+        let event_json = json!({
+            "id": "e1",
+            "slug": "event1",
+            "markets": [ market_json.clone() ]
+        });
+        let event: Event = from_value(event_json).expect("deserialize event");
+
+        // 计算 market.start_date（由反序列化产生）并期望 query.start_ts == start_date - 1
+        let market_start = event.markets.as_ref().unwrap()[0].start_date.unwrap();
+        let expected_sent_start = market_start - 1;
+
+        let history_resp = GetPricesHistoryResponse {
+            history: vec![MarketPriceHistoryPoint { t: 1000, p: 0.99 }],
+        };
+
+        let mut mock = MockPolymarketApiTrait::new();
+        let series_clone = series.clone();
+        mock.expect_query_series_by_id().returning(move |_id, _| Ok(series_clone.clone()));
+        let event_clone = event.clone();
+        mock.expect_query_event_id()
+            .returning(move |_id, _inc_chat, _inc_tmplt| Ok(event_clone.clone()));
+
+        let history_clone = history_resp.clone();
+        mock.expect_query_prices_history()
+            .withf(move |q: &GetPricesHistoryQuery| q.market == "tokenA" && q.start_ts == Some(expected_sent_start))
+            .returning(move |_q| Ok(history_clone.clone()));
+
+        let client: PolymarketAPI = Arc::new(mock);
+        let (tx, mut rx) = tokio::sync::broadcast::channel(16);
+        let series_ids = vec!["s1".to_string()];
+        let interval = HistoryInterval::OneMinute;
+        let svc = super::SeriesHistoryMarketServiceImpl::new(series_ids, interval, tx.clone(), client).await;
+
+        // 传入空的 start_ts_map
+        let start_ts_map: std::collections::HashMap<&str, u64> = std::collections::HashMap::new();
+        svc.initial_data(start_ts_map).await?;
+
+        let received = rx.recv().await.expect("should receive history");
+        assert_eq!(received.price, 0.99_f64);
         Ok(())
     }
 }

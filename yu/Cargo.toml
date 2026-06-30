@@ -21,6 +21,9 @@ rmcp-macros = "0.8.1"
 governor = { workspace = true }
 r2d2 = "0.8.10"
 
+# optional mockall dependency for generating mocks when feature "mockable" is enabled
+mockall = { version = "0.13", optional = true }
+
 serde = { version = "1.0.225", features = ["derive"] }
 serde_json = "1.0"
 
@@ -29,9 +32,11 @@ tonic-prost = { workspace = true }
 tokio-stream = "0.1.17"
 
 [dev-dependencies]
-mockall = { workspace = true }
+# keep yue mockable enabled for tests
 yue = { path = "../yue", features = ["mockable"] }
 
+[features]
+mockable = ["mockall"]
 
 [build-dependencies]
 tonic-prost-build = { workspace = true }
