@@ -19,7 +19,7 @@ RUN mkdir -p yue/src li/src yu/src && \
     echo "fn main() {}" > yue/src/main.rs && \
     echo "fn main() {}" > li/src/lib.rs && \
     echo "fn main() {}" > yu/src/main.rs
-RUN cargo chef prepare --recipe-path recipe.json
+RUN cargo chef prepare --recipe-path recipe.json --locked
 
 # =============================================
 # Builder Stage
