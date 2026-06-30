@@ -52,7 +52,7 @@ RUN cargo chef cook --release --recipe-path recipe.json --locked
 
 # ===================== 源码编译 =====================
 COPY . .
-RUN cargo build --release --bin ${APP_NAME} --locked
+RUN cargo build --release --locked
 
 # =============================================
 # Runtime Stage
