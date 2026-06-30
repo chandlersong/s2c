@@ -11,7 +11,6 @@ WORKDIR /app
 # Planner Stage
 # =============================================
 FROM chef AS builder
-RUN cargo install cargo-chef sccache --locked
 COPY Cargo.toml Cargo.lock ./
 COPY yue/Cargo.toml yue/Cargo.toml
 COPY li/Cargo.toml li/Cargo.toml
@@ -20,7 +19,6 @@ COPY yu/Cargo.toml yu/Cargo.toml
 ENV RUSTC_WRAPPER=sccache
 ENV SCCACHE_CACHE_SIZE=5G
 ENV SCCACHE_DIR=/app/target/.sccache
-COPY Cargo.toml Cargo.lock ./
 # Create dummy source files to build dependencies
 RUN mkdir -p yue/src li/src yu/src && \
     echo "fn main() {}" > yue/src/main.rs && \
