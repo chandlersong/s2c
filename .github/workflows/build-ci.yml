@@ -7,7 +7,7 @@ on:
         required: true
         default: '1.96-slim-bookworm'
   workflow_run:
-    workflows: ["Build RocksDB Multi-Arch"]
+    workflows: ["Build RocksDB"]
     types:
       - completed
 jobs:
