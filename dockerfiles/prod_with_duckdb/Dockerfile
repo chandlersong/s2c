@@ -19,6 +19,7 @@ COPY yu/Cargo.toml yu/Cargo.toml
 
 ENV RUSTC_WRAPPER=sccache
 ENV SCCACHE_CACHE_SIZE=5G
+ENV SCCACHE_DIR=/app/target/.sccache
 COPY Cargo.toml Cargo.lock ./
 # Create dummy source files to build dependencies
 RUN mkdir -p yue/src li/src yu/src && \
@@ -50,17 +51,11 @@ ENV CARGO_INCREMENTAL=0
 ENV CARGO_PROFILE_RELEASE_DEBUG=0
 
 # ===================== 依赖预编译 =====================
-RUN --mount=type=cache,target=/app/target \
-    --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/root/.cache/sccache \
-    cargo chef cook --release --recipe-path recipe.json --locked
+RUN  cargo chef cook --release --recipe-path recipe.json --locked
 
 # ===================== 源码编译 =====================
 COPY . .
-RUN --mount=type=cache,target=/app/target \
-    --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/root/.cache/sccache \
-    cargo build --release --bin ${APP_NAME} --locked
+RUN cargo build --release --bin ${APP_NAME} --locked
 
 # =============================================
 # Runtime Stage
@@ -83,7 +78,6 @@ COPY dockerscripts/start.sh /app/start.sh
 RUN chmod +x /app/start.sh
 
 COPY --from=builder /opt/libduckdb /opt/libduckdb
-RUN --mount=type=cache,target=/app/target \
-    cp /app/target/release/${APP_NAME} /app/app
+COPY --from=builder /app/target/release/${APP_NAME} /app/app
 
 CMD ["sh", "/app/start.sh"]
