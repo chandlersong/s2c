@@ -1,22 +1,25 @@
 syntax = "proto3";
 package grpc_sync;
 
+
+message AssetTimestamp {
+  map<string, uint64> timestamps = 1;
+}
+
 // 服务器端和客户端同步的服务
-service SyncServer {
-  // 双向流：Client 发送命令，Server 推送消息
-  rpc sync(stream ClientMessage) returns (stream ServerMessage) {}
-}
+// 这里要提供3个服务
+// 1. 获取服务器里面的所有资产的最新时间戳。返回AssetTimestamp
+// 2. client提供asset id和timestamp。然后server把timestamp之后的所有数据推送给client。stream里面推送，PolyMarketHistoryList
+// 3. 推送信息给client端最新的消息。 PolyMarketHistoryList
+service SyncInterface {
+  // 1. 获取服务器里面的所有资产的最新时间戳
+  rpc GetLatestTimestamps(Empty) returns (AssetTimestamp) {}
 
-// ================== Client -> Server ==================
-message ClientMessage {
-  oneof payload {
-    Initial initial = 1;           // 初始化消息
-  }
-}
+  // 2. client提供asset id和timestamp，server把timestamp之后的所有数据推送给client
+  rpc SyncHistory(SyncRequest) returns (stream ServerMessage) {}
 
-// 客户端给服务器端发送的消息。
-message Initial {
-  int64 local_max_timestamp = 2; //本地服务器最大的时间戳
+  // 3. 推送信息给client端最新的消息
+  rpc SubscribeLatest(SubscribeRequest) returns (stream ServerMessage) {}
 }
 
 message ServerMessage {
@@ -24,18 +27,31 @@ message ServerMessage {
     PolyMarketHistoryList polymarket_history = 1;     // 批量
   }
 }
+// 空消息
+message Empty {}
+
+// 历史数据同步请求
+message SyncRequest {
+  string asset_id = 1;  // 资产ID
+  uint64 timestamp = 2;  // 起始时间戳，server推送该时间之后的所有数据
+}
+
+// 订阅最新消息请求
+message SubscribeRequest {
+  // 预留字段，后续可添加过滤条件（如指定asset_id列表）
+}
 
 message PolyMarketHistory {
-    string series_id=1;
-    string series_slug= 2;
-    string event_id= 3;
-    string event_slug= 4;
-    string market_id= 5;
-    string market_slug= 6;
-    string asset_id= 7;
-    string asset_slug= 8;
-    uint64 timestamp= 9;
-    double price= 10;
+  string series_id = 1;
+  string series_slug = 2;
+  string event_id = 3;
+  string event_slug = 4;
+  string market_id = 5;
+  string market_slug = 6;
+  string asset_id = 7;
+  string asset_slug = 8;
+  uint64 timestamp = 9;
+  double price = 10;
 }
 
 message PolyMarketHistoryList {

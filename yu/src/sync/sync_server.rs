@@ -1,8 +1,8 @@
 use crate::duck_db::DuckDBDSProvider;
-use crate::sync::sync_server::grpc_sync::client_message::Payload as ClientPayload;
-use crate::sync::sync_server::grpc_sync::server_message::Payload as ServerPayload;
-use crate::sync::sync_server::grpc_sync::sync_server_server::SyncServer;
-use crate::sync::sync_server::grpc_sync::{ClientMessage, PolyMarketHistoryList, ServerMessage};
+use crate::sync::sync_server::grpc_sync::sync_interface_server::SyncInterface;
+use crate::sync::sync_server::grpc_sync::{
+    AssetTimestamp, Empty, PolyMarketHistoryList, ServerMessage, SubscribeRequest, SyncRequest, server_message,
+};
 use log::error;
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -96,38 +96,31 @@ impl YuSyncServer {
     }
 }
 #[tonic::async_trait]
-impl SyncServer for YuSyncServer {
-    type syncStream = Pin<Box<dyn tokio_stream::Stream<Item = Result<ServerMessage, Status>> + Send + 'static>>;
+impl SyncInterface for YuSyncServer {
+    async fn get_latest_timestamps(&self, request: Request<Empty>) -> Result<Response<AssetTimestamp>, Status> {
+        todo!()
+    }
 
-    async fn sync(&self, request: Request<Streaming<ClientMessage>>) -> Result<Response<Self::syncStream>, Status> {
-        let mut inbound = request.into_inner();
+    type SyncHistoryStream = Pin<Box<dyn tokio_stream::Stream<Item = Result<ServerMessage, Status>> + Send + 'static>>;
+
+    async fn sync_history(&self, request: Request<SyncRequest>) -> Result<Response<Self::SyncHistoryStream>, Status> {
+        request.get_ref().timestamp;
         let (tx, rx) = mpsc::channel::<Result<ServerMessage, Status>>(16);
+        let reply = ServerMessage {
+            payload: Some(server_message::Payload::PolymarketHistory(PolyMarketHistoryList {
+                history_list: Vec::new(),
+                timestamp: 123,
+            })),
+        };
+        if tx.send(Ok(reply)).await.is_err() {}
 
-        tokio::spawn(async move {
-            while let Some(next_msg) = inbound.next().await {
-                match next_msg {
-                    Ok(msg) => {
-                        if let Some(ClientPayload::Initial(_)) = msg.payload {
-                            let reply = ServerMessage {
-                                payload: Some(ServerPayload::PolymarketHistory(PolyMarketHistoryList {
-                                    history_list: Vec::new(),
-                                    timestamp: 123,
-                                })),
-                            };
-                            if tx.send(Ok(reply)).await.is_err() {
-                                break;
-                            }
-                        }
-                    }
-                    Err(status) => {
-                        let _ = tx.send(Err(status)).await;
-                        break;
-                    }
-                }
-            }
-        });
+        Ok(Response::new(Box::pin(ReceiverStream::new(rx)) as Self::SyncHistoryStream))
+    }
 
-        Ok(Response::new(Box::pin(ReceiverStream::new(rx)) as Self::syncStream))
+    type SubscribeLatestStream = Pin<Box<dyn tokio_stream::Stream<Item = Result<ServerMessage, Status>> + Send + 'static>>;
+
+    async fn subscribe_latest(&self, request: Request<SubscribeRequest>) -> Result<Response<Self::SubscribeLatestStream>, Status> {
+        todo!()
     }
 }
 
