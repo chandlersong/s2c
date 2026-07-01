@@ -1,14 +1,15 @@
 use crate::binance::db_consts::BinanceTables;
-use crate::duck_db::DBProvider;
+use crate::duck_db::DuckDBDSProvider;
 use crate::duck_db_tables::DuckDbTableTrait;
 use async_trait::async_trait;
-use duckdb::{params, DuckdbConnectionManager};
+use duckdb::{DuckdbConnectionManager, params};
 use li::actix_jobs::AsyncRepeatTask;
 use li::errors::LiError;
 use li::tools::time::unix_time_now_u64_utc;
 use log::{error, info};
 use r2d2::PooledConnection;
 use yue::models::HistoryInterval;
+use yue::query_message::DataSourceProviderTrait;
 
 #[derive(Clone)]
 struct CleanInfo {
@@ -20,7 +21,7 @@ struct CleanInfo {
 pub struct TableCleaner {
     info: Vec<CleanInfo>,
     retain_ms: u64,
-    db_provider: DBProvider,
+    db_provider: DuckDBDSProvider,
 }
 
 impl TableCleaner {
@@ -53,12 +54,12 @@ impl TableCleaner {
         Self {
             info,
             retain_ms,
-            db_provider: DBProvider::default(),
+            db_provider: DuckDBDSProvider::default(),
         }
     }
 
     #[cfg(test)]
-    pub fn new_with_db(retain_ms: u64, db_provider: DBProvider) -> Self {
+    pub fn new_with_db(retain_ms: u64, db_provider: DuckDBDSProvider) -> Self {
         let info = vec![CleanInfo {
             table_name: BinanceTables::SpotKline.table_name(),
             time_col_name: "candle_begin_time".to_string(),

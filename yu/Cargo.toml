@@ -5,7 +5,6 @@ edition = "2024"
 
 [dependencies]
 duckdb = { workspace = true }
-polars = { workspace = true }
 tokio = { workspace = true }
 tokio-cron-scheduler = { workspace = true }
 yue = { path = "../yue" }

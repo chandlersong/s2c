@@ -1,19 +1,16 @@
-use crate::duck_db::{DBProvider, DuckDBPO, DuckDbConnection};
+use crate::duck_db::{DuckDBDSProvider, DuckDBPO, DuckDbConnection};
 use crate::errors::YuError;
 use duckdb::DropBehavior;
 use li::tools::time::unix_time_now_u64_utc;
 use log::error;
-use polars::prelude::DataFrame;
-use serde_json::Value;
-use std::collections::HashMap;
 use std::format;
 use std::marker::PhantomData;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use yue::errors::YueError;
-use yue::query_message::{ExecuteSQLPayload, QueryCommand};
+use yue::query_message::{DataSourceProviderTrait, QueryCommand};
 
-pub type DuckTableTableChannel<P> = mpsc::Sender<QueryCommand<P>>;
+pub type DuckTableTableChannel<P> = mpsc::Sender<QueryCommand<P, DuckDBDSProvider>>;
 
 pub trait DuckDbTableTrait: Send + Clone + 'static {
     fn table_name(&self) -> String;
@@ -36,7 +33,7 @@ pub struct DuckDBOneTable<P: DuckDBPO, T: DuckDbTableTrait> {
     flush_interval: Duration,
     flush_count: usize,
     _marker: PhantomData<P>,
-    db_provider: DBProvider,
+    db_provider: DuckDBDSProvider,
 }
 
 // FUTURE: 以后做成根据具体表的变换。纯技术需求。
@@ -44,8 +41,8 @@ const DB_CHANNEL_CAPACITY: usize = 1000;
 const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 
 impl<P: DuckDBPO, T: DuckDbTableTrait> DuckDBOneTable<P, T> {
-    pub fn start_new(table: T, db_provider: Option<DBProvider>) -> DuckTableTableChannel<P> {
-        let provider = db_provider.unwrap_or_else(|| DBProvider::default());
+    pub fn start_new(table: T, db_provider: Option<DuckDBDSProvider>) -> DuckTableTableChannel<P> {
+        let provider = db_provider.unwrap_or_else(|| DuckDBDSProvider::default());
         DuckDBOneTable {
             table,
             flush_interval: FLUSH_INTERVAL,
@@ -86,42 +83,9 @@ impl<P: DuckDBPO, T: DuckDbTableTrait> DuckDBOneTable<P, T> {
     }
 
     pub fn get_connection(&self) -> Result<DuckDbConnection, YuError> {
-        self.db_provider.acquire()
+        Ok(self.db_provider.acquire()?)
     }
 
-    pub fn query_to_dataframe(conn: DuckDbConnection, payload: &ExecuteSQLPayload) -> Result<DataFrame, YueError> {
-        let mut stmt = conn.prepare(payload.sql.as_str()).map_err(|e| YueError::CustomError(e.to_string()))?;
-
-        // 如果 params 是 None，直接执行无参数查询
-        let polars_iter = if let Some(params_map) = &payload.params {
-            // 为了避免返回对临时值的引用，我们把转换后的参数放到一个 Vec<Box<dyn ToSql>> 中持有
-            // 先把所有可转换的参数收集到一个 vec 中（避免在持有引用时再扩容/移动）
-            let mut kvs: Vec<(&str, Box<dyn duckdb::ToSql>)> = Vec::with_capacity(params_map.len());
-            for (key, value) in params_map.iter() {
-                if matches!(value, Value::Null) {
-                    continue;
-                }
-                if let Some(b) = to_sql_value(value) {
-                    kvs.push((key.as_str(), b));
-                }
-            }
-            // 然后从 kvs 构建最终的引用 map，kvs 在此作用域内保持不变，因此引用是安全的
-            let mut filtered: HashMap<&str, &dyn duckdb::ToSql> = HashMap::with_capacity(kvs.len());
-            for (k, boxed) in kvs.iter() {
-                filtered.insert(*k, boxed.as_ref());
-            }
-
-            stmt.query_polars(&filtered).map_err(|e| YueError::CustomError(e.to_string()))?
-        } else {
-            stmt.query_polars([]).map_err(|e| YueError::CustomError(e.to_string()))?
-        };
-
-        // 取出第一个 DataFrame（通常查询结果只有一块）
-        match polars_iter.into_iter().next() {
-            Some(df) => Ok(df.into()),
-            None => Ok(DataFrame::default()), // 返回空 DataFrame
-        }
-    }
     fn count_table(conn: DuckDbConnection, table: T) -> Result<usize, YueError> {
         // 如果表没有提供 query_lastest_record SQL，则认为没有可查询的最新记录
         let query_sql_opt = table.count_records();
@@ -238,22 +202,11 @@ impl<P: DuckDBPO, T: DuckDbTableTrait> DuckDBOneTable<P, T> {
 
                                             }
                                         };
-                                    }QueryCommand::ExecuteSQL(payload) => {
-
-                                          match self.get_connection(){
-                                            Ok(conn) => {
-                                                    let result = Self::query_to_dataframe(conn,&payload);
-                                                    if let Some(callback) = payload.callback {
-                                                         if let Err(_unsent) = callback.send(result) {
-                                                             error!("在发送查询{}数量的时候出错：receiver 已关闭。", table.table_name());
-                                                         }
-                                                    }
-                                            }
-                                            Err(e) => {
-                                                  error!("Failed to to get connection when ExecuteSQL,table is {},error is {}",table.table_name(),e);
-                                            }
-                                        };
-
+                                    }QueryCommand::GetDataSourceProvider(payload) => {
+                                        // 获取数据源提供者
+                                        if let Err(_unsent) = payload.callback.send(Ok(self.db_provider.clone())) {
+                                            error!("在发送获取数据源提供者的时候出错：receiver 已关闭。");
+                                        }
                                     }}
                             }
                             None => {
@@ -285,33 +238,5 @@ impl<P: DuckDBPO, T: DuckDbTableTrait> DuckDBOneTable<P, T> {
             }
         });
         tx
-    }
-}
-
-// 辅助函数：把 serde_json::Value 转为 duckdb::ToSql
-fn to_sql_value(value: &Value) -> Option<Box<dyn duckdb::ToSql>> {
-    match value {
-        Value::Bool(b) => Some(Box::new(*b) as Box<dyn duckdb::ToSql>),
-        Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Some(Box::new(i) as Box<dyn duckdb::ToSql>)
-            } else if let Some(f) = n.as_f64() {
-                Some(Box::new(f) as Box<dyn duckdb::ToSql>)
-            } else if let Some(u) = n.as_u64() {
-                // prefer i64 when possible, otherwise use f64 fallback; here u64 -> i64 may overflow, so use f64
-                Some(Box::new(u as f64) as Box<dyn duckdb::ToSql>)
-            } else {
-                None
-            }
-        }
-        Value::String(s) => Some(Box::new(s.clone()) as Box<dyn duckdb::ToSql>),
-        Value::Array(_) | Value::Object(_) => {
-            // 将复杂类型序列化为 JSON 字符串传入（可以在 SQL 中解析或当作文本存储）
-            match serde_json::to_string(value) {
-                Ok(s) => Some(Box::new(s) as Box<dyn duckdb::ToSql>),
-                Err(_) => None,
-            }
-        }
-        Value::Null => None,
     }
 }

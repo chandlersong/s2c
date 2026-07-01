@@ -1,13 +1,14 @@
-use crate::duck_db::DBProvider;
+use crate::duck_db::DuckDBDSProvider;
 use crate::duck_db_tables::{DuckDBOneTable, DuckDbTableTrait, DuckTableTableChannel};
 use crate::errors::YuError;
 use crate::polymarket::db_consts::{ALL_POLYMARKET_TABLES, PolyMarketTables};
 use crate::polymarket::po::PolyMarketHistoryPo;
 use log::info;
 use std::sync::OnceLock;
+use yue::query_message::DataSourceProviderTrait;
 
-pub fn initial_tables(provider: Option<DBProvider>) -> Result<(), YuError> {
-    let db_provider = provider.unwrap_or_else(|| DBProvider::default());
+pub fn initial_tables(provider: Option<DuckDBDSProvider>) -> Result<(), YuError> {
+    let db_provider = provider.unwrap_or_else(|| DuckDBDSProvider::default());
     let conn = db_provider.acquire()?;
     for table in ALL_POLYMARKET_TABLES.iter() {
         let create_sql = table.create_table_statement();

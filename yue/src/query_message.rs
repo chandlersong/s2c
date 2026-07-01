@@ -1,8 +1,4 @@
 use crate::errors::YueError;
-use async_trait::async_trait;
-use polars::prelude::DataFrame;
-use serde_json::Value;
-use std::collections::HashMap;
 use tokio::sync::oneshot;
 
 ///
@@ -11,16 +7,21 @@ use tokio::sync::oneshot;
 /// 借助actix，则可以做到这一点。这里会定义一些基本的数据操作的message
 ///
 
-#[async_trait]
-pub trait DataSourceExecutorTrait<V: Send> {
-    async fn execute(&self, command: QueryCommand<V>) -> Result<(), YueError>;
+///
+/// 作为一个标志的Trait。没有其他实际意义
+///
+pub trait DataSourceProviderTrait {
+    type Connection;
+
+    ///
+    /// 因为实际操作中，希望这个尽量是连接池，所以希望这里用了acquire这个名字。
+    ///
+    fn acquire(&self) -> Result<Self::Connection, YueError>;
 }
 
-pub type DataSourceExecutor<V> = Box<dyn DataSourceExecutorTrait<V> + Send>;
-
-pub enum QueryCommand<V: Send> {
-    GetCount(oneshot::Sender<Result<usize, YueError>>), // 查询数量，返回 usize,如果-1，表示查询出错
-    ExecuteSQL(ExecuteSQLPayload),                      // 查询数量，返回 usize,如果-1，表示查询出错
+pub enum QueryCommand<V: Send, P: DataSourceProviderTrait> {
+    GetCount(oneshot::Sender<Result<usize, YueError>>),     // 查询数量，返回 usize,如果-1，表示查询出错
+    GetDataSourceProvider(GetDataSourceProviderPayload<P>), // 获得数据源，然后自己查询
     BatchInsert(BatchInsertPayload<V>),
     Insert(InsertPayload<V>),
     // Add more commands as needed...
@@ -31,27 +32,13 @@ pub enum QueryCommand<V: Send> {
 ///
 pub struct Count {}
 
-pub struct ExecuteSQLPayload {
-    pub sql: String,
-    pub params: Option<HashMap<String, Value>>,
-    pub callback: Option<oneshot::Sender<Result<DataFrame, YueError>>>,
+pub struct GetDataSourceProviderPayload<P: DataSourceProviderTrait> {
+    pub callback: oneshot::Sender<Result<P, YueError>>,
 }
 
-impl ExecuteSQLPayload {
-    pub fn new(sql: &str, params: Option<HashMap<String, Value>>, callback: oneshot::Sender<Result<DataFrame, YueError>>) -> Self {
-        Self {
-            sql: sql.to_string(),
-            params,
-            callback: Some(callback),
-        }
-    }
-
-    pub fn new_no_replay(sql: &str, params: Option<HashMap<String, Value>>) -> Self {
-        Self {
-            sql: sql.to_string(),
-            params,
-            callback: None,
-        }
+impl<P: DataSourceProviderTrait> GetDataSourceProviderPayload<P> {
+    pub fn new(callback: oneshot::Sender<Result<P, YueError>>) -> Self {
+        Self { callback }
     }
 }
 

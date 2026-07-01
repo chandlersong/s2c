@@ -4,7 +4,7 @@ use crate::binance::history::HistoryKlineSaver;
 use crate::data_integrity::check::ValidationStrategyTrait;
 use crate::data_integrity::models::{RepairRequest, ValidationGap, ValidationResult};
 use crate::data_integrity::repair::RepairStrategyTrait;
-use crate::duck_db::DBProvider;
+use crate::duck_db::DuckDBDSProvider;
 use crate::duck_db_tables::DuckDbTableTrait;
 use crate::errors::YuError;
 use async_trait::async_trait;
@@ -20,6 +20,7 @@ use yue::binance::bn_restful_commands::{SPOT_KLINE_HISTORY_COMMAND, SWAP_KLINE_H
 use yue::binance::restful_func::{CommonRequestBuilder, HistoryFetcherImpl, HistoryFetcherTrait};
 use yue::errors::YueError;
 use yue::models::HistoryInterval;
+use yue::query_message::DataSourceProviderTrait;
 
 pub const BN_SPOT_KLINE_CHECK: &str = "binance_spot_check"; // WireMock server address
 pub const BN_SWAP_KLINE_CHECK: &str = "binance_swap_check"; // WireMock server address
@@ -90,7 +91,7 @@ impl Default for IgnoreSymbols {
 ///
 #[derive(Clone)]
 pub struct SpotCheckStrategy {
-    db_provider: DBProvider,                    // Database provider for data access
+    db_provider: DuckDBDSProvider,              // Database provider for data access
     table_name: String,                         // Table to validate
     time_column: String,                        // 时间检测列，改列的时间都是unix时间戳，单位毫秒
     symbol_column: String,                      // symbol的column
@@ -113,8 +114,8 @@ pub struct SpotCheckStrategy {
 /// 1. symbol是否完整。这个是另外建立一个检测策略，还是其他就另说。
 ///
 impl SpotCheckStrategy {
-    pub fn spot_check_strategy(db_source: Option<DBProvider>, data_retention_time: u64) -> Self {
-        let db_provider = db_source.unwrap_or_else(|| DBProvider::default());
+    pub fn spot_check_strategy(db_source: Option<DuckDBDSProvider>, data_retention_time: u64) -> Self {
+        let db_provider = db_source.unwrap_or_else(|| DuckDBDSProvider::default());
         Self {
             db_provider,
             table_name: BinanceTables::SpotKline.table_name(),
@@ -127,8 +128,8 @@ impl SpotCheckStrategy {
         }
     }
 
-    pub fn swap_check_strategy(db_source: Option<DBProvider>, data_retention_time: u64) -> Self {
-        let db_provider = db_source.unwrap_or_else(|| DBProvider::default());
+    pub fn swap_check_strategy(db_source: Option<DuckDBDSProvider>, data_retention_time: u64) -> Self {
+        let db_provider = db_source.unwrap_or_else(|| DuckDBDSProvider::default());
         Self {
             db_provider,
             table_name: BinanceTables::SwapKline.table_name(),
@@ -641,6 +642,7 @@ mod tests {
     use crate::data_integrity::models::ValidationGap;
     use crate::errors::YuError;
     use crate::test_utils::create_memory_db_provider;
+    use yue::query_message::DataSourceProviderTrait;
 
     /// 测试说明（无缺失场景）:
     /// 场景: 在表中连续插入 5 个按 interval 对齐的时间槽数据，范围为 [start, end]

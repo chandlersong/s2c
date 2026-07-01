@@ -25,8 +25,8 @@ impl DuckDbTableTrait for PolyMarketTables {
 
 pub const CREATE_POLYMARKET_PRICE_HISTORY_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS poly_market_price_history (
-        assert_id VARCHAR，
-        timestamp BIGINT
+        assert_id VARCHAR,
+        timestamp BIGINT,
         payload BLOB
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_CREATE_POLYMARKET_PRICE_HISTORY_TABLE_MAIN ON poly_market_price_history(assert_id, timestamp);

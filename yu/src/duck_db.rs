@@ -1,11 +1,12 @@
 use crate::config::get_config;
-use crate::errors::YuError;
 use duckdb::DuckdbConnectionManager;
 use r2d2;
 use r2d2::{Pool, PooledConnection};
 use serde::de::DeserializeOwned;
 use std::fmt::Debug;
 use std::sync::OnceLock;
+use yue::errors::YueError;
+use yue::query_message::DataSourceProviderTrait;
 
 pub trait DuckDBPO: Debug + Clone + DeserializeOwned + 'static + Send + Sync {
     fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>>;
@@ -33,28 +34,35 @@ fn get_duck_connection_manager() -> DuckdbConnectionManager {
     DuckdbConnectionManager::memory().unwrap()
 }
 
-pub fn get_connection() -> Result<PooledConnection<DuckdbConnectionManager>, YuError> {
-    DBProvider::default().acquire()
+pub fn get_connection() -> Result<DuckDbConnection, YueError> {
+    DuckDBDSProvider::default().acquire()
 }
 pub type DuckDbConnection = PooledConnection<DuckdbConnectionManager>;
 #[derive(Clone)]
-pub struct DBProvider {
+pub struct DuckDBDSProvider {
     pool: Pool<DuckdbConnectionManager>,
 }
 
-impl DBProvider {
-    pub fn new(pool: Pool<DuckdbConnectionManager>) -> Self {
-        DBProvider { pool }
+impl std::fmt::Debug for DuckDBDSProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // pool doesn't implement Debug in a useful way here; print a lightweight summary
+        let info = format!("Pool(addr={:p})", &self.pool);
+        f.debug_struct("DuckDBDSProvider").field("pool", &info).finish()
     }
+}
+impl DataSourceProviderTrait for DuckDBDSProvider {
+    type Connection = DuckDbConnection;
 
-    pub fn acquire(&self) -> Result<PooledConnection<DuckdbConnectionManager>, YuError> {
+    fn acquire(&self) -> Result<Self::Connection, YueError> {
         const MAX_RETRIES: usize = 100;
         for attempt in 0..MAX_RETRIES {
             match self.pool.get() {
                 Ok(conn) => return Ok(conn),
                 Err(e) => {
                     if attempt + 1 == MAX_RETRIES {
-                        return Err(e.into());
+                        return Err(YueError::new(
+                            format!("failed to acquire connection after {} attempts: {}", MAX_RETRIES, e).as_str(),
+                        ));
                     }
                     // 基于当前时间生成一个小的随机抖动，避免同时重试的冲突
                     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_nanos();
@@ -66,13 +74,19 @@ impl DBProvider {
             }
         }
         // 理论上不会到达这里，但为满足签名返回一个错误
-        Err(YuError::new("failed to acquire connection"))
+        Err(YueError::new("failed to acquire connection"))
     }
 }
 
-impl Default for DBProvider {
+impl DuckDBDSProvider {
+    pub fn new(pool: Pool<DuckdbConnectionManager>) -> Self {
+        DuckDBDSProvider { pool }
+    }
+}
+
+impl Default for DuckDBDSProvider {
     fn default() -> Self {
-        DBProvider {
+        DuckDBDSProvider {
             pool: get_connection_pool().clone(),
         }
     }

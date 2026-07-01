@@ -1,12 +1,13 @@
 use li::errors::LiError;
 use thiserror::Error;
+use yue::errors::YueError;
 
 #[derive(Error, Debug)]
 pub enum YuError {
     #[error("system io: {0}")]
     SystemIOError(#[from] std::io::Error),
     #[error("yue error: {0}")]
-    YueError(#[from] yue::errors::YueError),
+    YueError(#[from] YueError),
     #[error("duckDB error: {0}")]
     DuckDBError(#[from] duckdb::Error),
     #[error("r2d2 error: {0}")]

@@ -4,12 +4,12 @@ use crate::binance::bn_data_integrity::{KlineGapRepairStrategy, SpotCheckStrateg
 use crate::binance::db_consts::ALL_BINANCE_TABLES;
 use crate::binance::history::{initial_kline, start_sync_funding_rate};
 use crate::binance::websocket_service::KlineSubscribeService;
-use crate::config::{get_config, AccountType, AppConfig, SecurityType};
+use crate::config::{AccountType, AppConfig, SecurityType, get_config};
 use crate::cron_job;
 use crate::data_integrity::check::ValidationStrategyTrait;
 use crate::data_integrity::models::RepairRequest;
 use crate::data_integrity::repair::RepairStrategyTrait;
-use crate::duck_db::DBProvider;
+use crate::duck_db::DuckDBDSProvider;
 use crate::duck_db_tables::DuckDbTableTrait;
 use crate::errors::YuError;
 use log::{error, info, warn};
@@ -17,6 +17,7 @@ use std::sync::Arc;
 use tokio::sync::watch;
 use yue::binance::bn_models::common::SymbolType;
 use yue::models::HistoryInterval;
+use yue::query_message::DataSourceProviderTrait;
 
 ///
 /// NEXT: 加入的功能
@@ -286,8 +287,8 @@ async fn start_refresh_history_data(
     Ok(())
 }
 
-pub fn initial_tables(provider: Option<DBProvider>) -> Result<(), YuError> {
-    let db_provider = provider.unwrap_or_else(|| DBProvider::default());
+pub fn initial_tables(provider: Option<DuckDBDSProvider>) -> Result<(), YuError> {
+    let db_provider = provider.unwrap_or_else(|| DuckDBDSProvider::default());
     let conn = db_provider.acquire()?;
     for table in ALL_BINANCE_TABLES.iter() {
         let create_sql = table.create_table_statement();

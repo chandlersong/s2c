@@ -1,4 +1,4 @@
-use crate::duck_db::DBProvider;
+use crate::duck_db::DuckDBDSProvider;
 use crate::errors::YuError;
 use duckdb::{Connection, DuckdbConnectionManager, Result};
 use r2d2::Pool;
@@ -56,10 +56,10 @@ pub fn generate_test_kline_vec(start_time: u64, interval_ms: u64, close: f64, co
         .collect()
 }
 
-pub fn create_memory_db_provider() -> DBProvider {
+pub fn create_memory_db_provider() -> DuckDBDSProvider {
     let manager = DuckdbConnectionManager::memory().unwrap();
     let pool = Pool::builder().max_size(4).build(manager).unwrap();
-    DBProvider::new(pool)
+    DuckDBDSProvider::new(pool)
 }
 
 pub fn initial_memory_db() -> Pool<DuckdbConnectionManager> {
