@@ -28,7 +28,7 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Build and push rust_ci image (amd64)
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: dockerfiles/rust_ci/Dockerfile
@@ -39,7 +39,7 @@ jobs:
             LIBDIR=x86_64-linux-gnu
             TARGETARCH=amd64
       - name: Build and push rust_runtime image (amd64)
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: dockerfiles/rust_runtime/Dockerfile
@@ -65,7 +65,7 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Build and push rust_ci image (arm64)
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: dockerfiles/rust_ci/Dockerfile
@@ -76,7 +76,7 @@ jobs:
             LIBDIR=aarch64-linux-gnu
             TARGETARCH=arm64
       - name: Build and push rust_runtime image (arm64)
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: dockerfiles/rust_runtime/Dockerfile
