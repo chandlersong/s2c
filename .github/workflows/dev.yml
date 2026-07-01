@@ -12,10 +12,10 @@ jobs:
       image: chandlersong/rust_ci:1.96-slim-bookworm
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Rust Cache   # 即使在 container 里也能工作
-        uses: Swatinem/rust-cache@v3
+        uses: Swatinem/rust-cache@v2
         with:
           prefix-key: "s2c-v1-dev"
           # workspaces: "."   # 如果需要可打开
