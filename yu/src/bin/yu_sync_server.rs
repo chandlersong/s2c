@@ -8,7 +8,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("gRPC 双向流服务 (oneof) 已启动 → {}", addr);
 
     Server::builder()
-        .add_service(SyncInterfaceServer::new(YuSyncServer::default()))
+        .add_service(SyncInterfaceServer::new(YuSyncServer::new(None)))
         .serve(addr)
         .await?;
 

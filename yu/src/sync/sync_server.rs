@@ -1,4 +1,7 @@
 use crate::duck_db::DuckDBDSProvider;
+use crate::duck_db_tables::{DuckTableTableChannel, request_data_source_provider_from_table};
+use crate::polymarket::database::get_polymarket_price_history_table;
+use crate::polymarket::po::PolyMarketHistoryPo;
 use crate::sync::sync_server::grpc_sync::sync_interface_server::SyncInterface;
 use crate::sync::sync_server::grpc_sync::{
     AssetTimestamp, Empty, PolyMarketHistoryList, ServerMessage, SubscribeRequest, SyncRequest, server_message,
@@ -6,17 +9,36 @@ use crate::sync::sync_server::grpc_sync::{
 use log::error;
 use std::collections::HashMap;
 use std::pin::Pin;
-use tokio::sync::mpsc;
-use tokio_stream::{StreamExt, wrappers::ReceiverStream};
-use tonic::{Request, Response, Status, Streaming};
-use yue::query_message::DataSourceProviderTrait;
+use tokio::sync::{mpsc, oneshot};
+use tokio_stream::wrappers::ReceiverStream;
+use tonic::{Request, Response, Status};
+use yue::query_message::{DataSourceProviderTrait, GetDataSourceProviderPayload, QueryCommand};
 
 pub mod grpc_sync {
+    use std::collections::HashMap;
+
     tonic::include_proto!("grpc_sync");
+
+    impl From<HashMap<String, u64>> for AssetTimestamp {
+        fn from(value: HashMap<String, u64>) -> Self {
+            let mut res = AssetTimestamp {
+                timestamps: Default::default(),
+            };
+            for (k, v) in &value {
+                res.timestamps.insert(k.clone(), v.clone());
+            }
+            res
+        }
+    }
 }
 
-#[derive(Default)]
-pub struct YuSyncServer {}
+enum SyncInternalCommand {
+    QueryAssetTimestamp(oneshot::Sender<Result<AssetTimestamp, Status>>),
+}
+
+pub struct YuSyncServer {
+    commands_sender: mpsc::Sender<SyncInternalCommand>,
+}
 
 ///
 /// 获取最新的asset id
@@ -79,8 +101,11 @@ async fn get_asset_timestamp(provider: DuckDBDSProvider) -> HashMap<String, u64>
 }
 
 impl YuSyncServer {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(table: Option<DuckTableTableChannel<PolyMarketHistoryPo>>) -> Self {
+        let (commands_sender, commands_receiver) = mpsc::channel(10);
+        let polymarket_table = table.unwrap_or(get_polymarket_price_history_table());
+        tokio::spawn(async move { Self::run(commands_receiver, polymarket_table) });
+        Self { commands_sender }
     }
 
     ///
@@ -91,14 +116,55 @@ impl YuSyncServer {
     ///     1. 收到消息
     ///     2. 处理查询。
     ///
-    pub async fn start_polymarket_server() {
-        todo!()
+    async fn run(mut commands_rx: mpsc::Receiver<SyncInternalCommand>, polymarket_table: DuckTableTableChannel<PolyMarketHistoryPo>) {
+        let ds_provider = match request_data_source_provider_from_table(polymarket_table.clone()).await {
+            Some(ds) => ds,
+            None => return, //以后再说吧
+        };
+
+        let asset_timestamp = get_asset_timestamp(ds_provider.clone()).await;
+        loop {
+            tokio::select! {
+                command = commands_rx.recv() => {
+                    match command {
+                        Some(SyncInternalCommand::QueryAssetTimestamp(tx)) => {
+                            let message: AssetTimestamp = AssetTimestamp::from(asset_timestamp.clone());
+                            // ignore send error (receiver might be dropped)
+                            if let Err(e) = tx.send(Ok(message)){
+                                error!("send asset timestamp failed: {:?}", e);
+                            }
+                        }
+                        None => {
+                            // internal command channel closed,退出 loop
+                            log::info!("Sync internal command channel closed, stopping run loop");
+                            break;
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 #[tonic::async_trait]
 impl SyncInterface for YuSyncServer {
-    async fn get_latest_timestamps(&self, request: Request<Empty>) -> Result<Response<AssetTimestamp>, Status> {
-        todo!()
+    async fn get_latest_timestamps(&self, _request: Request<Empty>) -> Result<Response<AssetTimestamp>, Status> {
+        let (tx, rx) = oneshot::channel();
+
+        // 发送内部命令到后台 task
+        if let Err(e) = self.commands_sender.send(SyncInternalCommand::QueryAssetTimestamp(tx)).await {
+            error!("send query asset timestamp failed: {:?}", e);
+            return Err(Status::internal("sync server not running"));
+        }
+
+        // 等待后台返回
+        match rx.await {
+            Ok(Ok(asset_ts)) => Ok(Response::new(asset_ts)),
+            Ok(Err(status)) => Err(status),
+            Err(e) => {
+                error!("get asset timestamp failed,{}", e);
+                Err(Status::internal("internal server error"))
+            }
+        }
     }
 
     type SyncHistoryStream = Pin<Box<dyn tokio_stream::Stream<Item = Result<ServerMessage, Status>> + Send + 'static>>;

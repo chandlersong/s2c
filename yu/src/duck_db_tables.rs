@@ -6,9 +6,9 @@ use log::error;
 use std::format;
 use std::marker::PhantomData;
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use yue::errors::YueError;
-use yue::query_message::{DataSourceProviderTrait, QueryCommand};
+use yue::query_message::{DataSourceProviderTrait, GetDataSourceProviderPayload, QueryCommand};
 
 pub type DuckTableTableChannel<P> = mpsc::Sender<QueryCommand<P, DuckDBDSProvider>>;
 
@@ -238,5 +238,25 @@ impl<P: DuckDBPO, T: DuckDbTableTrait> DuckDBOneTable<P, T> {
             }
         });
         tx
+    }
+}
+
+pub async fn request_data_source_provider_from_table<V: Send + 'static>(polymarket_table: DuckTableTableChannel<V>) -> Option<DuckDBDSProvider> {
+    let (ds_tx, ds_rx) = oneshot::channel();
+    let payload = GetDataSourceProviderPayload::new(ds_tx);
+    if let Err(e) = polymarket_table.send(QueryCommand::GetDataSourceProvider(payload)).await {
+        error!("query duckdb ds fail，stop process: {:?}", e);
+        return None;
+    }
+    match ds_rx.await {
+        Ok(Ok(ds)) => Some(ds),
+        Ok(Err(e)) => {
+            error!("query duckdb ds fail，stop process: {:?}", e);
+            None
+        }
+        Err(e) => {
+            error!("query duckdb ds fail，stop process: {:?}", e);
+            None
+        }
     }
 }
