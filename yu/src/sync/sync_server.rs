@@ -4,7 +4,7 @@ use crate::sync::sync_server::grpc_sync::sync_server_server::SyncServer;
 use crate::sync::sync_server::grpc_sync::{ClientMessage, PolyMarketHistoryList, ServerMessage};
 use std::pin::Pin;
 use tokio::sync::mpsc;
-use tokio_stream::{wrappers::ReceiverStream, StreamExt};
+use tokio_stream::{StreamExt, wrappers::ReceiverStream};
 use tonic::{Request, Response, Status, Streaming};
 
 pub mod grpc_sync {
@@ -17,6 +17,18 @@ pub struct YuSyncServer {}
 impl YuSyncServer {
     pub fn new() -> Self {
         Self {}
+    }
+
+    ///
+    /// 关于这个服务，我觉得主要问题还是在于共享数据。
+    /// 启动的时候，需要
+    /// 1. 获取asset列表
+    /// 2. 启动监听循环
+    ///     1. 收到消息
+    ///     2. 处理查询。
+    ///
+    pub async fn start_polymarket_server() {
+        todo!()
     }
 }
 #[tonic::async_trait]

@@ -27,6 +27,6 @@ pub(crate) static POLYMARKET_PRICE_HISTORY: OnceLock<DuckTableTableChannel<PolyM
 
 pub fn get_polymarket_price_history_table() -> DuckTableTableChannel<PolyMarketHistoryPo> {
     POLYMARKET_PRICE_HISTORY
-        .get_or_init(|| DuckDBOneTable::<PolyMarketHistoryPo, PolyMarketTables>::start_new(PolyMarketTables::PriceHistory))
+        .get_or_init(|| DuckDBOneTable::<PolyMarketHistoryPo, PolyMarketTables>::start_new(PolyMarketTables::PriceHistory, None))
         .clone()
 }

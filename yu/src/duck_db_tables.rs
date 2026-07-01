@@ -1,4 +1,5 @@
-use crate::duck_db::{get_connection, DuckDBPO};
+use crate::duck_db::{DBProvider, DuckDBPO, DuckDbConnection};
+use crate::errors::YuError;
 use duckdb::DropBehavior;
 use li::tools::time::unix_time_now_u64_utc;
 use log::error;
@@ -35,6 +36,7 @@ pub struct DuckDBOneTable<P: DuckDBPO, T: DuckDbTableTrait> {
     flush_interval: Duration,
     flush_count: usize,
     _marker: PhantomData<P>,
+    db_provider: DBProvider,
 }
 
 // FUTURE: 以后做成根据具体表的变换。纯技术需求。
@@ -42,21 +44,22 @@ const DB_CHANNEL_CAPACITY: usize = 1000;
 const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 
 impl<P: DuckDBPO, T: DuckDbTableTrait> DuckDBOneTable<P, T> {
-    pub fn start_new(table: T) -> DuckTableTableChannel<P> {
+    pub fn start_new(table: T, db_provider: Option<DBProvider>) -> DuckTableTableChannel<P> {
+        let provider = db_provider.unwrap_or_else(|| DBProvider::default());
         DuckDBOneTable {
             table,
             flush_interval: FLUSH_INTERVAL,
             flush_count: 600, //主要对应的是kline的根数。
             _marker: PhantomData::<P>,
+            db_provider: provider,
         }
         .start_listen()
     }
-    fn write_batch(table: T, data: Vec<P>) -> Result<usize, YueError> {
+    fn write_batch(mut conn: DuckDbConnection, table: T, data: Vec<P>) -> Result<usize, YueError> {
         if data.is_empty() {
             return Ok(0);
         }
         let res = data.len();
-        let mut conn = get_connection().map_err(|_e| YueError::CustomError(String::from("Failed to connect to DuckDB")))?;
         let mut tx = conn
             .transaction()
             .map_err(|_e| YueError::CustomError(String::from("Failed to create duckDB transaction")))?;
@@ -82,8 +85,11 @@ impl<P: DuckDBPO, T: DuckDbTableTrait> DuckDBOneTable<P, T> {
         Ok(res)
     }
 
-    pub fn query_to_dataframe(payload: &ExecuteSQLPayload) -> Result<DataFrame, YueError> {
-        let conn = get_connection().map_err(|e| YueError::CustomError(e.to_string()))?;
+    pub fn get_connection(&self) -> Result<DuckDbConnection, YuError> {
+        self.db_provider.acquire()
+    }
+
+    pub fn query_to_dataframe(conn: DuckDbConnection, payload: &ExecuteSQLPayload) -> Result<DataFrame, YueError> {
         let mut stmt = conn.prepare(payload.sql.as_str()).map_err(|e| YueError::CustomError(e.to_string()))?;
 
         // 如果 params 是 None，直接执行无参数查询
@@ -116,7 +122,7 @@ impl<P: DuckDBPO, T: DuckDbTableTrait> DuckDBOneTable<P, T> {
             None => Ok(DataFrame::default()), // 返回空 DataFrame
         }
     }
-    fn count_table(table: T) -> Result<usize, YueError> {
+    fn count_table(conn: DuckDbConnection, table: T) -> Result<usize, YueError> {
         // 如果表没有提供 query_lastest_record SQL，则认为没有可查询的最新记录
         let query_sql_opt = table.count_records();
         if query_sql_opt.is_none() {
@@ -127,8 +133,6 @@ impl<P: DuckDBPO, T: DuckDbTableTrait> DuckDBOneTable<P, T> {
         }
 
         let sql = query_sql_opt.unwrap();
-        let conn = get_connection().map_err(|e| YueError::CustomError(e.to_string()))?;
-
         let mut stmt = conn.prepare(sql.as_str()).map_err(|e| YueError::CustomError(e.to_string()))?;
         let mut rows = stmt.query([]).map_err(|e| YueError::CustomError(e.to_string()))?;
 
@@ -140,8 +144,8 @@ impl<P: DuckDBPO, T: DuckDbTableTrait> DuckDBOneTable<P, T> {
         Err(YueError::CustomError(format!("Table {:?} 数据库访问失败", table.table_name())))
     }
 
-    fn flush_data(table: T, data: Vec<P>) {
-        tokio::spawn(async move { Self::write_batch(table, data) });
+    fn flush_data(conn: DuckDbConnection, table: T, data: Vec<P>) {
+        tokio::spawn(async move { Self::write_batch(conn, table, data) });
     }
 
     ///
@@ -175,19 +179,35 @@ impl<P: DuckDBPO, T: DuckDbTableTrait> DuckDBOneTable<P, T> {
                                 match cmd {
                                     QueryCommand::GetCount(resp_tx) => {
                                          //统计行数
-                                        let count_result = Self::count_table(table.clone());
-                                        if let Err(_unsent) = resp_tx.send(count_result) {
-                                            error!("在发送查询{}数量的时候出错：receiver 已关闭。", table.table_name());
-                                        }
+                                         match self.get_connection(){
+                                            Ok(conn) => {
+                                                  let count_result = Self::count_table(conn,table.clone());
+                                                  if let Err(_unsent) = resp_tx.send(count_result) {
+                                                    error!("在发送查询{}数量的时候出错：receiver 已关闭。", table.table_name());
+                                                 }
+                                            }
+                                            Err(e) => {
+                                                  error!("Failed to to get connection when count table,table is {},error is {}",table.table_name(),e);
+                                            }
+                                        };
+
                                     }
                                     QueryCommand::BatchInsert(payload) => {
                                         //批量保存
-                                        let insert_result = Self::write_batch(table.clone(), payload.data);
-                                        if let Some(callback) =payload.callback{
-                                            if let Err(_unsent) = callback.send(insert_result) {
-                                                error!("在发送批量查询{}数量的时候出错：receiver 已关闭。", table.table_name());
+
+                                        match self.get_connection(){
+                                            Ok(conn) => {
+                                                let insert_result = Self::write_batch(conn,table.clone(), payload.data);
+                                                if let Some(callback) =payload.callback{
+                                                    if let Err(_unsent) = callback.send(insert_result) {
+                                                        error!("在发送批量查询{}数量的时候出错：receiver 已关闭。", table.table_name());
+                                                    }
+                                                }
                                             }
-                                        }
+                                            Err(e) => {
+                                                  error!("Failed to to get connection when BatchInsert,table is {},error is {}",table.table_name(),e);
+                                            }
+                                        };
 
                                     }
                                     QueryCommand::Insert(payload) => {
@@ -203,19 +223,36 @@ impl<P: DuckDBPO, T: DuckDbTableTrait> DuckDBOneTable<P, T> {
                                         let cond2 = cache_count >= flush_count;
                                         if cond1||cond2 {
                                             if single_cache.len() > 0 {
-                                                   Self::flush_data(table.clone(),single_cache);
-                                                    single_cache = vec![];
-                                                    cache_count = 0;
-                                                    last_flush_time = now;
+                                                  match self.get_connection(){
+                                                    Ok(conn) => {
+                                                        Self::flush_data(conn,table.clone(),single_cache);
+                                                            single_cache = vec![];
+                                                            cache_count = 0;
+                                                            last_flush_time = now;
+                                                        }
+                                                    Err(e) => {
+                                                          error!("Failed to to get connection when insert,table is {},error is {}",table.table_name(),e);
+                                                    }
+                                                };
+
+
                                             }
                                         };
                                     }QueryCommand::ExecuteSQL(payload) => {
-                                        let result = Self::query_to_dataframe(&payload);
-                                        if let Some(callback) = payload.callback {
-                                             if let Err(_unsent) = callback.send(result) {
-                                                 error!("在发送查询{}数量的时候出错：receiver 已关闭。", table.table_name());
-                                             }
-                                        }
+
+                                          match self.get_connection(){
+                                            Ok(conn) => {
+                                                    let result = Self::query_to_dataframe(conn,&payload);
+                                                    if let Some(callback) = payload.callback {
+                                                         if let Err(_unsent) = callback.send(result) {
+                                                             error!("在发送查询{}数量的时候出错：receiver 已关闭。", table.table_name());
+                                                         }
+                                                    }
+                                            }
+                                            Err(e) => {
+                                                  error!("Failed to to get connection when ExecuteSQL,table is {},error is {}",table.table_name(),e);
+                                            }
+                                        };
 
                                     }}
                             }
@@ -226,15 +263,22 @@ impl<P: DuckDBPO, T: DuckDbTableTrait> DuckDBOneTable<P, T> {
                             }
                         }
                     }
-
                     _ = tokio::time::sleep(flush_interval) => {
                         // 可在此处执行周期性 flush 或维护逻辑
                         let now = unix_time_now_u64_utc();
                         if now - last_flush_time > flush_interval.as_millis() as u64 && !single_cache.is_empty(){
-                             Self::flush_data(table.clone(),single_cache);
-                             single_cache = vec![];
-                             cache_count = 0;
-                             last_flush_time = now;
+                              match self.get_connection(){
+                                Ok(conn) => {
+                                     Self::flush_data(conn,table.clone(),single_cache);
+                                     single_cache = vec![];
+                                     cache_count = 0;
+                                     last_flush_time = now;
+                                }
+                                Err(e) => {
+                                    error!("Failed to to get connection when flush data,table is {},error is {}",table.table_name(),e);
+                                }
+                              };
+
                         }
                     }
                 }
