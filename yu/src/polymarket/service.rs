@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tokio::sync::{RwLock, broadcast};
 use yue::models::HistoryInterval;
 use yue::polymarket::restful_api::PolymarketAPI;
-use yue::polymarket::restful_models::{GetPricesHistoryQuery, Market, MarketPriceHistoryPoint};
+use yue::polymarket::restful_models::{GetPricesHistoryQuery, Market};
 pub struct MarketWithAddition {
     market: Market,
     series_id: String,
@@ -217,6 +217,7 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
     async fn initial_data(&self, start_timestamps: HashMap<String, u64>) -> Result<(), YuError> {
         let now = self.interval.get_now_close_unix_sec_utc();
         let fidelity = self.interval.to_second() / 60;
+        info!("start to initial polymarket history data");
         for market in self.open_markets.read().await.iter() {
             match &market.market.clob_token_ids {
                 None => {
@@ -242,6 +243,7 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
                 }
             }
         }
+        info!("finish to initial polymarket history data");
         Ok(())
     }
 

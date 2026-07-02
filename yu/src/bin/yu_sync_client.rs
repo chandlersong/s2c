@@ -1,70 +1,58 @@
 use std::error::Error;
-use yu::sync::sync_server::grpc_sync::ServerMessage;
-use yu::sync::sync_server::grpc_sync::sync_interface_client::SyncInterfaceClient;
+use tokio_stream::StreamExt;
+use tonic::Request;
 
 pub mod grpc_sync {
     tonic::include_proto!("grpc_sync");
 }
 
+use grpc_sync::sync_interface_client::SyncInterfaceClient;
+use grpc_sync::{Empty, SubscribeRequest};
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    // 连接服务器
-    let mut client = SyncInterfaceClient::connect("http://[::1]:50051").await?;
-    println!("已连接到 gRPC 服务端成功");
+    // 连接到 gRPC 服务（根据需要修改地址）
+    let mut client = SyncInterfaceClient::connect("http://localhost:50051").await?;
+    println!("已连接到 gRPC 服务端");
 
-    // 创建用于发送消息的 channel
-    // let (tx, rx) = mpsc::channel::<ClientMessage>(32);
-    // let outbound = ReceiverStream::new(rx);
-    //
-    // // 启动双向流
-    // let response = client.sync(outbound).await?;
-    // let mut inbound = response.into_inner(); // 服务端返回的流
-    //
-    // // 后台任务：持续发送消息给服务端
-    // let sender_task = tokio::spawn(async move {
-    //     let msg = ClientMessage {
-    //         payload: Some(Payload::Initial(Initial { local_max_timestamp: 0 })),
-    //     };
-    //
-    //     if tx.send(msg).await.is_err() {
-    //         println!("发送通道已关闭");
-    //     }
-    //
-    //     tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
-    // });
-    //
-    // // 主任务：接收服务端消息（重点处理 oneof）
-    // println!("开始接收服务端消息...\n");
-    //
-    // while let Some(result) = inbound.next().await {
-    //     match result {
-    //         Ok(msg) => handle_server_message(msg),
-    //         Err(e) => {
-    //             eprintln!("接收错误: {}", e);
-    //             break;
-    //         }
-    //     }
-    // }
+    // 1) 调用 GetLatestTimestamps
+    let resp = client.get_latest_timestamps(Request::new(Empty {})).await?;
+    let asset_ts = resp.into_inner();
+    println!("最新时间戳列表：");
+    for (asset, ts) in &asset_ts.timestamps {
+        println!("  {} => {}", asset, ts);
+    }
 
-    // 等待发送任务结束
-    // let _ = sender_task.await;
-    println!("客户端退出");
+    // 取最大的时间戳（如果需要用于后续逻辑）
+    let max_ts = asset_ts.timestamps.values().copied().max().unwrap_or(0);
+    println!("最大时间戳: {}", max_ts);
 
-    Ok(())
-}
+    // 2) 订阅 SubscribeLatest 并打印收到的所有消息
+    let mut stream = client.subscribe_latest(Request::new(SubscribeRequest {})).await?.into_inner();
 
-// 处理服务端 oneof 消息
-fn handle_server_message(msg: ServerMessage) {
-    if let Some(payload) = msg.payload {
-        match payload {
-            yu::sync::sync_server::grpc_sync::server_message::Payload::PolymarketHistory(history) => {
-                println!("收到 PolymarketHistory 消息: timestamp = {}", history.timestamp);
-                for (i, item) in history.history_list.iter().enumerate() {
-                    println!("  历史记录 {}: {:?}", i + 1, item);
+    println!("开始监听 SubscribeLatest 流：");
+    while let Some(item) = stream.next().await {
+        let msg = item?; // grpc_sync::ServerMessage
+        if let Some(payload) = msg.payload {
+            match payload {
+                grpc_sync::server_message::Payload::PolymarketHistory(list) => {
+                    println!("收到 PolyMarketHistoryList timestamp={}", list.timestamp);
+                    for h in list.history_list {
+                        println!(
+                            "  series={} event={} market={} asset={} ts={} price={}",
+                            h.series_id, h.event_id, h.market_id, h.asset_id, h.timestamp, h.price
+                        );
+                    }
+                }
+                _ => {
+                    println!("收到其他类型 payload");
                 }
             }
+        } else {
+            println!("收到 ServerMessage，但 payload 为空");
         }
-    } else {
-        println!("[未知消息类型]");
     }
+
+    println!("订阅流结束");
+    Ok(())
 }

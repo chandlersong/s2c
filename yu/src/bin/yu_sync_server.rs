@@ -9,6 +9,7 @@ use yu::config::get_config;
 use yu::cron_job;
 use yu::duck_db::DuckDBDSProvider;
 use yu::errors::YuError;
+use yu::polymarket::database::initial_tables;
 use yu::polymarket::service::new_series_history_market_service;
 use yu::sync::sync_server::grpc_sync::PolyMarketHistory;
 use yu::sync::sync_server::grpc_sync::sync_interface_server::SyncInterfaceServer;
@@ -30,7 +31,10 @@ async fn main() -> Result<(), YuError> {
         init_http_client(None);
     }
     let mut special_log = HashMap::new();
-
+    if let Err(e) = initial_tables(None) {
+        error!("Error initial tables: {}", e);
+        return Err(e);
+    }
     let log_in_config = app_config.log_level.as_deref();
     special_log.insert("yu_sync_server".to_string(), parse_level(log_in_config));
     special_log.insert("yu".to_string(), parse_level(log_in_config));
@@ -39,15 +43,16 @@ async fn main() -> Result<(), YuError> {
     setup_logger(Some(LevelFilter::Warn), special_log)?;
 
     let asset_timestamp = get_asset_timestamp(DuckDBDSProvider::default()).await;
-
-    let polymarket_history_tx = match start_polymarket_history(asset_timestamp.clone()).await {
+    // let series_ids = vec!["45".to_string(), "10151".to_string(), "10041".to_string()];
+    let series_ids = vec!["45".to_string()];
+    let polymarket_history_tx = match start_polymarket_history(series_ids, asset_timestamp.clone()).await {
         Ok(value) => value,
         Err(error) => {
             error!("polymarket seies history启动失败！！！程序退出:{}", error);
             return Err(error);
         }
     };
-    let server = YuSyncServer::new(polymarket_history_tx, asset_timestamp.clone(), None);
+    let server = YuSyncServer::new(polymarket_history_tx, asset_timestamp.clone(), None).await;
     info!("sync server start at  → {}", addr);
     Server::builder()
         .add_service(SyncInterfaceServer::new(server))
@@ -61,9 +66,8 @@ async fn main() -> Result<(), YuError> {
     Ok(())
 }
 
-async fn start_polymarket_history(asset_timestamp: HashMap<String, u64>) -> Result<Sender<PolyMarketHistory>, YuError> {
+async fn start_polymarket_history(series_ids: Vec<String>, asset_timestamp: HashMap<String, u64>) -> Result<Sender<PolyMarketHistory>, YuError> {
     let (polymarket_history_tx, _) = broadcast::channel(1000);
-    let series_ids = vec!["45".to_string(), "10151".to_string(), "10041".to_string()];
     let series_history_service = new_series_history_market_service(
         series_ids,
         HistoryInterval::OneHour,
@@ -75,6 +79,7 @@ async fn start_polymarket_history(asset_timestamp: HashMap<String, u64>) -> Resu
         error!("Error initializing series history: {}", e);
         return Err(e);
     }
+
     let series_history_service_clone = series_history_service.clone();
     //每天4点，因为好像很多都是4点刷新
     let _ = cron_job!("* 10 04 * * *", move |_uuid, _locked| {

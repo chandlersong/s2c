@@ -103,14 +103,14 @@ pub struct YuSyncServer {
 }
 
 impl YuSyncServer {
-    pub fn new(
+    pub async fn new(
         history_tx: broadcast::Sender<PolyMarketHistory>,
         asset_timestamp: HashMap<String, u64>,
         table: Option<DuckTableTableChannel<PolyMarketHistoryPo>>,
     ) -> Self {
         let (commands_sender, commands_receiver) = mpsc::channel(10);
         let polymarket_table = table.unwrap_or(get_polymarket_price_history_table());
-        tokio::spawn(async move { Self::run(commands_receiver, polymarket_table, asset_timestamp) });
+        tokio::spawn(async move { Self::run(commands_receiver, polymarket_table, asset_timestamp).await });
         Self { commands_sender, history_tx }
     }
 
@@ -127,9 +127,14 @@ impl YuSyncServer {
         polymarket_table: DuckTableTableChannel<PolyMarketHistoryPo>,
         asset_timestamp: HashMap<String, u64>,
     ) {
-        let ds_provider = match request_data_source_provider_from_table(polymarket_table.clone()).await {
-            Some(ds) => ds,
-            None => return, //以后再说吧
+        let ds_provider = loop {
+            match request_data_source_provider_from_table(polymarket_table.clone()).await {
+                Some(ds) => break ds,
+                None => {
+                    error!("request_data_source_provider_from_table returned None, retrying in 1s");
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            }
         };
         info!("Sync server run loop started");
 
@@ -277,7 +282,6 @@ impl SyncInterface for YuSyncServer {
 
     async fn subscribe_latest(&self, _request: Request<SubscribeRequest>) -> Result<Response<Self::SubscribeLatestStream>, Status> {
         let (tx, rx) = mpsc::channel::<Result<ServerMessage, Status>>(1000);
-
         let history_rx = self.history_tx.subscribe();
         tokio::spawn(async move {
             Self::send_history_to_client(history_rx, tx, 100, 1000).await;
