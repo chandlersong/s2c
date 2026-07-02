@@ -1,3 +1,4 @@
+use crate::binance::history;
 use crate::duck_db::DuckDBDSProvider;
 use crate::duck_db_tables::{DuckTableTableChannel, request_data_source_provider_from_table};
 use crate::polymarket::database::get_polymarket_price_history_table;
@@ -13,7 +14,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
-use yue::query_message::DataSourceProviderTrait;
+use yue::query_message::{DataSourceProviderTrait, InsertPayload, QueryCommand};
 
 pub mod grpc_sync {
     use std::collections::HashMap;
@@ -110,7 +111,8 @@ impl YuSyncServer {
     ) -> Self {
         let (commands_sender, commands_receiver) = mpsc::channel(10);
         let polymarket_table = table.unwrap_or(get_polymarket_price_history_table());
-        tokio::spawn(async move { Self::run(commands_receiver, polymarket_table, asset_timestamp).await });
+        let history_rx = history_tx.subscribe();
+        tokio::spawn(async move { Self::run(commands_receiver, polymarket_table, asset_timestamp, history_rx).await });
         Self { commands_sender, history_tx }
     }
 
@@ -125,17 +127,18 @@ impl YuSyncServer {
     async fn run(
         mut commands_rx: mpsc::Receiver<SyncInternalCommand>,
         polymarket_table: DuckTableTableChannel<PolyMarketHistoryPo>,
-        asset_timestamp: HashMap<String, u64>,
+        mut asset_timestamp: HashMap<String, u64>,
+        mut history_rx: broadcast::Receiver<PolyMarketHistory>,
     ) {
-        let ds_provider = loop {
-            match request_data_source_provider_from_table(polymarket_table.clone()).await {
-                Some(ds) => break ds,
-                None => {
-                    error!("request_data_source_provider_from_table returned None, retrying in 1s");
-                    tokio::time::sleep(Duration::from_secs(1)).await;
-                }
-            }
-        };
+        // let ds_provider = loop {
+        //     match request_data_source_provider_from_table(polymarket_table.clone()).await {
+        //         Some(ds) => break ds,
+        //         None => {
+        //             error!("request_data_source_provider_from_table returned None, retrying in 1s");
+        //             tokio::time::sleep(Duration::from_secs(1)).await;
+        //         }
+        //     }
+        // };
         info!("Sync server run loop started");
 
         loop {
@@ -151,10 +154,28 @@ impl YuSyncServer {
                         }
                         None => {
                             // internal command channel closed,退出 loop
-                            log::info!("Sync internal command channel closed, stopping run loop");
+                            info!("Sync internal command channel closed, stopping run loop");
                             break;
                         }
                     }
+                }
+                history = history_rx.recv() => {
+                    match history {
+                        Ok(poly_market_history) => {
+                            let latest_timestamp = poly_market_history.timestamp;
+                            let assert_id = poly_market_history.asset_id.clone();
+                            asset_timestamp.insert(assert_id,latest_timestamp);
+                            let po = PolyMarketHistoryPo::from(poly_market_history);
+                            let command = QueryCommand::Insert(InsertPayload::new_no_replay(po));
+                            if let Err(e) = polymarket_table.send(command).await {
+                                error!("send insert to polymarket_table failed: {:?}", e);
+                            }
+                        }
+                        Err(e) => {
+                            error!("recv history failed: {:?}", e);
+                        }
+                    }
+
                 }
             }
         }
