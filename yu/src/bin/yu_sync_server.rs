@@ -1,9 +1,8 @@
 use li::tools::logs::{parse_level, setup_logger};
 use log::{LevelFilter, debug, error, info};
 use std::collections::HashMap;
-use std::sync::Arc;
 use tokio::sync::broadcast;
-use tokio::sync::broadcast::{Receiver, Sender};
+use tokio::sync::broadcast::Sender;
 use tonic::transport::Server;
 use yu::config::get_config;
 use yu::cron_job;
@@ -43,16 +42,18 @@ async fn main() -> Result<(), YuError> {
     setup_logger(Some(LevelFilter::Warn), special_log)?;
 
     let asset_timestamp = get_asset_timestamp(DuckDBDSProvider::default()).await;
+    let (polymarket_history_tx, _) = broadcast::channel(1000);
+    let server = YuSyncServer::new(polymarket_history_tx.clone(), asset_timestamp.clone(), None).await;
     // let series_ids = vec!["45".to_string(), "10151".to_string(), "10041".to_string()];
     let series_ids = vec!["45".to_string()];
-    let polymarket_history_tx = match start_polymarket_history(series_ids, asset_timestamp.clone()).await {
+    match start_polymarket_history(series_ids, asset_timestamp.clone(), polymarket_history_tx).await {
         Ok(value) => value,
         Err(error) => {
             error!("polymarket seies history启动失败！！！程序退出:{}", error);
             return Err(error);
         }
     };
-    let server = YuSyncServer::new(polymarket_history_tx, asset_timestamp.clone(), None).await;
+
     info!("sync server start at  → {}", addr);
     Server::builder()
         .add_service(SyncInterfaceServer::new(server))
@@ -66,8 +67,11 @@ async fn main() -> Result<(), YuError> {
     Ok(())
 }
 
-async fn start_polymarket_history(series_ids: Vec<String>, asset_timestamp: HashMap<String, u64>) -> Result<Sender<PolyMarketHistory>, YuError> {
-    let (polymarket_history_tx, _) = broadcast::channel(1000);
+async fn start_polymarket_history(
+    series_ids: Vec<String>,
+    asset_timestamp: HashMap<String, u64>,
+    polymarket_history_tx: Sender<PolyMarketHistory>,
+) -> Result<Sender<PolyMarketHistory>, YuError> {
     let series_history_service = new_series_history_market_service(
         series_ids,
         HistoryInterval::OneHour,

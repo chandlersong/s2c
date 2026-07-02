@@ -229,10 +229,14 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
                             None => market.market.start_date.unwrap_or(0),
                             Some(v) => v.clone(),
                         };
+                        let query_start = start_ts + 1;
+                        if (query_start > now) || ((now - start_ts) < self.interval.to_second()) {
+                            continue;
+                        }
 
                         let query_param = GetPricesHistoryQuery {
                             market: asset_id.to_string(),
-                            start_ts: Some(start_ts - 1),
+                            start_ts: Some(query_start),
                             end_ts: Some(now.clone() + 10),
                             interval: Some(self.interval.as_ref().to_string()),
                             fidelity: Some(fidelity.clone() as u32),
@@ -257,10 +261,16 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
                 format!("{}_{}", market.market.slug, outcomes[asset_index])
             }
         };
+        let end_timestamp = query_payload.end_ts.unwrap_or(unix_time_now_u64_utc_seconds() + 10);
         let history = self.client.query_prices_history(query_payload).await;
+
         match history {
             Ok(history) => {
                 for h in history.history {
+                    if end_timestamp > h.t {
+                        continue;
+                    }
+                    let timestamp = self.interval.get_close_unix_sec(h.t);
                     let entry = PolyMarketHistory {
                         series_id: market.series_id.clone(),
                         series_slug: market.series_slug.clone(),
@@ -270,7 +280,7 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
                         market_slug: market.market.slug.clone(),
                         asset_id: asset_id.clone(),
                         asset_slug: asset_slug.clone(),
-                        timestamp: h.t,
+                        timestamp,
                         price: h.p,
                     };
                     self.broadcast_message(entry, &asset_slug, h.t);
@@ -292,11 +302,11 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
                 }
                 Some(asset_ids) => {
                     for (index, asset_id) in asset_ids.iter().enumerate() {
-                        let start_ts = now - 3601; // 获取过去一小时的数据
+                        let start_ts = now - 3599; // 获取过去一小时的数据
                         let query_param = GetPricesHistoryQuery {
                             market: asset_id.to_string(),
-                            start_ts: Some(start_ts - 1),
-                            end_ts: Some(now.clone() + 10),
+                            start_ts: Some(start_ts),
+                            end_ts: Some(now.clone() + 30),
                             interval: Some(self.interval.as_ref().to_string()),
                             fidelity: Some(fidelity.clone() as u32),
                         };

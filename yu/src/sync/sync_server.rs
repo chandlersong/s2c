@@ -1,6 +1,5 @@
-use crate::binance::history;
 use crate::duck_db::DuckDBDSProvider;
-use crate::duck_db_tables::{DuckTableTableChannel, request_data_source_provider_from_table};
+use crate::duck_db_tables::DuckTableTableChannel;
 use crate::polymarket::database::get_polymarket_price_history_table;
 use crate::polymarket::po::PolyMarketHistoryPo;
 use crate::sync::sync_server::grpc_sync::sync_interface_server::SyncInterface;
