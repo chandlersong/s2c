@@ -9,6 +9,7 @@ use crate::sync::sync_server::grpc_sync::{
 use log::{error, info};
 use std::collections::HashMap;
 use std::pin::Pin;
+use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
@@ -30,14 +31,6 @@ pub mod grpc_sync {
             res
         }
     }
-}
-
-enum SyncInternalCommand {
-    QueryAssetTimestamp(oneshot::Sender<Result<AssetTimestamp, Status>>),
-}
-
-pub struct YuSyncServer {
-    commands_sender: mpsc::Sender<SyncInternalCommand>,
 }
 
 ///
@@ -100,16 +93,25 @@ pub async fn get_asset_timestamp(provider: DuckDBDSProvider) -> HashMap<String, 
     res
 }
 
+enum SyncInternalCommand {
+    QueryAssetTimestamp(oneshot::Sender<Result<AssetTimestamp, Status>>),
+}
+
+pub struct YuSyncServer {
+    commands_sender: mpsc::Sender<SyncInternalCommand>,
+    history_tx: broadcast::Sender<PolyMarketHistory>,
+}
+
 impl YuSyncServer {
     pub fn new(
-        history_rx: broadcast::Receiver<PolyMarketHistory>,
+        history_tx: broadcast::Sender<PolyMarketHistory>,
         asset_timestamp: HashMap<String, u64>,
         table: Option<DuckTableTableChannel<PolyMarketHistoryPo>>,
     ) -> Self {
         let (commands_sender, commands_receiver) = mpsc::channel(10);
         let polymarket_table = table.unwrap_or(get_polymarket_price_history_table());
         tokio::spawn(async move { Self::run(commands_receiver, polymarket_table, asset_timestamp) });
-        Self { commands_sender }
+        Self { commands_sender, history_tx }
     }
 
     ///
@@ -149,6 +151,86 @@ impl YuSyncServer {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    /// Send batched PolyMarketHistory messages to a client.
+    ///
+    /// 说明（中文）:
+    /// - 将从 `history_receiver` 接收到的 `PolyMarketHistory` 按批次缓存，满足下列任一条件时把批次打包并发送给 `client_sender`：
+    ///   1. 缓存条目数达到 `max_cache_size`；
+    ///   2. 自上次发送后经过了 `max_loop_mill_seconds` 毫秒。
+    /// - 错误处理策略：对 `broadcast::RecvError::Lagged` 忽略滞后消息，对 `Closed` 置位关闭标志并退出循环；若 `client_sender` 关闭（客户端断开），则停止发送并退出。
+    ///
+    /// 参数：
+    /// - `history_receiver`: 广播订阅者，接收来自服务的 PolyMarketHistory
+    /// - `client_sender`: 将封装好的 `ServerMessage` 发送回客户端的 mpsc 发送端
+    /// - `max_cache_size`: 达到此数量时立即触发发送
+    /// - `max_loop_mill_seconds`: 达到此时间（毫秒）时触发发送
+    async fn send_history_to_client(
+        mut history_receiver: broadcast::Receiver<PolyMarketHistory>,
+        client_sender: mpsc::Sender<Result<ServerMessage, Status>>,
+        max_cache_size: usize,
+        max_loop_mill_seconds: usize,
+    ) {
+        let max_dur = Duration::from_millis(max_loop_mill_seconds as u64);
+
+        loop {
+            let mut buffer: Vec<PolyMarketHistory> = Vec::new();
+            let deadline = Instant::now() + max_dur;
+            let mut closed = false;
+
+            // collect until size reached or timeout
+            while buffer.len() < max_cache_size {
+                let now = Instant::now();
+                if now >= deadline {
+                    break;
+                }
+                let remaining = deadline - now;
+                match tokio::time::timeout(remaining, history_receiver.recv()).await {
+                    Ok(Ok(item)) => {
+                        buffer.push(item);
+                        continue;
+                    }
+                    Ok(Err(broadcast::error::RecvError::Lagged(_))) => {
+                        // skip lagged messages
+                        continue;
+                    }
+                    Ok(Err(broadcast::error::RecvError::Closed)) => {
+                        closed = true;
+                        break;
+                    }
+                    Err(_) => {
+                        // timeout waiting for next message
+                        break;
+                    }
+                }
+            }
+
+            if buffer.is_empty() {
+                if closed {
+                    break;
+                }
+                // nothing collected, continue loop to wait again
+                continue;
+            }
+
+            let list = PolyMarketHistoryList {
+                history_list: buffer,
+                timestamp: 0,
+            };
+            let message = ServerMessage {
+                payload: Some(server_message::Payload::PolymarketHistory(list)),
+            };
+
+            if client_sender.send(Ok(message)).await.is_err() {
+                // client disconnected
+                break;
+            }
+
+            if closed {
+                break;
             }
         }
     }
@@ -193,8 +275,15 @@ impl SyncInterface for YuSyncServer {
 
     type SubscribeLatestStream = Pin<Box<dyn tokio_stream::Stream<Item = Result<ServerMessage, Status>> + Send + 'static>>;
 
-    async fn subscribe_latest(&self, request: Request<SubscribeRequest>) -> Result<Response<Self::SubscribeLatestStream>, Status> {
-        todo!()
+    async fn subscribe_latest(&self, _request: Request<SubscribeRequest>) -> Result<Response<Self::SubscribeLatestStream>, Status> {
+        let (tx, rx) = mpsc::channel::<Result<ServerMessage, Status>>(1000);
+
+        let history_rx = self.history_tx.subscribe();
+        tokio::spawn(async move {
+            Self::send_history_to_client(history_rx, tx, 100, 1000).await;
+        });
+
+        Ok(Response::new(Box::pin(ReceiverStream::new(rx)) as Self::SyncHistoryStream))
     }
 }
 
@@ -302,5 +391,215 @@ pub mod tests {
         assert_eq!(asset_timestamp.len(), 2);
         assert_eq!(asset_timestamp.get("ASSETA").copied(), Some(2000u64));
         assert_eq!(asset_timestamp.get("ASSETB").copied(), Some(3000u64));
+    }
+
+    /// Unit test: test_send_history_to_client
+    ///
+    /// 目的：验证基本批处理行为。
+    /// 步骤：
+    /// 1. 启动 `send_history_to_client`，设置 `max_cache_size=3` 和较短的超时；
+    /// 2. 向 broadcast channel 发送 3 条 `PolyMarketHistory`；
+    /// 3. 断言客户端收到一个包含 3 条记录的 `PolymarketHistory` 批次消息。
+    #[tokio::test]
+    pub async fn test_send_history_to_client() {
+        use super::grpc_sync::{PolyMarketHistory, server_message};
+        use tokio::sync::{broadcast, mpsc};
+        use tonic::Status;
+
+        let (tx, _) = broadcast::channel(16);
+        let rx = tx.subscribe();
+        let (client_tx, mut client_rx) = mpsc::channel::<Result<super::grpc_sync::ServerMessage, Status>>(10);
+
+        // run sender task
+        tokio::spawn(async move {
+            super::YuSyncServer::send_history_to_client(rx, client_tx, 3, 500).await;
+        });
+
+        // send three messages
+        let m1 = PolyMarketHistory {
+            series_id: "".to_string(),
+            series_slug: "".to_string(),
+            event_id: "".to_string(),
+            event_slug: "".to_string(),
+            market_id: "".to_string(),
+            market_slug: "".to_string(),
+            asset_id: "A".to_string(),
+            asset_slug: "".to_string(),
+            timestamp: 1,
+            price: 1.0,
+        };
+        let m2 = PolyMarketHistory {
+            series_id: "".to_string(),
+            series_slug: "".to_string(),
+            event_id: "".to_string(),
+            event_slug: "".to_string(),
+            market_id: "".to_string(),
+            market_slug: "".to_string(),
+            asset_id: "B".to_string(),
+            asset_slug: "".to_string(),
+            timestamp: 2,
+            price: 2.0,
+        };
+        let m3 = PolyMarketHistory {
+            series_id: "".to_string(),
+            series_slug: "".to_string(),
+            event_id: "".to_string(),
+            event_slug: "".to_string(),
+            market_id: "".to_string(),
+            market_slug: "".to_string(),
+            asset_id: "C".to_string(),
+            asset_slug: "".to_string(),
+            timestamp: 3,
+            price: 3.0,
+        };
+
+        tx.send(m1).unwrap();
+        tx.send(m2).unwrap();
+        tx.send(m3).unwrap();
+
+        // expect aggregated message
+        let received = client_rx.recv().await.expect("expected server message");
+        match received {
+            Ok(msg) => {
+                if let Some(server_message::Payload::PolymarketHistory(list)) = msg.payload {
+                    assert_eq!(list.history_list.len(), 3);
+                } else {
+                    panic!("unexpected payload");
+                }
+            }
+            Err(e) => panic!("send error: {:?}", e),
+        }
+    }
+
+    /// Unit test: test_send_history_triggers_on_count
+    ///
+    /// 目的：验证当接收到的消息数量达到 `max_cache_size` 时会立即触发发送（不依赖超时）。
+    /// 步骤：
+    /// 1. 启动 `send_history_to_client`，设置 `max_cache_size=2` 且将超时设置为较长；
+    /// 2. 连续发送 2 条消息；
+    /// 3. 断言客户端在短时间内收到一个包含 2 条记录的批次。
+    #[tokio::test]
+    pub async fn test_send_history_triggers_on_count() {
+        use super::grpc_sync::PolyMarketHistory;
+        use tokio::sync::{broadcast, mpsc};
+        use tonic::Status;
+
+        let (tx, _) = broadcast::channel(16);
+        let rx = tx.subscribe();
+        let (client_tx, mut client_rx) = mpsc::channel::<Result<super::grpc_sync::ServerMessage, Status>>(10);
+
+        tokio::spawn(async move {
+            super::YuSyncServer::send_history_to_client(rx, client_tx, 2, 5000).await;
+        });
+
+        let m1 = PolyMarketHistory {
+            series_id: "".to_string(),
+            series_slug: "".to_string(),
+            event_id: "".to_string(),
+            event_slug: "".to_string(),
+            market_id: "".to_string(),
+            market_slug: "".to_string(),
+            asset_id: "A".to_string(),
+            asset_slug: "".to_string(),
+            timestamp: 1,
+            price: 1.0,
+        };
+        let m2 = PolyMarketHistory {
+            series_id: "".to_string(),
+            series_slug: "".to_string(),
+            event_id: "".to_string(),
+            event_slug: "".to_string(),
+            market_id: "".to_string(),
+            market_slug: "".to_string(),
+            asset_id: "B".to_string(),
+            asset_slug: "".to_string(),
+            timestamp: 2,
+            price: 2.0,
+        };
+
+        tx.send(m1).unwrap();
+        tx.send(m2).unwrap();
+
+        let received = tokio::time::timeout(std::time::Duration::from_millis(500), client_rx.recv())
+            .await
+            .expect("timeout waiting")
+            .expect("expected message");
+        match received {
+            Ok(msg) => {
+                if let Some(super::grpc_sync::server_message::Payload::PolymarketHistory(list)) = msg.payload {
+                    assert_eq!(list.history_list.len(), 2);
+                } else {
+                    panic!("unexpected payload");
+                }
+            }
+            Err(e) => panic!("send error: {:?}", e),
+        }
+    }
+
+    /// Unit test: test_send_history_triggers_on_timeout
+    ///
+    /// 目的：验证未达到数量阈值但超过时间阈值时会触发发送。
+    /// 步骤：
+    /// 1. 启动 `send_history_to_client`，设置 `max_cache_size` 为较大值、`max_loop_mill_seconds` 为较小值；
+    /// 2. 发送少于 `max_cache_size` 的消息（例如 2 条）；
+    /// 3. 等待超时并断言客户端收到包含这些消息的批次。
+    #[tokio::test]
+    pub async fn test_send_history_triggers_on_timeout() {
+        use super::grpc_sync::PolyMarketHistory;
+        use tokio::sync::{broadcast, mpsc};
+        use tonic::Status;
+
+        let (tx, _) = broadcast::channel(16);
+        let rx = tx.subscribe();
+        let (client_tx, mut client_rx) = mpsc::channel::<Result<super::grpc_sync::ServerMessage, Status>>(10);
+
+        // timeout set small
+        tokio::spawn(async move {
+            super::YuSyncServer::send_history_to_client(rx, client_tx, 10, 100).await;
+        });
+
+        let m1 = PolyMarketHistory {
+            series_id: "".to_string(),
+            series_slug: "".to_string(),
+            event_id: "".to_string(),
+            event_slug: "".to_string(),
+            market_id: "".to_string(),
+            market_slug: "".to_string(),
+            asset_id: "A".to_string(),
+            asset_slug: "".to_string(),
+            timestamp: 1,
+            price: 1.0,
+        };
+        let m2 = PolyMarketHistory {
+            series_id: "".to_string(),
+            series_slug: "".to_string(),
+            event_id: "".to_string(),
+            event_slug: "".to_string(),
+            market_id: "".to_string(),
+            market_slug: "".to_string(),
+            asset_id: "B".to_string(),
+            asset_slug: "".to_string(),
+            timestamp: 2,
+            price: 2.0,
+        };
+
+        tx.send(m1).unwrap();
+        tx.send(m2).unwrap();
+
+        // wait for message triggered by timeout
+        let received = tokio::time::timeout(std::time::Duration::from_secs(1), client_rx.recv())
+            .await
+            .expect("timeout waiting")
+            .expect("expected message");
+        match received {
+            Ok(msg) => {
+                if let Some(super::grpc_sync::server_message::Payload::PolymarketHistory(list)) = msg.payload {
+                    assert_eq!(list.history_list.len(), 2);
+                } else {
+                    panic!("unexpected payload");
+                }
+            }
+            Err(e) => panic!("send error: {:?}", e),
+        }
     }
 }

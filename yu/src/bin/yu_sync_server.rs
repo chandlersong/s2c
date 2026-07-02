@@ -40,14 +40,14 @@ async fn main() -> Result<(), YuError> {
 
     let asset_timestamp = get_asset_timestamp(DuckDBDSProvider::default()).await;
 
-    let polymarket_history_rx = match start_polymarket_history(asset_timestamp.clone()).await {
+    let polymarket_history_tx = match start_polymarket_history(asset_timestamp.clone()).await {
         Ok(value) => value,
         Err(error) => {
             error!("polymarket seies history启动失败！！！程序退出:{}", error);
             return Err(error);
         }
     };
-    let server = YuSyncServer::new(polymarket_history_rx, asset_timestamp.clone(), None);
+    let server = YuSyncServer::new(polymarket_history_tx, asset_timestamp.clone(), None);
     info!("sync server start at  → {}", addr);
     Server::builder()
         .add_service(SyncInterfaceServer::new(server))
@@ -61,11 +61,16 @@ async fn main() -> Result<(), YuError> {
     Ok(())
 }
 
-async fn start_polymarket_history(asset_timestamp: HashMap<String, u64>) -> Result<Receiver<PolyMarketHistory>, YuError> {
-    let (polymarket_history_tx, polymarket_history_rx) = broadcast::channel(1000);
+async fn start_polymarket_history(asset_timestamp: HashMap<String, u64>) -> Result<Sender<PolyMarketHistory>, YuError> {
+    let (polymarket_history_tx, _) = broadcast::channel(1000);
     let series_ids = vec!["45".to_string(), "10151".to_string(), "10041".to_string()];
-    let series_history_service =
-        new_series_history_market_service(series_ids, HistoryInterval::OneHour, polymarket_history_tx, default_polymarket_api()).await;
+    let series_history_service = new_series_history_market_service(
+        series_ids,
+        HistoryInterval::OneHour,
+        polymarket_history_tx.clone(),
+        default_polymarket_api(),
+    )
+    .await;
     if let Err(e) = series_history_service.initial_data(asset_timestamp.clone()).await {
         error!("Error initializing series history: {}", e);
         return Err(e);
@@ -102,5 +107,5 @@ async fn start_polymarket_history(asset_timestamp: HashMap<String, u64>) -> Resu
             };
         })
     });
-    Ok(polymarket_history_rx)
+    Ok(polymarket_history_tx)
 }
