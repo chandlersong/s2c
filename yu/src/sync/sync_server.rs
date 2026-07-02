@@ -4,15 +4,15 @@ use crate::polymarket::database::get_polymarket_price_history_table;
 use crate::polymarket::po::PolyMarketHistoryPo;
 use crate::sync::sync_server::grpc_sync::sync_interface_server::SyncInterface;
 use crate::sync::sync_server::grpc_sync::{
-    AssetTimestamp, Empty, PolyMarketHistoryList, ServerMessage, SubscribeRequest, SyncRequest, server_message,
+    AssetTimestamp, Empty, PolyMarketHistory, PolyMarketHistoryList, ServerMessage, SubscribeRequest, SyncRequest, server_message,
 };
-use log::error;
+use log::{error, info};
 use std::collections::HashMap;
 use std::pin::Pin;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
-use yue::query_message::{DataSourceProviderTrait, GetDataSourceProviderPayload, QueryCommand};
+use yue::query_message::DataSourceProviderTrait;
 
 pub mod grpc_sync {
     use std::collections::HashMap;
@@ -43,7 +43,7 @@ pub struct YuSyncServer {
 ///
 /// 获取最新的asset id
 ///
-async fn get_asset_timestamp(provider: DuckDBDSProvider) -> HashMap<String, u64> {
+pub async fn get_asset_timestamp(provider: DuckDBDSProvider) -> HashMap<String, u64> {
     // 最原始的做法：通过 provider 获取连接，直接用 stmt.query 返回 rows，然后在内存里计算每个 asset 的最大 timestamp
     let mut res: HashMap<String, u64> = HashMap::new();
 
@@ -101,10 +101,14 @@ async fn get_asset_timestamp(provider: DuckDBDSProvider) -> HashMap<String, u64>
 }
 
 impl YuSyncServer {
-    pub fn new(table: Option<DuckTableTableChannel<PolyMarketHistoryPo>>) -> Self {
+    pub fn new(
+        history_rx: broadcast::Receiver<PolyMarketHistory>,
+        asset_timestamp: HashMap<String, u64>,
+        table: Option<DuckTableTableChannel<PolyMarketHistoryPo>>,
+    ) -> Self {
         let (commands_sender, commands_receiver) = mpsc::channel(10);
         let polymarket_table = table.unwrap_or(get_polymarket_price_history_table());
-        tokio::spawn(async move { Self::run(commands_receiver, polymarket_table) });
+        tokio::spawn(async move { Self::run(commands_receiver, polymarket_table, asset_timestamp) });
         Self { commands_sender }
     }
 
@@ -116,13 +120,17 @@ impl YuSyncServer {
     ///     1. 收到消息
     ///     2. 处理查询。
     ///
-    async fn run(mut commands_rx: mpsc::Receiver<SyncInternalCommand>, polymarket_table: DuckTableTableChannel<PolyMarketHistoryPo>) {
+    async fn run(
+        mut commands_rx: mpsc::Receiver<SyncInternalCommand>,
+        polymarket_table: DuckTableTableChannel<PolyMarketHistoryPo>,
+        asset_timestamp: HashMap<String, u64>,
+    ) {
         let ds_provider = match request_data_source_provider_from_table(polymarket_table.clone()).await {
             Some(ds) => ds,
             None => return, //以后再说吧
         };
+        info!("Sync server run loop started");
 
-        let asset_timestamp = get_asset_timestamp(ds_provider.clone()).await;
         loop {
             tokio::select! {
                 command = commands_rx.recv() => {

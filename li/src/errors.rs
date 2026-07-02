@@ -1,6 +1,7 @@
 use aws_sdk_dynamodb::error::SdkError;
 use aws_sdk_dynamodb::operation::create_table::CreateTableError;
 use aws_sdk_dynamodb::operation::update_time_to_live::UpdateTimeToLiveError;
+use log::SetLoggerError;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -9,12 +10,14 @@ pub enum LiError {
     DynamoDBError(#[from] aws_sdk_dynamodb::Error),
     #[error("Serde error: {0}")]
     SerdeError(#[from] serde_json::Error),
+    #[error("SetLoggerError error: {0}")]
+    SetLoggerError(#[from] SetLoggerError),
     #[error("Custom error: {0}")]
     CustomError(String),
 }
 
 impl LiError {
-    pub fn custom_error(message: &str) -> Self {
+    pub fn new(message: &str) -> Self {
         LiError::CustomError(String::from(message))
     }
 }

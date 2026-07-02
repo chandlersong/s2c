@@ -1,10 +1,10 @@
+use crate::errors::LiError;
 use log::LevelFilter;
 use std::collections::HashMap;
 use std::time::SystemTime;
-
 //PLAN: 以后加入一些分布式的log库
 
-pub fn setup_logger_all(log_level: Option<LevelFilter>) -> Result<(), fern::InitError> {
+pub fn setup_logger_all(log_level: Option<LevelFilter>) -> Result<(), LiError> {
     setup_logger(log_level, HashMap::new())?;
     Ok(())
 }
@@ -21,7 +21,7 @@ pub fn parse_level(level: Option<&str>) -> LevelFilter {
     }
 }
 
-pub fn setup_logger(default_level: Option<LevelFilter>, special_level: HashMap<String, LevelFilter>) -> Result<(), fern::InitError> {
+pub fn setup_logger(default_level: Option<LevelFilter>, special_level: HashMap<String, LevelFilter>) -> Result<(), LiError> {
     let filter = default_level.unwrap_or_else(|| LevelFilter::Debug);
     let mut logger_builder = fern::Dispatch::new()
         .format(|out, message, record| {

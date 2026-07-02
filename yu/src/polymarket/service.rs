@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tokio::sync::{RwLock, broadcast};
 use yue::models::HistoryInterval;
 use yue::polymarket::restful_api::PolymarketAPI;
-use yue::polymarket::restful_models::{GetPricesHistoryQuery, Market};
+use yue::polymarket::restful_models::{GetPricesHistoryQuery, Market, MarketPriceHistoryPoint};
 pub struct MarketWithAddition {
     market: Market,
     series_id: String,
@@ -182,6 +182,17 @@ impl SeriesHistoryMarketServiceImpl {
     }
 }
 
+impl SeriesHistoryMarketServiceImpl {
+    fn broadcast_message(&self, entry: PolyMarketHistory, asset_slug: &str, timestamp: u64) -> broadcast::Sender<PolyMarketHistory> {
+        if self.history_broadcast.receiver_count() != 0 {
+            if let Err(e) = self.history_broadcast.send(entry) {
+                error!("asset_slug:{}, timestamp {},history_broadcast error: {:?}", asset_slug, timestamp, e);
+            }
+        }
+        self.history_broadcast.clone()
+    }
+}
+
 /// 服务接口：抽象出 trait 方便在测试或其它模块中 mock
 
 #[async_trait]
@@ -260,9 +271,7 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
                         timestamp: h.t,
                         price: h.p,
                     };
-                    if let Err(e) = self.history_broadcast.send(entry) {
-                        error!("asset_slug:{}, timestamp {},history_broadcast error: {:?}", asset_slug, h.t, e);
-                    }
+                    self.broadcast_message(entry, &asset_slug, h.t);
                 }
             }
             Err(e) => {
