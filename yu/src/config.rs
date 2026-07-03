@@ -1,5 +1,6 @@
 use config::Config;
 use serde::Deserialize;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use std::env;
 use std::path::Path;
 use std::sync::OnceLock;
@@ -99,6 +100,42 @@ impl SpotTradeStreamConfig {
         self.retention_days.unwrap_or(7)
     }
 }
+#[derive(Deserialize, Debug, Clone)]
+pub struct SyncClientConfig {
+    pub server_host: String,
+    pub server_port: u16,
+    pub db_host: String,
+    pub db_port: u16,
+    pub db_user: String,
+    pub db_password: String,
+    pub db_dbname: String,
+    pub max_connections: Option<u32>,
+    pub min_connections: Option<u32>,
+}
+impl SyncClientConfig {
+    pub fn connect_options(&self) -> PgConnectOptions {
+        PgConnectOptions::new()
+            .host(&self.db_host)
+            .port(self.db_port)
+            .username(&self.db_user)
+            .password(&self.db_password)
+            .database(&self.db_dbname)
+    }
+
+    pub fn pool_options(&self) -> PgPoolOptions {
+        PgPoolOptions::new()
+            .max_connections(self.get_max_connections())
+            .min_connections(self.get_min_connections())
+    }
+
+    pub fn get_max_connections(&self) -> u32 {
+        self.max_connections.unwrap_or(20)
+    }
+
+    pub fn get_min_connections(&self) -> u32 {
+        self.min_connections.unwrap_or(5)
+    }
+}
 
 #[derive(Deserialize, Debug)]
 pub struct AppConfig {
@@ -111,6 +148,7 @@ pub struct AppConfig {
     pub log_level: Option<String>,
     pub binance: Option<BinanceConfig>,
     pub data_integrity: Option<DataIntegrityConfig>,
+    pub sync_client: Option<SyncClientConfig>,
 }
 
 impl AppConfig {
@@ -368,6 +406,7 @@ logLevel: "info"
             log_level: None,
             binance: None,
             data_integrity: None,
+            sync_client: None,
         };
         let got = cfg.get_earliest_hour_time_ms(Some(utc_now));
         assert_eq!(got, 7 * HOUR_MS);
@@ -385,6 +424,7 @@ logLevel: "info"
             log_level: None,
             binance: None,
             data_integrity: None,
+            sync_client: None,
         };
         let got = cfg.get_earliest_hour_time_ms(Some(utc_now));
         assert_eq!(got, 15 * HOUR_MS);
@@ -402,6 +442,7 @@ logLevel: "info"
             log_level: None,
             binance: None,
             data_integrity: None,
+            sync_client: None,
         };
         let got = cfg.get_earliest_hour_time_ms(Some(utc_now));
         assert_eq!(got, 0);

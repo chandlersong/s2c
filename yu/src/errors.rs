@@ -18,6 +18,10 @@ pub enum YuError {
     SerdeJsonError(#[from] serde_json::Error),
     #[error("Not support: {0}")]
     NotSupportError(String),
+    #[error("tonic::transport: {0}")]
+    TonicTransportError(#[from] tonic::transport::Error),
+    #[error("tonic::Status: {0}")]
+    TonicTStatusError(#[from] tonic::Status),
     #[error("Custom error: {0}")]
     CustomError(String),
 }
