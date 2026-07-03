@@ -1,18 +1,20 @@
 use crate::duck_db::DuckDBDSProvider;
 use crate::duck_db_tables::{DuckTableTableChannel, request_data_source_provider_from_table};
 use crate::polymarket::database::get_polymarket_price_history_table;
-use crate::polymarket::po::PolyMarketHistoryPo;
+use crate::polymarket::po::{PolyMarketAssetInfoPo, PolyMarketHistoryPo};
 use crate::sync::sync_server::grpc_sync::sync_interface_server::SyncInterface;
 use crate::sync::sync_server::grpc_sync::{
-    Empty, PolyMarketAssetTimestamp, PolyMarketHistory, PolyMarketHistoryList, ServerMessage, SubscribeRequest, SyncRequest, server_message,
+    Empty, PolyMarketAssetTimestamp, PolyMarketHistory, PolyMarketHistoryList, PolymarketAssertInfo, ServerMessage, SubscribeRequest, SyncRequest,
+    server_message,
 };
 use duckdb::params;
 use log::{error, info};
 use prost::Message;
 use std::collections::HashMap;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::{RwLock, broadcast, mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 use yue::query_message::{DataSourceProviderTrait, InsertPayload, QueryCommand};
@@ -97,12 +99,13 @@ impl YuSyncServer {
         history_tx: broadcast::Sender<PolyMarketHistory>,
         asset_timestamp: HashMap<String, u64>,
         table: Option<DuckTableTableChannel<PolyMarketHistoryPo>>,
+        asset_infos: Arc<RwLock<Vec<PolyMarketAssetInfoPo>>>,
     ) -> Self {
         let (commands_sender, commands_receiver) = mpsc::channel(10);
         let polymarket_table = table.unwrap_or(get_polymarket_price_history_table());
         let history_rx = history_tx.subscribe();
         let ds_provider = Self::get_ds_from_table(&polymarket_table).await;
-        tokio::spawn(async move { Self::run(commands_receiver, polymarket_table, asset_timestamp, history_rx).await });
+        tokio::spawn(async move { Self::run(commands_receiver, polymarket_table, asset_timestamp, history_rx, asset_infos).await });
         Self {
             commands_sender,
             history_tx,
@@ -136,6 +139,7 @@ impl YuSyncServer {
         polymarket_table: DuckTableTableChannel<PolyMarketHistoryPo>,
         mut asset_timestamp: HashMap<String, u64>,
         mut history_rx: broadcast::Receiver<PolyMarketHistory>,
+        asset_infos: Arc<RwLock<Vec<PolyMarketAssetInfoPo>>>,
     ) {
         info!("Sync server run loop started");
 
@@ -144,11 +148,28 @@ impl YuSyncServer {
                 command = commands_rx.recv() => {
                     match command {
                         Some(SyncInternalCommand::QueryAssetTimestamp(tx)) => {
-                            // let message: PolyMarketAssetTimestamp = AssetTimestamp::from(asset_timestamp.clone());
-                            // // ignore send error (receiver might be dropped)
-                            // if let Err(e) = tx.send(Ok(message)){
-                            //     error!("send asset timestamp failed: {:?}", e);
-                            // }
+                            let mut message_info:HashMap<String,PolymarketAssertInfo> = HashMap::new();
+
+                            let assets = asset_infos.read().await.clone();
+                            for a in assets {
+                                let assert_id = a.asset_id;
+                                let info  = PolymarketAssertInfo{
+                                    series_id: assert_id.clone(),
+                                    series_slug: a.series_slug.clone(),
+                                    event_id: a.event_id.clone(),
+                                    event_slug: a.event_slug.clone(),
+                                    market_id: a.market_id.clone(),
+                                    market_slug: a.market_slug.clone(),
+                                    asset_id: assert_id.clone(),
+                                    asset_slug:a.asset_slug.clone(),
+                                    latest_timestamp: asset_timestamp.get(&assert_id).unwrap_or(&0).clone(),
+                                };
+                                message_info.insert(assert_id, info);
+                            }
+                            let message = PolyMarketAssetTimestamp{timestamps: message_info};
+                            if let Err(e) = tx.send(Ok(message)){
+                                error!("send asset timestamp failed: {:?}", e);
+                            }
                         }
                         None => {
                             // internal command channel closed,退出 loop
@@ -208,13 +229,13 @@ impl YuSyncServer {
             return;
         }
 
-        let mut offset: u64 = 0;
-        let batch = max_batch_size;
+        let mut offset: i64 = 0;
+        let batch = max_batch_size as usize;
         let mut any_sent = false;
 
         loop {
             let sql = format!(
-                "SELECT payload FROM poly_market_price_history WHERE assert_id = '{}' AND timestamp > {} ORDER BY timestamp LIMIT {} OFFSET ?",
+                "SELECT * FROM poly_market_price_history WHERE assert_id = '{}' AND timestamp > {} ORDER BY timestamp LIMIT {} OFFSET ?",
                 assert_id.replace("'", "''"),
                 start_timestamp,
                 batch
@@ -230,47 +251,37 @@ impl YuSyncServer {
                         }
                     };
 
-                    let mut rows = match stmt.query(params![offset]) {
-                        Ok(r) => r,
+                    // 执行带分页的查询，绑定 offset 参数
+                    let mapped_iter = match stmt.query_map(params![offset as i64], |row| {
+                        Ok(PolyMarketHistory {
+                            asset_id: row.get("assert_id")?,
+                            timestamp: row.get("timestamp")?,
+                            price: row.get("price")?,
+                        })
+                    }) {
+                        Ok(it) => it,
                         Err(e) => {
-                            error!("query query_and_send_history failed: {:?}", e);
+                            error!("query_map failed in query_and_send_history: {:?}", e);
+                            let _ = tx.send(Err(Status::internal("db query failed"))).await;
                             return;
                         }
                     };
 
+                    // 收集本页结果并处理逐行映射错误
                     let mut results: Vec<PolyMarketHistory> = Vec::new();
-                    let mut row_count: u64 = 0;
-
-                    while let Some(row_res) = rows.next().map_err(|e| e.to_string()).ok() {
+                    for row_res in mapped_iter {
                         match row_res {
-                            Some(row) => {
-                                row_count += 1;
-                                // payload 在第 0 列
-                                let payload_res: Result<Vec<u8>, _> = row.get(0);
-                                match payload_res {
-                                    Ok(payload) => {
-                                        // payload 为 prost 编码的 PolyMarketHistory
-                                        match PolyMarketHistory::decode(payload.as_slice()) {
-                                            Ok(history) => results.push(history),
-                                            Err(e) => {
-                                                error!("decode PolyMarketHistory failed: {:?}", e);
-                                                continue;
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        error!("get payload failed: {:?}", e);
-                                        continue;
-                                    }
-                                }
+                            Ok(pm) => results.push(pm),
+                            Err(e) => {
+                                error!("row mapping failed in query_and_send_history: {:?}", e);
+                                let _ = tx.send(Err(Status::internal("db row mapping failed"))).await;
+                                return;
                             }
-                            None => break,
                         }
                     }
 
-                    // 在继续到 await 之前显式 drop DuckDB 的非 Send 类型（stmt/rows/conn），
-                    // 避免将它们跨 await 保持在异步任务中导致 future 非 Send。
-                    drop(rows);
+                    let row_count = results.len();
+
                     drop(stmt);
                     drop(conn);
 
@@ -296,7 +307,7 @@ impl YuSyncServer {
                     }
 
                     // 否则继续下一页
-                    offset += batch;
+                    offset += batch as i64;
                 }
                 Err(e) => {
                     error!("acquire provider failed in query_and_send_history: {:?}", e);
@@ -458,12 +469,9 @@ impl SyncInterface for YuSyncServer {
 
 #[cfg(test)]
 pub mod tests {
-    use crate::duck_db::DuckDBDSProvider;
-    use crate::duck_db_tables::{DuckDBOneTable, DuckTableTableChannel};
     use crate::polymarket::database::initial_tables;
-    use crate::polymarket::db_consts::PolyMarketTables;
     use crate::polymarket::po::PolyMarketHistoryPo;
-    use crate::test_utils::{create_memory_db_provider, create_memory_duckdb_provider};
+    use crate::test_utils::create_memory_duckdb_provider;
     use yue::query_message::GetDataSourceProviderPayload;
 
     ///
@@ -727,7 +735,7 @@ pub mod tests {
     /// 3. 调用 query_and_send_history，等待接收端收到批次消息并断言返回记录数和时间戳条件正确。
     #[tokio::test]
     pub async fn test_query_and_send_history() {
-        use super::grpc_sync::{PolyMarketHistory, ServerMessage};
+        use super::grpc_sync::ServerMessage;
         use crate::polymarket::po::PolyMarketHistoryPo;
         use tokio::sync::mpsc;
         use tokio::sync::oneshot;
@@ -742,11 +750,6 @@ pub mod tests {
         let mut po_vec: Vec<PolyMarketHistoryPo> = Vec::new();
         for i in 1..=5 {
             let ts = i as u64 * 1000;
-            let history = PolyMarketHistory {
-                asset_id: "ASSETA".to_string(),
-                timestamp: ts,
-                price: i as f64,
-            };
             let po = PolyMarketHistoryPo {
                 assert_id: "ASSETA".to_string(),
                 timestamp: ts,

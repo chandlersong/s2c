@@ -32,7 +32,7 @@ impl From<PolyMarketHistory> for PolyMarketHistoryPo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PolyMarketAssertInfoPo {
+pub struct PolyMarketAssetInfoPo {
     pub series_id: String,
     pub series_slug: String,
     pub event_id: String,
@@ -43,7 +43,7 @@ pub struct PolyMarketAssertInfoPo {
     pub asset_slug: String,
 }
 
-impl DuckDBPO for PolyMarketAssertInfoPo {
+impl DuckDBPO for PolyMarketAssetInfoPo {
     fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>> {
         appender_params_from_iter(vec![
             &self.series_id as &dyn duckdb::ToSql,

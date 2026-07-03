@@ -1,7 +1,6 @@
 use crate::config::get_config;
 use crate::errors::YuError;
 use sqlx::PgPool;
-use sqlx::postgres::PgPoolOptions;
 use tokio::sync::OnceCell;
 
 pub(crate) static SYNC_CLIENT_PG_POOL: OnceCell<PgPool> = OnceCell::const_new();

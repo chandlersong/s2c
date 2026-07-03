@@ -1,7 +1,8 @@
 use li::tools::logs::setup_logger;
 use log::{LevelFilter, info};
 use std::collections::HashMap;
-use tokio::sync::broadcast;
+use std::sync::Arc;
+use tokio::sync::{RwLock, broadcast};
 use yu::config::get_config;
 use yu::errors::YuError;
 use yu::polymarket::service::{SeriesHistoryMarketServiceImpl, SeriesHistoryMarketServiceTrait};
@@ -28,7 +29,15 @@ async fn main() -> Result<(), YuError> {
 
     let series_ids = vec!["45".to_string(), "10151".to_string(), "10041".to_string()];
     let (tx, mut rx) = broadcast::channel(10);
-    let service = SeriesHistoryMarketServiceImpl::new(series_ids, HistoryInterval::OneHour, tx, default_polymarket_api(), None).await;
+    let service = SeriesHistoryMarketServiceImpl::new(
+        series_ids,
+        HistoryInterval::OneHour,
+        tx,
+        default_polymarket_api(),
+        None,
+        Arc::new(RwLock::new(vec![])),
+    )
+    .await;
 
     tokio::spawn(async move {
         service.fetch_last_one_hour_data().await.expect("TODO: panic message");

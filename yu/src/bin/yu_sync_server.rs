@@ -1,14 +1,16 @@
 use li::tools::logs::{parse_level, setup_logger};
 use log::{LevelFilter, debug, error, info};
 use std::collections::HashMap;
-use tokio::sync::broadcast;
+use std::sync::Arc;
 use tokio::sync::broadcast::Sender;
+use tokio::sync::{RwLock, broadcast};
 use tonic::transport::Server;
 use yu::config::get_config;
 use yu::cron_job;
 use yu::duck_db::DuckDBDSProvider;
 use yu::errors::YuError;
 use yu::polymarket::database::initial_tables;
+use yu::polymarket::po::PolyMarketAssetInfoPo;
 use yu::polymarket::service::new_series_history_market_service;
 use yu::sync::sync_server::grpc_sync::PolyMarketHistory;
 use yu::sync::sync_server::grpc_sync::sync_interface_server::SyncInterfaceServer;
@@ -43,10 +45,11 @@ async fn main() -> Result<(), YuError> {
 
     let asset_timestamp = get_asset_timestamp(DuckDBDSProvider::default()).await;
     let (polymarket_history_tx, _) = broadcast::channel(1000);
-    let server = YuSyncServer::new(polymarket_history_tx.clone(), asset_timestamp.clone(), None).await;
+    let asset_infos = Arc::new(RwLock::new(vec![]));
+    let server = YuSyncServer::new(polymarket_history_tx.clone(), asset_timestamp.clone(), None, asset_infos.clone()).await;
     // let series_ids = vec!["45".to_string(), "10151".to_string(), "10041".to_string()];
     let series_ids = vec!["45".to_string()];
-    match start_polymarket_history(series_ids, asset_timestamp.clone(), polymarket_history_tx).await {
+    match start_polymarket_history(series_ids, asset_timestamp.clone(), polymarket_history_tx, asset_infos).await {
         Ok(value) => value,
         Err(error) => {
             error!("polymarket seies history启动失败！！！程序退出:{}", error);
@@ -71,6 +74,7 @@ async fn start_polymarket_history(
     series_ids: Vec<String>,
     asset_timestamp: HashMap<String, u64>,
     polymarket_history_tx: Sender<PolyMarketHistory>,
+    asset_infos: Arc<RwLock<Vec<PolyMarketAssetInfoPo>>>,
 ) -> Result<Sender<PolyMarketHistory>, YuError> {
     let series_history_service = new_series_history_market_service(
         series_ids,
@@ -78,6 +82,7 @@ async fn start_polymarket_history(
         polymarket_history_tx.clone(),
         default_polymarket_api(),
         None,
+        asset_infos,
     )
     .await;
     if let Err(e) = series_history_service.initial_data(asset_timestamp.clone()).await {
