@@ -77,6 +77,7 @@ async fn start_polymarket_history(
         HistoryInterval::OneHour,
         polymarket_history_tx.clone(),
         default_polymarket_api(),
+        None,
     )
     .await;
     if let Err(e) = series_history_service.initial_data(asset_timestamp.clone()).await {

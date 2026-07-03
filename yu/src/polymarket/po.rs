@@ -1,14 +1,13 @@
 use crate::duck_db::DuckDBPO;
 use crate::sync::sync_server::grpc_sync::PolyMarketHistory;
 use duckdb::appender_params_from_iter;
-use prost::Message;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolyMarketHistoryPo {
     pub assert_id: String,
     pub timestamp: u64,
-    pub payload: Vec<u8>,
+    pub price: f64,
 }
 
 impl DuckDBPO for PolyMarketHistoryPo {
@@ -16,7 +15,7 @@ impl DuckDBPO for PolyMarketHistoryPo {
         appender_params_from_iter(vec![
             &self.assert_id as &dyn duckdb::ToSql,
             &self.timestamp as &dyn duckdb::ToSql,
-            &self.payload as &dyn duckdb::ToSql,
+            &self.price as &dyn duckdb::ToSql,
         ])
     }
 }
@@ -27,7 +26,34 @@ impl From<PolyMarketHistory> for PolyMarketHistoryPo {
         Self {
             assert_id,
             timestamp: history.timestamp,
-            payload: history.encode_to_vec(),
+            price: history.price,
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolyMarketAssertInfoPo {
+    pub series_id: String,
+    pub series_slug: String,
+    pub event_id: String,
+    pub event_slug: String,
+    pub market_id: String,
+    pub market_slug: String,
+    pub asset_id: String,
+    pub asset_slug: String,
+}
+
+impl DuckDBPO for PolyMarketAssertInfoPo {
+    fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>> {
+        appender_params_from_iter(vec![
+            &self.series_id as &dyn duckdb::ToSql,
+            &self.series_slug as &dyn duckdb::ToSql,
+            &self.event_id as &dyn duckdb::ToSql,
+            &self.event_slug as &dyn duckdb::ToSql,
+            &self.market_id as &dyn duckdb::ToSql,
+            &self.market_slug as &dyn duckdb::ToSql,
+            &self.asset_id as &dyn duckdb::ToSql,
+            &self.asset_slug as &dyn duckdb::ToSql,
+        ])
     }
 }

@@ -4,7 +4,7 @@ use crate::polymarket::database::get_polymarket_price_history_table;
 use crate::polymarket::po::PolyMarketHistoryPo;
 use crate::sync::sync_server::grpc_sync::sync_interface_server::SyncInterface;
 use crate::sync::sync_server::grpc_sync::{
-    AssetTimestamp, Empty, PolyMarketHistory, PolyMarketHistoryList, ServerMessage, SubscribeRequest, SyncRequest, server_message,
+    Empty, PolyMarketAssetTimestamp, PolyMarketHistory, PolyMarketHistoryList, ServerMessage, SubscribeRequest, SyncRequest, server_message,
 };
 use duckdb::params;
 use log::{error, info};
@@ -19,21 +19,7 @@ use yue::query_message::{DataSourceProviderTrait, InsertPayload, QueryCommand};
 // for decoding prost-encoded payloads into PolyMarketHistory
 
 pub mod grpc_sync {
-    use std::collections::HashMap;
-
     tonic::include_proto!("grpc_sync");
-
-    impl From<HashMap<String, u64>> for AssetTimestamp {
-        fn from(value: HashMap<String, u64>) -> Self {
-            let mut res = AssetTimestamp {
-                timestamps: Default::default(),
-            };
-            for (k, v) in &value {
-                res.timestamps.insert(k.clone(), v.clone());
-            }
-            res
-        }
-    }
 }
 
 ///
@@ -97,7 +83,7 @@ pub async fn get_asset_timestamp(provider: DuckDBDSProvider) -> HashMap<String, 
 }
 
 enum SyncInternalCommand {
-    QueryAssetTimestamp(oneshot::Sender<Result<AssetTimestamp, Status>>),
+    QueryAssetTimestamp(oneshot::Sender<Result<PolyMarketAssetTimestamp, Status>>),
 }
 
 pub struct YuSyncServer {
@@ -158,11 +144,11 @@ impl YuSyncServer {
                 command = commands_rx.recv() => {
                     match command {
                         Some(SyncInternalCommand::QueryAssetTimestamp(tx)) => {
-                            let message: AssetTimestamp = AssetTimestamp::from(asset_timestamp.clone());
-                            // ignore send error (receiver might be dropped)
-                            if let Err(e) = tx.send(Ok(message)){
-                                error!("send asset timestamp failed: {:?}", e);
-                            }
+                            // let message: PolyMarketAssetTimestamp = AssetTimestamp::from(asset_timestamp.clone());
+                            // // ignore send error (receiver might be dropped)
+                            // if let Err(e) = tx.send(Ok(message)){
+                            //     error!("send asset timestamp failed: {:?}", e);
+                            // }
                         }
                         None => {
                             // internal command channel closed,退出 loop
@@ -415,7 +401,7 @@ impl YuSyncServer {
 }
 #[tonic::async_trait]
 impl SyncInterface for YuSyncServer {
-    async fn get_latest_timestamps(&self, _request: Request<Empty>) -> Result<Response<AssetTimestamp>, Status> {
+    async fn get_poly_market_assert_info(&self, _request: Request<Empty>) -> Result<Response<PolyMarketAssetTimestamp>, Status> {
         let (tx, rx) = oneshot::channel();
 
         // 发送内部命令到后台 task
@@ -477,14 +463,8 @@ pub mod tests {
     use crate::polymarket::database::initial_tables;
     use crate::polymarket::db_consts::PolyMarketTables;
     use crate::polymarket::po::PolyMarketHistoryPo;
-    use crate::test_utils::create_memory_db_provider;
+    use crate::test_utils::{create_memory_db_provider, create_memory_duckdb_provider};
     use yue::query_message::GetDataSourceProviderPayload;
-
-    pub fn create_memory_table() -> (DuckDBDSProvider, DuckTableTableChannel<PolyMarketHistoryPo>) {
-        let provider = create_memory_db_provider();
-        let table = DuckDBOneTable::<PolyMarketHistoryPo, PolyMarketTables>::start_new(PolyMarketTables::PriceHistory, Some(provider.clone()));
-        (provider, table)
-    }
 
     ///
     /// 测试相应的获取数据库中，asset_timestamp.
@@ -502,7 +482,7 @@ pub mod tests {
         use tokio::sync::oneshot;
         use yue::query_message::{BatchInsertPayload, QueryCommand};
 
-        let (provider, table) = create_memory_table();
+        let (provider, table) = create_memory_duckdb_provider();
 
         // create table and wait for execution
         initial_tables(Some(provider.clone())).expect("initial tables failed");
@@ -511,27 +491,27 @@ pub mod tests {
         let p1 = PolyMarketHistoryPo {
             assert_id: "ASSETA".to_string(),
             timestamp: 1000,
-            payload: vec![],
+            price: 1.0,
         };
         let p2 = PolyMarketHistoryPo {
             assert_id: "ASSETA".to_string(),
             timestamp: 2000,
-            payload: vec![],
+            price: 1.0,
         };
         let p3 = PolyMarketHistoryPo {
             assert_id: "ASSETB".to_string(),
             timestamp: 1500,
-            payload: vec![],
+            price: 1.0,
         };
         let p4 = PolyMarketHistoryPo {
             assert_id: "ASSETB".to_string(),
             timestamp: 2500,
-            payload: vec![],
+            price: 1.0,
         };
         let p5 = PolyMarketHistoryPo {
             assert_id: "ASSETB".to_string(),
             timestamp: 3000,
-            payload: vec![],
+            price: 1.0,
         };
 
         // batch insert and wait for completion
@@ -600,38 +580,17 @@ pub mod tests {
 
         // send three messages
         let m1 = PolyMarketHistory {
-            series_id: "".to_string(),
-            series_slug: "".to_string(),
-            event_id: "".to_string(),
-            event_slug: "".to_string(),
-            market_id: "".to_string(),
-            market_slug: "".to_string(),
             asset_id: "A".to_string(),
-            asset_slug: "".to_string(),
             timestamp: 1,
             price: 1.0,
         };
         let m2 = PolyMarketHistory {
-            series_id: "".to_string(),
-            series_slug: "".to_string(),
-            event_id: "".to_string(),
-            event_slug: "".to_string(),
-            market_id: "".to_string(),
-            market_slug: "".to_string(),
             asset_id: "B".to_string(),
-            asset_slug: "".to_string(),
             timestamp: 2,
             price: 2.0,
         };
         let m3 = PolyMarketHistory {
-            series_id: "".to_string(),
-            series_slug: "".to_string(),
-            event_id: "".to_string(),
-            event_slug: "".to_string(),
-            market_id: "".to_string(),
-            market_slug: "".to_string(),
             asset_id: "C".to_string(),
-            asset_slug: "".to_string(),
             timestamp: 3,
             price: 3.0,
         };
@@ -676,26 +635,12 @@ pub mod tests {
         });
 
         let m1 = PolyMarketHistory {
-            series_id: "".to_string(),
-            series_slug: "".to_string(),
-            event_id: "".to_string(),
-            event_slug: "".to_string(),
-            market_id: "".to_string(),
-            market_slug: "".to_string(),
             asset_id: "A".to_string(),
-            asset_slug: "".to_string(),
             timestamp: 1,
             price: 1.0,
         };
         let m2 = PolyMarketHistory {
-            series_id: "".to_string(),
-            series_slug: "".to_string(),
-            event_id: "".to_string(),
-            event_slug: "".to_string(),
-            market_id: "".to_string(),
-            market_slug: "".to_string(),
             asset_id: "B".to_string(),
-            asset_slug: "".to_string(),
             timestamp: 2,
             price: 2.0,
         };
@@ -742,26 +687,12 @@ pub mod tests {
         });
 
         let m1 = PolyMarketHistory {
-            series_id: "".to_string(),
-            series_slug: "".to_string(),
-            event_id: "".to_string(),
-            event_slug: "".to_string(),
-            market_id: "".to_string(),
-            market_slug: "".to_string(),
             asset_id: "A".to_string(),
-            asset_slug: "".to_string(),
             timestamp: 1,
             price: 1.0,
         };
         let m2 = PolyMarketHistory {
-            series_id: "".to_string(),
-            series_slug: "".to_string(),
-            event_id: "".to_string(),
-            event_slug: "".to_string(),
-            market_id: "".to_string(),
-            market_slug: "".to_string(),
             asset_id: "B".to_string(),
-            asset_slug: "".to_string(),
             timestamp: 2,
             price: 2.0,
         };
@@ -798,14 +729,13 @@ pub mod tests {
     pub async fn test_query_and_send_history() {
         use super::grpc_sync::{PolyMarketHistory, ServerMessage};
         use crate::polymarket::po::PolyMarketHistoryPo;
-        use prost::Message;
         use tokio::sync::mpsc;
         use tokio::sync::oneshot;
         use tonic::Status;
         use yue::query_message::{BatchInsertPayload, QueryCommand}; // for encode_to_vec in test
 
         // create memory provider and table
-        let (provider, table) = create_memory_table();
+        let (provider, table) = create_memory_duckdb_provider();
         initial_tables(Some(provider.clone())).expect("initial tables failed");
 
         // prepare data: five records for ASSETA (1000,2000,3000,4000,5000)
@@ -813,21 +743,14 @@ pub mod tests {
         for i in 1..=5 {
             let ts = i as u64 * 1000;
             let history = PolyMarketHistory {
-                series_id: "".to_string(),
-                series_slug: "".to_string(),
-                event_id: "".to_string(),
-                event_slug: "".to_string(),
-                market_id: "".to_string(),
-                market_slug: "".to_string(),
                 asset_id: "ASSETA".to_string(),
-                asset_slug: "".to_string(),
                 timestamp: ts,
                 price: i as f64,
             };
             let po = PolyMarketHistoryPo {
                 assert_id: "ASSETA".to_string(),
                 timestamp: ts,
-                payload: history.encode_to_vec(),
+                price: 1.0,
             };
             po_vec.push(po);
         }

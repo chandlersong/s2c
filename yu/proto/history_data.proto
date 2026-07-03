@@ -2,8 +2,20 @@ syntax = "proto3";
 package grpc_sync;
 
 
-message AssetTimestamp {
-  map<string, uint64> timestamps = 1;
+message PolymarketAssertInfo{
+  string series_id = 1;
+  string series_slug = 2;
+  string event_id = 3;
+  string event_slug = 4;
+  string market_id = 5;
+  string market_slug = 6;
+  string asset_id = 7;
+  string asset_slug = 8;
+  uint64 latest_timestamp = 9;
+}
+
+message PolyMarketAssetTimestamp {
+  map<string, PolymarketAssertInfo> timestamps = 1;
 }
 
 // 服务器端和客户端同步的服务
@@ -13,7 +25,7 @@ message AssetTimestamp {
 // 3. 推送信息给client端最新的消息。 PolyMarketHistoryList
 service SyncInterface {
   // 1. 获取服务器里面的所有资产的最新时间戳
-  rpc GetLatestTimestamps(Empty) returns (AssetTimestamp) {}
+  rpc GetPolyMarketAssertInfo(Empty) returns (PolyMarketAssetTimestamp) {}
 
   // 2. client提供asset id和timestamp，server把timestamp之后的所有数据推送给client
   rpc SyncHistory(SyncRequest) returns (stream ServerMessage) {}
@@ -42,16 +54,9 @@ message SubscribeRequest {
 }
 
 message PolyMarketHistory {
-  string series_id = 1;
-  string series_slug = 2;
-  string event_id = 3;
-  string event_slug = 4;
-  string market_id = 5;
-  string market_slug = 6;
-  string asset_id = 7;
-  string asset_slug = 8;
-  uint64 timestamp = 9;
-  double price = 10;
+  string asset_id = 1;
+  uint64 timestamp = 2;
+  double price = 3;
 }
 
 message PolyMarketHistoryList {

@@ -54,16 +54,16 @@ async fn main() -> Result<(), YuError> {
     println!("已连接到 gRPC 服务端");
 
     // 1) 调用 GetLatestTimestamps
-    let resp = client.get_latest_timestamps(Request::new(Empty {})).await?;
+    let resp = client.get_poly_market_assert_info(Request::new(Empty {})).await?;
     let asset_ts = resp.into_inner();
     println!("最新时间戳列表：");
-    for (asset, ts) in &asset_ts.timestamps {
-        println!("  {} => {}", asset, ts);
+    for (asset, info) in &asset_ts.timestamps {
+        println!("  {} => {}", asset, info.latest_timestamp);
     }
 
     // 取最大的时间戳（如果需要用于后续逻辑）
-    let max_ts = asset_ts.timestamps.values().copied().max().unwrap_or(0);
-    println!("最大时间戳: {}", max_ts);
+    // let max_ts = asset_ts.timestamps.values().copied().max().unwrap_or(0);
+    // println!("最大时间戳: {}", max_ts);
 
     // 2) 订阅 SubscribeLatest 并打印收到的所有消息
     let mut stream = client.subscribe_latest(Request::new(SubscribeRequest {})).await?.into_inner();
@@ -76,10 +76,7 @@ async fn main() -> Result<(), YuError> {
                 grpc_sync::server_message::Payload::PolymarketHistory(list) => {
                     println!("收到 PolyMarketHistoryList timestamp={}", list.timestamp);
                     for h in list.history_list {
-                        println!(
-                            "series={} event={} market={} asset={} ts={} price={}",
-                            h.series_id, h.event_id, h.market_id, h.asset_id, h.timestamp, h.price
-                        );
+                        println!("asset={} ts={} price={}", h.asset_id, h.timestamp, h.price);
                     }
                 }
                 _ => {

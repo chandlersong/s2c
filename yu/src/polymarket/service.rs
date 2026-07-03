@@ -1,4 +1,6 @@
+use crate::duck_db::{DuckDBDSProvider, DuckDBPO};
 use crate::errors::YuError;
+use crate::polymarket::po::PolyMarketAssertInfoPo;
 use crate::sync::sync_server::grpc_sync::PolyMarketHistory;
 use async_trait::async_trait;
 use li::tools::time::unix_time_now_u64_utc_seconds;
@@ -9,6 +11,8 @@ use tokio::sync::{RwLock, broadcast};
 use yue::models::HistoryInterval;
 use yue::polymarket::restful_api::PolymarketAPI;
 use yue::polymarket::restful_models::{GetPricesHistoryQuery, Market};
+use yue::query_message::DataSourceProviderTrait;
+
 pub struct MarketWithAddition {
     market: Market,
     series_id: String,
@@ -135,8 +139,9 @@ pub async fn new_series_history_market_service(
     interval: HistoryInterval,
     history_broadcast: broadcast::Sender<PolyMarketHistory>,
     client: PolymarketAPI,
+    ds_provider: Option<DuckDBDSProvider>,
 ) -> SeriesHistoryMarketService {
-    Arc::new(SeriesHistoryMarketServiceImpl::new(series_ids, interval, history_broadcast, client).await)
+    Arc::new(SeriesHistoryMarketServiceImpl::new(series_ids, interval, history_broadcast, client, ds_provider).await)
 }
 
 /**
@@ -154,6 +159,7 @@ pub struct SeriesHistoryMarketServiceImpl {
     open_markets: MarketList,
     history_broadcast: broadcast::Sender<PolyMarketHistory>,
     client: PolymarketAPI,
+    ds_provider: DuckDBDSProvider,
 }
 
 impl SeriesHistoryMarketServiceImpl {
@@ -162,6 +168,7 @@ impl SeriesHistoryMarketServiceImpl {
         interval: HistoryInterval,
         history_broadcast: broadcast::Sender<PolyMarketHistory>,
         client: PolymarketAPI,
+        ds_provider: Option<DuckDBDSProvider>,
     ) -> Self {
         let (open_markets, _) = match batch_split_series_markets_with_client(&series_ids, client.clone()).await {
             Ok((open_markets, close_markets)) => (open_markets, close_markets),
@@ -178,6 +185,7 @@ impl SeriesHistoryMarketServiceImpl {
             open_markets: Arc::new(RwLock::new(open_markets)),
             history_broadcast,
             client,
+            ds_provider: ds_provider.unwrap_or_else(|| DuckDBDSProvider::default()),
         }
     }
 }
@@ -191,6 +199,131 @@ impl SeriesHistoryMarketServiceImpl {
         }
         self.history_broadcast.clone()
     }
+
+    ///
+    /// 检查过程。
+    /// 1. 通过 select assert_id from assert_info来获取所有的asset_id
+    /// 2. loop market。如果asset_id已经存在，则跳过。
+    /// 3. 不存在，则组装一个PolyMarketAssertInfoPo，存入数据库
+    ///
+    async fn refresh_assert_info_in_db(&self, markets: &Vec<MarketWithAddition>) -> Result<(), YuError> {
+        // acquire a connection
+        let mut conn = match self.ds_provider.acquire() {
+            Ok(c) => c,
+            Err(e) => {
+                error!("acquire connection error when refresh assert_info_in_db: {:?}", e);
+                return Err(crate::errors::YuError::from(e));
+            }
+        };
+
+        // 读取已存在的 assert_id
+        let mut existing: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let sql = "SELECT assert_id FROM poly_market_assert_info;";
+        match conn.prepare(sql) {
+            Ok(mut stmt) => {
+                match stmt.query([]) {
+                    Ok(mut rows) => {
+                        while let Some(row_res) = rows.next().map_err(|e| e.to_string()).ok() {
+                            match row_res {
+                                Some(row) => {
+                                    if let Ok(id) = row.get::<usize, String>(0) {
+                                        existing.insert(id);
+                                    }
+                                }
+                                None => break,
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        // 如果查询失败，很可能是表不存在，尝试创建表后继续（但这里先记录错误并继续）
+                        error!("query existing assert_id failed: {:?}, will attempt to create table", e);
+                        if let Err(e2) = conn.execute_batch(crate::polymarket::db_consts::CREATE_POLYMARKET_ASSERT_INFO_TABLE) {
+                            error!("failed to create poly_market_assert_info table: {:?}", e2);
+                            return Err(YuError::from(e2));
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                // 如果 prepare 失败，很可能是因为表不存在，尝试创建表
+                error!("prepare select assert_id failed: {:?}, will attempt to create table", e);
+                if let Err(e2) = conn.execute_batch(crate::polymarket::db_consts::CREATE_POLYMARKET_ASSERT_INFO_TABLE) {
+                    error!("failed to create poly_market_assert_info table: {:?}", e2);
+                    return Err(crate::errors::YuError::from(e2));
+                }
+            }
+        }
+
+        let mut new_pos: Vec<PolyMarketAssertInfoPo> = Vec::new();
+
+        for market in markets.iter() {
+            match &market.market.clob_token_ids {
+                None => {
+                    warn!("market :{} has no clob_token_ids,skip", market.market.slug);
+                }
+                Some(asset_ids) => {
+                    for (index, asset_id) in asset_ids.iter().enumerate() {
+                        if existing.contains(asset_id) {
+                            continue;
+                        }
+
+                        // 构造 asset_slug
+                        let outcome = match &market.market.outcomes {
+                            None => index.to_string(),
+                            Some(outcomes) => outcomes.get(index).cloned().unwrap_or(index.to_string()),
+                        };
+                        let po = PolyMarketAssertInfoPo {
+                            series_id: market.series_id.clone(),
+                            series_slug: market.series_slug.clone(),
+                            event_id: market.event_id.clone(),
+                            event_slug: market.event_slug.clone(),
+                            market_id: market.market.id.clone(),
+                            market_slug: market.market.slug.clone(),
+                            asset_id: asset_id.clone(),
+                            asset_slug: format!("{}_{}", market.market.slug, outcome),
+                        };
+
+                        existing.insert(asset_id.clone());
+                        new_pos.push(po);
+                    }
+                }
+            }
+        }
+        info!("find new markets:{}", new_pos.len());
+
+        if !new_pos.is_empty() {
+            // write batch using transaction + appender
+            let mut tx = match conn.transaction() {
+                Ok(t) => t,
+                Err(e) => {
+                    error!("create transaction failed when insert assert_info: {:?}", e);
+                    return Err(YuError::from(e));
+                }
+            };
+            tx.set_drop_behavior(duckdb::DropBehavior::Commit);
+            let mut appender = match tx.appender("poly_market_assert_info") {
+                Ok(a) => a,
+                Err(e) => {
+                    error!("Failed to create appender for poly_market_assert_info: {:?}", e);
+                    return Err(YuError::from(e));
+                }
+            };
+
+            for po in new_pos {
+                if let Err(e) = appender.append_row(po.to_params()) {
+                    error!("Failed to append assert_info row: {:?}", e);
+                    return Err(YuError::from(e));
+                }
+            }
+
+            if let Err(e) = appender.flush() {
+                error!("Failed to flush appender for poly_market_assert_info: {:?}", e);
+                return Err(YuError::from(e));
+            }
+        }
+
+        Ok(())
+    }
 }
 
 /// 服务接口：抽象出 trait 方便在测试或其它模块中 mock
@@ -201,6 +334,7 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
         match batch_split_series_markets_with_client(&self.series_ids, self.client.clone()).await {
             Ok((open_markets, _)) => {
                 // 把 self.open_markets 替换成新的 open_markets
+                self.refresh_assert_info_in_db(&open_markets).await?;
                 let count = open_markets.len();
                 let mut guard = self.open_markets.write().await;
                 *guard = open_markets;
@@ -274,14 +408,7 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
                     }
                     let timestamp = self.interval.get_close_unix_sec(h.t);
                     let entry = PolyMarketHistory {
-                        series_id: market.series_id.clone(),
-                        series_slug: market.series_slug.clone(),
-                        event_id: market.event_id.clone(),
-                        event_slug: market.event_slug.clone(),
-                        market_id: market.market.id.clone(),
-                        market_slug: market.market.slug.clone(),
                         asset_id: asset_id.clone(),
-                        asset_slug: asset_slug.clone(),
                         timestamp,
                         price: h.p,
                     };
@@ -324,14 +451,17 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
 
 #[cfg(test)]
 mod tests {
+    use super::MarketWithAddition;
     use super::SeriesHistoryMarketServiceTrait;
     use crate::errors::YuError;
+    use crate::test_utils::{create_memory_db_provider, create_memory_duckdb_provider};
     use serde_json::from_value;
     use serde_json::json;
     use std::sync::Arc;
     use yue::models::HistoryInterval;
     use yue::polymarket::restful_api::{MockPolymarketApiTrait, PolymarketAPI};
-    use yue::polymarket::restful_models::{Event, GetPricesHistoryQuery, GetPricesHistoryResponse, MarketPriceHistoryPoint, Series};
+    use yue::polymarket::restful_models::{Event, GetPricesHistoryQuery, GetPricesHistoryResponse, Market, MarketPriceHistoryPoint, Series};
+    use yue::query_message::DataSourceProviderTrait;
 
     #[tokio::test]
     pub async fn test_series_history_service_with_mock_client() -> Result<(), YuError> {
@@ -395,8 +525,8 @@ mod tests {
         let (tx, mut rx) = tokio::sync::broadcast::channel(16);
         let series_ids = vec!["s1".to_string()];
         let interval = HistoryInterval::OneMinute;
-
-        let svc = super::SeriesHistoryMarketServiceImpl::new(series_ids, interval, tx.clone(), client).await;
+        let (provider, _) = create_memory_duckdb_provider();
+        let svc = super::SeriesHistoryMarketServiceImpl::new(series_ids, interval, tx.clone(), client, Some(provider)).await;
 
         // 调用 fetch_last_one_hour_data，会使用 mock 返回的 history 并通过 broadcast 发送
         svc.fetch_last_one_hour_data().await?;
@@ -468,8 +598,8 @@ mod tests {
         let (tx, mut rx) = tokio::sync::broadcast::channel(16);
         let series_ids = vec!["s1".to_string()];
         let interval = HistoryInterval::OneMinute;
-
-        let svc = super::SeriesHistoryMarketServiceImpl::new(series_ids, interval, tx.clone(), client).await;
+        let (provider, _) = create_memory_duckdb_provider();
+        let svc = super::SeriesHistoryMarketServiceImpl::new(series_ids, interval, tx.clone(), client, Some(provider)).await;
 
         // 构造 start_timestamps，覆盖 tokenA 的起始时间
         let mut start_ts_map: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
@@ -532,7 +662,8 @@ mod tests {
         let (tx, mut rx) = tokio::sync::broadcast::channel(16);
         let series_ids = vec!["s1".to_string()];
         let interval = HistoryInterval::OneMinute;
-        let svc = super::SeriesHistoryMarketServiceImpl::new(series_ids, interval, tx.clone(), client).await;
+        let (provider, _) = create_memory_duckdb_provider();
+        let svc = super::SeriesHistoryMarketServiceImpl::new(series_ids, interval, tx.clone(), client, Some(provider)).await;
 
         let mut start_ts_map: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
         start_ts_map.insert("tokenA".to_string(), 900u64);
@@ -595,7 +726,8 @@ mod tests {
         let (tx, mut rx) = tokio::sync::broadcast::channel(16);
         let series_ids = vec!["s1".to_string()];
         let interval = HistoryInterval::OneMinute;
-        let svc = super::SeriesHistoryMarketServiceImpl::new(series_ids, interval, tx.clone(), client).await;
+        let (provider, _) = create_memory_duckdb_provider();
+        let svc = super::SeriesHistoryMarketServiceImpl::new(series_ids, interval, tx.clone(), client, Some(provider)).await;
 
         // 传入空的 start_ts_map
         let start_ts_map: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
@@ -603,6 +735,81 @@ mod tests {
 
         let received = rx.recv().await.expect("should receive history");
         assert_eq!(received.price, 0.99_f64);
+        Ok(())
+    }
+
+    #[tokio::test]
+    pub async fn test_refresh_assert_info_in_db_inserts_rows() -> Result<(), YuError> {
+        // 构造 market
+        let market_json = json!({
+            "id": "m1",
+            "slug": "market1",
+            "conditionId": "c1",
+            "marketMakerAddress": "addr",
+            "startDate": "2026-01-01T00:00:00Z",
+            "endDate": "2027-01-01T00:00:00Z",
+            "clobTokenIds": ["tokenA", "tokenB"],
+            "outcomes": ["Yes", "No"]
+        });
+        let market: Market = from_value(market_json).expect("deserialize market");
+        let mware = MarketWithAddition {
+            market: market.clone(),
+            series_id: "s1".to_string(),
+            series_slug: "series1".to_string(),
+            event_id: "e1".to_string(),
+            event_slug: "event1".to_string(),
+        };
+        let markets = vec![mware];
+
+        let provider = create_memory_db_provider();
+        // create both tables
+        crate::polymarket::database::initial_tables(Some(provider.clone())).expect("init tables");
+
+        // pre-insert tokenA so refresh should skip it
+        let mut pre_conn = provider.acquire().expect("acquire");
+        pre_conn.execute("INSERT INTO poly_market_assert_info(assert_id, series_id, series_slug, event_id, event_slug, market_id, market_slug, assert_slug) VALUES ('tokenA','s1','series1','e1','event1','m1','market1','market1_Yes')", []).expect("insert tokenA");
+
+        let mock = MockPolymarketApiTrait::new();
+        let client: PolymarketAPI = Arc::new(mock);
+        let (tx, _rx) = tokio::sync::broadcast::channel(16);
+        let series_ids: Vec<String> = vec![]; // keep empty so new() won't call remote
+        let interval = HistoryInterval::OneMinute;
+        let svc = super::SeriesHistoryMarketServiceImpl::new(series_ids, interval, tx.clone(), client, Some(provider.clone())).await;
+
+        // 调用私有方法（测试模块与 impl 在同一文件下，因此可以访问）
+        svc.refresh_assert_info_in_db(&markets).await.expect("refresh assert info");
+        // 打印并验证数据库中内容（应包含 tokenA 原有记录和新插入的 tokenB）
+        let conn = provider.acquire().expect("acquire");
+        let mut stmt = conn
+            .prepare("SELECT assert_id, series_id, series_slug, event_id, event_slug, market_id, market_slug, assert_slug FROM poly_market_assert_info ORDER BY assert_id;")
+            .expect("prepare");
+        let mut rows = stmt.query([]).expect("query");
+        let mut found: Vec<(String, String, String)> = Vec::new();
+        println!("Contents of poly_market_assert_info:");
+        while let Some(row_opt) = rows.next().map_err(|e| e.to_string()).ok() {
+            match row_opt {
+                Some(row) => {
+                    let assert_id: String = row.get(0).unwrap_or_default();
+                    let series_id: String = row.get(1).unwrap_or_default();
+                    let series_slug: String = row.get(2).unwrap_or_default();
+                    let event_id: String = row.get(3).unwrap_or_default();
+                    let event_slug: String = row.get(4).unwrap_or_default();
+                    let market_id: String = row.get(5).unwrap_or_default();
+                    let market_slug: String = row.get(6).unwrap_or_default();
+                    let assert_slug: String = row.get(7).unwrap_or_default();
+                    println!(
+                        "assert_id={}, series_id={}, series_slug={}, event_id={}, event_slug={}, market_id={}, market_slug={}, assert_slug={}",
+                        assert_id, series_id, series_slug, event_id, event_slug, market_id, market_slug, assert_slug
+                    );
+                    found.push((assert_id, market_id, assert_slug));
+                }
+                None => break,
+            }
+        }
+        // should have tokenA (preexisting) and tokenB (new)
+        assert_eq!(found.len(), 2);
+        assert!(found.iter().any(|(id, _, slug)| id == "tokenA" && slug == "market1_Yes"));
+        assert!(found.iter().any(|(id, _, slug)| id == "tokenB" && slug == "market1_No"));
         Ok(())
     }
 }

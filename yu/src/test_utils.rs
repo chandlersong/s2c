@@ -1,5 +1,8 @@
 use crate::duck_db::DuckDBDSProvider;
+use crate::duck_db_tables::{DuckDBOneTable, DuckTableTableChannel};
 use crate::errors::YuError;
+use crate::polymarket::db_consts::PolyMarketTables;
+use crate::polymarket::po::PolyMarketHistoryPo;
 use duckdb::{Connection, DuckdbConnectionManager, Result};
 use r2d2::Pool;
 use rust_decimal::dec;
@@ -69,4 +72,10 @@ pub fn initial_memory_db() -> Pool<DuckdbConnectionManager> {
         .connection_timeout(std::time::Duration::from_secs(5)); // 连接超时时间
 
     builder.build(DuckdbConnectionManager::memory().unwrap()).unwrap()
+}
+
+pub fn create_memory_duckdb_provider() -> (DuckDBDSProvider, DuckTableTableChannel<PolyMarketHistoryPo>) {
+    let provider = create_memory_db_provider();
+    let table = DuckDBOneTable::<PolyMarketHistoryPo, PolyMarketTables>::start_new(PolyMarketTables::PriceHistory, Some(provider.clone()));
+    (provider, table)
 }

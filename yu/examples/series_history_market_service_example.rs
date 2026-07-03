@@ -28,13 +28,13 @@ async fn main() -> Result<(), YuError> {
 
     let series_ids = vec!["45".to_string(), "10151".to_string(), "10041".to_string()];
     let (tx, mut rx) = broadcast::channel(10);
-    let service = SeriesHistoryMarketServiceImpl::new(series_ids, HistoryInterval::OneHour, tx, default_polymarket_api()).await;
+    let service = SeriesHistoryMarketServiceImpl::new(series_ids, HistoryInterval::OneHour, tx, default_polymarket_api(), None).await;
 
     tokio::spawn(async move {
         service.fetch_last_one_hour_data().await.expect("TODO: panic message");
     });
     while let Ok(h) = rx.recv().await {
-        info!("fetch asset{} at {} : {:?}", h.asset_slug, h.timestamp, h.price);
+        info!("fetch asset{} at {} : {:?}", h.asset_id, h.timestamp, h.price);
     }
     Ok(())
 }
