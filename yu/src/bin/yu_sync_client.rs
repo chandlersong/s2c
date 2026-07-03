@@ -1,7 +1,5 @@
 use log::{LevelFilter, error, info};
 use std::collections::HashMap;
-use std::error::Error;
-use std::fmt::format;
 use tokio_stream::StreamExt;
 use tonic::Request;
 
@@ -12,7 +10,7 @@ pub mod grpc_sync {
 use grpc_sync::sync_interface_client::SyncInterfaceClient;
 use grpc_sync::{Empty, SubscribeRequest};
 use li::tools::logs::{parse_level, setup_logger};
-use yu::config::{SyncClientConfig, get_config};
+use yu::config::get_config;
 use yu::errors::YuError;
 use yu::polymarket::database::initial_tables;
 use yue::http_client::init_http_client;

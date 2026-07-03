@@ -9,7 +9,6 @@ use crate::sync::sync_server::grpc_sync::{
 };
 use duckdb::params;
 use log::{error, info};
-use prost::Message;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
