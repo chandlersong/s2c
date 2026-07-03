@@ -12,6 +12,8 @@ pub enum YuError {
     DuckDBError(#[from] duckdb::Error),
     #[error("r2d2 error: {0}")]
     R2D2Error(#[from] r2d2::Error),
+    #[error("sqlx error: {0}")]
+    SqlxError(#[from] sqlx::Error),
     #[error("li error: {0}")]
     LiError(#[from] LiError),
     #[error("parse json error: {0}")]

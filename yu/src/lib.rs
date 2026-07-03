@@ -5,6 +5,7 @@ pub mod duck_db;
 pub mod duck_db_tables;
 pub mod errors;
 pub mod polymarket;
+pub mod postgresql_db;
 pub mod scheduler;
 pub mod sync;
 #[cfg(test)]
