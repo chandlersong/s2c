@@ -229,7 +229,8 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
                             None => market.market.start_date.unwrap_or(0),
                             Some(v) => v.clone(),
                         };
-                        let query_start = start_ts + 1;
+                        // tests expect query.start_ts to be start_ts - 1, so use saturating_sub to avoid underflow
+                        let query_start = start_ts.saturating_sub(1);
                         if (query_start > now) || ((now - start_ts) < self.interval.to_second()) {
                             continue;
                         }
@@ -267,7 +268,8 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
         match history {
             Ok(history) => {
                 for h in history.history {
-                    if end_timestamp > h.t {
+                    // only process points not later than end_timestamp
+                    if h.t > end_timestamp {
                         continue;
                     }
                     let timestamp = self.interval.get_close_unix_sec(h.t);

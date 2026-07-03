@@ -1,12 +1,14 @@
 use crate::duck_db::DuckDBDSProvider;
-use crate::duck_db_tables::DuckTableTableChannel;
+use crate::duck_db_tables::{DuckTableTableChannel, request_data_source_provider_from_table};
 use crate::polymarket::database::get_polymarket_price_history_table;
 use crate::polymarket::po::PolyMarketHistoryPo;
 use crate::sync::sync_server::grpc_sync::sync_interface_server::SyncInterface;
 use crate::sync::sync_server::grpc_sync::{
     AssetTimestamp, Empty, PolyMarketHistory, PolyMarketHistoryList, ServerMessage, SubscribeRequest, SyncRequest, server_message,
 };
+use duckdb::params;
 use log::{error, info};
+use prost::Message;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
@@ -14,6 +16,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 use yue::query_message::{DataSourceProviderTrait, InsertPayload, QueryCommand};
+// for decoding prost-encoded payloads into PolyMarketHistory
 
 pub mod grpc_sync {
     use std::collections::HashMap;
@@ -100,6 +103,7 @@ enum SyncInternalCommand {
 pub struct YuSyncServer {
     commands_sender: mpsc::Sender<SyncInternalCommand>,
     history_tx: broadcast::Sender<PolyMarketHistory>,
+    ds_provider: DuckDBDSProvider,
 }
 
 impl YuSyncServer {
@@ -111,8 +115,26 @@ impl YuSyncServer {
         let (commands_sender, commands_receiver) = mpsc::channel(10);
         let polymarket_table = table.unwrap_or(get_polymarket_price_history_table());
         let history_rx = history_tx.subscribe();
+        let ds_provider = Self::get_ds_from_table(&polymarket_table).await;
         tokio::spawn(async move { Self::run(commands_receiver, polymarket_table, asset_timestamp, history_rx).await });
-        Self { commands_sender, history_tx }
+        Self {
+            commands_sender,
+            history_tx,
+            ds_provider,
+        }
+    }
+
+    async fn get_ds_from_table(table: &DuckTableTableChannel<PolyMarketHistoryPo>) -> DuckDBDSProvider {
+        // FUTURE: 加入一个试错的上限
+        loop {
+            match request_data_source_provider_from_table(table.clone()).await {
+                Some(ds) => break ds,
+                None => {
+                    error!("request_data_source_provider_from_table returned None, retrying in 1s");
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            }
+        }
     }
 
     ///
@@ -129,15 +151,6 @@ impl YuSyncServer {
         mut asset_timestamp: HashMap<String, u64>,
         mut history_rx: broadcast::Receiver<PolyMarketHistory>,
     ) {
-        // let ds_provider = loop {
-        //     match request_data_source_provider_from_table(polymarket_table.clone()).await {
-        //         Some(ds) => break ds,
-        //         None => {
-        //             error!("request_data_source_provider_from_table returned None, retrying in 1s");
-        //             tokio::time::sleep(Duration::from_secs(1)).await;
-        //         }
-        //     }
-        // };
         info!("Sync server run loop started");
 
         loop {
@@ -177,6 +190,146 @@ impl YuSyncServer {
 
                 }
             }
+        }
+    }
+
+    ///
+    /// 1. 从数据库里面，从表poly_market_price_history里面大于start_timestamp里面所有的数据
+    ///    - 一次最多查询max_batch_size，要把所有的大于start_timestamp的查询出来
+    /// 2. 然后按照max_batch_size最大的一组，发送给客户端
+    ///
+    pub async fn query_and_send_history(
+        provider: DuckDBDSProvider,
+        assert_id: &str,
+        start_timestamp: u64,
+        tx: mpsc::Sender<Result<ServerMessage, Status>>,
+        max_batch_size: u64,
+    ) {
+        // 使用内存/文件数据库提供者从 poly_market_price_history 中查询指定 asset_id
+        // 注意：为了兼容 duckdb 参数绑定的不确定性，这里将 asset_id 做简单的 SQL 转义后拼接入查询语句
+        // 查询逻辑：按 timestamp 升序，查询 > start_timestamp 的记录，限制为 max_batch_size
+
+        // 如果 max_batch_size 为 0，避免除零或无限循环，直接返回
+        if max_batch_size == 0 {
+            let list = PolyMarketHistoryList {
+                history_list: vec![],
+                timestamp: 0,
+            };
+            let message = ServerMessage {
+                payload: Some(server_message::Payload::PolymarketHistory(list)),
+            };
+            let _ = tx.send(Ok(message)).await;
+            return;
+        }
+
+        let mut offset: u64 = 0;
+        let batch = max_batch_size;
+        let mut any_sent = false;
+
+        loop {
+            let sql = format!(
+                "SELECT payload FROM poly_market_price_history WHERE assert_id = '{}' AND timestamp > {} ORDER BY timestamp LIMIT {} OFFSET ?",
+                assert_id.replace("'", "''"),
+                start_timestamp,
+                batch
+            );
+
+            match provider.acquire() {
+                Ok(conn) => {
+                    let mut stmt = match conn.prepare(sql.as_str()) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            error!("prepare query_and_send_history failed: {:?}", e);
+                            return;
+                        }
+                    };
+
+                    let mut rows = match stmt.query(params![offset]) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            error!("query query_and_send_history failed: {:?}", e);
+                            return;
+                        }
+                    };
+
+                    let mut results: Vec<PolyMarketHistory> = Vec::new();
+                    let mut row_count: u64 = 0;
+
+                    while let Some(row_res) = rows.next().map_err(|e| e.to_string()).ok() {
+                        match row_res {
+                            Some(row) => {
+                                row_count += 1;
+                                // payload 在第 0 列
+                                let payload_res: Result<Vec<u8>, _> = row.get(0);
+                                match payload_res {
+                                    Ok(payload) => {
+                                        // payload 为 prost 编码的 PolyMarketHistory
+                                        match PolyMarketHistory::decode(payload.as_slice()) {
+                                            Ok(history) => results.push(history),
+                                            Err(e) => {
+                                                error!("decode PolyMarketHistory failed: {:?}", e);
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("get payload failed: {:?}", e);
+                                        continue;
+                                    }
+                                }
+                            }
+                            None => break,
+                        }
+                    }
+
+                    // 在继续到 await 之前显式 drop DuckDB 的非 Send 类型（stmt/rows/conn），
+                    // 避免将它们跨 await 保持在异步任务中导致 future 非 Send。
+                    drop(rows);
+                    drop(stmt);
+                    drop(conn);
+
+                    // 如果本次查询返回了数据，就发送批次
+                    if !results.is_empty() {
+                        any_sent = true;
+                        let list = PolyMarketHistoryList {
+                            history_list: results,
+                            timestamp: 0,
+                        };
+                        let message = ServerMessage {
+                            payload: Some(server_message::Payload::PolymarketHistory(list)),
+                        };
+                        if tx.send(Ok(message)).await.is_err() {
+                            error!("client receiver closed when sending history");
+                            return;
+                        }
+                    }
+
+                    // 若本轮返回行数少于 batch，说明已到末尾，退出循环
+                    if row_count < batch {
+                        break;
+                    }
+
+                    // 否则继续下一页
+                    offset += batch;
+                }
+                Err(e) => {
+                    error!("acquire provider failed in query_and_send_history: {:?}", e);
+                    let _ = tx.send(Err(Status::internal("failed to acquire datasource"))).await;
+                    return;
+                }
+            }
+        }
+
+        // 如果没有任何记录被发送，则发送一个空批次，方便客户端判断
+        if !any_sent {
+            let list = PolyMarketHistoryList {
+                history_list: vec![],
+                timestamp: 0,
+            };
+            let message = ServerMessage {
+                payload: Some(server_message::Payload::PolymarketHistory(list)),
+            };
+            let _ = tx.send(Ok(message)).await;
         }
     }
 
@@ -285,15 +438,21 @@ impl SyncInterface for YuSyncServer {
     type SyncHistoryStream = Pin<Box<dyn tokio_stream::Stream<Item = Result<ServerMessage, Status>> + Send + 'static>>;
 
     async fn sync_history(&self, request: Request<SyncRequest>) -> Result<Response<Self::SyncHistoryStream>, Status> {
-        request.get_ref().timestamp;
+        let timestamp = request.get_ref().timestamp;
+        let assert_id = request.get_ref().asset_id.clone();
+
         let (tx, rx) = mpsc::channel::<Result<ServerMessage, Status>>(16);
-        let reply = ServerMessage {
-            payload: Some(server_message::Payload::PolymarketHistory(PolyMarketHistoryList {
-                history_list: Vec::new(),
-                timestamp: 123,
-            })),
-        };
-        if tx.send(Ok(reply)).await.is_err() {}
+        let ds_provider = self.ds_provider.clone();
+        let assert_id_owned = assert_id.clone();
+        // Use spawn_blocking to run DuckDB blocking operations on a blocking thread.
+        // Inside the blocking closure we synchronously run the async helper via Handle::block_on,
+        // so DuckDB's non-Send types never cross async await points on the runtime threads.
+        tokio::task::spawn_blocking(move || {
+            let handle = tokio::runtime::Handle::current();
+            handle.block_on(async move {
+                Self::query_and_send_history(ds_provider, &assert_id_owned, timestamp, tx, 1000).await;
+            });
+        });
 
         Ok(Response::new(Box::pin(ReceiverStream::new(rx)) as Self::SyncHistoryStream))
     }
@@ -625,5 +784,100 @@ pub mod tests {
             }
             Err(e) => panic!("send error: {:?}", e),
         }
+    }
+
+    /// Unit test: test_query_and_send_history
+    ///
+    /// 目的：验证 query_and_send_history 能够从 DuckDB 中读取指定 asset_id 且 timestamp 大于 start_timestamp 的记录，
+    /// 并以一个 PolyMarketHistoryList 批次消息发送给客户端。
+    /// 步骤：
+    /// 1. 创建内存数据库和表；
+    /// 2. 插入多条 PolyMarketHistoryPo（包含目标 asset_id 和其他 asset），
+    /// 3. 调用 query_and_send_history，等待接收端收到批次消息并断言返回记录数和时间戳条件正确。
+    #[tokio::test]
+    pub async fn test_query_and_send_history() {
+        use super::grpc_sync::{PolyMarketHistory, ServerMessage};
+        use crate::polymarket::po::PolyMarketHistoryPo;
+        use prost::Message;
+        use tokio::sync::mpsc;
+        use tokio::sync::oneshot;
+        use tonic::Status;
+        use yue::query_message::{BatchInsertPayload, QueryCommand}; // for encode_to_vec in test
+
+        // create memory provider and table
+        let (provider, table) = create_memory_table();
+        initial_tables(Some(provider.clone())).expect("initial tables failed");
+
+        // prepare data: five records for ASSETA (1000,2000,3000,4000,5000)
+        let mut po_vec: Vec<PolyMarketHistoryPo> = Vec::new();
+        for i in 1..=5 {
+            let ts = i as u64 * 1000;
+            let history = PolyMarketHistory {
+                series_id: "".to_string(),
+                series_slug: "".to_string(),
+                event_id: "".to_string(),
+                event_slug: "".to_string(),
+                market_id: "".to_string(),
+                market_slug: "".to_string(),
+                asset_id: "ASSETA".to_string(),
+                asset_slug: "".to_string(),
+                timestamp: ts,
+                price: i as f64,
+            };
+            let po = PolyMarketHistoryPo {
+                assert_id: "ASSETA".to_string(),
+                timestamp: ts,
+                payload: history.encode_to_vec(),
+            };
+            po_vec.push(po);
+        }
+
+        let (ins_tx, ins_rx) = oneshot::channel();
+        if let Err(e) = table.send(QueryCommand::BatchInsert(BatchInsertPayload::new(po_vec, ins_tx))).await {
+            panic!("batch insert send failed: {:?}", e);
+        }
+        match ins_rx.await {
+            Ok(Ok(_inserted)) => {}
+            Ok(Err(e)) => panic!("batch insert failed: {:?}", e),
+            Err(e) => panic!("batch insert response error: {:?}", e),
+        }
+
+        // prepare receiver for server messages
+        let (tx, mut rx) = mpsc::channel::<Result<ServerMessage, Status>>(4);
+
+        // query for ASSETA with start_timestamp = 0 and max_batch_size = 2 => should return 3 messages: 2,2,1
+        let provider_clone = provider.clone();
+        tokio::task::spawn_blocking(move || {
+            let handle = tokio::runtime::Handle::current();
+            handle.block_on(async move {
+                super::YuSyncServer::query_and_send_history(provider_clone, "ASSETA", 0u64, tx, 2u64).await;
+            });
+        });
+
+        // collect messages
+        let mut total_received = 0usize;
+        let mut timestamps: Vec<u64> = Vec::new();
+        for _ in 0..3 {
+            let received = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+                .await
+                .expect("timeout waiting")
+                .expect("expected message");
+            match received {
+                Ok(msg) => {
+                    if let Some(super::grpc_sync::server_message::Payload::PolymarketHistory(list)) = msg.payload {
+                        total_received += list.history_list.len();
+                        for h in list.history_list {
+                            timestamps.push(h.timestamp);
+                        }
+                    } else {
+                        panic!("unexpected payload");
+                    }
+                }
+                Err(e) => panic!("send error: {:?}", e),
+            }
+        }
+
+        assert_eq!(total_received, 5);
+        assert_eq!(timestamps, vec![1000u64, 2000u64, 3000u64, 4000u64, 5000u64]);
     }
 }
