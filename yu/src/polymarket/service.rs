@@ -1,5 +1,7 @@
 use crate::duck_db::{DuckDBDSProvider, DuckDBPO};
+use crate::duck_db_tables::DuckDbTableTrait;
 use crate::errors::YuError;
+use crate::polymarket::db_consts::PolyMarketTables::AssertInfo;
 use crate::polymarket::po::PolyMarketAssetInfoPo;
 use crate::sync::sync_server::grpc_sync::PolyMarketHistory;
 use async_trait::async_trait;
@@ -218,14 +220,14 @@ impl SeriesHistoryMarketServiceImpl {
             Ok(c) => c,
             Err(e) => {
                 error!("acquire connection error when refresh assert_info_in_db: {:?}", e);
-                return Err(crate::errors::YuError::from(e));
+                return Err(YuError::from(e));
             }
         };
 
         // 读取已存在的条目并同时收集 assert_id
         let mut existing: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut all_pos: Vec<PolyMarketAssetInfoPo> = Vec::new();
-        let sql = "SELECT series_id, series_slug, event_id, event_slug, market_id, market_slug, assert_id, assert_slug FROM poly_market_assert_info;";
+        let sql = "SELECT series_id, series_slug, event_id, event_slug, market_id, market_slug, assert_id, assert_slug FROM polymarket_assert_info;";
         match conn.prepare(sql) {
             Ok(mut stmt) => {
                 match stmt.query([]) {
@@ -324,7 +326,7 @@ impl SeriesHistoryMarketServiceImpl {
                 }
             };
             tx.set_drop_behavior(duckdb::DropBehavior::Commit);
-            let mut appender = match tx.appender("poly_market_assert_info") {
+            let mut appender = match tx.appender(AssertInfo.table_name().as_str()) {
                 Ok(a) => a,
                 Err(e) => {
                     error!("Failed to create appender for poly_market_assert_info: {:?}", e);
@@ -804,7 +806,7 @@ mod tests {
 
         // pre-insert tokenA so refresh should skip it
         let pre_conn = provider.acquire().expect("acquire");
-        pre_conn.execute("INSERT INTO poly_market_assert_info(assert_id, series_id, series_slug, event_id, event_slug, market_id, market_slug, assert_slug) VALUES ('tokenA','s1','series1','e1','event1','m1','market1','market1_Yes')", []).expect("insert tokenA");
+        pre_conn.execute("INSERT INTO polymarket_assert_info(assert_id, series_id, series_slug, event_id, event_slug, market_id, market_slug, assert_slug) VALUES ('tokenA','s1','series1','e1','event1','m1','market1','market1_Yes')", []).expect("insert tokenA");
 
         let mock = MockPolymarketApiTrait::new();
         let client: PolymarketAPI = Arc::new(mock);

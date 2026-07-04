@@ -1,11 +1,12 @@
 use crate::duck_db::DuckDBDSProvider;
-use crate::duck_db_tables::{request_data_source_provider_from_table, DuckTableTableChannel};
+use crate::duck_db_tables::{DuckDbTableTrait, DuckTableTableChannel, request_data_source_provider_from_table};
 use crate::polymarket::database::get_polymarket_price_history_table;
+use crate::polymarket::db_consts::PolyMarketTables::PriceHistory;
 use crate::polymarket::po::{PolyMarketAssetInfoPo, PolyMarketHistoryPo};
 use crate::sync::sync_server::grpc_sync::sync_interface_server::SyncInterface;
 use crate::sync::sync_server::grpc_sync::{
-    server_message, Empty, PolyMarketAssetInfoList, PolyMarketHistory, PolyMarketHistoryList, PolymarketAssertInfo, ServerMessage, SubscribeRequest,
-    SyncRequest,
+    Empty, PolyMarketAssetInfoList, PolyMarketHistory, PolyMarketHistoryList, PolymarketAssertInfo, ServerMessage, SubscribeRequest, SyncRequest,
+    server_message,
 };
 use duckdb::params;
 use li::tools::time::unix_time_now_u64_utc;
@@ -14,7 +15,7 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{broadcast, mpsc, oneshot, RwLock};
+use tokio::sync::{RwLock, broadcast, mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 use yue::query_message::{DataSourceProviderTrait, InsertPayload, QueryCommand};
@@ -31,7 +32,7 @@ pub async fn get_asset_timestamp(provider: DuckDBDSProvider) -> HashMap<String, 
     // 最原始的做法：通过 provider 获取连接，直接用 stmt.query 返回 rows，然后在内存里计算每个 asset 的最大 timestamp
     let mut res: HashMap<String, u64> = HashMap::new();
 
-    let sql_all = "SELECT assert_id, timestamp FROM poly_market_price_history ORDER BY assert_id, timestamp;";
+    let sql_all = "SELECT assert_id, timestamp FROM polymarket_price_history ORDER BY assert_id, timestamp;";
     match provider.acquire() {
         Ok(conn) => {
             let mut stmt = match conn.prepare(sql_all) {
@@ -235,7 +236,8 @@ impl YuSyncServer {
 
         loop {
             let sql = format!(
-                "SELECT * FROM poly_market_price_history WHERE assert_id = '{}' AND timestamp > {} ORDER BY timestamp LIMIT {} OFFSET ?",
+                "SELECT * FROM {} WHERE assert_id = '{}' AND timestamp > {} ORDER BY timestamp LIMIT {} OFFSET ?",
+                PriceHistory.table_name(),
                 assert_id.replace("'", "''"),
                 start_timestamp,
                 batch
@@ -573,7 +575,7 @@ pub mod tests {
     /// 3. 断言客户端收到一个包含 3 条记录的 `PolymarketHistory` 批次消息。
     #[tokio::test]
     pub async fn test_send_history_to_client() {
-        use super::grpc_sync::{server_message, PolyMarketHistory};
+        use super::grpc_sync::{PolyMarketHistory, server_message};
         use tokio::sync::{broadcast, mpsc};
         use tonic::Status;
 
