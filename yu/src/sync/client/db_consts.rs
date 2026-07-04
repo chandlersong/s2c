@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS polymarket_assert_info (
         assert_slug VARCHAR
 
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_CREATE_POLYMARKET_ASSERT_INFO_TABLE_MAIN ON poly_market_assert_info(assert_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_CREATE_POLYMARKET_ASSERT_INFO_TABLE_MAIN ON polymarket_assert_info(assert_id);
 "#;
 
 pub const CREATE_POLYMARKET_PRICE_HISTORY_TABLE: &str = r#"
@@ -51,7 +51,6 @@ SELECT create_hypertable(
   'timestamp',
   if_not_exists => TRUE
 );
--- Enable compression and set orderby/segmentby. timescaledb.compress must be assigned a value.
 ALTER TABLE polymarket_price_history SET (
   timescaledb.enable_columnstore,
   timescaledb.orderby = 'timestamp DESC',
