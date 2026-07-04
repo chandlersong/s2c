@@ -8,17 +8,11 @@ pub async fn initial_tables(provider: Option<PostgresqlDataSourceProvider>) -> R
     let pool = db_provider.pool();
     for table in ALL_CLIENT_POLYMARKET_TABLES.iter() {
         let create_sql = table.create_table_statement();
-        let table_initial_stmt = create_sql.split(';');
-        for stmt in table_initial_stmt {
-            let sql: &'static str = stmt.trim();
-            if !sql.is_empty() {
-                // sql is a &'static str (from constants), pass directly to sqlx::query
-                match sqlx::query(sql).execute(pool).await {
-                    Ok(_) => {}
-                    Err(e) => {
-                        error!("Failed to execute sql: {}\nerror: {}", sql, e);
-                    }
-                }
+        // execute the whole SQL blob (may contain multiple statements); simpler and avoids slicing lifetimes
+        match sqlx::query(create_sql).execute(pool).await {
+            Ok(_) => {}
+            Err(e) => {
+                error!("Failed to execute create_sql for table {}:\nerror: {}", table.table_name(), e);
             }
         }
     }
