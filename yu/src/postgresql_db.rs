@@ -1,15 +1,12 @@
 use crate::config::get_config;
 use crate::errors::YuError;
 use futures::executor::block_on;
-use sqlx::{PgPool, postgres};
-use sqlx_core::pool::PoolConnection;
+use sqlx::PgPool;
 use tokio::sync::OnceCell;
-use yue::errors::YueError;
-use yue::query_message::DataSourceProviderTrait;
 
 pub(crate) static SYNC_CLIENT_PG_POOL: OnceCell<PgPool> = OnceCell::const_new();
 
-pub async fn get_sync_client_pg_pool() -> Result<&'static PgPool, YuError> {
+pub async fn get_sync_client_pg_pool() -> Result<PgPool, YuError> {
     SYNC_CLIENT_PG_POOL
         .get_or_try_init(|| async {
             let app_config = get_config();
@@ -17,40 +14,15 @@ pub async fn get_sync_client_pg_pool() -> Result<&'static PgPool, YuError> {
             client_config.pool_options().connect_with(client_config.connect_options()).await
         })
         .await
+        .map(|p| p.clone())
         .map_err(Into::into)
+}
+
+pub fn get_sync_client_pg_pool_sync() -> Result<PgPool, YuError> {
+    block_on(get_sync_client_pg_pool())
 }
 
 pub trait PostgresqlTableTrait: Send + Clone + 'static {
     fn table_name(&self) -> &'static str;
     fn create_table_statement(&self) -> &'static str;
-}
-
-pub struct PostgresqlDataSourceProvider {
-    pool: &'static PgPool,
-}
-
-impl PostgresqlDataSourceProvider {
-    pub fn new(pool: &'static PgPool) -> Self {
-        Self { pool }
-    }
-
-    pub fn pool(&self) -> &'static PgPool {
-        self.pool
-    }
-}
-
-impl DataSourceProviderTrait for PostgresqlDataSourceProvider {
-    type Connection = PoolConnection<postgres::Postgres>;
-
-    fn acquire(&self) -> Result<Self::Connection, YueError> {
-        block_on(self.pool.acquire()).map_err(|e| YueError::new(&format!("Failed to acquire PostgreSQL connection: {}", e)))
-    }
-}
-
-impl Default for PostgresqlDataSourceProvider {
-    fn default() -> Self {
-        Self {
-            pool: block_on(get_sync_client_pg_pool()).expect("sync_client pg pool missing"),
-        }
-    }
 }

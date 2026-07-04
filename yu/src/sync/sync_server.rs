@@ -1,11 +1,11 @@
 use crate::duck_db::DuckDBDSProvider;
-use crate::duck_db_tables::{DuckTableTableChannel, request_data_source_provider_from_table};
+use crate::duck_db_tables::{request_data_source_provider_from_table, DuckTableTableChannel};
 use crate::polymarket::database::get_polymarket_price_history_table;
 use crate::polymarket::po::{PolyMarketAssetInfoPo, PolyMarketHistoryPo};
 use crate::sync::sync_server::grpc_sync::sync_interface_server::SyncInterface;
 use crate::sync::sync_server::grpc_sync::{
-    Empty, PolyMarketAssetTimestamp, PolyMarketHistory, PolyMarketHistoryList, PolymarketAssertInfo, ServerMessage, SubscribeRequest, SyncRequest,
-    server_message,
+    server_message, Empty, PolyMarketAssetInfoList, PolyMarketHistory, PolyMarketHistoryList, PolymarketAssertInfo, ServerMessage, SubscribeRequest,
+    SyncRequest,
 };
 use duckdb::params;
 use li::tools::time::unix_time_now_u64_utc;
@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{RwLock, broadcast, mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot, RwLock};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 use yue::query_message::{DataSourceProviderTrait, InsertPayload, QueryCommand};
@@ -85,7 +85,7 @@ pub async fn get_asset_timestamp(provider: DuckDBDSProvider) -> HashMap<String, 
 }
 
 enum SyncInternalCommand {
-    QueryAssetTimestamp(oneshot::Sender<Result<PolyMarketAssetTimestamp, Status>>),
+    QueryAssetTimestamp(oneshot::Sender<Result<PolyMarketAssetInfoList, Status>>),
 }
 
 pub struct YuSyncServer {
@@ -166,7 +166,7 @@ impl YuSyncServer {
                                 };
                                 message_info.insert(assert_id, info);
                             }
-                            let message = PolyMarketAssetTimestamp{timestamps: message_info};
+                            let message = PolyMarketAssetInfoList{assets: message_info};
                             if let Err(e) = tx.send(Ok(message)){
                                 error!("send asset timestamp failed: {:?}", e);
                             }
@@ -412,7 +412,7 @@ impl YuSyncServer {
 }
 #[tonic::async_trait]
 impl SyncInterface for YuSyncServer {
-    async fn get_poly_market_assert_info(&self, _request: Request<Empty>) -> Result<Response<PolyMarketAssetTimestamp>, Status> {
+    async fn get_poly_market_assert_info(&self, _request: Request<Empty>) -> Result<Response<PolyMarketAssetInfoList>, Status> {
         let (tx, rx) = oneshot::channel();
 
         // 发送内部命令到后台 task
@@ -573,7 +573,7 @@ pub mod tests {
     /// 3. 断言客户端收到一个包含 3 条记录的 `PolymarketHistory` 批次消息。
     #[tokio::test]
     pub async fn test_send_history_to_client() {
-        use super::grpc_sync::{PolyMarketHistory, server_message};
+        use super::grpc_sync::{server_message, PolyMarketHistory};
         use tokio::sync::{broadcast, mpsc};
         use tonic::Status;
 

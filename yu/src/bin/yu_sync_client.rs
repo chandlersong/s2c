@@ -1,7 +1,5 @@
-use log::{LevelFilter, error, info};
+use log::{error, info, LevelFilter};
 use std::collections::HashMap;
-use tokio_stream::StreamExt;
-use tonic::Request;
 
 pub mod grpc_sync {
     tonic::include_proto!("grpc_sync");
@@ -14,6 +12,7 @@ use yu::config::get_config;
 use yu::errors::YuError;
 use yu::polymarket::database::initial_tables;
 use yu::sync::client::database::initial_grpc_client_tables;
+use yu::sync::client::sync_client_service::SyncClientService;
 use yue::http_client::init_http_client;
 
 #[tokio::main]
@@ -34,6 +33,11 @@ async fn main() -> Result<(), YuError> {
     special_log.insert("li".to_string(), parse_level(log_in_config));
     setup_logger(Some(LevelFilter::Warn), special_log)?;
     initial_grpc_client_tables(None).await?;
+
+    let client_service = SyncClientService::default();
+    if let Err(e) = client_service.align_local_assets(Default::default()).await {
+        error!("Error aligning local assets: {}", e);
+    }
     // let sync_client_config = match &app_config.sync_client {
     //     None => {
     //         error!("No sync client config provide provided");
