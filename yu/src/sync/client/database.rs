@@ -13,12 +13,14 @@ pub fn initial_tables(provider: Option<PostgresqlDataSourceProvider>) -> Result<
         for stmt in table_initial_stmt {
             let sql = stmt.trim();
             if !sql.is_empty() {
-                // make an owned String and move it into the async block so the future is 'static
+                // make an owned String and leak it to 'static for sqlx::query which requires a 'static str
+                // This leaks the SQL strings but it's acceptable for one-time initialization.
                 let owned_sql = sql.to_string();
-                match block_on(async move { sqlx::query(&owned_sql).execute(pool).await }) {
+                let static_sql: &'static str = Box::leak(owned_sql.into_boxed_str());
+                match block_on(async move { sqlx::query(static_sql).execute(pool).await }) {
                     Ok(_) => {}
                     Err(e) => {
-                        error!("Failed to execute sql: {}\nerror: {}", owned_sql, e);
+                        error!("Failed to execute sql: {}\nerror: {}", static_sql, e);
                     }
                 }
             }
