@@ -7,10 +7,10 @@ pub enum PolyMarketTables {
 }
 
 impl PostgresqlTableTrait for PolyMarketTables {
-    fn table_name(&self) -> String {
+    fn table_name(&self) -> &'static str {
         match self {
-            PolyMarketTables::PriceHistory => String::from("polymarket_price_history"),
-            PolyMarketTables::AssertInfo => String::from("polymarket_assert_info"),
+            PolyMarketTables::PriceHistory => "polymarket_price_history",
+            PolyMarketTables::AssertInfo => "polymarket_assert_info",
         }
     }
 

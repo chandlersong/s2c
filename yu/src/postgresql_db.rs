@@ -1,7 +1,7 @@
 use crate::config::get_config;
 use crate::errors::YuError;
 use futures::executor::block_on;
-use sqlx::{postgres, PgPool};
+use sqlx::{PgPool, postgres};
 use sqlx_core::pool::PoolConnection;
 use tokio::sync::OnceCell;
 use yue::errors::YueError;
@@ -21,7 +21,7 @@ pub async fn get_sync_client_pg_pool() -> Result<&'static PgPool, YuError> {
 }
 
 pub trait PostgresqlTableTrait: Send + Clone + 'static {
-    fn table_name(&self) -> String;
+    fn table_name(&self) -> &'static str;
     fn create_table_statement(&self) -> &'static str;
 }
 

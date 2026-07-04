@@ -8,6 +8,7 @@ use crate::sync::sync_server::grpc_sync::{
     server_message,
 };
 use duckdb::params;
+use li::tools::time::unix_time_now_u64_utc;
 use log::{error, info};
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -320,7 +321,7 @@ impl YuSyncServer {
         if !any_sent {
             let list = PolyMarketHistoryList {
                 history_list: vec![],
-                timestamp: 0,
+                timestamp: unix_time_now_u64_utc(),
             };
             let message = ServerMessage {
                 payload: Some(server_message::Payload::PolymarketHistory(list)),
@@ -392,7 +393,7 @@ impl YuSyncServer {
 
             let list = PolyMarketHistoryList {
                 history_list: buffer,
-                timestamp: 0,
+                timestamp: unix_time_now_u64_utc(),
             };
             let message = ServerMessage {
                 payload: Some(server_message::Payload::PolymarketHistory(list)),

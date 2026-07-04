@@ -9,8 +9,8 @@ pub enum PolyMarketTables {
 impl DuckDbTableTrait for PolyMarketTables {
     fn table_name(&self) -> String {
         match self {
-            PolyMarketTables::PriceHistory => String::from("poly_market_price_history"),
-            PolyMarketTables::AssertInfo => String::from("poly_market_assert_info"),
+            PolyMarketTables::PriceHistory => String::from("polymarket_price_history"),
+            PolyMarketTables::AssertInfo => String::from("polymarket_assert_info"),
         }
     }
 
@@ -26,7 +26,7 @@ impl DuckDbTableTrait for PolyMarketTables {
     }
 }
 pub const CREATE_POLYMARKET_ASSERT_INFO_TABLE: &str = r#"
-CREATE TABLE IF NOT EXISTS poly_market_assert_info (
+CREATE TABLE IF NOT EXISTS polymarket_assert_info (
         series_id VARCHAR,
         series_slug VARCHAR,
         event_id VARCHAR,
@@ -41,7 +41,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_CREATE_POLYMARKET_ASSERT_INFO_TABLE_MAIN O
 "#;
 
 pub const CREATE_POLYMARKET_PRICE_HISTORY_TABLE: &str = r#"
-CREATE TABLE IF NOT EXISTS poly_market_price_history (
+CREATE TABLE IF NOT EXISTS polymarket_price_history (
         assert_id VARCHAR,
         timestamp BIGINT,
         price DOUBLE
