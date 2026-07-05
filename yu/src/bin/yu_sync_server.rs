@@ -85,7 +85,7 @@ async fn start_polymarket_history(
         asset_infos,
     )
     .await;
-    if let Err(e) = series_history_service.initial_data(asset_timestamp.clone()).await {
+    if let Err(e) = series_history_service.initial_history_data(asset_timestamp.clone()).await {
         error!("Error initializing series history: {}", e);
         return Err(e);
     }

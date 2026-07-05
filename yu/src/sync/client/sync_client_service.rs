@@ -1,11 +1,13 @@
 use crate::errors::YuError;
 use crate::postgresql_db::get_sync_client_pg_pool_sync;
-use crate::sync::client::po::LocalPolyMarketAssetInfoPo;
+use crate::postgresql_db_tables::PostgresqlBatchInsert;
+use crate::sync::client::po::{LocalPolyMarketAssetInfoPo, LocalPolyMarketHistoryPo};
 use crate::sync::client::repository::{ClientPolyMarketRepository, ClientPolyMarketRepositoryImpl};
+use crate::sync::sync_server::grpc_sync::server_message::Payload;
 use crate::sync::sync_server::grpc_sync::{PolyMarketAssetInfoList, ServerMessage};
 use log::info;
 use std::collections::HashMap;
-use std::sync::mpsc;
+use tokio::sync::mpsc;
 
 pub struct SyncClientService {
     repository: ClientPolyMarketRepository,
@@ -37,7 +39,7 @@ impl SyncClientService {
     ///
     pub async fn align_local_assets(&self, server_assets: PolyMarketAssetInfoList) -> Result<HashMap<String, u64>, YuError> {
         let local_assets = self.repository.list_assets_timestamp().await?;
-        info!("local assets num: {}", local_assets.len());
+        info!("local assets history num: {}", local_assets.len());
 
         let mut res: HashMap<String, u64> = HashMap::new();
 
@@ -79,8 +81,28 @@ impl SyncClientService {
     ///
     /// 监听数据，写入数据库
     ///
-    pub async fn start_listen(rx: mpsc::Receiver<ServerMessage>) -> Result<(), YuError> {
-        todo!()
+    pub async fn start_listen(
+        mut rx: mpsc::Receiver<ServerMessage>,
+        batch_insert: PostgresqlBatchInsert<LocalPolyMarketHistoryPo>,
+    ) -> Result<(), YuError> {
+        loop {
+            tokio::select! {
+                Some(server_msg) = rx.recv() => {
+                    if let Some(payload) = server_msg.payload {
+                        match payload {
+                        Payload::PolymarketHistory(history) => {
+                                let batch_timestamp = history.timestamp;
+                                for h in history.history_list.into_iter() {
+                                    let po = LocalPolyMarketHistoryPo::from_polymarket_history(h, batch_timestamp);
+                                    batch_insert.insert_data(po).await;
+                                }
+
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

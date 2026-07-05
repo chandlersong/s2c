@@ -152,6 +152,7 @@ impl YuSyncServer {
                             let mut message_info:HashMap<String,PolymarketAssertInfo> = HashMap::new();
 
                             let assets = asset_infos.read().await.clone();
+                            info!("开始查询内存中的asset 列表：现有{}",assets.len());
                             for a in assets {
                                 let assert_id = a.asset_id;
                                 let info  = PolymarketAssertInfo{

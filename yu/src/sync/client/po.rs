@@ -1,5 +1,7 @@
 use crate::postgresql_db::CopyInsertable;
+use crate::sync::sync_server::grpc_sync::PolyMarketHistory;
 use sqlx::{FromRow, Row};
+use yue::tools::get_snow_flake_id_u64;
 
 #[derive(Debug, FromRow)]
 pub struct LocalPolyMarketAssetInfoPo {
@@ -23,6 +25,18 @@ pub struct LocalPolyMarketHistoryPo {
     pub timestamp: u64,
     pub price: f64,
     pub batch_timestamp: u64,
+}
+
+impl LocalPolyMarketHistoryPo {
+    pub fn from_polymarket_history(history: PolyMarketHistory, batch_timestamp: u64) -> LocalPolyMarketHistoryPo {
+        LocalPolyMarketHistoryPo {
+            id: get_snow_flake_id_u64(),
+            asset_id: history.asset_id,
+            timestamp: history.timestamp,
+            price: history.price,
+            batch_timestamp,
+        }
+    }
 }
 
 // 手动实现 FromRow，支持从 timestamptz/BigInt 等类型读取并转换为 u64

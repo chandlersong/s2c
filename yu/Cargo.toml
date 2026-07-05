@@ -38,7 +38,6 @@ sqlx = { version = "0.9.0", features = [
     "uuid",
     "macros", # 如果使用 query! 宏
 ] }
-sqlx-core = "0.9.0"
 sqlx-postgres = "0.9.0"
 [dev-dependencies]
 # keep yue mockable enabled for tests

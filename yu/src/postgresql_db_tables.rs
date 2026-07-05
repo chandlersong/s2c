@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 ///
 
 #[async_trait]
-pub trait PostgresqlBatchInsertTrait<P: CopyInsertable> {
+pub trait PostgresqlBatchInsertTrait<P: CopyInsertable>: Send + Sync {
     async fn insert_data(&self, data: P);
 }
 
@@ -20,13 +20,13 @@ pub struct PostgresqlBatchInsertImpl<P: CopyInsertable> {
 }
 
 impl<P: CopyInsertable> PostgresqlBatchInsertImpl<P> {
-    pub async fn new(table_name: &str, pg_pool: PgPool) -> Self {
+    pub async fn new(table_name: &str, pg_pool: PgPool) -> PostgresqlBatchInsert<P> {
         let (sender, receiver) = mpsc::channel(1);
         let table = table_name.to_owned();
         tokio::spawn(async move {
             Self::start_at_backend(pg_pool, receiver, table, 1000, 1000).await;
         });
-        Self { sender }
+        Arc::new(Self { sender })
     }
 
     ///

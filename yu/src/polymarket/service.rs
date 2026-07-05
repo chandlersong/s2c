@@ -127,7 +127,7 @@ async fn batch_split_series_markets_with_client(
 pub trait SeriesHistoryMarketServiceTrait: Send + Sync {
     async fn refresh_open_markets(&self) -> Result<(), YuError>;
 
-    async fn initial_data(&self, start_timestamps: HashMap<String, u64>) -> Result<(), YuError>;
+    async fn initial_history_data(&self, start_timestamps: HashMap<String, u64>) -> Result<(), YuError>;
 
     async fn query_and_broadcast(&self, query_payload: GetPricesHistoryQuery, asset_index: usize, market: &MarketWithAddition);
 
@@ -175,24 +175,17 @@ impl SeriesHistoryMarketServiceImpl {
         ds_provider: Option<DuckDBDSProvider>,
         assert_infos: Arc<RwLock<Vec<PolyMarketAssetInfoPo>>>,
     ) -> Self {
-        let (open_markets, _) = match batch_split_series_markets_with_client(&series_ids, client.clone()).await {
-            Ok((open_markets, close_markets)) => (open_markets, close_markets),
-            Err(e) => panic!("batch_split_series_markets error: {:?}", e),
-        };
-        info!(
-            "SeriesHistoryMarketService: series num:{} , open markets num: {}",
-            series_ids.len(),
-            open_markets.len()
-        );
-        Self {
+        let res = Self {
             series_ids,
             interval,
-            open_markets: Arc::new(RwLock::new(open_markets)),
+            open_markets: Arc::new(RwLock::new(Vec::new())),
             history_broadcast,
             client,
             ds_provider: ds_provider.unwrap_or_else(|| DuckDBDSProvider::default()),
             assert_infos,
-        }
+        };
+        res.refresh_open_markets().await.expect("refresh open markets failed");
+        res
     }
 }
 
@@ -369,10 +362,12 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
                     let mut guard = self.assert_infos.write().await;
                     *guard = asset_infos;
                 };
-                let count = open_markets.len();
-                let mut guard = self.open_markets.write().await;
-                *guard = open_markets;
-                info!("refresh_open_markets: updated open markets num: {}", count);
+                {
+                    let count = open_markets.len();
+                    let mut guard = self.open_markets.write().await;
+                    *guard = open_markets;
+                    info!("refresh_open_markets: updated open markets num: {}", count);
+                }
             }
             Err(e) => {
                 error!("refresh_open_markets error: {:?}", e);
@@ -382,7 +377,7 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
         Ok(())
     }
 
-    async fn initial_data(&self, start_timestamps: HashMap<String, u64>) -> Result<(), YuError> {
+    async fn initial_history_data(&self, start_timestamps: HashMap<String, u64>) -> Result<(), YuError> {
         let now = self.interval.get_now_close_unix_sec_utc();
         let fidelity = self.interval.to_second() / 60;
         info!("start to initial polymarket history data");
@@ -643,7 +638,7 @@ mod tests {
         start_ts_map.insert("tokenA".to_string(), 900u64);
 
         // 调用 initial_data，会使用 mock 返回的 history 并通过 broadcast 发送
-        svc.initial_data(start_ts_map).await?;
+        svc.initial_history_data(start_ts_map).await?;
 
         // 接收一条消息
         let received = rx.recv().await.expect("should receive history");
@@ -706,7 +701,7 @@ mod tests {
         let mut start_ts_map: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
         start_ts_map.insert("tokenA".to_string(), 900u64);
 
-        svc.initial_data(start_ts_map).await?;
+        svc.initial_history_data(start_ts_map).await?;
 
         let received = rx.recv().await.expect("should receive history");
         assert_eq!(received.price, 0.42_f64);
@@ -770,7 +765,7 @@ mod tests {
 
         // 传入空的 start_ts_map
         let start_ts_map: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
-        svc.initial_data(start_ts_map).await?;
+        svc.initial_history_data(start_ts_map).await?;
 
         let received = rx.recv().await.expect("should receive history");
         assert_eq!(received.price, 0.99_f64);

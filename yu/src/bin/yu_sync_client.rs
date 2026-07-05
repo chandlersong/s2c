@@ -1,18 +1,14 @@
-use log::{error, info, LevelFilter};
+use log::{LevelFilter, error, info};
 use std::collections::HashMap;
+use std::sync::Arc;
+use tonic::Request;
 
-pub mod grpc_sync {
-    tonic::include_proto!("grpc_sync");
-}
-
-use grpc_sync::sync_interface_client::SyncInterfaceClient;
-use grpc_sync::{Empty, SubscribeRequest};
 use li::tools::logs::{parse_level, setup_logger};
 use yu::config::get_config;
 use yu::errors::YuError;
-use yu::polymarket::database::initial_tables;
 use yu::sync::client::database::initial_grpc_client_tables;
 use yu::sync::client::sync_client_service::SyncClientService;
+use yu::sync::sync_server::grpc_sync::{Empty, sync_interface_client::SyncInterfaceClient};
 use yue::http_client::init_http_client;
 
 #[tokio::main]
@@ -34,31 +30,35 @@ async fn main() -> Result<(), YuError> {
     setup_logger(Some(LevelFilter::Warn), special_log)?;
     initial_grpc_client_tables(None).await?;
 
-    let client_service = SyncClientService::default();
-    if let Err(e) = client_service.align_local_assets(Default::default()).await {
-        error!("Error aligning local assets: {}", e);
-    }
-    // let sync_client_config = match &app_config.sync_client {
-    //     None => {
-    //         error!("No sync client config provide provided");
-    //         return Err(YuError::new("sync_client 配置未找到，请在配置文件中添加 sync_client 配置"));
-    //     }
-    //     Some(config) => config,
-    // };
+    let client_service = Arc::new(SyncClientService::default());
+
+    let sync_client_config = match &app_config.sync_client {
+        None => {
+            error!("No sync client config provide provided");
+            return Err(YuError::new("sync_client 配置未找到，请在配置文件中添加 sync_client 配置"));
+        }
+        Some(config) => config,
+    };
     // //FUTURE:改成https
-    // let server_url = format!("http://{}:{}", sync_client_config.server_host, sync_client_config.server_port);
-    // info!("连接到远程服务器:{}", server_url);
+    let server_url = format!("http://{}:{}", sync_client_config.server_host, sync_client_config.server_port);
+    info!("连接到远程服务器:{}", server_url);
     // // 连接到 gRPC 服务（根据需要修改地址）
-    // let mut client = SyncInterfaceClient::connect(server_url).await?;
-    // println!("已连接到 gRPC 服务端");
+    let mut client = SyncInterfaceClient::connect(server_url).await?;
+    info!("已连接到 gRPC 服务端");
     //
     // // 1) 调用 GetLatestTimestamps
-    // let resp = client.get_poly_market_assert_info(Request::new(Empty {})).await?;
-    // let asset_ts = resp.into_inner();
-    // println!("最新时间戳列表：");
-    // for (asset, info) in &asset_ts.timestamps {
-    //     println!("  {} => {}", asset, info.latest_timestamp);
-    // }
+    let resp = client.get_poly_market_assert_info(Request::new(Empty {})).await?;
+    let asset_list = resp.into_inner();
+    info!("获取asset列表个数.{}", asset_list.assets.len());
+    let result = client_service.align_local_assets(asset_list).await;
+    match result {
+        Ok(diff) => {
+            info!("align_local_assets done. 需要同步的asset个数:{}", diff.len());
+        }
+        Err(e) => {
+            error!("align_local_assets fail. {}", e);
+        }
+    }
     //
     // // 取最大的时间戳（如果需要用于后续逻辑）
     // // let max_ts = asset_ts.timestamps.values().copied().max().unwrap_or(0);

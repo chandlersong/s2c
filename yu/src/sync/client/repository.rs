@@ -1,8 +1,8 @@
 use crate::errors::YuError;
 use crate::sync::client::po::LocalPolyMarketAssetInfoPo;
 use async_trait::async_trait;
+use sqlx::PgPool;
 use std::collections::HashMap;
-use sqlx_postgres::PgPool;
 use std::sync::Arc;
 
 #[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
@@ -61,4 +61,3 @@ impl ClientPolyMarketRepositoryTrait for ClientPolyMarketRepositoryImpl {
         Ok(())
     }
 }
-

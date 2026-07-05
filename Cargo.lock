@@ -7290,7 +7290,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
- "sqlx-core",
  "sqlx-postgres",
  "thiserror 2.0.18",
  "tokio",
