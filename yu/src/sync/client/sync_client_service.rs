@@ -1,7 +1,7 @@
 use crate::errors::YuError;
 use crate::postgresql_db::get_sync_client_pg_pool_sync;
-use crate::sync::client::repository::{ClientPolyMarketRepository, ClientPolyMarketRepositoryImpl};
 use crate::sync::client::po::LocalPolyMarketAssetInfoPo;
+use crate::sync::client::repository::{ClientPolyMarketRepository, ClientPolyMarketRepositoryImpl};
 use crate::sync::sync_server::grpc_sync::{PolyMarketAssetInfoList, ServerMessage};
 use log::info;
 use std::collections::HashMap;
@@ -44,7 +44,11 @@ impl SyncClientService {
         // server_assets.assets: map<string, PolymarketAssertInfo>
         for (_key, info) in server_assets.assets.into_iter() {
             // prefer info.asset_id if set, otherwise use map key
-            let asset_id = if !info.asset_id.is_empty() { info.asset_id.clone() } else { _key.clone() };
+            let asset_id = if !info.asset_id.is_empty() {
+                info.asset_id.clone()
+            } else {
+                _key.clone()
+            };
 
             if !local_assets.contains_key(&asset_id) {
                 // insert into local db
@@ -84,9 +88,9 @@ impl SyncClientService {
 mod tests {
     use crate::sync::client::repository::{ClientPolyMarketRepository, MockClientPolyMarketRepositoryTrait};
     use crate::sync::client::sync_client_service::SyncClientService;
-    use crate::sync::sync_server::grpc_sync::{PolymarketAssertInfo, PolyMarketAssetInfoList};
-    use std::sync::Arc;
+    use crate::sync::sync_server::grpc_sync::{PolyMarketAssetInfoList, PolymarketAssertInfo};
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     // helper constructor for tests to inject mock repository
     impl SyncClientService {
@@ -101,9 +105,7 @@ mod tests {
         let mut mock_repository = MockClientPolyMarketRepositoryTrait::default();
 
         // local DB has no assets
-        mock_repository
-            .expect_list_assets_timestamp()
-            .returning(|| Ok(HashMap::new()));
+        mock_repository.expect_list_assets_timestamp().returning(|| Ok(HashMap::new()));
 
         // expect create_asset to be called with assert_id == "a1"
         mock_repository

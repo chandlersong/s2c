@@ -26,3 +26,11 @@ pub trait PostgresqlTableTrait: Send + Clone + 'static {
     fn table_name(&self) -> &'static str;
     fn create_table_statement(&self) -> &'static str;
 }
+
+///
+/// 一些对象，需要支持PostgreSQL的通过copy方式批量插入操作，需要实现这个trait
+///
+pub trait CopyInsertable: Send + Sync + 'static {
+    fn columns() -> &'static str; // 如 "id,username,email,created_at"
+    fn to_csv_row(&self) -> String; // 转为 CSV 格式的一行
+}

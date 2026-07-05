@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS polymarket_price_history (
     asset_id TEXT,
     timestamp timestamptz NOT NULL,
     price DOUBLE PRECISION,
-    batch_timestamp bigint
+    batch_timestamp timestamptz
 );
 ALTER TABLE polymarket_price_history
   ADD CONSTRAINT polymarket_history_pkey PRIMARY KEY (asset_id, timestamp);
