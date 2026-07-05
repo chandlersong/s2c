@@ -32,7 +32,7 @@ pub async fn get_asset_timestamp(provider: DuckDBDSProvider) -> HashMap<String, 
     // 最原始的做法：通过 provider 获取连接，直接用 stmt.query 返回 rows，然后在内存里计算每个 asset 的最大 timestamp
     let mut res: HashMap<String, u64> = HashMap::new();
 
-    let sql_all = "SELECT assert_id, timestamp FROM polymarket_price_history ORDER BY assert_id, timestamp;";
+    let sql_all = "SELECT asset_id, timestamp FROM polymarket_price_history ORDER BY asset_id, timestamp;";
     match provider.acquire() {
         Ok(conn) => {
             let mut stmt = match conn.prepare(sql_all) {
@@ -154,19 +154,19 @@ impl YuSyncServer {
                             let assets = asset_infos.read().await.clone();
                             info!("开始查询内存中的asset 列表：现有{}",assets.len());
                             for a in assets {
-                                let assert_id = a.asset_id;
+                                let asset_id = a.asset_id;
                                 let info  = PolymarketAssertInfo{
-                                    series_id: assert_id.clone(),
+                                    series_id: asset_id.clone(),
                                     series_slug: a.series_slug.clone(),
                                     event_id: a.event_id.clone(),
                                     event_slug: a.event_slug.clone(),
                                     market_id: a.market_id.clone(),
                                     market_slug: a.market_slug.clone(),
-                                    asset_id: assert_id.clone(),
+                                    asset_id: asset_id.clone(),
                                     asset_slug:a.asset_slug.clone(),
-                                    latest_timestamp: asset_timestamp.get(&assert_id).unwrap_or(&0).clone(),
+                                    latest_timestamp: asset_timestamp.get(&asset_id).unwrap_or(&0).clone(),
                                 };
-                                message_info.insert(assert_id, info);
+                                message_info.insert(asset_id, info);
                             }
                             let message = PolyMarketAssetInfoList{assets: message_info};
                             if let Err(e) = tx.send(Ok(message)){
@@ -184,8 +184,8 @@ impl YuSyncServer {
                     match history {
                         Ok(poly_market_history) => {
                             let latest_timestamp = poly_market_history.timestamp;
-                            let assert_id = poly_market_history.asset_id.clone();
-                            asset_timestamp.insert(assert_id,latest_timestamp);
+                            let asset_id = poly_market_history.asset_id.clone();
+                            asset_timestamp.insert(asset_id,latest_timestamp);
                             let po = PolyMarketHistoryPo::from(poly_market_history);
                             let command = QueryCommand::Insert(InsertPayload::new_no_replay(po));
                             if let Err(e) = polymarket_table.send(command).await {
@@ -209,7 +209,7 @@ impl YuSyncServer {
     ///
     pub async fn query_and_send_history(
         provider: DuckDBDSProvider,
-        assert_id: &str,
+        asset_id: &str,
         start_timestamp: u64,
         tx: mpsc::Sender<Result<ServerMessage, Status>>,
         max_batch_size: u64,
@@ -237,9 +237,9 @@ impl YuSyncServer {
 
         loop {
             let sql = format!(
-                "SELECT * FROM {} WHERE assert_id = '{}' AND timestamp > {} ORDER BY timestamp LIMIT {} OFFSET ?",
+                "SELECT * FROM {} WHERE asset_id = '{}' AND timestamp > {} ORDER BY timestamp LIMIT {} OFFSET ?",
                 PriceHistory.table_name(),
-                assert_id.replace("'", "''"),
+                asset_id.replace("'", "''"),
                 start_timestamp,
                 batch
             );
@@ -257,7 +257,7 @@ impl YuSyncServer {
                     // 执行带分页的查询，绑定 offset 参数
                     let mapped_iter = match stmt.query_map(params![offset as i64], |row| {
                         Ok(PolyMarketHistory {
-                            asset_id: row.get("assert_id")?,
+                            asset_id: row.get("asset_id")?,
                             timestamp: row.get("timestamp")?,
                             price: row.get("price")?,
                         })
@@ -439,18 +439,18 @@ impl SyncInterface for YuSyncServer {
 
     async fn sync_history(&self, request: Request<SyncRequest>) -> Result<Response<Self::SyncHistoryStream>, Status> {
         let timestamp = request.get_ref().timestamp;
-        let assert_id = request.get_ref().asset_id.clone();
+        let asset_id = request.get_ref().asset_id.clone();
 
         let (tx, rx) = mpsc::channel::<Result<ServerMessage, Status>>(16);
         let ds_provider = self.ds_provider.clone();
-        let assert_id_owned = assert_id.clone();
+        let asset_id_owned = asset_id.clone();
         // Use spawn_blocking to run DuckDB blocking operations on a blocking thread.
         // Inside the blocking closure we synchronously run the async helper via Handle::block_on,
         // so DuckDB's non-Send types never cross async await points on the runtime threads.
         tokio::task::spawn_blocking(move || {
             let handle = tokio::runtime::Handle::current();
             handle.block_on(async move {
-                Self::query_and_send_history(ds_provider, &assert_id_owned, timestamp, tx, 1000).await;
+                Self::query_and_send_history(ds_provider, &asset_id_owned, timestamp, tx, 1000).await;
             });
         });
 
@@ -500,27 +500,27 @@ pub mod tests {
 
         // prepare data
         let p1 = PolyMarketHistoryPo {
-            assert_id: "ASSETA".to_string(),
+            asset_id: "ASSETA".to_string(),
             timestamp: 1000,
             price: 1.0,
         };
         let p2 = PolyMarketHistoryPo {
-            assert_id: "ASSETA".to_string(),
+            asset_id: "ASSETA".to_string(),
             timestamp: 2000,
             price: 1.0,
         };
         let p3 = PolyMarketHistoryPo {
-            assert_id: "ASSETB".to_string(),
+            asset_id: "ASSETB".to_string(),
             timestamp: 1500,
             price: 1.0,
         };
         let p4 = PolyMarketHistoryPo {
-            assert_id: "ASSETB".to_string(),
+            asset_id: "ASSETB".to_string(),
             timestamp: 2500,
             price: 1.0,
         };
         let p5 = PolyMarketHistoryPo {
-            assert_id: "ASSETB".to_string(),
+            asset_id: "ASSETB".to_string(),
             timestamp: 3000,
             price: 1.0,
         };
@@ -754,7 +754,7 @@ pub mod tests {
         for i in 1..=5 {
             let ts = i as u64 * 1000;
             let po = PolyMarketHistoryPo {
-                assert_id: "ASSETA".to_string(),
+                asset_id: "ASSETA".to_string(),
                 timestamp: ts,
                 price: 1.0,
             };

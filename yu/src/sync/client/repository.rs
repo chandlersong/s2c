@@ -35,7 +35,7 @@ impl ClientPolyMarketRepositoryTrait for ClientPolyMarketRepositoryImpl {
     }
 
     async fn list_assets_timestamp(&self) -> Result<HashMap<String, u64>, YuError> {
-        let sql = "SELECT asset_id, max(timestamp) as max_ts FROM polymarket_price_history GROUP BY asset_id";
+        let sql = "SELECT asset_id, EXTRACT(EPOCH FROM max(timestamp))::bigint as max_ts FROM polymarket_price_history GROUP BY asset_id";
         let rows: Vec<(String, i64)> = sqlx::query_as(sql).fetch_all(&self.pg_pool).await?;
 
         let map: HashMap<String, u64> = rows.into_iter().map(|(k, v)| (k, v as u64)).collect();

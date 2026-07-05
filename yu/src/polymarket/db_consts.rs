@@ -33,20 +33,20 @@ CREATE TABLE IF NOT EXISTS polymarket_assert_info (
         event_slug VARCHAR,
         market_id VARCHAR,
         market_slug VARCHAR,
-        assert_id VARCHAR,
+        asset_id VARCHAR,
         assert_slug VARCHAR
 
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_CREATE_POLYMARKET_ASSERT_INFO_TABLE_MAIN ON polymarket_assert_info(assert_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_CREATE_POLYMARKET_ASSERT_INFO_TABLE_MAIN ON polymarket_assert_info(asset_id);
 "#;
 
 pub const CREATE_POLYMARKET_PRICE_HISTORY_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS polymarket_price_history (
-        assert_id VARCHAR,
+        asset_id VARCHAR,
         timestamp BIGINT,
         price DOUBLE
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_CREATE_POLYMARKET_PRICE_HISTORY_TABLE_MAIN ON polymarket_price_history(assert_id, timestamp);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_CREATE_POLYMARKET_PRICE_HISTORY_TABLE_MAIN ON polymarket_price_history(asset_id, timestamp);
 "#;
 
 pub(crate) const ALL_POLYMARKET_TABLES: &[PolyMarketTables] = &[PolyMarketTables::PriceHistory, PolyMarketTables::AssertInfo];

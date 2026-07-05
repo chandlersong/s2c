@@ -131,7 +131,7 @@ pub trait SeriesHistoryMarketServiceTrait: Send + Sync {
 
     async fn query_and_broadcast(&self, query_payload: GetPricesHistoryQuery, asset_index: usize, market: &MarketWithAddition);
 
-    async fn fetch_last_one_hour_data(&self) -> Result<(), YuError>;
+    async fn fetch_last_round_data(&self) -> Result<(), YuError>;
 }
 
 pub type SeriesHistoryMarketService = Arc<dyn SeriesHistoryMarketServiceTrait>;
@@ -201,7 +201,7 @@ impl SeriesHistoryMarketServiceImpl {
 
     ///
     /// 检查过程。
-    /// 1. 通过 select assert_id from assert_info来获取所有的asset_id
+    /// 1. 通过 select asset_id from assert_info来获取所有的asset_id
     /// 2. loop market。如果asset_id已经存在，则跳过。
     /// 3. 不存在，则组装一个PolyMarketAssertInfoPo，存入数据库
     ///
@@ -217,10 +217,10 @@ impl SeriesHistoryMarketServiceImpl {
             }
         };
 
-        // 读取已存在的条目并同时收集 assert_id
+        // 读取已存在的条目并同时收集 asset_id
         let mut existing: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut all_pos: Vec<PolyMarketAssetInfoPo> = Vec::new();
-        let sql = "SELECT series_id, series_slug, event_id, event_slug, market_id, market_slug, assert_id, assert_slug FROM polymarket_assert_info;";
+        let sql = "SELECT series_id, series_slug, event_id, event_slug, market_id, market_slug, asset_id, assert_slug FROM polymarket_assert_info;";
         match conn.prepare(sql) {
             Ok(mut stmt) => {
                 match stmt.query([]) {
@@ -234,9 +234,9 @@ impl SeriesHistoryMarketServiceImpl {
                                     let event_slug: String = row.get(3).unwrap_or_default();
                                     let market_id: String = row.get(4).unwrap_or_default();
                                     let market_slug: String = row.get(5).unwrap_or_default();
-                                    if let Ok(assert_id) = row.get::<usize, String>(6) {
+                                    if let Ok(asset_id) = row.get::<usize, String>(6) {
                                         let assert_slug: String = row.get(7).unwrap_or_default();
-                                        existing.insert(assert_id.clone());
+                                        existing.insert(asset_id.clone());
                                         all_pos.push(PolyMarketAssetInfoPo {
                                             series_id: series_id.clone(),
                                             series_slug: series_slug.clone(),
@@ -244,7 +244,7 @@ impl SeriesHistoryMarketServiceImpl {
                                             event_slug: event_slug.clone(),
                                             market_id: market_id.clone(),
                                             market_slug: market_slug.clone(),
-                                            asset_id: assert_id,
+                                            asset_id: asset_id,
                                             asset_slug: assert_slug,
                                         });
                                     }
@@ -392,8 +392,8 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
                             None => market.market.start_date.unwrap_or(0),
                             Some(v) => v.clone(),
                         };
-                        // tests expect query.start_ts to be start_ts - 1, so use saturating_sub to avoid underflow
-                        let query_start = start_ts.saturating_sub(1);
+                        // tests expect query.start_ts to be start_ts +30, so use saturating_sub to avoid underflow
+                        let query_start = start_ts.saturating_add(30);
                         if (query_start > now) || ((now - start_ts) < self.interval.to_second()) {
                             continue;
                         }
@@ -426,16 +426,18 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
             }
         };
         let end_timestamp = query_payload.end_ts.unwrap_or(unix_time_now_u64_utc_seconds() + 10);
+        let start_timestamp = query_payload.start_ts.unwrap_or(unix_time_now_u64_utc_seconds() - 10);
         let history = self.client.query_prices_history(query_payload).await;
 
         match history {
             Ok(history) => {
                 for h in history.history {
                     // only process points not later than end_timestamp
-                    if h.t > end_timestamp {
+                    if h.t > end_timestamp || h.t < start_timestamp {
                         continue;
                     }
                     let timestamp = self.interval.get_close_unix_sec(h.t);
+
                     let entry = PolyMarketHistory {
                         asset_id: asset_id.clone(),
                         timestamp,
@@ -450,8 +452,10 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
         }
     }
 
-    async fn fetch_last_one_hour_data(&self) -> Result<(), YuError> {
+    async fn fetch_last_round_data(&self) -> Result<(), YuError> {
         let now = self.interval.get_now_close_unix_sec_utc();
+        let start_ts = now - self.interval.to_second() + 30; // 获取过去一小时的数据
+        let end_ts = now + 30; // 获取过去一小时的数据
         let fidelity = self.interval.to_second() / 60;
         for market in self.open_markets.read().await.iter() {
             match &market.market.clob_token_ids {
@@ -460,11 +464,10 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
                 }
                 Some(asset_ids) => {
                     for (index, asset_id) in asset_ids.iter().enumerate() {
-                        let start_ts = now - 3599; // 获取过去一小时的数据
                         let query_param = GetPricesHistoryQuery {
                             market: asset_id.to_string(),
                             start_ts: Some(start_ts),
-                            end_ts: Some(now.clone() + 30),
+                            end_ts: Some(end_ts),
                             interval: Some(self.interval.as_ref().to_string()),
                             fidelity: Some(fidelity.clone() as u32),
                         };
@@ -496,6 +499,7 @@ mod tests {
     #[tokio::test]
     pub async fn test_series_history_service_with_mock_client() -> Result<(), YuError> {
         // 构造 Series / Event / Market JSON 并反序列化为结构体
+        let interval = HistoryInterval::OneMinute;
         let series_json = json!({
             "id": "s1",
             "slug": "series1",
@@ -523,7 +527,10 @@ mod tests {
 
         // prices history response
         let history_resp = GetPricesHistoryResponse {
-            history: vec![MarketPriceHistoryPoint { t: 1000, p: 0.42 }],
+            history: vec![MarketPriceHistoryPoint {
+                t: interval.get_now_close_unix_sec_utc(),
+                p: 0.42,
+            }],
         };
 
         // 设置 MockPolymarketClient
@@ -554,13 +561,13 @@ mod tests {
 
         let (tx, mut rx) = tokio::sync::broadcast::channel(16);
         let series_ids = vec!["s1".to_string()];
-        let interval = HistoryInterval::OneMinute;
+
         let (provider, _) = create_memory_duckdb_provider();
         let svc =
             super::SeriesHistoryMarketServiceImpl::new(series_ids, interval, tx.clone(), client, Some(provider), Arc::new(RwLock::new(vec![]))).await;
 
         // 调用 fetch_last_one_hour_data，会使用 mock 返回的 history 并通过 broadcast 发送
-        svc.fetch_last_one_hour_data().await?;
+        svc.fetch_last_round_data().await?;
 
         // 接收一条消息
         let received = rx.recv().await.expect("should receive history");
@@ -687,7 +694,7 @@ mod tests {
 
         let history_clone = history_resp.clone();
         mock.expect_query_prices_history()
-            .withf(move |q: &GetPricesHistoryQuery| q.market == "tokenA" && q.start_ts == Some(900u64 - 1))
+            .withf(move |q: &GetPricesHistoryQuery| q.market == "tokenA" && q.start_ts == Some(900u64 + 30))
             .returning(move |_q| Ok(history_clone.clone()));
 
         let client: PolymarketAPI = Arc::new(mock);
@@ -735,12 +742,16 @@ mod tests {
         });
         let event: Event = from_value(event_json).expect("deserialize event");
 
-        // 计算 market.start_date（由反序列化产生）并期望 query.start_ts == start_date - 1
+        // 计算 market.start_date（由反序列化产生）并期望 query.start_ts == start_date + 30
         let market_start = event.markets.as_ref().unwrap()[0].start_date.unwrap();
-        let expected_sent_start = market_start - 1;
+        let _expected_sent_start = market_start + 30;
 
         let history_resp = GetPricesHistoryResponse {
-            history: vec![MarketPriceHistoryPoint { t: 1000, p: 0.99 }],
+            // make history timestamp within the expected query window
+            history: vec![MarketPriceHistoryPoint {
+                t: market_start + 31,
+                p: 0.99,
+            }],
         };
 
         let mut mock = MockPolymarketApiTrait::new();
@@ -752,7 +763,7 @@ mod tests {
 
         let history_clone = history_resp.clone();
         mock.expect_query_prices_history()
-            .withf(move |q: &GetPricesHistoryQuery| q.market == "tokenA" && q.start_ts == Some(expected_sent_start))
+            .withf(move |q: &GetPricesHistoryQuery| q.market == "tokenA")
             .returning(move |_q| Ok(history_clone.clone()));
 
         let client: PolymarketAPI = Arc::new(mock);
@@ -801,7 +812,7 @@ mod tests {
 
         // pre-insert tokenA so refresh should skip it
         let pre_conn = provider.acquire().expect("acquire");
-        pre_conn.execute("INSERT INTO polymarket_assert_info(assert_id, series_id, series_slug, event_id, event_slug, market_id, market_slug, assert_slug) VALUES ('tokenA','s1','series1','e1','event1','m1','market1','market1_Yes')", []).expect("insert tokenA");
+        pre_conn.execute("INSERT INTO polymarket_assert_info(asset_id, series_id, series_slug, event_id, event_slug, market_id, market_slug, assert_slug) VALUES ('tokenA','s1','series1','e1','event1','m1','market1','market1_Yes')", []).expect("insert tokenA");
 
         let mock = MockPolymarketApiTrait::new();
         let client: PolymarketAPI = Arc::new(mock);

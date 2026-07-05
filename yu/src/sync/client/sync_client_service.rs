@@ -1,6 +1,7 @@
 use crate::errors::YuError;
 use crate::postgresql_db::get_sync_client_pg_pool_sync;
 use crate::postgresql_db_tables::PostgresqlBatchInsert;
+use crate::sync::client::database::get_polymarket_price_batch_insert;
 use crate::sync::client::po::{LocalPolyMarketAssetInfoPo, LocalPolyMarketHistoryPo};
 use crate::sync::client::repository::{ClientPolyMarketRepository, ClientPolyMarketRepositoryImpl};
 use crate::sync::sync_server::grpc_sync::server_message::Payload;
@@ -81,28 +82,35 @@ impl SyncClientService {
     ///
     /// 监听数据，写入数据库
     ///
-    pub async fn start_listen(
-        mut rx: mpsc::Receiver<ServerMessage>,
-        batch_insert: PostgresqlBatchInsert<LocalPolyMarketHistoryPo>,
-    ) -> Result<(), YuError> {
-        loop {
-            tokio::select! {
-                Some(server_msg) = rx.recv() => {
-                    if let Some(payload) = server_msg.payload {
-                        match payload {
-                        Payload::PolymarketHistory(history) => {
-                                let batch_timestamp = history.timestamp;
-                                for h in history.history_list.into_iter() {
-                                    let po = LocalPolyMarketHistoryPo::from_polymarket_history(h, batch_timestamp);
-                                    batch_insert.insert_data(po).await;
-                                }
+    pub async fn start_batch_insert(
+        &self,
+        batch_insert: Option<PostgresqlBatchInsert<LocalPolyMarketHistoryPo>>,
+    ) -> Result<mpsc::Sender<ServerMessage>, YuError> {
+        let (tx, mut rx) = mpsc::channel::<ServerMessage>(10000);
 
+        let do_batch_insert = batch_insert.unwrap_or_else(|| get_polymarket_price_batch_insert());
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    Some(server_msg) = rx.recv() => {
+                        if let Some(payload) = server_msg.payload {
+                            match payload {
+                            Payload::PolymarketHistory(history) => {
+                                    let batch_timestamp = history.timestamp;
+                                    for h in history.history_list.into_iter() {
+                                        let po = LocalPolyMarketHistoryPo::from_polymarket_history(h, batch_timestamp);
+                                        do_batch_insert.insert_data(po).await;
+                                    }
+
+                                }
                             }
                         }
                     }
                 }
             }
-        }
+        });
+
+        Ok(tx)
     }
 }
 

@@ -5,8 +5,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
 use yu::config::get_config;
 use yu::errors::YuError;
-use yu::postgresql_db::{get_sync_client_pg_pool, get_sync_client_pg_pool_sync};
-use yu::postgresql_db_tables::{PostgresqlBatchInsertImpl, PostgresqlBatchInsertTrait};
+use yu::postgresql_db::get_sync_client_pg_pool;
+use yu::postgresql_db_tables::PostgresqlBatchInsertImpl;
 use yu::sync::client::po::LocalPolyMarketHistoryPo;
 
 #[tokio::main]

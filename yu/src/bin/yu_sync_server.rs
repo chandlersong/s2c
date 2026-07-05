@@ -112,7 +112,7 @@ async fn start_polymarket_history(
         let refresh_history_clone = series_history_service.clone();
         info!("start polymarket fetch last one hour data");
         Box::pin(async move {
-            match refresh_history_clone.clone().fetch_last_one_hour_data().await {
+            match refresh_history_clone.clone().fetch_last_round_data().await {
                 Ok(_) => {
                     debug!("polymarket fetch last one hour data success");
                 }

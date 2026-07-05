@@ -40,7 +40,7 @@ async fn main() -> Result<(), YuError> {
     .await;
 
     tokio::spawn(async move {
-        service.fetch_last_one_hour_data().await.expect("TODO: panic message");
+        service.fetch_last_round_data().await.expect("TODO: panic message");
     });
     while let Ok(h) = rx.recv().await {
         info!("fetch asset{} at {} : {:?}", h.asset_id, h.timestamp, h.price);
