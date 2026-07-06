@@ -21,9 +21,17 @@ use yue::polymarket::restful_api::default_polymarket_api;
 
 #[tokio::main]
 async fn main() -> Result<(), YuError> {
-    let addr = "[::1]:50051".parse().unwrap();
-
     let app_config = get_config();
+
+    let sync_server_config = match &app_config.sync_server {
+        None => {
+            error!("No sync server config provide provided");
+            return Err(YuError::new("sync_server 配置未找到，请在配置文件中添加 sync_server 配置"));
+        }
+        Some(config) => config,
+    };
+    let addr = format!("[::1]:{}", sync_server_config.get_server_port()).parse().unwrap();
+
     let proxy = app_config.proxy_url.clone();
     if let Some(url_proxy) = proxy {
         info!("Using proxy: {}", url_proxy);
@@ -48,7 +56,22 @@ async fn main() -> Result<(), YuError> {
     let asset_infos = Arc::new(RwLock::new(vec![]));
     let server = YuSyncServer::new(polymarket_history_tx.clone(), asset_timestamp.clone(), None, asset_infos.clone()).await;
     // let series_ids = vec!["45".to_string(), "10151".to_string(), "10041".to_string()];
-    let series_ids = vec!["45".to_string()];
+    let series_ids = match sync_server_config.series_ids {
+        None => {
+            error!("No sync server series_ids provided");
+            return Err(YuError::new("sync_server的series id没有找到"));
+        }
+        Some(ref ids) => {
+            if ids.is_empty() {
+                error!("sync server series_ids is empty");
+                return Err(YuError::new("sync_server的series id没有找到"));
+            }
+            for id in ids {
+                info!("Sync server subscribe series id: {}", id);
+            }
+            ids.clone()
+        }
+    };
     match start_polymarket_history(series_ids, asset_timestamp.clone(), polymarket_history_tx, asset_infos).await {
         Ok(value) => value,
         Err(error) => {

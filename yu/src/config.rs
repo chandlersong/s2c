@@ -137,6 +137,18 @@ impl SyncClientConfig {
     }
 }
 
+#[derive(Deserialize, Debug, Clone)]
+pub struct SyncServerConfig {
+    pub server_port: Option<u16>,
+    pub series_ids: Option<Vec<String>>,
+}
+
+impl SyncServerConfig {
+    pub fn get_server_port(&self) -> u16 {
+        self.server_port.unwrap_or(50051)
+    }
+}
+
 #[derive(Deserialize, Debug)]
 pub struct AppConfig {
     #[serde(rename = "proxyUrl")]
@@ -149,6 +161,7 @@ pub struct AppConfig {
     pub binance: Option<BinanceConfig>,
     pub data_integrity: Option<DataIntegrityConfig>,
     pub sync_client: Option<SyncClientConfig>,
+    pub sync_server: Option<SyncServerConfig>,
 }
 
 impl AppConfig {
@@ -407,6 +420,7 @@ logLevel: "info"
             binance: None,
             data_integrity: None,
             sync_client: None,
+            sync_server: None,
         };
         let got = cfg.get_earliest_hour_time_ms(Some(utc_now));
         assert_eq!(got, 7 * HOUR_MS);
@@ -425,6 +439,7 @@ logLevel: "info"
             binance: None,
             data_integrity: None,
             sync_client: None,
+            sync_server: None,
         };
         let got = cfg.get_earliest_hour_time_ms(Some(utc_now));
         assert_eq!(got, 15 * HOUR_MS);
@@ -443,6 +458,7 @@ logLevel: "info"
             binance: None,
             data_integrity: None,
             sync_client: None,
+            sync_server: None,
         };
         let got = cfg.get_earliest_hour_time_ms(Some(utc_now));
         assert_eq!(got, 0);
