@@ -6,9 +6,89 @@ use crate::sync::client::po::{LocalPolyMarketAssetInfoPo, LocalPolyMarketHistory
 use crate::sync::client::repository::{ClientPolyMarketRepository, ClientPolyMarketRepositoryImpl};
 use crate::sync::sync_server::grpc_sync::server_message::Payload;
 use crate::sync::sync_server::grpc_sync::{PolyMarketAssetInfoList, ServerMessage};
-use log::info;
+use governor::Jitter;
+use log::{error, info};
 use std::collections::HashMap;
-use tokio::sync::mpsc;
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
+use tokio::sync::{Mutex, Notify, mpsc};
+use tonic::transport::{Channel, Endpoint};
+
+struct ConnectionHolder {
+    channel: OnceLock<Channel>,
+    reconnect_notify: Notify,   // 通知等待者
+    reconnect_mutex: Mutex<()>, // 防止多个进程同时重连
+}
+
+pub struct GrpcChannelManager {
+    inner: Arc<ConnectionHolder>,
+    server_url: String,
+}
+
+impl GrpcChannelManager {
+    pub fn new(server_url: &str) -> Self {
+        Self {
+            inner: Arc::new(ConnectionHolder {
+                channel: OnceLock::new(),
+                reconnect_notify: Notify::new(),
+                reconnect_mutex: Mutex::new(()),
+            }),
+            server_url: server_url.to_string(),
+        }
+    }
+
+    /// 获取 Channel（会自动初始化或等待）
+    pub async fn get_channel(&self) -> Channel {
+        // 第一次或断开后
+        if let Some(ch) = self.inner.channel.get() {
+            return ch.clone();
+        }
+
+        self.reconnect().await
+    }
+
+    /// 核心：带跨进程锁的重连逻辑
+    pub async fn reconnect(&self) -> Channel {
+        // 先尝试获取跨进程锁（只有一个进程能真正重连）
+        let _guard = match self.inner.reconnect_mutex.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                // 其他进程等待通知
+                println!("其他进程等待重连完成...");
+                self.inner.reconnect_notify.notified().await;
+                return self.inner.channel.get().unwrap().clone();
+            }
+        };
+
+        // ==================== 真正执行重连的进程 ====================
+        info!("当前进程正在重建 gRPC 连接...");
+        self.connect().await
+    }
+
+    pub async fn connect(&self) -> Channel {
+        loop {
+            match Endpoint::from_shared(self.server_url.clone()) {
+                Ok(endpoint) => match endpoint.connect().await {
+                    Ok(new_channel) => {
+                        let _ = self.inner.channel.set(new_channel.clone());
+                        self.inner.reconnect_notify.notify_waiters(); // 通知所有等待者
+                        return new_channel;
+                    }
+                    Err(e) => {
+                        error!("连接失败: {}, 2秒后重试", e);
+                        let jitter = Jitter::up_to(Duration::from_millis(1000));
+                        let duration = jitter + Duration::from_millis(1500);
+                        tokio::time::sleep(duration).await;
+                    }
+                },
+                Err(e) => {
+                    error!("invalid server url: {}, 2秒后重试", e);
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+            }
+        }
+    }
+}
 
 pub struct SyncClientService {
     repository: ClientPolyMarketRepository,

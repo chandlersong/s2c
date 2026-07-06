@@ -8,9 +8,10 @@ use tokio_stream::StreamExt;
 use tonic::Request;
 use tonic::transport::Channel;
 use yu::config::get_config;
+use yu::cron_job;
 use yu::errors::YuError;
 use yu::sync::client::database::initial_grpc_client_tables;
-use yu::sync::client::sync_client_service::SyncClientService;
+use yu::sync::client::sync_client_service::{GrpcChannelManager, SyncClientService};
 use yu::sync::sync_server::grpc_sync::{Empty, ServerMessage, SubscribeRequest, SyncRequest, sync_interface_client::SyncInterfaceClient};
 use yue::http_client::init_http_client;
 
@@ -45,8 +46,9 @@ async fn main() -> Result<(), YuError> {
     // //FUTURE:改成https
     let server_url = format!("http://{}:{}", sync_client_config.server_host, sync_client_config.server_port);
     info!("连接到远程服务器:{}", server_url);
-    // // 连接到 gRPC 服务（根据需要修改地址）
-    let client: SyncInterfaceClient<Channel> = SyncInterfaceClient::connect(server_url).await?;
+    // // 连接到 gRPC 服务（根据需要修改地址）-
+    let connection_manager = Arc::new(GrpcChannelManager::new(server_url.as_ref()));
+
     info!("已连接到 gRPC 服务端");
     //
     // // 1) 调用 GetLatestTimestamps
@@ -58,19 +60,38 @@ async fn main() -> Result<(), YuError> {
             return Err(e);
         }
     };
-    let sync_server_tx = tx.clone();
-    let sync_server_client = client.clone();
+
+    let subscribe_server_tx = tx.clone();
+    let subscribe_server_connection = connection_manager.clone();
     tokio::spawn(async move {
-        if let Err(e) = async_sync_server(client_service.clone(), sync_server_tx, sync_server_client).await {
+        if let Err(e) = subscribe(subscribe_server_tx, subscribe_server_connection).await {
+            error!("Error in subscribe: {}", e);
+        }
+    });
+
+    let sync_server_tx = tx.clone();
+    let sync_server_manager = connection_manager.clone();
+    let sync_client_service = client_service.clone();
+    tokio::spawn(async move {
+        if let Err(e) = async_sync_server(sync_client_service, sync_server_tx, sync_server_manager).await {
             error!("Error in async_sync_server: {}", e);
         }
     });
-    let subscribe_server_tx = tx.clone();
-    let subscribe_server_client = client.clone();
-    tokio::spawn(async move {
-        if let Err(e) = subscribe(subscribe_server_tx, subscribe_server_client).await {
-            error!("Error in subscribe: {}", e);
-        }
+
+    let daily_sync_tx = tx.clone();
+    let daily_sync_manager = connection_manager.clone();
+    let daily_sync_client_service = client_service.clone();
+
+    let _ = cron_job!("0 30 5 * * *", move |_uuid, _locked| {
+        let sync_tx = daily_sync_tx.clone();
+        let sync_manager = daily_sync_manager.clone();
+        let sync_client_service = daily_sync_client_service.clone();
+        Box::pin(async move {
+            info!("start refresh binance exchange info");
+            if let Err(e) = async_sync_server(sync_client_service, sync_tx, sync_manager).await {
+                error!("Error in async_sync_server: {}", e);
+            }
+        })
     });
 
     signal::ctrl_c().await.expect("监听 Ctrl+C 失败");
@@ -94,16 +115,27 @@ async fn forward_server_stream(mut stream: tonic::Streaming<ServerMessage>, loca
     Ok(())
 }
 
-async fn subscribe(local_db_tx: Sender<ServerMessage>, mut server: SyncInterfaceClient<Channel>) -> Result<(), YuError> {
-    let stream = server.subscribe_latest(Request::new(SubscribeRequest {})).await?.into_inner();
-    forward_server_stream(stream, local_db_tx).await
+async fn subscribe(local_db_tx: Sender<ServerMessage>, manager: Arc<GrpcChannelManager>) -> Result<(), YuError> {
+    loop {
+        let connection = manager.connect().await;
+        let mut server = SyncInterfaceClient::new(connection);
+        let stream = server.subscribe_latest(Request::new(SubscribeRequest {})).await?.into_inner();
+        if let Err(e) = forward_server_stream(stream, local_db_tx.clone()).await {
+            error!("error forwarding server stream: {}", e);
+            manager.reconnect().await;
+        }
+    }
 }
 
+///
+/// 这些信息并不是全部需要长连接的。所以暂时先不考虑锻炼身体
+///
 async fn async_sync_server(
     client_service: Arc<SyncClientService>,
     local_db_tx: Sender<ServerMessage>,
-    mut server: SyncInterfaceClient<Channel>,
+    manager: Arc<GrpcChannelManager>,
 ) -> Result<(), YuError> {
+    let mut server = SyncInterfaceClient::new(manager.connect().await);
     let resp = server.get_poly_market_assert_info(Request::new(Empty {})).await?;
     let asset_list = resp.into_inner();
     info!("获取asset列表个数.{}", asset_list.assets.len());
