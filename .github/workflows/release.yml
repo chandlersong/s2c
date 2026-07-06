@@ -1,5 +1,4 @@
 name: release
-
 on:
   workflow_dispatch:
     inputs:
@@ -8,10 +7,14 @@ on:
         required: true
         default: '0.1.6'
       app:
-        description: '发布那个app'
+        description: 'app'
         required: true
+        type: choice
         default: 'yu_sync_server'
-
+        options:
+          - 'yu_sync_server'
+          - 'yu_sync_client'
+          - 'yu_datacenter'
 jobs:
   build-amd64:
     runs-on: ubuntu-latest
