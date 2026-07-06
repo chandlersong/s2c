@@ -52,9 +52,16 @@ async fn main() -> Result<(), YuError> {
     setup_logger(Some(LevelFilter::Warn), special_log)?;
 
     let asset_timestamp = get_asset_timestamp(DuckDBDSProvider::default()).await;
-    let (polymarket_history_tx, _) = broadcast::channel(1000);
+    let (polymarket_history_tx, _) = broadcast::channel(100000);
     let asset_infos = Arc::new(RwLock::new(vec![]));
-    let server = YuSyncServer::new(polymarket_history_tx.clone(), asset_timestamp.clone(), None, asset_infos.clone()).await;
+    let server = YuSyncServer::new(
+        polymarket_history_tx.clone(),
+        asset_timestamp.clone(),
+        None,
+        asset_infos.clone(),
+        sync_server_config.get_batch_size(),
+    )
+    .await;
     // let series_ids = vec!["45".to_string(), "10151".to_string(), "10041".to_string()];
     let series_ids = match sync_server_config.series_ids {
         None => {

@@ -93,6 +93,7 @@ pub struct YuSyncServer {
     commands_sender: mpsc::Sender<SyncInternalCommand>,
     history_tx: broadcast::Sender<PolyMarketHistory>,
     ds_provider: DuckDBDSProvider,
+    batch_size: usize,
 }
 
 impl YuSyncServer {
@@ -101,6 +102,7 @@ impl YuSyncServer {
         asset_timestamp: HashMap<String, u64>,
         table: Option<DuckTableTableChannel<PolyMarketHistoryPo>>,
         asset_infos: Arc<RwLock<Vec<PolyMarketAssetInfoPo>>>,
+        batch_size: usize,
     ) -> Self {
         let (commands_sender, commands_receiver) = mpsc::channel(10);
         let polymarket_table = table.unwrap_or(get_polymarket_price_history_table());
@@ -111,6 +113,7 @@ impl YuSyncServer {
             commands_sender,
             history_tx,
             ds_provider,
+            batch_size,
         }
     }
 
@@ -212,7 +215,7 @@ impl YuSyncServer {
         asset_id: &str,
         start_timestamp: u64,
         tx: mpsc::Sender<Result<ServerMessage, Status>>,
-        max_batch_size: u64,
+        max_batch_size: usize,
     ) {
         // 使用内存/文件数据库提供者从 poly_market_price_history 中查询指定 asset_id
         // 注意：为了兼容 duckdb 参数绑定的不确定性，这里将 asset_id 做简单的 SQL 转义后拼接入查询语句
@@ -447,10 +450,11 @@ impl SyncInterface for YuSyncServer {
         // Use spawn_blocking to run DuckDB blocking operations on a blocking thread.
         // Inside the blocking closure we synchronously run the async helper via Handle::block_on,
         // so DuckDB's non-Send types never cross async await points on the runtime threads.
+        let batch_size = self.batch_size.clone();
         tokio::task::spawn_blocking(move || {
             let handle = tokio::runtime::Handle::current();
             handle.block_on(async move {
-                Self::query_and_send_history(ds_provider, &asset_id_owned, timestamp, tx, 1000).await;
+                Self::query_and_send_history(ds_provider, &asset_id_owned, timestamp, tx, batch_size).await;
             });
         });
 
@@ -462,8 +466,9 @@ impl SyncInterface for YuSyncServer {
     async fn subscribe_latest(&self, _request: Request<SubscribeRequest>) -> Result<Response<Self::SubscribeLatestStream>, Status> {
         let (tx, rx) = mpsc::channel::<Result<ServerMessage, Status>>(1000);
         let history_rx = self.history_tx.subscribe();
+        let batch_size = self.batch_size.clone();
         tokio::spawn(async move {
-            Self::send_history_to_client(history_rx, tx, 100, 1000).await;
+            Self::send_history_to_client(history_rx, tx, 100, batch_size).await;
         });
 
         Ok(Response::new(Box::pin(ReceiverStream::new(rx)) as Self::SyncHistoryStream))
@@ -779,7 +784,7 @@ pub mod tests {
         tokio::task::spawn_blocking(move || {
             let handle = tokio::runtime::Handle::current();
             handle.block_on(async move {
-                super::YuSyncServer::query_and_send_history(provider_clone, "ASSETA", 0u64, tx, 2u64).await;
+                super::YuSyncServer::query_and_send_history(provider_clone, "ASSETA", 0u64, tx, 2).await;
             });
         });
 

@@ -5,6 +5,12 @@ use std::env;
 use std::path::Path;
 use std::sync::OnceLock;
 
+///
+/// FUTURE:
+/// 1. 加入让log能够保存文件
+/// 2. log能够写成不同的文件地址
+///
+
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum SecurityType {
@@ -141,11 +147,16 @@ impl SyncClientConfig {
 pub struct SyncServerConfig {
     pub server_port: Option<u16>,
     pub series_ids: Option<Vec<String>>,
+    pub batch_size: Option<usize>,
 }
 
 impl SyncServerConfig {
     pub fn get_server_port(&self) -> u16 {
         self.server_port.unwrap_or(50051)
+    }
+
+    pub fn get_batch_size(&self) -> usize {
+        self.batch_size.unwrap_or(1000)
     }
 }
 
