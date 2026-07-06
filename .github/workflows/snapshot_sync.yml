@@ -1,11 +1,9 @@
 name: snapshot
 on:
-  workflow_dispatch:
-    inputs:
-      imageTag:
-        description: '统一的version'
-        required: true
-        default: '0.1.6'
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
 jobs:
   build-amd64:
     runs-on: ubuntu-latest
@@ -27,9 +25,22 @@ jobs:
           context: .
           file: ./dockerfiles/prod_with_duckdb/Dockerfile
           push: true
-          tags: chandlersong/yu_datacenter:snapshot-amd64
+          tags: chandlersong/yu_sync_server:snapshot-amd64
           build-args: |
-            APP_NAME=yu_datacenter
+            APP_NAME=yu_sync_server
+            LIBDIR=x86_64-linux-gnu
+            SCCACHE_GHA_ENABLED: "true"
+          platforms: linux/amd64
+          cache-from: type=gha,scope=s2cDockerAmd64
+          cache-to: type=gha,mode=max,scope=s2cDockerAmd64
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./dockerfiles/prod_with_duckdb/Dockerfile
+          push: true
+          tags: chandlersong/yu_sync_client:snapshot-amd64
+          build-args: |
+            APP_NAME=yu_sync_client
             LIBDIR=x86_64-linux-gnu
             SCCACHE_GHA_ENABLED: "true"
           platforms: linux/amd64
@@ -56,9 +67,22 @@ jobs:
           context: .
           file: ./dockerfiles/prod_with_duckdb/Dockerfile
           push: true
-          tags: chandlersong/yu_datacenter:snapshot-arm64
+          tags: chandlersong/yu_sync_server:snapshot-arm64
           build-args: |
-            APP_NAME=yu_datacenter
+            APP_NAME=yu_sync_server
+            LIBDIR=aarch64-linux-gnu
+            SCCACHE_GHA_ENABLED: "true"
+          platforms: linux/arm64
+          cache-from: type=gha,scope=s2cDockerArm64
+          cache-to: type=gha,mode=max,scope=s2cDockerArm64
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./dockerfiles/prod_with_duckdb/Dockerfile
+          push: true
+          tags: chandlersong/yu_sync_client:snapshot-arm64
+          build-args: |
+            APP_NAME=yu_sync_client
             LIBDIR=aarch64-linux-gnu
             SCCACHE_GHA_ENABLED: "true"
           platforms: linux/arm64
@@ -76,6 +100,9 @@ jobs:
 
       - name: Create multi-arch manifest
         run: |
-          docker buildx imagetools create --tag chandlersong/yu_datacenter:snapshot \
-            chandlersong/yu_datacenter:snapshot-amd64 \
-            chandlersong/yu_datacenter:snapshot-arm64
+          docker buildx imagetools create --tag chandlersong/yu_sync_server:snapshot \
+            chandlersong/yu_sync_server:snapshot-amd64 \
+            chandlersong/yu_sync_server:snapshot-arm64
+          docker buildx imagetools create --tag chandlersong/yu_sync_client:snapshot \
+            chandlersong/yu_sync_client:snapshot-amd64 \
+            chandlersong/yu_sync_client:snapshot-arm64

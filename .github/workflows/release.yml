@@ -7,6 +7,10 @@ on:
         description: '统一的version'
         required: true
         default: '0.1.6'
+      app:
+        description: '发布那个app'
+        required: true
+        default: 'yu_sync_server'
 
 jobs:
   build-amd64:
@@ -28,9 +32,9 @@ jobs:
           context: .
           file: ./dockerfiles/prod_with_duckdb/Dockerfile
           push: true
-          tags: chandlersong/yu_datacenter:${{ inputs.imageTag }}-amd64
+          tags: chandlersong/${{ inputs.app }}:${{ inputs.imageTag }}-amd64
           build-args: |
-            APP_NAME=yu_datacenter
+            APP_NAME=${{ inputs.app }}
             LIBDIR=x86_64-linux-gnu
             SCCACHE_GHA_ENABLED: "true"
           platforms: linux/amd64
@@ -56,9 +60,9 @@ jobs:
           context: .
           file: ./dockerfiles/prod_with_duckdb/Dockerfile
           push: true
-          tags: chandlersong/yu_datacenter:${{ inputs.imageTag }}-arm64
+          tags: chandlersong/${{ inputs.app }}:${{ inputs.imageTag }}-arm64
           build-args: |
-            APP_NAME=yu_datacenter
+            APP_NAME=${{ inputs.app }}
             LIBDIR=aarch64-linux-gnu
             SCCACHE_GHA_ENABLED: "true"
           platforms: linux/arm64
@@ -76,9 +80,9 @@ jobs:
 
       - name: Create multi-arch manifest
         run: |
-          docker buildx imagetools create --tag chandlersong/yu_datacenter:${{ inputs.imageTag }} \
-            chandlersong/yu_datacenter:${{ inputs.imageTag }}-amd64 \
-            chandlersong/yu_datacenter:${{ inputs.imageTag }}-arm64
-          docker buildx imagetools create --tag chandlersong/yu_datacenter:latest \
-            chandlersong/yu_datacenter:${{ inputs.imageTag }}-amd64 \
-            chandlersong/yu_datacenter:${{ inputs.imageTag }}-arm64
+          docker buildx imagetools create --tag chandlersong/${{ inputs.app }}:${{ inputs.imageTag }} \
+            chandlersong/${{ inputs.app }}:${{ inputs.imageTag }}-amd64 \
+            chandlersong/${{ inputs.app }}:${{ inputs.imageTag }}-arm64
+          docker buildx imagetools create --tag chandlersong/${{ inputs.app }}:latest \
+            chandlersong/${{ inputs.app }}:${{ inputs.imageTag }}-amd64 \
+            chandlersong/${{ inputs.app }}:${{ inputs.imageTag }}-arm64
