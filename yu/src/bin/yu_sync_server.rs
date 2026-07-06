@@ -30,7 +30,7 @@ async fn main() -> Result<(), YuError> {
         }
         Some(config) => config,
     };
-    let addr = format!("[::1]:{}", sync_server_config.get_server_port()).parse().unwrap();
+    let addr = format!("[::]:{}", sync_server_config.get_server_port()).parse().unwrap();
 
     let proxy = app_config.proxy_url.clone();
     if let Some(url_proxy) = proxy {
