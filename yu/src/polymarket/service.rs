@@ -7,7 +7,7 @@ use crate::sync::sync_server::grpc_sync::PolyMarketHistory;
 use async_trait::async_trait;
 use li::tools::time::unix_time_now_u64_utc_seconds;
 use log::{error, info, trace, warn};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, broadcast};
 use yue::models::HistoryInterval;
@@ -72,7 +72,7 @@ async fn split_series_markets_with_client(
                                     error!(
                                         "duplicate asset id found,asset_id:{},idx:{},,prev series_slug:{},prev event_slug:{}, perv market slug is {} and series_slug:{},event_slug:{},market slug:{}",
                                         asset_id,
-                                        idx
+                                        idx,
                                         open_market_prev.series_slug,
                                         open_market_prev.event_slug,
                                         open_market_prev.market.slug,
@@ -80,7 +80,9 @@ async fn split_series_markets_with_client(
                                         event_slug,
                                         market.slug
                                     );
+                                    continue;
                                 }
+                                open_asset_markets_map.insert(asset_id.clone(), market_with_addition.clone());
                             }
 
                             if now > start_data && now < end_data {
@@ -443,10 +445,11 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
                 format!("{}_{}", market.market.slug, outcomes[asset_index])
             }
         };
+        let query_payload_log = query_payload.clone();
         let end_timestamp = query_payload.end_ts.unwrap_or(unix_time_now_u64_utc_seconds() + 10);
         let start_timestamp = query_payload.start_ts.unwrap_or(unix_time_now_u64_utc_seconds() - 10);
         let history = self.client.query_prices_history(query_payload).await;
-
+        let mut pre_history_data: HashMap<u64, u64> = HashMap::new();
         match history {
             Ok(history) => {
                 for h in history.history {
@@ -455,7 +458,21 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
                         continue;
                     }
                     let timestamp = self.interval.get_close_unix_sec(h.t);
-
+                    if pre_history_data.contains_key(&timestamp) {
+                        let prev_t = pre_history_data.get(&timestamp).unwrap();
+                        error!(
+                            "duplicate timestamp found, asset_id is {},prev_t is {},current t is {},\
+                            query info, start:{},end:{},interval:{}",
+                            asset_id,
+                            prev_t,
+                            h.t,
+                            query_payload_log.start_ts.unwrap(),
+                            query_payload_log.end_ts.unwrap(),
+                            query_payload_log.interval.clone().unwrap().to_string()
+                        );
+                        continue;
+                    }
+                    pre_history_data.insert(timestamp, h.t);
                     let entry = PolyMarketHistory {
                         asset_id: asset_id.clone(),
                         timestamp,

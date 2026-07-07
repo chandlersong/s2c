@@ -6,7 +6,6 @@ use tokio::signal;
 use tokio::sync::mpsc::Sender;
 use tokio_stream::StreamExt;
 use tonic::Request;
-use tonic::transport::Channel;
 use yu::config::get_config;
 use yu::cron_job;
 use yu::errors::YuError;
