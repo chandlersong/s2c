@@ -7,7 +7,7 @@ use crate::sync::sync_server::grpc_sync::PolyMarketHistory;
 use async_trait::async_trait;
 use li::tools::time::unix_time_now_u64_utc_seconds;
 use log::{error, info, trace, warn};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{RwLock, broadcast};
 use yue::models::HistoryInterval;
@@ -15,6 +15,7 @@ use yue::polymarket::restful_api::PolymarketAPI;
 use yue::polymarket::restful_models::{GetPricesHistoryQuery, Market};
 use yue::query_message::DataSourceProviderTrait;
 
+#[derive(Clone)]
 pub struct MarketWithAddition {
     market: Market,
     series_id: String,
@@ -34,6 +35,7 @@ async fn split_series_markets_with_client(
 ) -> Result<(Vec<MarketWithAddition>, Vec<MarketWithAddition>), YuError> {
     let mut open_markets: Vec<MarketWithAddition> = Vec::new();
     let mut close_markets: Vec<MarketWithAddition> = Vec::new();
+    let mut open_asset_markets_map: HashMap<String, MarketWithAddition> = HashMap::new();
     let series = match api.query_series_by_id(&series_id, Some(false)).await {
         Ok(s) => s,
         Err(e) => {
@@ -64,6 +66,22 @@ async fn split_series_markets_with_client(
                                 event_id: event_id.clone(),
                                 event_slug: event_slug.clone(),
                             };
+                            for (idx, asset_id) in market.clob_token_ids.unwrap_or(vec![]).iter().enumerate() {
+                                if open_asset_markets_map.contains_key(asset_id) {
+                                    let open_market_prev = open_asset_markets_map.get(asset_id).unwrap();
+                                    error!(
+                                        "duplicate asset id found,asset_id:{},idx:{},,prev series_slug:{},prev event_slug:{}, perv market slug is {} and series_slug:{},event_slug:{},market slug:{}",
+                                        asset_id,
+                                        idx
+                                        open_market_prev.series_slug,
+                                        open_market_prev.event_slug,
+                                        open_market_prev.market.slug,
+                                        series_slug,
+                                        event_slug,
+                                        market.slug
+                                    );
+                                }
+                            }
 
                             if now > start_data && now < end_data {
                                 open_markets.push(market_with_addition)
