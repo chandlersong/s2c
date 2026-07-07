@@ -31,7 +31,7 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 
 ARG LIBDIR
-ARG APP_NAME=yu_datacenter
+
 ARG TARGETARCH
 
 # 环境变量（保持你原来的配置）
@@ -51,6 +51,7 @@ ENV CARGO_PROFILE_RELEASE_DEBUG=0
 RUN cargo chef cook --release --recipe-path recipe.json --locked
 
 # ===================== 源码编译 =====================
+ARG APP_NAME=yu_datacenter
 COPY . .
 RUN cargo build --release --locked
 
