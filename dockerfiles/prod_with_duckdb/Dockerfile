@@ -53,7 +53,7 @@ RUN cargo chef cook --release --recipe-path recipe.json --locked
 # ===================== 源码编译 =====================
 ARG APP_NAME=yu_datacenter
 COPY . .
-RUN cargo build --release --locked
+RUN cargo build --release --locked --bin ${APP_NAME}
 
 # =============================================
 # Runtime Stage
