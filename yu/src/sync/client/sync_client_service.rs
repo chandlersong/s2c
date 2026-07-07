@@ -72,6 +72,7 @@ impl GrpcChannelManager {
                     Ok(new_channel) => {
                         let _ = self.inner.channel.set(new_channel.clone());
                         self.inner.reconnect_notify.notify_waiters(); // 通知所有等待者
+                        info!("连接到远程成功");
                         return new_channel;
                     }
                     Err(e) => {
