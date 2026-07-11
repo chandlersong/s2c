@@ -1,8 +1,9 @@
 use li::tools::logs::setup_logger;
+use li::tools::time::unix_2_readable;
 use log::{LevelFilter, info};
 use std::collections::HashMap;
 use yue::http_client::init_http_client;
-use yue::polymarket::restful_api::{query_event_id, query_market_id, query_series_by_id};
+use yue::okx::option_restful::list_okx_option;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -11,20 +12,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut special_log = HashMap::new();
     special_log.insert("yue".to_string(), LevelFilter::Info);
     special_log.insert("li".to_string(), LevelFilter::Info);
-    special_log.insert("polymarket_restful_example".to_string(), LevelFilter::Info);
+    special_log.insert("okx_option_example".to_string(), LevelFilter::Info);
     setup_logger(Some(LevelFilter::Warn), special_log)?;
 
-    let series = query_series_by_id("10151", Some(false)).await?;
-    info!("find series:{}", series.slug);
-
-    let event_from_series = series.events.unwrap()[0].clone();
-
-    let event = query_event_id(&event_from_series.id, None, None).await.unwrap();
-    info!("find event:{}", event.slug);
-
-    let market_from_event = event.markets.unwrap()[0].clone();
-    let market = query_market_id(&market_from_event.id, None).await?;
-    info!("find market:{}", market.slug);
+    let btc_option = list_okx_option("BTC-USD").await?;
+    info!("find {} options for BTC-USD", btc_option.data.len());
+    for data in &btc_option.data {
+        let exp_time = unix_2_readable(&data.exp_time.unwrap_or(0));
+        info!("find {}, exprie at {}", data.inst_id, exp_time);
+    }
 
     Ok(())
 }

@@ -1,0 +1,12 @@
+# 查询了option列表
+GET {{host}}/api/v5/public/instruments
+    ?instType=OPTION
+    &instFamily=BTC-USD HTTP/1.1
+content-type: application/json
+
+
+### 获取某个option的K线
+GET {{host}}/api/v5/market/history-mark-price-candles
+    ?instId=BTC-USD-270625-140000-C
+    &bar=1H HTTP/1.1
+content-type: application/json

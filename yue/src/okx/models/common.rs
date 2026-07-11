@@ -1,6 +1,12 @@
+use rust_decimal::Decimal;
 use serde::Deserialize;
-use crate::binance::bn_models::spot_restful::{ExchangeFilter, RateLimit};
-use crate::binance::bn_models::swap_restful::SwapExchangeSymbol;
+
+#[derive(Deserialize, Debug)]
+pub struct OkxListResponse<T> {
+    pub code: String,
+    pub msg: String,
+    pub data: Vec<T>,
+}
 
 ///
 ///  GET /api/v5/public/instruments
@@ -58,7 +64,6 @@ use crate::binance::bn_models::swap_restful::SwapExchangeSymbol;
 ///
 ///
 ///
-use rust_decimal::Decimal;
 
 #[derive(Deserialize, Debug)]
 pub struct UpcChgEntry {
@@ -74,7 +79,6 @@ pub struct UpcChgEntry {
     /// 生效时间（字符串时间戳），保留为字符串以免解析失败
     pub eff_time: Option<String>,
 }
-
 
 #[derive(Deserialize, Debug)]
 pub struct InstrumentInfo {
@@ -114,9 +118,9 @@ pub struct InstrumentInfo {
     /// 连续交易切换时间（字符串时间戳），可能为空
     pub cont_td_sw_time: Option<String>,
 
-    #[serde(rename = "expTime")]
+    #[serde(rename = "expTime", with = "crate::tools::string_to_option_u64")]
     /// 到期时间（字符串时间戳），期货/期权适用
-    pub exp_time: Option<String>,
+    pub exp_time: Option<u64>,
 
     #[serde(rename = "futureSettlement")]
     /// 是否为未来结算，通常为布尔值

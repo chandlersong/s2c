@@ -143,6 +143,33 @@ pub mod string_to_u64 {
     }
 }
 
+pub mod string_to_option_u64 {
+    use serde::{Deserialize, Deserializer, Serializer};
+    use std::str::FromStr;
+
+    pub fn serialize<S>(value: &Option<u64>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match value {
+            Some(v) => serializer.serialize_u64(*v),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let opt = Option::<String>::deserialize(deserializer)?;
+        match opt {
+            Some(s) if s.trim().is_empty() => Ok(None),
+            Some(s) => u64::from_str(&s).map(Some).map_err(serde::de::Error::custom),
+            None => Ok(None),
+        }
+    }
+}
+
 pub mod string_to_option_float {
     use serde::{Deserialize, Deserializer, Serializer};
     use std::str::FromStr;

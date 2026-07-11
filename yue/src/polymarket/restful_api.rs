@@ -57,7 +57,7 @@ pub async fn query_series_by_id(id: &str, include_chat: Option<bool>) -> Result<
     let client = HTTP_CLIENT.get().ok_or(YueError::new("HTTP 客户端没有初始化"))?;
     // 构造 URL：替换 {id} 并添加 include_chat 参数
     // 获取 base RequestInfo 引用以读取配置
-    let base_info: &RequestInfo = &*SERIES_BY_ID_COMMAND;
+    let base_info: &RequestInfo = &SERIES_BY_ID_COMMAND;
     let base = base_info.as_ref().as_str();
     // Url::parse 会对花括号进行 percent-encoding，路径中可能出现 "%7Bid%7D"，因此尝试多种替换形式
     let mut url = base.replace("%7Bid%7D", id);
@@ -82,7 +82,7 @@ pub async fn query_series_by_id(id: &str, include_chat: Option<bool>) -> Result<
 
 pub async fn query_event_id(id: &str, include_chat: Option<bool>, include_template: Option<bool>) -> Result<Event, YueError> {
     let client = HTTP_CLIENT.get().ok_or(YueError::new("HTTP 客户端没有初始化"))?;
-    let base_info: &RequestInfo = &*EVENT_BY_ID_COMMAND;
+    let base_info: &RequestInfo = &EVENT_BY_ID_COMMAND;
     let base = base_info.as_ref().as_str();
 
     let mut url = base.replace("%7Bid%7D", id);
@@ -115,7 +115,7 @@ pub async fn query_event_id(id: &str, include_chat: Option<bool>, include_templa
 
 pub async fn query_market_id(id: &str, include_tag: Option<bool>) -> Result<Market, YueError> {
     let client = HTTP_CLIENT.get().ok_or(YueError::new("HTTP 客户端没有初始化"))?;
-    let base_info: &RequestInfo = &*MARKET_BY_ID_COMMAND;
+    let base_info: &RequestInfo = &MARKET_BY_ID_COMMAND;
     let base = base_info.as_ref().as_str();
 
     let mut url = base.replace("%7Bid%7D", id);
@@ -140,7 +140,7 @@ pub async fn query_market_id(id: &str, include_tag: Option<bool>) -> Result<Mark
 
 pub async fn query_prices_history(query: GetPricesHistoryQuery) -> Result<GetPricesHistoryResponse, YueError> {
     let client = HTTP_CLIENT.get().ok_or(YueError::new("HTTP 客户端没有初始化"))?;
-    let base_info: &RequestInfo = &*PRICES_HISTORY_COMMAND;
+    let base_info: &RequestInfo = &PRICES_HISTORY_COMMAND;
 
     // 构造 URL，将查询参数拼接到 query string 中
     let query_string = query.to_query_string();
