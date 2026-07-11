@@ -58,6 +58,24 @@ use crate::binance::bn_models::swap_restful::SwapExchangeSymbol;
 ///
 ///
 ///
+use rust_decimal::Decimal;
+
+#[derive(Deserialize, Debug)]
+pub struct UpcChgEntry {
+    #[serde(rename = "param")]
+    /// 变更项的参数名，例如 "tickSz"
+    pub param: String,
+
+    #[serde(rename = "newValue", with = "crate::tools::string_to_option_decimal")]
+    /// 新值（通常为字符串数字），解析为 Decimal，允许为空
+    pub new_value: Option<Decimal>,
+
+    #[serde(rename = "effTime")]
+    /// 生效时间（字符串时间戳），保留为字符串以免解析失败
+    pub eff_time: Option<String>,
+}
+
+
 #[derive(Deserialize, Debug)]
 pub struct InstrumentInfo {
     #[serde(rename = "alias")]
@@ -76,17 +94,17 @@ pub struct InstrumentInfo {
     /// 分类标识，通常为字符串数字
     pub category: Option<String>,
 
-    #[serde(rename = "ctMult")]
-    /// 合约乘数（字符串），仅对衍生品有
-    pub ct_mult: Option<String>,
+    #[serde(rename = "ctMult", with = "crate::tools::string_to_option_decimal")]
+    /// 合约乘数（字符串），仅对衍生品有，解析为 Decimal
+    pub ct_mult: Option<Decimal>,
 
     #[serde(rename = "ctType")]
     /// 合约类型标识
     pub ct_type: Option<String>,
 
-    #[serde(rename = "ctVal")]
-    /// 合约面值（字符串）
-    pub ct_val: Option<String>,
+    #[serde(rename = "ctVal", with = "crate::tools::string_to_option_decimal")]
+    /// 合约面值（字符串），解析为 Decimal
+    pub ct_val: Option<Decimal>,
 
     #[serde(rename = "ctValCcy")]
     /// 合约面值币种
@@ -121,52 +139,52 @@ pub struct InstrumentInfo {
     pub inst_type: String,
 
     #[serde(rename = "lever")]
-    /// 杠杆，字符串形式
+    /// 杠杆，字符串形式（保留字符串，解析策略另行决定）
     pub lever: Option<String>,
 
     #[serde(rename = "listTime")]
     /// 上线时间（字符串时间戳）
     pub list_time: Option<String>,
 
-    #[serde(rename = "lotSz")]
-    /// 最小交易量（字符串）
-    pub lot_sz: Option<String>,
+    #[serde(rename = "lotSz", with = "crate::tools::string_to_option_decimal")]
+    /// 最小交易量，解析为 Decimal
+    pub lot_sz: Option<Decimal>,
 
-    #[serde(rename = "maxIcebergSz")]
-    /// 最大冰山订单尺寸（字符串）
-    pub max_iceberg_sz: Option<String>,
+    #[serde(rename = "maxIcebergSz", with = "crate::tools::string_to_option_decimal")]
+    /// 最大冰山订单尺寸，解析为 Decimal
+    pub max_iceberg_sz: Option<Decimal>,
 
-    #[serde(rename = "maxLmtAmt")]
-    /// 限价最大金额（字符串）
-    pub max_lmt_amt: Option<String>,
+    #[serde(rename = "maxLmtAmt", with = "crate::tools::string_to_option_decimal")]
+    /// 限价最大金额，解析为 Decimal
+    pub max_lmt_amt: Option<Decimal>,
 
-    #[serde(rename = "maxLmtSz")]
-    /// 限价最大数量（字符串）
-    pub max_lmt_sz: Option<String>,
+    #[serde(rename = "maxLmtSz", with = "crate::tools::string_to_option_decimal")]
+    /// 限价最大数量，解析为 Decimal
+    pub max_lmt_sz: Option<Decimal>,
 
-    #[serde(rename = "maxMktAmt")]
-    /// 市价最大金额（字符串）
-    pub max_mkt_amt: Option<String>,
+    #[serde(rename = "maxMktAmt", with = "crate::tools::string_to_option_decimal")]
+    /// 市价最大金额，解析为 Decimal
+    pub max_mkt_amt: Option<Decimal>,
 
-    #[serde(rename = "maxMktSz")]
-    /// 市价最大数量（字符串），可能为空
-    pub max_mkt_sz: Option<String>,
+    #[serde(rename = "maxMktSz", with = "crate::tools::string_to_option_decimal")]
+    /// 市价最大数量，可能为空，解析为 Decimal
+    pub max_mkt_sz: Option<Decimal>,
 
-    #[serde(rename = "maxStopSz")]
-    /// 止损最大数量（字符串），可能为空
-    pub max_stop_sz: Option<String>,
+    #[serde(rename = "maxStopSz", with = "crate::tools::string_to_option_decimal")]
+    /// 止损最大数量，可能为空，解析为 Decimal
+    pub max_stop_sz: Option<Decimal>,
 
-    #[serde(rename = "maxTriggerSz")]
-    /// 触发单最大数量（字符串）
-    pub max_trigger_sz: Option<String>,
+    #[serde(rename = "maxTriggerSz", with = "crate::tools::string_to_option_decimal")]
+    /// 触发单最大数量，解析为 Decimal
+    pub max_trigger_sz: Option<Decimal>,
 
-    #[serde(rename = "maxTwapSz")]
-    /// TWAP 最大数量（字符串）
-    pub max_twap_sz: Option<String>,
+    #[serde(rename = "maxTwapSz", with = "crate::tools::string_to_option_decimal")]
+    /// TWAP 最大数量，解析为 Decimal
+    pub max_twap_sz: Option<Decimal>,
 
-    #[serde(rename = "minSz")]
-    /// 最小下单数量（字符串）
-    pub min_sz: Option<String>,
+    #[serde(rename = "minSz", with = "crate::tools::string_to_option_decimal")]
+    /// 最小下单数量，解析为 Decimal
+    pub min_sz: Option<Decimal>,
 
     #[serde(rename = "optType")]
     /// 期权类型（如有）
@@ -204,9 +222,9 @@ pub struct InstrumentInfo {
     /// 是否为股票类标识（保留字段）
     pub stk: Option<String>,
 
-    #[serde(rename = "tickSz")]
-    /// 最小价格变动（字符串）
-    pub tick_sz: Option<String>,
+    #[serde(rename = "tickSz", with = "crate::tools::string_to_option_decimal")]
+    /// 最小价格变动，解析为 Decimal
+    pub tick_sz: Option<Decimal>,
 
     #[serde(rename = "uly")]
     /// 标的合约（Underlying），如期货对应的合约标的
@@ -221,6 +239,6 @@ pub struct InstrumentInfo {
     pub inst_category: Option<String>,
 
     #[serde(rename = "upcChg")]
-    /// 属性变更记录数组，结构复杂，保留为JSON Value
-    pub upc_chg: Option<Vec<serde_json::Value>>,
+    /// 属性变更记录数组，解析为结构化对象
+    pub upc_chg: Option<Vec<UpcChgEntry>>,
 }
