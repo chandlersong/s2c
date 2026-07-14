@@ -26,7 +26,7 @@ impl DuckDbTableTrait for OkxTables {
     }
 }
 pub const CREATE_OKX_INSTRUMENTS_TABLE: &str = r#"
-CREATE TABLE IF NOT EXISTS okx_instruments (
+CREATE TABLE IF NOT EXISTS OKX_INSTRUMENTS (
         instId VARCHAR,
         instType VARCHAR,
         instFamily VARCHAR,
@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS okx_instruments (
         instIdCode VARCHAR,
         instCategory VARCHAR
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_CREATE_okx_instruments_MAIN ON okx_instruments(instId);
+CREATE UNIQUE INDEX IF NOT EXISTS IDX_CREATE_OKX_INSTRUMENTS_MAIN ON okx_instruments(instId);
 "#;
 
 pub const OKX_KLINE: &str = r#"
@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS OKX_KLINE (
         volCcyQuote DOUBLE,
         confirm int
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_CREATE_OKX_KLINE_MAIN ON OKX_KLINE(instId, timestamp);
+CREATE UNIQUE INDEX IF NOT EXISTS IDX_CREATE_OKX_KLINE_MAIN ON OKX_KLINE(instId, timestamp);
 "#;
 
 pub(crate) const ALL_OKX_TABLES: &[OkxTables] = &[OkxTables::Kline, OkxTables::Instruments];
