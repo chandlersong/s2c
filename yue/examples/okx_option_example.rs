@@ -22,10 +22,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let exp_time = unix_2_readable(&data.exp_time.unwrap_or(0));
         info!("find {}, exprie at {}", data.inst_id, exp_time);
     }
-    let last_one = btc_option.data.last().unwrap();
+    let last_one = &btc_option.data[100];
     info!("try to query {} history", last_one.inst_id);
 
-    let query_param = HistoryParams::new_only_inst_1h("BTC-USD-270625-140000-C".to_string());
+    let query_param = HistoryParams::new_only_inst_1h(last_one.inst_id.to_string());
     let history = query_history_candle(query_param).await?;
     info!("history contains {} candles", history.data.len());
     let first_candle = history.data.first().unwrap();
