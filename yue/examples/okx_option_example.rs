@@ -4,6 +4,7 @@ use log::{LevelFilter, info};
 use std::collections::HashMap;
 use yue::http_client::init_http_client;
 use yue::okx::option_restful::list_okx_option;
+use yue::okx::restful_common::{HistoryParams, query_history_candle};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -21,6 +22,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let exp_time = unix_2_readable(&data.exp_time.unwrap_or(0));
         info!("find {}, exprie at {}", data.inst_id, exp_time);
     }
+    let last_one = btc_option.data.last().unwrap();
+    info!("try to query {} history", last_one.inst_id);
+
+    let query_param = HistoryParams::new_only_inst_1h("BTC-USD-270625-140000-C".to_string());
+    let history = query_history_candle(query_param).await?;
+    info!("history contains {} candles", history.data.len());
+    let first_candle = history.data.first().unwrap();
+    let last_candle = history.data.last().unwrap();
+    info!(
+        "candle begin is from {} to {}",
+        unix_2_readable(&first_candle[0].parse::<u64>().unwrap_or(0)),
+        unix_2_readable(&last_candle[0].parse::<u64>().unwrap_or(0))
+    );
 
     Ok(())
 }

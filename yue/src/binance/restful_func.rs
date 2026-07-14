@@ -1,12 +1,12 @@
 ///
 /// 主要是集中了很多调用restful的过程。
 ///
-use crate::binance::bn_models::common::{ExchangeInfoTrait, HistoryVo, SymbolInfo, SymbolInfoTrait, ToRequestBuilder};
+use crate::binance::bn_models::common::{ExchangeInfoTrait, HistoryVo, SymbolInfo, SymbolInfoTrait};
 use crate::binance::bn_models::spot_restful::ExchangeInfo;
 use crate::binance::bn_models::swap_restful::SwapExchangeInfo;
 use crate::binance::bn_restful_commands::{PING_COMMAND, SWAP_FUNDING_RATE_COMMAND, execute_json_request};
 use crate::errors::YueError;
-use crate::http_client::{HTTP_CLIENT, get_http_client};
+use crate::http_client::{HTTP_CLIENT, ToRequestBuilder, get_http_client};
 use crate::models::{EmptyObject, HistoryInterval, RequestInfo};
 use async_trait::async_trait;
 use governor::Jitter;

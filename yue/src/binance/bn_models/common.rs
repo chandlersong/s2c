@@ -1,7 +1,6 @@
 use crate::binance::bn_models::spot_websocket::ExecutionReportPayload;
-use crate::models::{Decimal, RequestInfo};
+use crate::models::Decimal;
 use li::tools::time::{UnixTimeStamp, unix_time_now_u64_utc};
-use reqwest::RequestBuilder;
 use serde::de::{DeserializeOwned, Error};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
@@ -9,9 +8,7 @@ use std::fmt::Display;
 use std::str::FromStr;
 
 // 查询参数trait定义
-pub trait ToRequestBuilder {
-    fn to_request_builder(&self, request_info: &RequestInfo) -> RequestBuilder;
-}
+
 #[derive(Clone, Copy, Debug)]
 pub enum SymbolType {
     Spot,   //现货

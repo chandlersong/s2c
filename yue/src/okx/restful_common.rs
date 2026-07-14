@@ -1,6 +1,10 @@
+use crate::errors::YueError;
+use crate::http_client::{ToRequestBuilder, execute_public_json_request, get_http_client};
 use crate::models::{DefaultRateLimiter, HostInfo, RequestInfo};
+use crate::okx::models::common::CandleResponse;
 use governor::middleware::StateInformationMiddleware;
 use governor::{Quota, RateLimiter};
+use reqwest::RequestBuilder;
 use std::num::NonZeroU32;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
@@ -34,6 +38,61 @@ pub const OKX_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
 });
 
 pub const PUBLIC_INSTRUMENTS: &str = "/api/v5/public/instruments";
+pub const HISTORY_CANDLES: &str = "/api/v5/market/history-candles";
 
+pub const CANDLES: &str = "/api/v5/market/candles";
 pub static PUBLIC_INSTRUMENTS_COMMAND: LazyLock<RequestInfo> =
     LazyLock::new(|| RequestInfo::from_base_path(OKX_BASE.clone(), PUBLIC_INSTRUMENTS, false, 1, None, None).unwrap());
+
+pub static HISTORY_CANDLES_COMMAND: LazyLock<RequestInfo> =
+    LazyLock::new(|| RequestInfo::from_base_path(OKX_BASE.clone(), HISTORY_CANDLES, false, 1, None, None).unwrap());
+pub struct HistoryParams {
+    inst_id: String,
+    bar: Option<String>,
+    after: Option<String>,
+    before: Option<String>,
+    limit: Option<String>,
+    adjust: Option<String>,
+}
+
+impl HistoryParams {
+    pub fn new_only_inst_1h(inst_id: String) -> Self {
+        Self {
+            inst_id,
+            bar: Some("1H".to_string()),
+            after: None,
+            before: None,
+            limit: None,
+            adjust: None,
+        }
+    }
+}
+
+impl ToRequestBuilder for HistoryParams {
+    fn to_request_builder(&self, request_info: &RequestInfo) -> RequestBuilder {
+        let client = get_http_client();
+        let res = client.get(request_info.as_ref().as_str());
+        let mut params = vec![];
+        params.push(("instId", self.inst_id.clone()));
+        if let Some(bar) = self.bar.as_ref() {
+            params.push(("bar", bar.clone()));
+        }
+        if let Some(after) = self.after.as_ref() {
+            params.push(("after", after.to_string()));
+        }
+        if let Some(before) = self.before.as_ref() {
+            params.push(("before", before.to_string()));
+        }
+        if let Some(limit) = self.limit.as_ref() {
+            params.push(("limit", limit.to_string()));
+        }
+        if let Some(adjust) = self.adjust.as_ref() {
+            params.push(("adjust", adjust.to_string()));
+        }
+        res.query(&params)
+    }
+}
+
+pub async fn query_history_candle(params: HistoryParams) -> Result<CandleResponse, YueError> {
+    execute_public_json_request::<CandleResponse>(&HISTORY_CANDLES_COMMAND, params.to_request_builder(&HISTORY_CANDLES_COMMAND)).await
+}

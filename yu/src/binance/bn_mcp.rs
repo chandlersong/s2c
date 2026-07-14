@@ -4,14 +4,14 @@ use rmcp::model::{
     CallToolResult, Content, Implementation, InitializeRequestParam, InitializeResult, ProtocolVersion, ServerCapabilities, ServerInfo,
 };
 use rmcp::service::RequestContext;
-use rmcp::{schemars, serde_json, RoleServer};
 use rmcp::{ErrorData as McpError, ServerHandler};
+use rmcp::{RoleServer, schemars, serde_json};
 use rmcp_macros::{tool, tool_handler, tool_router};
 use serde::{Deserialize, Serialize};
-use yue::binance::bn_models::common::ToRequestBuilder;
 use yue::binance::bn_models::spot_restful::Ticker24hr;
-use yue::binance::bn_restful_commands::{execute_json_request, SPOT_TICKER_24HR_ONE_SYMBOL_COMMAND};
+use yue::binance::bn_restful_commands::{SPOT_TICKER_24HR_ONE_SYMBOL_COMMAND, execute_json_request};
 use yue::binance::restful_func::CommonRequestBuilder;
+use yue::http_client::ToRequestBuilder;
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct SymbolRequest {

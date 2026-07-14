@@ -1,8 +1,8 @@
 use rust_decimal::Decimal;
 use serde::Deserialize;
 
-#[derive(Deserialize, Debug)]
-pub struct OkxListResponse<T> {
+#[derive(Deserialize, Debug, Clone)]
+pub struct OkxListResponse<T: Clone> {
     pub code: String,
     pub msg: String,
     pub data: Vec<T>,
@@ -65,7 +65,7 @@ pub struct OkxListResponse<T> {
 ///
 ///
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct UpcChgEntry {
     #[serde(rename = "param")]
     /// 变更项的参数名，例如 "tickSz"
@@ -80,7 +80,7 @@ pub struct UpcChgEntry {
     pub eff_time: Option<String>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct InstrumentInfo {
     #[serde(rename = "alias")]
     /// 别名，可能为空字符串
@@ -246,3 +246,11 @@ pub struct InstrumentInfo {
     /// 属性变更记录数组，解析为结构化对象
     pub upc_chg: Option<Vec<UpcChgEntry>>,
 }
+
+///
+///  /api/v5/market/history-candles
+///  /api/v5/market/candles
+///. 因为这些都是一些list。所以暂时就这么处理了。
+///  [字段顺序](https://www.okx.com/docs-v5/zh/#order-book-trading-market-data-get-candlesticks)
+///
+pub type CandleResponse = OkxListResponse<Vec<String>>;

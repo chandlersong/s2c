@@ -50,6 +50,10 @@ where
     }
 }
 
+pub trait ToRequestBuilder {
+    fn to_request_builder(&self, request_info: &RequestInfo) -> RequestBuilder;
+}
+
 #[derive(Clone)]
 pub struct CommonPublicRestfulClient {
     max_retries: u16,
