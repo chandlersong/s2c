@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, broadcast};
 use yue::models::HistoryInterval;
-use yue::polymarket::restful_api::PolymarketAPI;
+use yue::polymarket::restful_api::PolymarketApi;
 use yue::polymarket::restful_models::{GetPricesHistoryQuery, Market};
 use yue::query_message::DataSourceProviderTrait;
 
@@ -30,7 +30,7 @@ type MarketList = Arc<RwLock<Vec<MarketWithAddition>>>;
 返回顺序是open，和close
 **/
 async fn split_series_markets_with_client(
-    api: PolymarketAPI,
+    api: PolymarketApi,
     series_id: String,
 ) -> Result<(Vec<MarketWithAddition>, Vec<MarketWithAddition>), YuError> {
     let mut open_markets: Vec<MarketWithAddition> = Vec::new();
@@ -114,7 +114,7 @@ async fn split_series_markets_with_client(
 
 async fn batch_split_series_markets_with_client(
     series_ids: &Vec<String>,
-    api: PolymarketAPI,
+    api: PolymarketApi,
 ) -> Result<(Vec<MarketWithAddition>, Vec<MarketWithAddition>), YuError> {
     let mut open_markets: Vec<MarketWithAddition> = vec![];
     let mut close_markets: Vec<MarketWithAddition> = vec![];
@@ -160,7 +160,7 @@ pub async fn new_series_history_market_service(
     series_ids: Vec<String>,
     interval: HistoryInterval,
     history_broadcast: broadcast::Sender<PolyMarketHistory>,
-    client: PolymarketAPI,
+    client: PolymarketApi,
     ds_provider: Option<DuckDBDSProvider>,
     assert_infos: Arc<RwLock<Vec<PolyMarketAssetInfoPo>>>,
 ) -> SeriesHistoryMarketService {
@@ -181,7 +181,7 @@ pub struct SeriesHistoryMarketServiceImpl {
     interval: HistoryInterval,
     open_markets: MarketList,
     history_broadcast: broadcast::Sender<PolyMarketHistory>,
-    client: PolymarketAPI,
+    client: PolymarketApi,
     ds_provider: DuckDBDSProvider,
     assert_infos: Arc<RwLock<Vec<PolyMarketAssetInfoPo>>>,
 }
@@ -191,7 +191,7 @@ impl SeriesHistoryMarketServiceImpl {
         series_ids: Vec<String>,
         interval: HistoryInterval,
         history_broadcast: broadcast::Sender<PolyMarketHistory>,
-        client: PolymarketAPI,
+        client: PolymarketApi,
         ds_provider: Option<DuckDBDSProvider>,
         assert_infos: Arc<RwLock<Vec<PolyMarketAssetInfoPo>>>,
     ) -> Self {
@@ -527,7 +527,7 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::RwLock;
     use yue::models::HistoryInterval;
-    use yue::polymarket::restful_api::{MockPolymarketApiTrait, PolymarketAPI};
+    use yue::polymarket::restful_api::{MockPolymarketApiTrait, PolymarketApi};
     use yue::polymarket::restful_models::{Event, GetPricesHistoryQuery, GetPricesHistoryResponse, Market, MarketPriceHistoryPoint, Series};
     use yue::query_message::DataSourceProviderTrait;
 
@@ -592,7 +592,7 @@ mod tests {
             Ok(r)
         });
 
-        let client: PolymarketAPI = Arc::new(mock);
+        let client: PolymarketApi = Arc::new(mock);
 
         let (tx, mut rx) = tokio::sync::broadcast::channel(16);
         let series_ids = vec!["s1".to_string()];
@@ -666,7 +666,7 @@ mod tests {
             Ok(r)
         });
 
-        let client: PolymarketAPI = Arc::new(mock);
+        let client: PolymarketApi = Arc::new(mock);
 
         let (tx, mut rx) = tokio::sync::broadcast::channel(16);
         let series_ids = vec!["s1".to_string()];
@@ -732,7 +732,7 @@ mod tests {
             .withf(move |q: &GetPricesHistoryQuery| q.market == "tokenA" && q.start_ts == Some(900u64 + 30))
             .returning(move |_q| Ok(history_clone.clone()));
 
-        let client: PolymarketAPI = Arc::new(mock);
+        let client: PolymarketApi = Arc::new(mock);
         let (tx, mut rx) = tokio::sync::broadcast::channel(16);
         let series_ids = vec!["s1".to_string()];
         let interval = HistoryInterval::OneMinute;
@@ -801,7 +801,7 @@ mod tests {
             .withf(move |q: &GetPricesHistoryQuery| q.market == "tokenA")
             .returning(move |_q| Ok(history_clone.clone()));
 
-        let client: PolymarketAPI = Arc::new(mock);
+        let client: PolymarketApi = Arc::new(mock);
         let (tx, mut rx) = tokio::sync::broadcast::channel(16);
         let series_ids = vec!["s1".to_string()];
         let interval = HistoryInterval::OneMinute;
@@ -850,7 +850,7 @@ mod tests {
         pre_conn.execute("INSERT INTO polymarket_assert_info(asset_id, series_id, series_slug, event_id, event_slug, market_id, market_slug, assert_slug) VALUES ('tokenA','s1','series1','e1','event1','m1','market1','market1_Yes')", []).expect("insert tokenA");
 
         let mock = MockPolymarketApiTrait::new();
-        let client: PolymarketAPI = Arc::new(mock);
+        let client: PolymarketApi = Arc::new(mock);
         let (tx, _rx) = tokio::sync::broadcast::channel(16);
         let series_ids: Vec<String> = vec![]; // keep empty so new() won't call remote
         let interval = HistoryInterval::OneMinute;

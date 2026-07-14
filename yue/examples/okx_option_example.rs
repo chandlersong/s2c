@@ -3,8 +3,7 @@ use li::tools::time::unix_2_readable;
 use log::{LevelFilter, info};
 use std::collections::HashMap;
 use yue::http_client::init_http_client;
-use yue::okx::option_restful::list_okx_option;
-use yue::okx::restful_common::{HistoryParams, query_history_candle};
+use yue::okx::restful_api::{HistoryParams, default_okx_api, list_okx_option};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -25,8 +24,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let last_one = &btc_option.data[100];
     info!("try to query {} history", last_one.inst_id);
 
+    let api = default_okx_api();
     let query_param = HistoryParams::new_only_inst_1h(last_one.inst_id.to_string());
-    let history = query_history_candle(query_param).await?;
+    let history = api.query_history_candle(query_param).await?;
     info!("history contains {} candles", history.data.len());
     let first_candle = history.data.first().unwrap();
     let last_candle = history.data.last().unwrap();

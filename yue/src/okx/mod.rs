@@ -1,3 +1,3 @@
 pub mod models;
-pub mod option_restful;
-pub mod restful_common;
+pub mod restful_api;
+pub mod restful_constants;

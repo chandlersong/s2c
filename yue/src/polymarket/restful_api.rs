@@ -178,9 +178,9 @@ impl PolymarketApiTrait for PolymarketClientImpl {
     }
 }
 
-pub type PolymarketAPI = Arc<dyn PolymarketApiTrait>;
+pub type PolymarketApi = Arc<dyn PolymarketApiTrait>;
 
 pub(crate) static SHARE_POLYMARKET_API: OnceLock<Arc<PolymarketClientImpl>> = OnceLock::new();
-pub fn default_polymarket_api() -> PolymarketAPI {
+pub fn default_polymarket_api() -> PolymarketApi {
     SHARE_POLYMARKET_API.get_or_init(|| Arc::new(PolymarketClientImpl)).clone()
 }
