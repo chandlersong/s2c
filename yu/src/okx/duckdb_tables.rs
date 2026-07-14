@@ -1,8 +1,10 @@
 use crate::duck_db::DuckDBDSProvider;
-use crate::duck_db_tables::DuckDbTableTrait;
+use crate::duck_db_tables::{DuckDBOneTable, DuckDbTableTrait, DuckTableTableChannel};
 use crate::errors::YuError;
-use crate::okx::duckdb_consts::ALL_OKX_TABLES;
+use crate::okx::duck_po::OkxKlinePo;
+use crate::okx::duckdb_consts::{ALL_OKX_TABLES, OkxTables};
 use log::info;
+use std::sync::OnceLock;
 use yue::query_message::DataSourceProviderTrait;
 
 pub fn initial_okx_tables(provider: Option<DuckDBDSProvider>) -> Result<(), YuError> {
@@ -20,4 +22,12 @@ pub fn initial_okx_tables(provider: Option<DuckDBDSProvider>) -> Result<(), YuEr
     }
     info!("initial okx tables done");
     Ok(())
+}
+
+pub(crate) static OKX_KLINE: OnceLock<DuckTableTableChannel<OkxKlinePo>> = OnceLock::new();
+
+pub fn get_okx_kline_table() -> DuckTableTableChannel<OkxKlinePo> {
+    OKX_KLINE
+        .get_or_init(|| DuckDBOneTable::<OkxKlinePo, OkxTables>::start_new(OkxTables::Kline, None))
+        .clone()
 }
