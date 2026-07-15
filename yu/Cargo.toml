@@ -17,10 +17,12 @@ config = { workspace = true }
 prost = { workspace = true }
 rust_decimal = { workspace = true }
 chrono = { workspace = true }
+bon = { workspace = true }
 rmcp = { version = "0.8.1", features = ["transport-sse-server"] }  # 根据最新版本调整，从 GitHub crate 获取
 rmcp-macros = "0.8.1"
 governor = { workspace = true }
 r2d2 = "0.8.10"
+
 
 # optional mockall dependency for generating mocks when feature "mockable" is enabled
 mockall = { version = "0.13", optional = true }

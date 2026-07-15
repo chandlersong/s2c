@@ -1,10 +1,11 @@
 use crate::duck_db::DuckDBPO;
+use bon::Builder;
 use duckdb::appender_params_from_iter;
 use serde::{Deserialize, Serialize};
 use yue::okx::models::common::CandleResponse;
 use yue::tools::get_snow_flake_id_u64;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 pub struct OkxKlinePo {
     pub id: u64,
     pub inst_id: String,
@@ -55,6 +56,47 @@ impl DuckDBPO for OkxKlinePo {
             &self.vol_ccy as &dyn duckdb::ToSql,
             &self.vol_ccy_quote as &dyn duckdb::ToSql,
             &self.confirm as &dyn duckdb::ToSql,
+        ])
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
+pub struct InstrumentPo {
+    pub inst_id: String,
+    pub inst_type: String,
+    pub inst_family: Option<String>,
+    pub base_ccy: String,
+    pub quote_ccy: Option<String>,
+    pub settle_ccy: Option<String>,
+    pub list_time: Option<String>,
+    pub exp_time: Option<String>,
+    pub tick_sz: Option<f64>,
+    pub lot_sz: Option<f64>,
+    pub min_sz: Option<f64>,
+    pub alias: Option<String>,
+    pub state: Option<String>,
+    pub inst_id_code: Option<String>,
+    pub inst_category: Option<String>,
+}
+
+impl DuckDBPO for InstrumentPo {
+    fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>> {
+        appender_params_from_iter(vec![
+            &self.inst_id as &dyn duckdb::ToSql,
+            &self.inst_type as &dyn duckdb::ToSql,
+            &self.inst_family as &dyn duckdb::ToSql,
+            &self.base_ccy as &dyn duckdb::ToSql,
+            &self.quote_ccy as &dyn duckdb::ToSql,
+            &self.settle_ccy as &dyn duckdb::ToSql,
+            &self.list_time as &dyn duckdb::ToSql,
+            &self.exp_time as &dyn duckdb::ToSql,
+            &self.tick_sz as &dyn duckdb::ToSql,
+            &self.lot_sz as &dyn duckdb::ToSql,
+            &self.min_sz as &dyn duckdb::ToSql,
+            &self.alias as &dyn duckdb::ToSql,
+            &self.state as &dyn duckdb::ToSql,
+            &self.inst_id_code as &dyn duckdb::ToSql,
+            &self.inst_category as &dyn duckdb::ToSql,
         ])
     }
 }

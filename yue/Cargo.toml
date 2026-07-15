@@ -20,7 +20,7 @@ reqwest = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 governor = { workspace = true }
-
+bon = { workspace = true }
 moka = { version = "0.12.10", features = ["future"] }
 
 

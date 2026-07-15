@@ -41,6 +41,7 @@ tonic-prost = "0.14.5"          # ← 必须添加这一行
 tonic-prost-build = "0.14.5"
 governor = { version = "0.10.4", features = ["std"] }
 serial_test = "3.5.0"
+bon = "3"   # 或最新版本
 ### DEV ####
 mockall = { version = "0.13.1" }
 

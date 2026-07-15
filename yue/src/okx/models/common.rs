@@ -1,7 +1,8 @@
+use bon::Builder;
 use rust_decimal::Decimal;
 use serde::Deserialize;
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, Builder)]
 pub struct OkxListResponse<T: Clone> {
     pub code: String,
     pub msg: String,
@@ -65,7 +66,7 @@ pub struct OkxListResponse<T: Clone> {
 ///
 ///
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, Builder)]
 pub struct UpcChgEntry {
     #[serde(rename = "param")]
     /// 变更项的参数名，例如 "tickSz"
@@ -80,7 +81,7 @@ pub struct UpcChgEntry {
     pub eff_time: Option<String>,
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, Builder)]
 pub struct InstrumentInfo {
     #[serde(rename = "alias")]
     /// 别名，可能为空字符串
