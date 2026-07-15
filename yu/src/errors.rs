@@ -1,5 +1,6 @@
 use li::errors::LiError;
 use thiserror::Error;
+use tokio::sync::mpsc::error::SendError;
 use yue::errors::YueError;
 
 #[derive(Error, Debug)]
