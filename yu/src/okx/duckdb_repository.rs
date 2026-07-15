@@ -13,6 +13,7 @@ use yue::query_message::{BatchInsertPayload, DataSourceProviderTrait, InsertPayl
 #[async_trait]
 pub trait OkxInstrumentRepositoryTrait {
     async fn get_instrument_by_type(&self, inst_type: InstrumentType) -> Result<Vec<InstrumentPo>, YuError>;
+    async fn get_instrument_by_id(&self, inst_id: &str) -> Result<InstrumentPo, YuError>;
     async fn get_instrument_by_type_live(&self, inst_type: InstrumentType) -> Result<Vec<InstrumentPo>, YuError>;
 
     async fn insert_instrument(&self, instrument: InstrumentPo) -> Result<(), YuError>;
@@ -60,6 +61,19 @@ impl OkxInstrumentRepositoryTrait for OkxInstrumentRepositoryImpl {
         let mut stmt = conn.prepare("SELECT instId, instType, instFamily, baseCcy, quoteCcy, settleCcy, listTime, expTime, tickSz, lotSz, minSz, alias, state, instIdCode, instCategory FROM OKX_INSTRUMENTS where instType = ?;")?;
         let rows = stmt.query([inst_type.as_str()])?;
         InstrumentPo::from_db_to_vec(rows)
+    }
+
+    async fn get_instrument_by_id(&self, inst_id: &str) -> Result<InstrumentPo, YuError> {
+        let conn = self.provider.acquire()?;
+        let mut stmt = conn.prepare("SELECT instId, instType, instFamily, baseCcy, quoteCcy, settleCcy, listTime, expTime, tickSz, lotSz, minSz, alias, state, instIdCode, instCategory FROM OKX_INSTRUMENTS where instId = ?;")?;
+        let mut rows = stmt.query([inst_id])?;
+        // Expect at most one row. Read the first row if present and convert it to InstrumentPo.
+        if let Some(row) = rows.next()? {
+            let po = InstrumentPo::try_from(row)?;
+            Ok(po)
+        } else {
+            Err(YuError::new("instrument not found"))
+        }
     }
 
     async fn get_instrument_by_type_live(&self, inst_type: InstrumentType) -> Result<Vec<InstrumentPo>, YuError> {

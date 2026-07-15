@@ -1,7 +1,7 @@
 use crate::duck_db::DuckDBPO;
 use crate::errors::YuError;
 use bon::Builder;
-use duckdb::{Rows, appender_params_from_iter};
+use duckdb::{Row, Rows, appender_params_from_iter};
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use yue::okx::models::common::CandleResponse;
@@ -86,40 +86,7 @@ impl InstrumentPo {
     pub fn from_db_to_vec(mut rows: Rows) -> Result<Vec<InstrumentPo>, YuError> {
         let mut res = Vec::<InstrumentPo>::new();
         while let Some(row) = rows.next()? {
-            let inst_id: String = row.get::<usize, String>(0)?;
-            let inst_type_v: String = row.get::<usize, String>(1)?;
-            let inst_family: Option<String> = row.get::<usize, Option<String>>(2)?;
-            let base_ccy: String = row.get::<usize, String>(3)?;
-            let quote_ccy: Option<String> = row.get::<usize, Option<String>>(4)?;
-            let settle_ccy: Option<String> = row.get::<usize, Option<String>>(5)?;
-            let list_time: Option<String> = row.get::<usize, Option<String>>(6)?;
-            let exp_time: Option<String> = row.get::<usize, Option<String>>(7)?;
-            let tick_sz: Option<f64> = row.get::<usize, Option<f64>>(8)?;
-            let lot_sz: Option<f64> = row.get::<usize, Option<f64>>(9)?;
-            let min_sz: Option<f64> = row.get::<usize, Option<f64>>(10)?;
-            let alias: Option<String> = row.get::<usize, Option<String>>(11)?;
-            let state: Option<String> = row.get::<usize, Option<String>>(12)?;
-            let inst_id_code: Option<String> = row.get::<usize, Option<String>>(13)?;
-            let inst_category: Option<String> = row.get::<usize, Option<String>>(14)?;
-
-            let po = InstrumentPo {
-                inst_id,
-                inst_type: inst_type_v,
-                inst_family,
-                base_ccy,
-                quote_ccy,
-                settle_ccy,
-                list_time,
-                exp_time,
-                tick_sz,
-                lot_sz,
-                min_sz,
-                alias,
-                state,
-                inst_id_code,
-                inst_category,
-            };
-
+            let po = Self::try_from(row)?;
             res.push(po);
         }
         Ok(res)
@@ -167,5 +134,45 @@ impl From<InstrumentInfo> for InstrumentPo {
             inst_id_code: info.inst_id_code.map(|i| i.to_string()),
             inst_category: info.inst_category,
         }
+    }
+}
+
+impl<'a> TryFrom<&'a Row<'a>> for InstrumentPo {
+    type Error = YuError;
+
+    fn try_from(row: &Row) -> Result<Self, Self::Error> {
+        let inst_id: String = row.get(0)?;
+        let inst_type: String = row.get(1)?;
+        let inst_family: Option<String> = row.get(2)?;
+        let base_ccy: String = row.get(3)?;
+        let quote_ccy: Option<String> = row.get(4)?;
+        let settle_ccy: Option<String> = row.get(5)?;
+        let list_time: Option<String> = row.get(6)?;
+        let exp_time: Option<String> = row.get(7)?;
+        let tick_sz: Option<f64> = row.get(8)?;
+        let lot_sz: Option<f64> = row.get(9)?;
+        let min_sz: Option<f64> = row.get(10)?;
+        let alias: Option<String> = row.get(11)?;
+        let state: Option<String> = row.get(12)?;
+        let inst_id_code: Option<String> = row.get(13)?;
+        let inst_category: Option<String> = row.get(14)?;
+
+        Ok(InstrumentPo {
+            inst_id,
+            inst_type,
+            inst_family,
+            base_ccy,
+            quote_ccy,
+            settle_ccy,
+            list_time,
+            exp_time,
+            tick_sz,
+            lot_sz,
+            min_sz,
+            alias,
+            state,
+            inst_id_code,
+            inst_category,
+        })
     }
 }

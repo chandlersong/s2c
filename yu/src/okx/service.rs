@@ -1,6 +1,6 @@
 use crate::errors::YuError;
 use crate::okx::duck_po::{InstrumentPo, OkxKlinePo};
-use crate::okx::duckdb_repository::{OkxInstrumentRepository, get_instrument_repo};
+use crate::okx::duckdb_repository::{OkxInstrumentRepository, OkxKlineRepository, get_instrument_repo};
 use crate::okx::okx_consts::InstrumentType;
 use log::warn;
 use std::collections::HashMap;
@@ -8,6 +8,17 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::broadcast;
 use yue::models::HistoryInterval;
 use yue::okx::restful_api::{InstrumentsParam, OKxApi, default_okx_api};
+
+pub async fn fetch_history(
+    inst_id: &str,
+    now: u64,
+    interval: HistoryInterval,
+    api: &OKxApi,
+    instrument_repository: &OkxInstrumentRepository,
+    kline_repository: &OkxKlineRepository,
+) -> Result<Vec<OkxKlinePo>, YuError> {
+    todo!()
+}
 
 ///
 /// 主要是刷新inst_ids。因为inst_ids是会变的。这个是需要维护的。
@@ -151,14 +162,16 @@ impl OptionService {
 
 #[cfg(test)]
 mod tests {
-    use super::fetch_and_upsert_instruments;
+    use super::{fetch_and_upsert_instruments, fetch_history};
+    use crate::errors::YuError;
     use crate::okx::duck_po::InstrumentPo;
-    use crate::okx::duckdb_repository::MockOkxInstrumentRepositoryTrait;
     use crate::okx::duckdb_repository::OkxInstrumentRepository;
+    use crate::okx::duckdb_repository::{MockOkxInstrumentRepositoryTrait, MockOkxKlineRepositoryTrait, OkxKlineRepository};
     use crate::okx::duckdb_tables::initial_okx_tables;
     use crate::okx::okx_consts::InstrumentType;
     use crate::test_utils::create_memory_db_provider;
     use std::sync::Arc;
+    use yue::models::HistoryInterval;
     use yue::okx::models::common::{InstrumentInfo, OkxListResponse};
     use yue::okx::restful_api::{InstrumentsParam, MockOKXApiTrait, OKxApi};
 
@@ -276,5 +289,40 @@ mod tests {
         fetch_and_upsert_instruments(param, &inst_repo, &api, InstrumentType::Option)
             .await
             .expect("fetch failed");
+    }
+
+    ///
+    /// 测试数据库，完全没有的数据情况下，存入数据库。
+    ///
+    ///
+    ///
+    ///
+    #[tokio::test]
+    pub async fn test_fetch_history_new() -> Result<(), YuError> {
+        let interval = HistoryInterval::OneHour;
+        let live_time = 100000;
+        let now = live_time + 3 * interval.to_milliseconds();
+        let mut mock_inst_repo = MockOkxInstrumentRepositoryTrait::new();
+        let inst = InstrumentPo::builder()
+            .inst_id("BTC-1".to_string())
+            .inst_type("OPTION".to_string())
+            .base_ccy("BTC".to_string())
+            .state("live".to_string())
+            .list_time(live_time.to_string())
+            .build();
+        mock_inst_repo.expect_get_instrument_by_type().return_once(move |_| Ok(vec![inst]));
+
+        let mut mock_kline_repo = MockOkxKlineRepositoryTrait::new();
+        mock_kline_repo.expect_instrument_max_timestamp().return_once(|_| Ok(None));
+
+        let mut mock_api = MockOKXApiTrait::new();
+
+        let api: OKxApi = Arc::new(mock_api);
+        let inst_repo: OkxInstrumentRepository = Arc::new(mock_inst_repo);
+        let kline_repo: OkxKlineRepository = Arc::new(mock_kline_repo);
+
+        let res = fetch_history("btc-usd", now, interval, &api, &inst_repo, &kline_repo).await?;
+
+        Ok(())
     }
 }
