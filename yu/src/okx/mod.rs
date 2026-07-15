@@ -4,3 +4,4 @@ pub mod duckdb_tables;
 pub mod service;
 
 pub mod duckdb_repository;
+pub mod okx_consts;

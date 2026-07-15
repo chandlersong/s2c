@@ -1,13 +1,16 @@
 use crate::duck_db::DuckDBDSProvider;
 use crate::errors::YuError;
 use crate::okx::duck_po::InstrumentPo;
+use crate::okx::okx_consts::InstrumentType;
 use async_trait::async_trait;
 use std::sync::Arc;
 use yue::query_message::DataSourceProviderTrait;
 
+#[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
 #[async_trait]
 pub trait OkxInstrumentRepositoryTrait {
-    async fn get_instrument_by_type(&self, inst_type: &str) -> Result<Vec<InstrumentPo>, YuError>;
+    async fn get_instrument_by_type(&self, inst_type: InstrumentType) -> Result<Vec<InstrumentPo>, YuError>;
+    async fn get_instrument_by_type_live(&self, inst_type: InstrumentType) -> Result<Vec<InstrumentPo>, YuError>;
 
     async fn insert_instrument(&self, instrument: InstrumentPo) -> Result<(), YuError>;
 
@@ -19,55 +22,29 @@ pub trait OkxInstrumentRepositoryTrait {
 
 pub type OkxInstrumentRepository = Arc<dyn OkxInstrumentRepositoryTrait + Send + Sync>;
 
+pub fn get_instrument_repo(provider: Option<DuckDBDSProvider>) -> OkxInstrumentRepository {
+    let real_provider = provider.unwrap_or_default();
+    Arc::new(OkxInstrumentRepositoryImpl { provider: real_provider })
+}
+
 struct OkxInstrumentRepositoryImpl {
     provider: DuckDBDSProvider,
 }
 
 #[async_trait]
 impl OkxInstrumentRepositoryTrait for OkxInstrumentRepositoryImpl {
-    async fn get_instrument_by_type(&self, inst_type: &str) -> Result<Vec<InstrumentPo>, YuError> {
+    async fn get_instrument_by_type(&self, inst_type: InstrumentType) -> Result<Vec<InstrumentPo>, YuError> {
         let conn = self.provider.acquire()?;
         let mut stmt = conn.prepare("SELECT instId, instType, instFamily, baseCcy, quoteCcy, settleCcy, listTime, expTime, tickSz, lotSz, minSz, alias, state, instIdCode, instCategory FROM OKX_INSTRUMENTS where instType = ?;")?;
-        let mut rows = stmt.query([inst_type])?;
-        let mut res = Vec::<InstrumentPo>::new();
-        while let Some(row) = rows.next()? {
-            let inst_id: String = row.get::<usize, String>(0)?;
-            let inst_type_v: String = row.get::<usize, String>(1)?;
-            let inst_family: Option<String> = row.get::<usize, Option<String>>(2)?;
-            let base_ccy: String = row.get::<usize, String>(3)?;
-            let quote_ccy: Option<String> = row.get::<usize, Option<String>>(4)?;
-            let settle_ccy: Option<String> = row.get::<usize, Option<String>>(5)?;
-            let list_time: Option<String> = row.get::<usize, Option<String>>(6)?;
-            let exp_time: Option<String> = row.get::<usize, Option<String>>(7)?;
-            let tick_sz: Option<f64> = row.get::<usize, Option<f64>>(8)?;
-            let lot_sz: Option<f64> = row.get::<usize, Option<f64>>(9)?;
-            let min_sz: Option<f64> = row.get::<usize, Option<f64>>(10)?;
-            let alias: Option<String> = row.get::<usize, Option<String>>(11)?;
-            let state: Option<String> = row.get::<usize, Option<String>>(12)?;
-            let inst_id_code: Option<String> = row.get::<usize, Option<String>>(13)?;
-            let inst_category: Option<String> = row.get::<usize, Option<String>>(14)?;
+        let rows = stmt.query([inst_type.as_str()])?;
+        InstrumentPo::from_db_to_vec(rows)
+    }
 
-            let po = InstrumentPo {
-                inst_id,
-                inst_type: inst_type_v,
-                inst_family,
-                base_ccy,
-                quote_ccy,
-                settle_ccy,
-                list_time,
-                exp_time,
-                tick_sz,
-                lot_sz,
-                min_sz,
-                alias,
-                state,
-                inst_id_code,
-                inst_category,
-            };
-
-            res.push(po);
-        }
-        Ok(res)
+    async fn get_instrument_by_type_live(&self, inst_type: InstrumentType) -> Result<Vec<InstrumentPo>, YuError> {
+        let conn = self.provider.acquire()?;
+        let mut stmt = conn.prepare("SELECT instId, instType, instFamily, baseCcy, quoteCcy, settleCcy, listTime, expTime, tickSz, lotSz, minSz, alias, state, instIdCode, instCategory FROM OKX_INSTRUMENTS where instType = ? and state='live';")?;
+        let rows = stmt.query([inst_type.as_str()])?;
+        InstrumentPo::from_db_to_vec(rows)
     }
 
     async fn insert_instrument(&self, instrument: InstrumentPo) -> Result<(), YuError> {

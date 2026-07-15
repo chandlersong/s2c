@@ -4,10 +4,11 @@ use crate::models::RequestInfo;
 use crate::okx::models::common::{CandleResponse, InstrumentInfo, OkxListResponse};
 use crate::okx::restful_constants::{HISTORY_CANDLES_COMMAND, PUBLIC_INSTRUMENTS_COMMAND};
 use async_trait::async_trait;
+use bon::Builder;
 use reqwest::RequestBuilder;
 use std::sync::{Arc, OnceLock};
 
-#[cfg_attr(feature = "mockable", mockall::automock)]
+#[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
 #[async_trait]
 pub trait OKXApiTrait: Send + Sync {
     async fn list_instruments(&self, params: InstrumentsParam) -> Result<OkxListResponse<InstrumentInfo>, YueError>;
@@ -77,6 +78,7 @@ impl ToRequestBuilder for HistoryParams {
     }
 }
 
+#[derive(Clone, Builder)]
 pub struct InstrumentsParam {
     inst_type: String,
     series_id: Option<String>,

@@ -1,8 +1,11 @@
 use crate::duck_db::DuckDBPO;
+use crate::errors::YuError;
 use bon::Builder;
-use duckdb::appender_params_from_iter;
+use duckdb::{Rows, appender_params_from_iter};
+use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use yue::okx::models::common::CandleResponse;
+use yue::okx::models::common::InstrumentInfo;
 use yue::tools::get_snow_flake_id_u64;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Builder)]
@@ -79,6 +82,50 @@ pub struct InstrumentPo {
     pub inst_category: Option<String>,
 }
 
+impl InstrumentPo {
+    pub fn from_db_to_vec(mut rows: Rows) -> Result<Vec<InstrumentPo>, YuError> {
+        let mut res = Vec::<InstrumentPo>::new();
+        while let Some(row) = rows.next()? {
+            let inst_id: String = row.get::<usize, String>(0)?;
+            let inst_type_v: String = row.get::<usize, String>(1)?;
+            let inst_family: Option<String> = row.get::<usize, Option<String>>(2)?;
+            let base_ccy: String = row.get::<usize, String>(3)?;
+            let quote_ccy: Option<String> = row.get::<usize, Option<String>>(4)?;
+            let settle_ccy: Option<String> = row.get::<usize, Option<String>>(5)?;
+            let list_time: Option<String> = row.get::<usize, Option<String>>(6)?;
+            let exp_time: Option<String> = row.get::<usize, Option<String>>(7)?;
+            let tick_sz: Option<f64> = row.get::<usize, Option<f64>>(8)?;
+            let lot_sz: Option<f64> = row.get::<usize, Option<f64>>(9)?;
+            let min_sz: Option<f64> = row.get::<usize, Option<f64>>(10)?;
+            let alias: Option<String> = row.get::<usize, Option<String>>(11)?;
+            let state: Option<String> = row.get::<usize, Option<String>>(12)?;
+            let inst_id_code: Option<String> = row.get::<usize, Option<String>>(13)?;
+            let inst_category: Option<String> = row.get::<usize, Option<String>>(14)?;
+
+            let po = InstrumentPo {
+                inst_id,
+                inst_type: inst_type_v,
+                inst_family,
+                base_ccy,
+                quote_ccy,
+                settle_ccy,
+                list_time,
+                exp_time,
+                tick_sz,
+                lot_sz,
+                min_sz,
+                alias,
+                state,
+                inst_id_code,
+                inst_category,
+            };
+
+            res.push(po);
+        }
+        Ok(res)
+    }
+}
+
 impl DuckDBPO for InstrumentPo {
     fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>> {
         appender_params_from_iter(vec![
@@ -98,5 +145,27 @@ impl DuckDBPO for InstrumentPo {
             &self.inst_id_code as &dyn duckdb::ToSql,
             &self.inst_category as &dyn duckdb::ToSql,
         ])
+    }
+}
+
+impl From<InstrumentInfo> for InstrumentPo {
+    fn from(info: InstrumentInfo) -> Self {
+        InstrumentPo {
+            inst_id: info.inst_id,
+            inst_type: info.inst_type,
+            inst_family: info.inst_family,
+            base_ccy: info.base_ccy,
+            quote_ccy: info.quote_ccy,
+            settle_ccy: info.settle_ccy,
+            list_time: info.list_time,
+            exp_time: info.exp_time.map(|t| t.to_string()),
+            tick_sz: info.tick_sz.and_then(|d| d.to_f64()),
+            lot_sz: info.lot_sz.and_then(|d| d.to_f64()),
+            min_sz: info.min_sz.and_then(|d| d.to_f64()),
+            alias: info.alias,
+            state: info.state,
+            inst_id_code: info.inst_id_code.map(|i| i.to_string()),
+            inst_category: info.inst_category,
+        }
     }
 }
