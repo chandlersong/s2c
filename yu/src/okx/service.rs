@@ -2,22 +2,96 @@ use crate::errors::YuError;
 use crate::okx::duck_po::{InstrumentPo, OkxKlinePo};
 use crate::okx::duckdb_repository::{OkxInstrumentRepository, OkxKlineRepository, get_instrument_repo};
 use crate::okx::okx_consts::InstrumentType;
-use log::warn;
+use log::{error, warn};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio::sync::broadcast;
 use yue::models::HistoryInterval;
-use yue::okx::restful_api::{InstrumentsParam, OKxApi, default_okx_api};
+use yue::okx::restful_api::{HistoryParams, InstrumentsParam, OKxApi, default_okx_api};
 
+///
+/// # 大致流程
+///
+/// 1. 从start_ts到end_ts之间。调用query_history_candle
+/// 2. 每次有新的值，找到返回值中，最小的ts。然后更新current_end_ts
+/// 3. 满足退出条件。返回。
+///
+/// ### 查询退出条件
+/// 1. api返回的kline最小的的timestamp小于start_ts。
+/// 2. api返回的kline为空
+///
+/// # 业务条件。
+/// 1. 每一次查询的kline，都通过kline_repository的batch_insert存入数据库。
+/// 2. 有些kline可能为空
+/// 3. OkxApi返回的kline的timestamp是降序的。
+///
+///
 pub async fn fetch_history(
     inst_id: &str,
-    now: u64,
-    interval: HistoryInterval,
+    start_ts: u64,
+    end_ts: u64,
+    interval: &HistoryInterval,
     api: &OKxApi,
-    instrument_repository: &OkxInstrumentRepository,
     kline_repository: &OkxKlineRepository,
 ) -> Result<Vec<OkxKlinePo>, YuError> {
-    todo!()
+    let mut all_records: Vec<OkxKlinePo> = Vec::new();
+
+    let mut current_end_ts = end_ts;
+    let inst_id_up = inst_id.to_uppercase();
+
+    loop {
+        // build params: omit `before` for the very first call (no pagination cursor)
+        let request_param = HistoryParams::builder()
+            .inst_id(inst_id.to_string())
+            .after(current_end_ts.to_string())
+            .before(start_ts.to_string())
+            .bar(interval.as_ref().to_uppercase())
+            .limit(300.to_string())
+            .build();
+
+        let candles = match api.query_history_candle(request_param).await {
+            Ok(candle) => candle,
+            Err(e) => {
+                error!("Error fetching candles: {}", e);
+                // on API error, retry by continuing loop
+                continue;
+            }
+        };
+
+        let mut batch = OkxKlinePo::from_kline_response(&inst_id_up, candles);
+
+        if batch.is_empty() {
+            // no more data
+            break;
+        }
+
+        // find minimal timestamp in this batch
+        let min_ts_opt = batch.iter().map(|p| p.ts).min();
+
+        // append to result
+        all_records.append(&mut batch);
+
+        if let Err(e) = kline_repository.batch_insert(batch).await {
+            error!("Error inserting batch into database: {}", e);
+            // on DB error, retry by continuing loop
+            continue;
+        }
+
+        if let Some(min_ts) = min_ts_opt {
+            if min_ts <= start_ts {
+                break;
+            } else if min_ts > 0 {
+                // set current_end_ts to one less than min_ts to paginate
+                current_end_ts = min_ts - 1;
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+
+    Ok(all_records)
 }
 
 ///
@@ -57,7 +131,7 @@ pub async fn fetch_and_upsert_instruments(
                         warn!("Failed to insert instrument: {:?}", e);
                     }
                 } else {
-                    let mut po = Option::None;
+                    let mut po = None;
                     let db_state = existing.get(&id).unwrap().state.clone();
                     if db_state == None {
                         po = Some(InstrumentPo::from(info));
@@ -172,7 +246,7 @@ mod tests {
     use crate::test_utils::create_memory_db_provider;
     use std::sync::Arc;
     use yue::models::HistoryInterval;
-    use yue::okx::models::common::{InstrumentInfo, OkxListResponse};
+    use yue::okx::models::common::{CandleResponse, InstrumentInfo, OkxListResponse};
     use yue::okx::restful_api::{InstrumentsParam, MockOKXApiTrait, OKxApi};
 
     ///
@@ -293,35 +367,80 @@ mod tests {
 
     ///
     /// 测试数据库，完全没有的数据情况下，存入数据库。
-    ///
-    ///
+    /// inst_id为BTC-1为例子。
+    /// 1. 数据库返回的max timestamp为None，表示没有数据。
+    /// 2. 从数据库中的查询inst。获取live_time
+    /// 3. 从live_time往前面查。
     ///
     ///
     #[tokio::test]
     pub async fn test_fetch_history_new() -> Result<(), YuError> {
         let interval = HistoryInterval::OneHour;
-        let live_time = 100000;
-        let now = live_time + 3 * interval.to_milliseconds();
-        let mut mock_inst_repo = MockOkxInstrumentRepositoryTrait::new();
-        let inst = InstrumentPo::builder()
-            .inst_id("BTC-1".to_string())
-            .inst_type("OPTION".to_string())
-            .base_ccy("BTC".to_string())
-            .state("live".to_string())
-            .list_time(live_time.to_string())
-            .build();
-        mock_inst_repo.expect_get_instrument_by_type().return_once(move |_| Ok(vec![inst]));
-
+        let start = interval.to_milliseconds();
+        let end = start + 3 * interval.to_milliseconds() + 1;
         let mut mock_kline_repo = MockOkxKlineRepositoryTrait::new();
         mock_kline_repo.expect_instrument_max_timestamp().return_once(|_| Ok(None));
+        mock_kline_repo.expect_batch_insert().times(2).returning(|_| Ok(()));
 
         let mut mock_api = MockOKXApiTrait::new();
+        let response_1: CandleResponse = OkxListResponse {
+            code: "0".to_string(),
+            msg: "".to_string(),
+            data: vec![
+                vec![
+                    (start + interval.to_milliseconds() * 2).to_string(),
+                    "3.721".to_string(),
+                    "3.743".to_string(),
+                    "3.677".to_string(),
+                    "3.708".to_string(),
+                    "8422410".to_string(),
+                    "22698348.04828491".to_string(),
+                    "12698348.04828491".to_string(),
+                    "1".to_string(),
+                ],
+                vec![
+                    (start + interval.to_milliseconds()).to_string(),
+                    "3.731".to_string(),
+                    "3.799".to_string(),
+                    "3.494".to_string(),
+                    "3.72".to_string(),
+                    "24912403".to_string(),
+                    "67632347.24399722".to_string(),
+                    "37632347.24399722".to_string(),
+                    "1".to_string(),
+                ],
+            ],
+        };
+        let response_2: CandleResponse = OkxListResponse {
+            code: "0".to_string(),
+            msg: "".to_string(),
+            data: vec![vec![
+                start.to_string(),
+                "3.731".to_string(),
+                "3.799".to_string(),
+                "3.494".to_string(),
+                "3.72".to_string(),
+                "24912403".to_string(),
+                "67632347.24399722".to_string(),
+                "37632347.24399722".to_string(),
+                "1".to_string(),
+            ]],
+        };
+        let during_ms = interval.to_milliseconds();
+        mock_api
+            .expect_query_history_candle()
+            .withf(move |param| param.after == Some(end.to_string()))
+            .return_once(move |_| Ok(response_1));
+        mock_api
+            .expect_query_history_candle()
+            .withf(move |param| param.after == Some((start + during_ms - 1).to_string()))
+            .return_once(move |_| Ok(response_2));
 
         let api: OKxApi = Arc::new(mock_api);
-        let inst_repo: OkxInstrumentRepository = Arc::new(mock_inst_repo);
         let kline_repo: OkxKlineRepository = Arc::new(mock_kline_repo);
 
-        let res = fetch_history("btc-usd", now, interval, &api, &inst_repo, &kline_repo).await?;
+        let res = fetch_history("btc-usd", start, end, &interval, &api, &kline_repo).await?;
+        assert_eq!(res.len(), 3);
 
         Ok(())
     }

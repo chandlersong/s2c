@@ -16,5 +16,6 @@ content-type: application/json
 ### 获取某个option的K线
 GET {{host}}/api/v5/market/history-candles
     ?instId=BTC-USD-270625-140000-C
-    &bar=1H HTTP/1.1
+    &bar=1H
+    &before=1783638000000 HTTP/1.1
 content-type: application/json

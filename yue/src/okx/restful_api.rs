@@ -30,14 +30,14 @@ impl OKXApiTrait for OKXApiImpl {
         execute_public_json_request::<CandleResponse>(&HISTORY_CANDLES_COMMAND, params.to_request_builder(&HISTORY_CANDLES_COMMAND)).await
     }
 }
-
+#[derive(Clone, Builder)]
 pub struct HistoryParams {
-    inst_id: String,
-    bar: Option<String>,
-    after: Option<String>,
-    before: Option<String>,
-    limit: Option<String>,
-    adjust: Option<String>,
+    pub inst_id: String,
+    pub bar: Option<String>,
+    pub after: Option<String>,
+    pub before: Option<String>,
+    pub limit: Option<String>,
+    pub adjust: Option<String>,
 }
 
 impl HistoryParams {
