@@ -19,6 +19,12 @@ use yue::okx::restful_api::{HistoryParams, InstrumentsParam, OKxApi, default_okx
 /// ### 查询退出条件
 /// 1. api返回的kline最小的的timestamp小于start_ts。
 /// 2. api返回的kline为空
+/// 3. 返回的条数，小于limit_num
+///
+/// ### 过滤条件
+/// 满足以下条件，被删除出返回值。
+/// 1. 返回的数据的ts。不在start_ts和end_ts
+/// 2. 返回confirm为0
 ///
 /// # 业务条件。
 /// 1. 每一次查询的kline，都通过kline_repository的batch_insert存入数据库。
@@ -33,12 +39,13 @@ pub async fn fetch_history(
     interval: &HistoryInterval,
     api: &OKxApi,
     kline_repository: &OkxKlineRepository,
+    limit_num: Option<u64>,
 ) -> Result<Vec<OkxKlinePo>, YuError> {
     let mut all_records: Vec<OkxKlinePo> = Vec::new();
 
     let mut current_end_ts = end_ts;
     let inst_id_up = inst_id.to_uppercase();
-
+    let limit = limit_num.unwrap_or(300).to_string();
     loop {
         // build params: omit `before` for the very first call (no pagination cursor)
         let request_param = HistoryParams::builder()
@@ -46,7 +53,7 @@ pub async fn fetch_history(
             .after(current_end_ts.to_string())
             .before(start_ts.to_string())
             .bar(interval.as_ref().to_uppercase())
-            .limit(300.to_string())
+            .limit(limit.clone())
             .build();
 
         let candles = match api.query_history_candle(request_param).await {
@@ -439,7 +446,7 @@ mod tests {
         let api: OKxApi = Arc::new(mock_api);
         let kline_repo: OkxKlineRepository = Arc::new(mock_kline_repo);
 
-        let res = fetch_history("btc-usd", start, end, &interval, &api, &kline_repo).await?;
+        let res = fetch_history("btc-usd", start, end, &interval, &api, &kline_repo, None).await?;
         assert_eq!(res.len(), 3);
 
         Ok(())

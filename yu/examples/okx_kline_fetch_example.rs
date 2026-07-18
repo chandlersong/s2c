@@ -44,7 +44,7 @@ async fn main() -> Result<(), YuError> {
     );
     let mut fist_kline_timestamp = interval.get_now_close_unix_ms_utc() + interval.to_milliseconds();
     let interval_ms = interval.to_milliseconds();
-    let klines = fetch_history(inst_id, start, end, &interval, &okx_api, &kline_repo).await?;
+    let klines = fetch_history(inst_id, start, end, &interval, &okx_api, &kline_repo, None).await?;
     info!("find {} klines", klines.len());
 
     for kline in klines {
