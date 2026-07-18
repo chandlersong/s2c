@@ -26,6 +26,8 @@ pub enum YuError {
     TonicTStatusError(#[from] tonic::Status),
     #[error("Custom error: {0}")]
     CustomError(String),
+    #[error("{0},exceed max error: {1}")]
+    MaxErrorReached(String, usize),
 }
 
 impl YuError {

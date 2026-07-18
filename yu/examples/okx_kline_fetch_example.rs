@@ -1,4 +1,3 @@
-use futures::future::err;
 use li::tools::logs::setup_logger;
 use li::tools::time::unix_2_readable;
 use log::{LevelFilter, error, info};
@@ -30,7 +29,7 @@ async fn main() -> Result<(), YuError> {
     setup_logger(Some(LevelFilter::Warn), special_log)?;
     initial_okx_tables(None)?;
     //到时候自己找一个
-    let inst_id = "BTC-USD-260717-63000-C";
+    let inst_id = "BTC-USD-260720-64250-C";
     let interval = HistoryInterval::OneHour;
     let end = interval.get_now_close_unix_ms_utc() + 1;
     let start = interval.get_now_close_unix_ms_utc() - 150 * interval.to_milliseconds();
@@ -44,16 +43,23 @@ async fn main() -> Result<(), YuError> {
     );
     let mut fist_kline_timestamp = interval.get_now_close_unix_ms_utc() + interval.to_milliseconds();
     let interval_ms = interval.to_milliseconds();
-    let klines = fetch_history(inst_id, start, end, &interval, &okx_api, &kline_repo, None).await?;
+    let klines = fetch_history(inst_id, start, end, &interval, &okx_api, &kline_repo, None, Some(5)).await?;
     info!("find {} klines", klines.len());
-
-    for kline in klines {
+    for kline in &klines {
         let real_gap = fist_kline_timestamp - kline.ts;
         fist_kline_timestamp = kline.ts;
         if real_gap != interval_ms {
             error!("{} gap is not correct", unix_2_readable(&kline.ts))
         }
     }
+    let first_candle = klines.first().unwrap();
+    let last_candle = klines.last().unwrap();
+
+    info!(
+        "candle begin is from {} to {}",
+        unix_2_readable(&first_candle.ts),
+        unix_2_readable(&last_candle.ts)
+    );
 
     Ok(())
 }

@@ -2,9 +2,11 @@ use crate::errors::YuError;
 use crate::okx::duck_po::{InstrumentPo, OkxKlinePo};
 use crate::okx::duckdb_repository::{OkxInstrumentRepository, OkxKlineRepository, get_instrument_repo};
 use crate::okx::okx_consts::InstrumentType;
+use governor::Jitter;
 use log::{error, warn};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 use tokio::sync::broadcast;
 use yue::models::HistoryInterval;
 use yue::okx::restful_api::{HistoryParams, InstrumentsParam, OKxApi, default_okx_api};
@@ -32,6 +34,7 @@ use yue::okx::restful_api::{HistoryParams, InstrumentsParam, OKxApi, default_okx
 /// 3. OkxApi返回的kline的timestamp是降序的。
 ///
 ///
+///
 pub async fn fetch_history(
     inst_id: &str,
     start_ts: u64,
@@ -40,12 +43,15 @@ pub async fn fetch_history(
     api: &OKxApi,
     kline_repository: &OkxKlineRepository,
     limit_num: Option<u64>,
+    max_error_num: Option<usize>,
 ) -> Result<Vec<OkxKlinePo>, YuError> {
     let mut all_records: Vec<OkxKlinePo> = Vec::new();
 
+    let mut error_count: usize = 0;
     let mut current_end_ts = end_ts;
     let inst_id_up = inst_id.to_uppercase();
     let limit = limit_num.unwrap_or(300).to_string();
+    let jitter = Jitter::up_to(Duration::from_millis(2000));
     loop {
         // build params: omit `before` for the very first call (no pagination cursor)
         let request_param = HistoryParams::builder()
@@ -60,29 +66,42 @@ pub async fn fetch_history(
             Ok(candle) => candle,
             Err(e) => {
                 error!("Error fetching candles: {}", e);
-                // on API error, retry by continuing loop
+                tokio::time::sleep(jitter + Duration::from_secs(10)).await; // backoff before retrying
+                error_count = error_count.saturating_add(1);
+                if max_error_num.map_or(false, |max| error_count > max) {
+                    return Err(YuError::MaxErrorReached("fetch okx kline net error".to_string(), error_count));
+                }
                 continue;
             }
         };
 
         let mut batch = OkxKlinePo::from_kline_response(&inst_id_up, candles);
 
+        // filter out records outside [start_ts, end_ts] or confirm == 0
+        batch.retain(|p| p.ts >= start_ts && p.ts <= end_ts && p.confirm != 0);
+
         if batch.is_empty() {
-            // no more data
+            // no relevant data
             break;
         }
 
         // find minimal timestamp in this batch
         let min_ts_opt = batch.iter().map(|p| p.ts).min();
 
-        // append to result
-        all_records.append(&mut batch);
-
-        if let Err(e) = kline_repository.batch_insert(batch).await {
+        // insert into db (clone since we'll append afterwards)
+        let insert_batch = batch.clone();
+        if let Err(e) = kline_repository.batch_insert(insert_batch).await {
             error!("Error inserting batch into database: {}", e);
-            // on DB error, retry by continuing loop
+            tokio::time::sleep(jitter + Duration::ZERO).await; // wait a bit before retrying
+            error_count = error_count.saturating_add(1);
+            if max_error_num.map_or(false, |max| error_count > max) {
+                return Err(YuError::MaxErrorReached("fetch okx kline net error".to_string(), error_count));
+            }
             continue;
         }
+
+        // append to result
+        all_records.append(&mut batch);
 
         if let Some(min_ts) = min_ts_opt {
             if min_ts <= start_ts {
@@ -375,10 +394,7 @@ mod tests {
     ///
     /// 测试数据库，完全没有的数据情况下，存入数据库。
     /// inst_id为BTC-1为例子。
-    /// 1. 数据库返回的max timestamp为None，表示没有数据。
-    /// 2. 从数据库中的查询inst。获取live_time
-    /// 3. 从live_time往前面查。
-    ///
+    /// 1. 所有的数据，满足正常要求。没有被过滤
     ///
     #[tokio::test]
     pub async fn test_fetch_history_new() -> Result<(), YuError> {
@@ -446,8 +462,86 @@ mod tests {
         let api: OKxApi = Arc::new(mock_api);
         let kline_repo: OkxKlineRepository = Arc::new(mock_kline_repo);
 
-        let res = fetch_history("btc-usd", start, end, &interval, &api, &kline_repo, None).await?;
+        let res = fetch_history("btc-usd", start, end, &interval, &api, &kline_repo, Some(2), None).await?;
         assert_eq!(res.len(), 3);
+
+        Ok(())
+    }
+
+    ///
+    /// 有一条数据为没有完成，就是confirm为0
+    ///
+    /// 应该过滤
+    ///
+    ///
+    #[tokio::test]
+    pub async fn test_fetch_history_with_incomplete_kline() -> Result<(), YuError> {
+        let interval = HistoryInterval::OneHour;
+        let start = interval.to_milliseconds();
+        let end = start + 3 * interval.to_milliseconds() + 1;
+        let mut mock_kline_repo = MockOkxKlineRepositoryTrait::new();
+        mock_kline_repo.expect_instrument_max_timestamp().return_once(|_| Ok(None));
+        mock_kline_repo.expect_batch_insert().times(2).returning(|_| Ok(()));
+
+        let mut mock_api = MockOKXApiTrait::new();
+        let response_1: CandleResponse = OkxListResponse {
+            code: "0".to_string(),
+            msg: "".to_string(),
+            data: vec![
+                vec![
+                    (start + interval.to_milliseconds() * 2).to_string(),
+                    "3.721".to_string(),
+                    "3.743".to_string(),
+                    "3.677".to_string(),
+                    "3.708".to_string(),
+                    "8422410".to_string(),
+                    "22698348.04828491".to_string(),
+                    "12698348.04828491".to_string(),
+                    "0".to_string(),
+                ],
+                vec![
+                    (start + interval.to_milliseconds()).to_string(),
+                    "3.731".to_string(),
+                    "3.799".to_string(),
+                    "3.494".to_string(),
+                    "3.72".to_string(),
+                    "24912403".to_string(),
+                    "67632347.24399722".to_string(),
+                    "37632347.24399722".to_string(),
+                    "1".to_string(),
+                ],
+            ],
+        };
+        let response_2: CandleResponse = OkxListResponse {
+            code: "0".to_string(),
+            msg: "".to_string(),
+            data: vec![vec![
+                start.to_string(),
+                "3.731".to_string(),
+                "3.799".to_string(),
+                "3.494".to_string(),
+                "3.72".to_string(),
+                "24912403".to_string(),
+                "67632347.24399722".to_string(),
+                "37632347.24399722".to_string(),
+                "1".to_string(),
+            ]],
+        };
+        let during_ms = interval.to_milliseconds();
+        mock_api
+            .expect_query_history_candle()
+            .withf(move |param| param.after == Some(end.to_string()))
+            .return_once(move |_| Ok(response_1));
+        mock_api
+            .expect_query_history_candle()
+            .withf(move |param| param.after == Some((start + during_ms - 1).to_string()))
+            .return_once(move |_| Ok(response_2));
+
+        let api: OKxApi = Arc::new(mock_api);
+        let kline_repo: OkxKlineRepository = Arc::new(mock_kline_repo);
+
+        let res = fetch_history("btc-usd", start, end, &interval, &api, &kline_repo, Some(2), None).await?;
+        assert_eq!(res.len(), 2);
 
         Ok(())
     }
