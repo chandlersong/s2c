@@ -545,4 +545,38 @@ mod tests {
 
         Ok(())
     }
+
+    ///
+    /// 因为太慢了。所以手工跑吧。
+    ///
+    #[ignore]
+    #[tokio::test]
+    pub async fn test_fetch_history_max_error_reached() {
+        let interval = HistoryInterval::OneHour;
+        let start = interval.to_milliseconds();
+        let end = start + interval.to_milliseconds();
+
+        let mut mock_kline_repo = MockOkxKlineRepositoryTrait::new();
+        mock_kline_repo.expect_instrument_max_timestamp().return_once(|_| Ok(None));
+
+        let mut mock_api = MockOKXApiTrait::new();
+        // Simulate repeated network errors: fetch_history should return MaxErrorReached after exceeding max_error_num
+        mock_api
+            .expect_query_history_candle()
+            .times(3)
+            .returning(|_| Err(yue::errors::YueError::new("network error")));
+
+        let api: OKxApi = Arc::new(mock_api);
+        let kline_repo: OkxKlineRepository = Arc::new(mock_kline_repo);
+
+        let res = fetch_history("btc-usd", start, end, &interval, &api, &kline_repo, Some(2), Some(2)).await;
+        match res {
+            Err(YuError::MaxErrorReached(msg, cnt)) => {
+                assert!(msg.contains("fetch okx kline net error"));
+                // first two errors are retried, third should trigger MaxErrorReached -> cnt == 3
+                assert_eq!(cnt, 3);
+            }
+            other => panic!("unexpected result: {:?}", other),
+        }
+    }
 }
