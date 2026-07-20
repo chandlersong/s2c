@@ -49,7 +49,7 @@ mockall = { workspace = true }
 mockall_double = { workspace = true }
 
 [features]
-mockable = ["mockall"]
+mockable = []
 
 [build-dependencies]
 tonic-prost-build = { workspace = true }
