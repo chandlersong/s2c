@@ -1,10 +1,9 @@
 use crate::errors::YuError;
 use crate::okx::duck_po::{InstrumentPo, OkxKlinePo};
-use crate::okx::duckdb_repository::{OkxInstrumentRepository, OkxKlineRepository, get_instrument_repo};
+use crate::okx::duckdb_repository::{OkxInstrumentRepository, OkxKlineRepository, get_default_kline_repo, get_instrument_repo};
 use crate::okx::okx_consts::InstrumentType;
 use governor::Jitter;
 use log::{error, warn};
-use mockall::automock;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -16,9 +15,60 @@ use yue::okx::restful_api::{HistoryParams, InstrumentsParam, OKxApi, default_okx
 /// 因为按照OKX的数据结构。所有的交易标的都是instrument的结构。
 /// 然后历史等信息，基本一致。所以把这类方法抽象到这里，方便日后的重写。
 ///
-struct CommonIOService {}
-#[automock]
-impl CommonIOService {}
+/// 而这个方法的主要目的，还是为了测试.方便mock，而方法又不能mock。所以用了这种方法。
+/// 而套一层，存粹是因为没办法做其他的。
+///
+struct CommonIOService {
+    instrument_repo: OkxInstrumentRepository,
+    kline_repo: OkxKlineRepository,
+    okx_api: OKxApi,
+}
+
+impl Default for CommonIOService {
+    fn default() -> Self {
+        Self {
+            instrument_repo: get_instrument_repo(None),
+            kline_repo: get_default_kline_repo(None),
+            okx_api: default_okx_api(),
+        }
+    }
+}
+
+#[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
+impl CommonIOService {
+    pub fn new(instrument_repo: OkxInstrumentRepository, kline_repo: OkxKlineRepository, okx_api: OKxApi) -> Self {
+        Self {
+            instrument_repo,
+            kline_repo,
+            okx_api,
+        }
+    }
+    pub async fn fetch_history(
+        &self,
+        inst_id: &str,
+        start_ts: u64,
+        end_ts: u64,
+        interval: &HistoryInterval,
+        limit_num: Option<u64>,
+        max_error_num: Option<usize>,
+    ) -> Result<Vec<OkxKlinePo>, YuError> {
+        fetch_history(
+            inst_id,
+            start_ts,
+            end_ts,
+            interval,
+            &self.okx_api,
+            &self.kline_repo,
+            limit_num,
+            max_error_num,
+        )
+        .await
+    }
+
+    pub async fn fetch_and_update_instruments(&self, param: InstrumentsParam, inst_type: InstrumentType) -> Result<(), YuError> {
+        fetch_and_update_instruments(param, inst_type, &self.instrument_repo, &self.okx_api).await
+    }
+}
 ///
 /// # 大致流程
 ///
@@ -141,11 +191,11 @@ pub async fn fetch_history(
 ///
 ///
 // Helper: fetch instruments for given param, upsert full fields, return newly inserted instIds
-pub async fn fetch_and_upsert_instruments(
+pub async fn fetch_and_update_instruments(
     param: InstrumentsParam,
+    inst_type: InstrumentType,
     instrument_repo: &OkxInstrumentRepository,
     api: &OKxApi,
-    inst_type: InstrumentType,
 ) -> Result<(), YuError> {
     let mut existing: HashMap<String, InstrumentPo> = HashMap::new();
     let instruments = instrument_repo.get_instrument_by_type(inst_type).await?;
@@ -203,48 +253,50 @@ pub async fn fetch_and_upsert_instruments(
 ///
 ///
 pub struct OptionService {
-    pub inst_ids: Arc<RwLock<Vec<InstrumentPo>>>,
-    pub api: OKxApi,
-    pub sender: broadcast::Sender<OkxKlinePo>,
-    pub instrument_repo: OkxInstrumentRepository,
-    pub interval: HistoryInterval,
+    inst_ids: Arc<RwLock<Vec<InstrumentPo>>>,
+    common_io: CommonIOService,
+    sender: broadcast::Sender<OkxKlinePo>,
+
+    interval: HistoryInterval,
 }
 
 impl Default for OptionService {
     fn default() -> Self {
-        Self::new(None, None, None)
+        Self::new(None, None, None, None)
     }
 }
 
 impl OptionService {
-    pub fn new(instrument_repo: Option<OkxInstrumentRepository>, api: Option<OKxApi>, interval: Option<HistoryInterval>) -> Self {
+    pub fn new(
+        instrument_repo: Option<OkxInstrumentRepository>,
+        kline_repo: Option<OkxKlineRepository>,
+        api: Option<OKxApi>,
+        interval: Option<HistoryInterval>,
+    ) -> Self {
         let (sender, _) = broadcast::channel(10000);
         Self {
             inst_ids: Arc::new(RwLock::new(vec![])),
-            api: api.unwrap_or_else(|| default_okx_api()),
+            common_io: CommonIOService::new(
+                instrument_repo.unwrap_or_else(|| get_instrument_repo(None)),
+                kline_repo.unwrap_or_else(|| get_default_kline_repo(None)),
+                api.unwrap_or_else(|| default_okx_api()),
+            ),
             sender,
-            instrument_repo: instrument_repo.unwrap_or_else(|| get_instrument_repo(None)),
             interval: interval.unwrap_or(HistoryInterval::OneHour),
         }
     }
 
     pub async fn refresh_inst_ids(&self) {
         // call for BTC and ETH
-        let _ = fetch_and_upsert_instruments(
-            InstrumentsParam::query_option("BTC-USD"),
-            &self.instrument_repo,
-            &self.api,
-            InstrumentType::Option,
-        )
-        .await;
-        let _ = fetch_and_upsert_instruments(
-            InstrumentsParam::query_option("ETH-USD"),
-            &self.instrument_repo,
-            &self.api,
-            InstrumentType::Option,
-        )
-        .await;
-        let live_instruments = self.instrument_repo.get_instrument_by_type_live(InstrumentType::Option).await;
+        let _ = self
+            .common_io
+            .fetch_and_update_instruments(InstrumentsParam::query_option("BTC-USD"), InstrumentType::Option)
+            .await;
+        let _ = self
+            .common_io
+            .fetch_and_update_instruments(InstrumentsParam::query_option("ETH-USD"), InstrumentType::Option)
+            .await;
+        let live_instruments = self.common_io.instrument_repo.get_instrument_by_type_live(InstrumentType::Option).await;
         match live_instruments {
             Ok(instruments) => {
                 // update in-memory inst_ids
@@ -272,7 +324,7 @@ impl OptionService {
 mod tests {
     #[double]
     use super::CommonIOService;
-    use super::{fetch_and_upsert_instruments, fetch_history};
+    use super::{fetch_and_update_instruments, fetch_history};
     use crate::errors::YuError;
     use crate::okx::duck_po::InstrumentPo;
     use crate::okx::duckdb_repository::OkxInstrumentRepository;
@@ -326,7 +378,7 @@ mod tests {
 
         let inst_repo: OkxInstrumentRepository = Arc::new(mock_inst_repo);
         let api: OKxApi = Arc::new(mock_api);
-        fetch_and_upsert_instruments(param, &inst_repo, &api, InstrumentType::Option)
+        fetch_and_update_instruments(param, InstrumentType::Option, &inst_repo, &api)
             .await
             .expect("TODO: panic message");
     }
@@ -397,7 +449,7 @@ mod tests {
         let inst_repo: OkxInstrumentRepository = Arc::new(mock_inst_repo);
         let api: OKxApi = Arc::new(mock_api);
 
-        fetch_and_upsert_instruments(param, &inst_repo, &api, InstrumentType::Option)
+        fetch_and_update_instruments(param, InstrumentType::Option, &inst_repo, &api)
             .await
             .expect("fetch failed");
     }

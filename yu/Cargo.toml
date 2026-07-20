@@ -25,7 +25,7 @@ r2d2 = "0.8.10"
 
 
 # optional mockall dependency for generating mocks when feature "mockable" is enabled
-mockall = { workspace = true}
+mockall = { workspace = true, optional = true }
 
 serde = { version = "1.0.225", features = ["derive"] }
 serde_json = "1.0"
@@ -49,7 +49,7 @@ mockall = { workspace = true }
 mockall_double = { workspace = true }
 
 [features]
-mockable = []
+mockable = ['mockall']
 
 [build-dependencies]
 tonic-prost-build = { workspace = true }
