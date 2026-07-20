@@ -43,6 +43,19 @@ impl CommonIOService {
             okx_api,
         }
     }
+
+    pub fn get_kline_repo(&self) -> OkxKlineRepository {
+        self.kline_repo.clone()
+    }
+
+    pub fn get_instrument_repo(&self) -> OkxInstrumentRepository {
+        self.instrument_repo.clone()
+    }
+
+    pub fn get_okx_api(&self) -> OKxApi {
+        self.okx_api.clone()
+    }
+
     pub async fn fetch_history(
         &self,
         inst_id: &str,
@@ -296,7 +309,11 @@ impl OptionService {
             .common_io
             .fetch_and_update_instruments(InstrumentsParam::query_option("ETH-USD"), InstrumentType::Option)
             .await;
-        let live_instruments = self.common_io.instrument_repo.get_instrument_by_type_live(InstrumentType::Option).await;
+        let live_instruments = self
+            .common_io
+            .get_instrument_repo()
+            .get_instrument_by_type_live(InstrumentType::Option)
+            .await;
         match live_instruments {
             Ok(instruments) => {
                 // update in-memory inst_ids
