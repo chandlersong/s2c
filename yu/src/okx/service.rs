@@ -4,6 +4,7 @@ use crate::okx::duckdb_repository::{OkxInstrumentRepository, OkxKlineRepository,
 use crate::okx::okx_consts::InstrumentType;
 use governor::Jitter;
 use log::{error, warn};
+use mockall::automock;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -11,6 +12,13 @@ use tokio::sync::broadcast;
 use yue::models::HistoryInterval;
 use yue::okx::restful_api::{HistoryParams, InstrumentsParam, OKxApi, default_okx_api};
 
+///
+/// 因为按照OKX的数据结构。所有的交易标的都是instrument的结构。
+/// 然后历史等信息，基本一致。所以把这类方法抽象到这里，方便日后的重写。
+///
+struct CommonIOService {}
+#[automock]
+impl CommonIOService {}
 ///
 /// # 大致流程
 ///
@@ -262,6 +270,8 @@ impl OptionService {
 
 #[cfg(test)]
 mod tests {
+    #[double]
+    use super::CommonIOService;
     use super::{fetch_and_upsert_instruments, fetch_history};
     use crate::errors::YuError;
     use crate::okx::duck_po::InstrumentPo;
@@ -270,6 +280,7 @@ mod tests {
     use crate::okx::duckdb_tables::initial_okx_tables;
     use crate::okx::okx_consts::InstrumentType;
     use crate::test_utils::create_memory_db_provider;
+    use mockall_double::double;
     use std::sync::Arc;
     use yue::models::HistoryInterval;
     use yue::okx::models::common::{CandleResponse, InstrumentInfo, OkxListResponse};
