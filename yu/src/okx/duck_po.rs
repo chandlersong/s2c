@@ -71,8 +71,8 @@ pub struct InstrumentPo {
     pub base_ccy: String,
     pub quote_ccy: Option<String>,
     pub settle_ccy: Option<String>,
-    pub list_time: Option<String>,
-    pub exp_time: Option<String>,
+    pub list_time: Option<u64>,
+    pub exp_time: Option<u64>,
     pub tick_sz: Option<f64>,
     pub lot_sz: Option<f64>,
     pub min_sz: Option<f64>,
@@ -125,7 +125,7 @@ impl From<InstrumentInfo> for InstrumentPo {
             quote_ccy: info.quote_ccy,
             settle_ccy: info.settle_ccy,
             list_time: info.list_time,
-            exp_time: info.exp_time.map(|t| t.to_string()),
+            exp_time: info.exp_time,
             tick_sz: info.tick_sz.and_then(|d| d.to_f64()),
             lot_sz: info.lot_sz.and_then(|d| d.to_f64()),
             min_sz: info.min_sz.and_then(|d| d.to_f64()),
@@ -147,8 +147,8 @@ impl<'a> TryFrom<&'a Row<'a>> for InstrumentPo {
         let base_ccy: String = row.get(3)?;
         let quote_ccy: Option<String> = row.get(4)?;
         let settle_ccy: Option<String> = row.get(5)?;
-        let list_time: Option<String> = row.get(6)?;
-        let exp_time: Option<String> = row.get(7)?;
+        let list_time: Option<u64> = row.get(6)?;
+        let exp_time: Option<u64> = row.get(7)?;
         let tick_sz: Option<f64> = row.get(8)?;
         let lot_sz: Option<f64> = row.get(9)?;
         let min_sz: Option<f64> = row.get(10)?;

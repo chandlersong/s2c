@@ -332,6 +332,15 @@ impl OptionService {
         }
     }
 
+    ///
+    /// 初始化所有的candle。首先获取所有的instrument，然后获取每个instrument的candle。然后存入数据库。
+    ///
+    /// # candle的时间判断。
+    /// - 开始时间：按照下面的优先级，来获取开始渐渐。
+    ///   - 从okx_kline里面inst_id中最大的timestamp。
+    ///   - OKX_INSTRUMENTS中的listTime
+    /// - 结束时间：
+    ///
     pub fn initial_candle(&self) {
         todo!()
     }
@@ -658,5 +667,29 @@ mod tests {
             }
             other => panic!("unexpected result: {:?}", other),
         }
+    }
+    fn create_mock_common_io(
+        mock_instrument_repo: MockOkxInstrumentRepositoryTrait,
+        mock_kline_repo: MockOkxKlineRepositoryTrait,
+        mock_api: MockOKXApiTrait,
+    ) -> CommonIOService {
+        let mut common_io = CommonIOService::default();
+        let arc_mock_inst_repo: OkxInstrumentRepository = Arc::new(mock_instrument_repo);
+        let arc_mock_kline_repo: OkxKlineRepository = Arc::new(mock_kline_repo);
+        let arc_mock_api: OKxApi = Arc::new(mock_api);
+        common_io.expect_get_instrument_repo().return_const(arc_mock_inst_repo);
+        common_io.expect_get_kline_repo().return_const(arc_mock_kline_repo);
+        common_io.expect_get_okx_api().return_const(arc_mock_api);
+        common_io
+    }
+
+    #[tokio::test]
+    pub async fn test_option_service_initial_kline() {
+        let mut mock_instrument_repo = MockOkxInstrumentRepositoryTrait::new();
+        let mut mock_kline_repo = MockOkxKlineRepositoryTrait::new();
+
+        let mut mock_api = MockOKXApiTrait::new();
+
+        let mut common_io = create_mock_common_io(mock_instrument_repo, mock_kline_repo, mock_api);
     }
 }

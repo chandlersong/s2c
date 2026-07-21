@@ -147,9 +147,9 @@ pub struct InstrumentInfo {
     /// 杠杆，字符串形式（保留字符串，解析策略另行决定）
     pub lever: Option<String>,
 
-    #[serde(rename = "listTime")]
+    #[serde(rename = "listTime", with = "crate::tools::string_to_option_u64")]
     /// 上线时间（字符串时间戳）
-    pub list_time: Option<String>,
+    pub list_time: Option<u64>,
 
     #[serde(rename = "lotSz", with = "crate::tools::string_to_option_decimal")]
     /// 最小交易量，解析为 Decimal

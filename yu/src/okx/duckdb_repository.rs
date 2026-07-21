@@ -93,6 +93,8 @@ impl OkxInstrumentRepositoryTrait for OkxInstrumentRepositoryImpl {
             None => "NULL".to_string(),
         };
 
+        let list_time = instrument.list_time.map(|v| format!("'{}'", v)).unwrap_or_else(|| "NULL".to_string());
+        let exp_time = instrument.exp_time.map(|v| format!("'{}'", v)).unwrap_or_else(|| "NULL".to_string());
         let tick_sz = instrument.tick_sz.map(|f| f.to_string()).unwrap_or_else(|| "NULL".to_string());
         let lot_sz = instrument.lot_sz.map(|f| f.to_string()).unwrap_or_else(|| "NULL".to_string());
         let min_sz = instrument.min_sz.map(|f| f.to_string()).unwrap_or_else(|| "NULL".to_string());
@@ -105,8 +107,8 @@ impl OkxInstrumentRepositoryTrait for OkxInstrumentRepositoryImpl {
             esc(&instrument.base_ccy),
             q_str(&instrument.quote_ccy),
             q_str(&instrument.settle_ccy),
-            q_str(&instrument.list_time),
-            q_str(&instrument.exp_time),
+            list_time,
+            exp_time,
             tick_sz,
             lot_sz,
             min_sz,
@@ -128,7 +130,8 @@ impl OkxInstrumentRepositoryTrait for OkxInstrumentRepositoryImpl {
             Some(v) => format!("'{}'", esc(v)),
             None => "NULL".to_string(),
         };
-
+        let list_time = instrument.list_time.map(|v| format!("'{}'", v)).unwrap_or_else(|| "NULL".to_string());
+        let exp_time = instrument.exp_time.map(|v| format!("'{}'", v)).unwrap_or_else(|| "NULL".to_string());
         let tick_sz = instrument.tick_sz.map(|f| f.to_string()).unwrap_or_else(|| "NULL".to_string());
         let lot_sz = instrument.lot_sz.map(|f| f.to_string()).unwrap_or_else(|| "NULL".to_string());
         let min_sz = instrument.min_sz.map(|f| f.to_string()).unwrap_or_else(|| "NULL".to_string());
@@ -140,8 +143,8 @@ impl OkxInstrumentRepositoryTrait for OkxInstrumentRepositoryImpl {
             esc(&instrument.base_ccy),
             q_str(&instrument.quote_ccy),
             q_str(&instrument.settle_ccy),
-            q_str(&instrument.list_time),
-            q_str(&instrument.exp_time),
+            list_time,
+            exp_time,
             tick_sz,
             lot_sz,
             min_sz,
