@@ -1,8 +1,6 @@
 use crate::errors::YuError;
 use crate::okx::duck_po::{InstrumentPo, OkxKlinePo};
-use crate::okx::duckdb_repository::{
-    get_default_kline_repo, get_instrument_repo, OkxInstrumentRepository, OkxInstrumentRepositoryTrait, OkxKlineRepository,
-};
+use crate::okx::duckdb_repository::{OkxInstrumentRepository, OkxKlineRepository, get_default_kline_repo, get_instrument_repo};
 use crate::okx::okx_consts::InstrumentType;
 use governor::Jitter;
 use li::tools::time::UnixTimeStamp;
@@ -12,9 +10,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::sync::broadcast;
-use tokio::sync::mpsc::Sender;
 use yue::models::HistoryInterval;
-use yue::okx::restful_api::{default_okx_api, HistoryParams, InstrumentsParam, OKxApi};
+use yue::okx::restful_api::{HistoryParams, InstrumentsParam, OKxApi, default_okx_api};
 #[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
 #[async_trait::async_trait]
 pub trait CommonIOServiceTrait {
@@ -421,7 +418,7 @@ impl OptionService {
 
 #[cfg(test)]
 mod tests {
-    use super::{fetch_and_update_instruments, fetch_history, CommonIOService, MockCommonIOServiceTrait, OptionService};
+    use super::{CommonIOService, MockCommonIOServiceTrait, OptionService, fetch_and_update_instruments, fetch_history};
     use crate::errors::YuError;
     use crate::okx::duck_po::InstrumentPo;
     use crate::okx::duckdb_repository::OkxInstrumentRepository;
@@ -770,15 +767,15 @@ mod tests {
 
         let mock_api = MockOKXApiTrait::new();
         let mut mock_common_io = MockCommonIOServiceTrait::new();
-        let expected_start = start_time + 1;
+        let expected_start = start_time;
         mock_common_io
             .expect_fetch_history()
             .times(1)
-            .withf(move |inst_id, start_ts, _, _, _, _| inst_id == "BTC1" && *start_ts == expected_start)
+            .withf(move |inst_id, start_ts, _, _, _, _| inst_id == "BTC1" && start_ts == &expected_start)
             .return_once(|_, _, _, _, _, _| Ok(vec![]));
 
         let common_io: CommonIOService = link_mock_common_io_service(mock_common_io, mock_instrument_repo, mock_kline_repo, mock_api);
-        let (tx, rx) = tokio::sync::broadcast::channel(10000);
+        let (tx, _) = tokio::sync::broadcast::channel(10000);
 
         let inst_po = InstrumentPo::builder()
             .inst_id("BTC1".to_string())
@@ -789,6 +786,80 @@ mod tests {
         let option_service = OptionService::new_with_mock(Arc::new(RwLock::new(vec![inst_po])), common_io, tx, HistoryInterval::OneHour);
 
         let res = option_service.initial_candle(0).await;
+        assert!(res.is_ok());
+    }
+
+    ///
+    /// 在kline里面，有数据
+    /// 那么，应该是1，取instrument的里面的list time
+    ///
+    #[tokio::test]
+    pub async fn test_option_service_initial_kline_has_value() {
+        let mock_instrument_repo = MockOkxInstrumentRepositoryTrait::new();
+        let mut mock_kline_repo = MockOkxKlineRepositoryTrait::new();
+        mock_kline_repo
+            .expect_instrument_max_timestamp()
+            .withf(|inst_id| inst_id == "BTC1")
+            .returning(|_| Ok(Some(HistoryInterval::OneHour.to_milliseconds() * 2 + 1)));
+
+        let mock_api = MockOKXApiTrait::new();
+        let mut mock_common_io = MockCommonIOServiceTrait::new();
+        let expected_start = HistoryInterval::OneHour.to_milliseconds() * 2 + 1;
+        mock_common_io
+            .expect_fetch_history()
+            .times(1)
+            .withf(move |inst_id, start_ts, _, _, _, _| inst_id == "BTC1" && start_ts == &expected_start)
+            .return_once(|_, _, _, _, _, _| Ok(vec![]));
+
+        let common_io: CommonIOService = link_mock_common_io_service(mock_common_io, mock_instrument_repo, mock_kline_repo, mock_api);
+        let (tx, _) = tokio::sync::broadcast::channel(10000);
+
+        let inst_po = InstrumentPo::builder()
+            .inst_id("BTC1".to_string())
+            .inst_type("OPTION".to_string())
+            .base_ccy("BTC".to_string())
+            .list_time(HistoryInterval::OneHour.to_milliseconds() + 1)
+            .build();
+        let option_service = OptionService::new_with_mock(Arc::new(RwLock::new(vec![inst_po])), common_io, tx, HistoryInterval::OneHour);
+
+        let res = option_service.initial_candle(0).await;
+        assert!(res.is_ok());
+    }
+
+    ///
+    /// 在kline里面，有数据
+    /// 那么，应该是1，取instrument的里面的list time
+    ///
+    #[tokio::test]
+    pub async fn test_option_service_initial_max_timestamp() {
+        let mock_instrument_repo = MockOkxInstrumentRepositoryTrait::new();
+        let mut mock_kline_repo = MockOkxKlineRepositoryTrait::new();
+        mock_kline_repo
+            .expect_instrument_max_timestamp()
+            .withf(|inst_id| inst_id == "BTC1")
+            .returning(|_| Ok(Some(HistoryInterval::OneHour.to_milliseconds() * 2 + 1)));
+
+        let mock_api = MockOKXApiTrait::new();
+        let mut mock_common_io = MockCommonIOServiceTrait::new();
+        let expected_start = HistoryInterval::OneHour.to_milliseconds() * 3 + 1;
+        mock_common_io
+            .expect_fetch_history()
+            .times(1)
+            .withf(move |inst_id, start_ts, _, _, _, _| inst_id == "BTC1" && start_ts == &expected_start)
+            .return_once(|_, _, _, _, _, _| Ok(vec![]));
+
+        let common_io: CommonIOService = link_mock_common_io_service(mock_common_io, mock_instrument_repo, mock_kline_repo, mock_api);
+        let (tx, _) = tokio::sync::broadcast::channel(10000);
+
+        let inst_po = InstrumentPo::builder()
+            .inst_id("BTC1".to_string())
+            .inst_type("OPTION".to_string())
+            .base_ccy("BTC".to_string())
+            .list_time(HistoryInterval::OneHour.to_milliseconds() + 1)
+            .build();
+        let option_service = OptionService::new_with_mock(Arc::new(RwLock::new(vec![inst_po])), common_io, tx, HistoryInterval::OneHour);
+
+        let res = option_service.initial_candle(HistoryInterval::OneHour.to_milliseconds() * 3).await;
         assert!(res.is_ok());
     }
 }
