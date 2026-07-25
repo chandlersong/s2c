@@ -3103,6 +3103,7 @@ dependencies = [
  "futures-util",
  "humantime",
  "log",
+ "mockall",
  "rocksdb",
  "serde",
  "serde_json",
@@ -3322,20 +3323,6 @@ dependencies = [
 
 [[package]]
 name = "mockall"
-version = "0.13.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "39a6bfcc6c8c7eed5ee98b9c3e33adc726054389233e201c95dab2d41a3839d2"
-dependencies = [
- "cfg-if",
- "downcast",
- "fragile",
- "mockall_derive 0.13.1",
- "predicates",
- "predicates-tree",
-]
-
-[[package]]
-name = "mockall"
 version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1a6ceddfe3ce334925e96bf420fdb2dcee5bed6c632a168ece622676dadeaf8a"
@@ -3343,21 +3330,9 @@ dependencies = [
  "cfg-if",
  "downcast",
  "fragile",
- "mockall_derive 0.15.0",
+ "mockall_derive",
  "predicates",
  "predicates-tree",
-]
-
-[[package]]
-name = "mockall_derive"
-version = "0.13.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25ca3004c2efe9011bd4e461bd8256445052b9615405b4f7ea43fc8ca5c20898"
-dependencies = [
- "cfg-if",
- "proc-macro2",
- "quote",
- "syn 2.0.118",
 ]
 
 [[package]]
@@ -7333,7 +7308,7 @@ dependencies = [
  "governor",
  "li",
  "log",
- "mockall 0.15.0",
+ "mockall",
  "prost",
  "r2d2",
  "rmcp",
@@ -7368,7 +7343,7 @@ dependencies = [
  "hmac 0.12.1",
  "li",
  "log",
- "mockall 0.13.1",
+ "mockall",
  "moka",
  "prost",
  "prost-build",

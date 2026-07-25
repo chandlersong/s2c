@@ -72,8 +72,25 @@ impl ToServerMessage {
 pub const MESSAGE_CACHE: usize = 1000;
 const EVENT_CACHE: usize = 100;
 
+#[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
+#[async_trait]
+pub trait WebSocketInterfaceTrait<M>: Send + Sync + 'static
+where
+    M: WebSocketMessage,
+{
+    fn get_message_receiver(&self) -> Option<broadcast::Receiver<M>>;
+
+    fn get_event_broadcast(&self) -> broadcast::Receiver<WebSocketEvent>;
+
+    fn command_sender(&self) -> UnboundedSender<CommandMessage>;
+
+    fn send_command(&self, command: CommandMessage);
+}
+
+pub type WebSocketInterface<M> = dyn WebSocketInterfaceTrait<M>;
+
 #[derive(Clone)]
-pub struct WebSocketInterface<M>
+pub struct WebSocketInterfaceImpl<M>
 where
     M: WebSocketMessage,
 {
@@ -82,7 +99,7 @@ where
     command_sender: UnboundedSender<CommandMessage>,
 }
 
-impl<M> WebSocketInterface<M>
+impl<M> WebSocketInterfaceImpl<M>
 where
     M: WebSocketMessage,
 {
@@ -97,8 +114,13 @@ where
             command_sender,
         }
     }
+}
 
-    pub fn get_message_receiver(&self) -> Option<broadcast::Receiver<M>> {
+impl<M> WebSocketInterfaceTrait<M> for WebSocketInterfaceImpl<M>
+where
+    M: WebSocketMessage,
+{
+    fn get_message_receiver(&self) -> Option<broadcast::Receiver<M>> {
         if let Some(broadcast) = &self.message_broadcast {
             Some(broadcast.subscribe())
         } else {
@@ -106,15 +128,15 @@ where
         }
     }
 
-    pub fn get_event_broadcast(&self) -> broadcast::Receiver<WebSocketEvent> {
+    fn get_event_broadcast(&self) -> broadcast::Receiver<WebSocketEvent> {
         self.event_broadcast.subscribe()
     }
 
-    pub fn command_sender(&self) -> UnboundedSender<CommandMessage> {
+    fn command_sender(&self) -> UnboundedSender<CommandMessage> {
         self.command_sender.clone()
     }
 
-    pub fn send_command(&self, command: CommandMessage) {
+    fn send_command(&self, command: CommandMessage) {
         if let Err(e) = self.command_sender.send(command) {
             error!("send command error: {}", e);
         }
@@ -200,7 +222,7 @@ impl WebSocketConnection {
         let message_tx = m_handler.get_tx();
         let (event_tx, _) = broadcast::channel(EVENT_CACHE);
         let (command_tx, mut command_rx) = mpsc::unbounded_channel();
-        let res = Arc::new(WebSocketInterface::new(message_tx.clone(), event_tx.clone(), command_tx.clone()));
+        let res = Arc::new(WebSocketInterfaceImpl::new(message_tx.clone(), event_tx.clone(), command_tx.clone()));
 
         // 准备 handler：如果用户没有提供，则构造默认的 BroadcastMessageHandler
 

@@ -29,7 +29,7 @@ url = { version = "2.5.4" }
 ed25519-dalek = { version = "2", features = ["pkcs8", "pem", "std"] }  # pem feature 自动带上 pkcs8 和 alloc
 # 如果需要 base64 解码或其他辅助
 base64 = "0.22.1"
-mockall = { version = "0.13.0", optional = true }
+mockall = { workspace = true, optional = true }
 
 [dev-dependencies]
 wiremock = "0.6.5"

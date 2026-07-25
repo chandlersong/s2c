@@ -23,6 +23,11 @@ async-trait = { workspace = true }
 cron = "0.15.0"
 
 unicode-segmentation = "1.13.1"
+mockall = { workspace = true, optional = true }
+
+[dev-dependencies]
+mockall = { workspace = true}
 
 [features]
 default = []
+mockable = ["mockall"]
