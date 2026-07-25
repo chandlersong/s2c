@@ -4,6 +4,7 @@ use li::websocket::models::WebSocketMessage;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(untagged)]
 pub enum OkxWebsocketResponse {
     SubscribeResponse(SubscribeResponsePayload),
     Kline(KlinePayload),
@@ -35,13 +36,16 @@ pub struct SubscribeResponsePayload {
 
     /// 事件时间
     #[serde(rename = "event")]
-    pub event: String,
+    pub event: Option<String>,
 
     #[serde(rename = "code")]
     pub code: Option<String>,
 
+    #[serde(rename = "msg")]
+    pub msg: Option<String>,
+
     #[serde(rename = "arg")]
-    pub arg: ArgBody,
+    pub arg: Option<ArgBody>,
 
     #[serde(rename = "connId")]
     pub conn_id: Option<String>,
