@@ -61,8 +61,6 @@ async fn main() -> Result<(), YuError> {
             error!("{} gap is not correct", unix_2_readable(&kline.ts))
         }
     }
-    let first_candle = klines.first().unwrap();
-    let last_candle = klines.last().unwrap();
 
     Ok(())
 }

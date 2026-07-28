@@ -342,7 +342,6 @@ impl WebSocketConnection {
                             match msg {
                                 WsMessage::Text(text) => {
                                     let text_str = String::from_utf8_lossy(text.as_bytes()).to_string();
-                                    trace!("收到文本消息");
                                     match M::from_text(&text_str) {
                                         Ok(m) => {
                                             // 交给 message_handler 处理（可能是广播、也可能是用户自定义处理）
@@ -356,7 +355,6 @@ impl WebSocketConnection {
                                 }
                                 WsMessage::Binary(data) => {
                                     let data_vec = data.to_vec();
-                                    trace!("收到二进制消息: {} 字节", data_vec.len());
                                     match M::from_binary(data_vec) {
                                         Ok(m) => {
                                             // 交给 message_handler 处理（可能是广播、也可能是用户自定义处理）
@@ -415,7 +413,7 @@ impl WebSocketConnection {
                 }
                 // 处理要发送的 WebSocket 消息
                 Some(msg) = ws_rx.recv() => {
-                    debug!("实际发送消息,{}",msg);
+                    // debug!("实际发送消息,{}",msg);
                     if let Err(e) = write.send(msg).await {
                         error!("发送消息失败: {}", e);
                         return Err(LiError::CustomError(format!("发送消息失败: {}", e)));

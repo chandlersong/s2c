@@ -1,6 +1,8 @@
 use li::tools::logs::setup_logger;
 use log::{LevelFilter, info};
 use std::collections::HashMap;
+use std::time::Duration;
+use tokio::time::sleep;
 use yu::config::get_config;
 use yu::errors::YuError;
 use yu::okx::duckdb_tables::initial_okx_tables;
@@ -27,5 +29,7 @@ async fn main() -> Result<(), YuError> {
 
     let service = OptionService::default();
     service.start().await?;
+
+    sleep(Duration::from_mins(10)).await;
     Ok(())
 }

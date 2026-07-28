@@ -197,7 +197,7 @@ impl OkxKlineRepositoryTrait for OkxKlinePoRepositoryImpl {
             .map_err(|e| YuError::new(&format!("Failed to send command: {}", e)))?;
         match rx.await {
             Ok(_) => Ok(()),
-            Err(e) => Err(YuError::new(&format!("Failed to receive command: {}", e))),
+            Err(e) => Err(YuError::new(&format!("Failed to receive response: {}", e))),
         }
     }
 

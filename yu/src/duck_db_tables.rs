@@ -181,6 +181,11 @@ impl<P: DuckDBPO, T: DuckDbTableTrait> DuckDBOneTable<P, T> {
                                          //    2. 上次刷新时间过了2s。
                                          // 2. 保存启动一条线程。
                                         single_cache.push(payload.data);
+                                        if let Some(tx) = payload.callback{
+                                            if let Err(e) = tx.send(Ok(0)){
+                                                error!("Failed to send insert result for table {}: {:?}", table.table_name(), e);
+                                            }
+                                        }
                                         let now = unix_time_now_u64_utc();
                                         cache_count = cache_count +1;
                                         let cond1 = (now - last_flush_time) < flush_interval.as_millis() as u64;

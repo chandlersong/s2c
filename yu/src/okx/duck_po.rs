@@ -6,6 +6,7 @@ use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use yue::okx::models::common::CandleResponse;
 use yue::okx::models::common::InstrumentInfo;
+use yue::okx::models::websocket::KlinePayload;
 use yue::tools::get_snow_flake_id_u64;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Builder)]
@@ -27,6 +28,27 @@ impl OkxKlinePo {
     pub fn from_kline_response(inst_id: &str, response: CandleResponse) -> Vec<Self> {
         let mut res = Vec::<Self>::new();
         for candle in response.data {
+            res.push(Self {
+                id: get_snow_flake_id_u64(),
+                inst_id: inst_id.to_string(),
+                ts: candle[0].parse().unwrap(),
+                open: candle[1].parse().unwrap(),
+                high: candle[2].parse().unwrap(),
+                low: candle[3].parse().unwrap(),
+                close: candle[4].parse().unwrap(),
+                vol: candle[5].parse().unwrap(),
+                vol_ccy: candle[6].parse().unwrap(),
+                vol_ccy_quote: candle[7].parse().unwrap(),
+                confirm: candle[8].parse().unwrap(),
+            });
+        }
+        res
+    }
+
+    pub fn from_ws_response(payload: &KlinePayload) -> Vec<Self> {
+        let mut res = Vec::<Self>::new();
+        let inst_id = payload.arg.inst_id.to_string();
+        for candle in &payload.data {
             res.push(Self {
                 id: get_snow_flake_id_u64(),
                 inst_id: inst_id.to_string(),

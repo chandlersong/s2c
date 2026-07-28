@@ -2,21 +2,24 @@ use crate::config::get_config;
 use crate::cron_job;
 use crate::errors::YuError;
 use crate::okx::duck_po::{InstrumentPo, OkxKlinePo};
-use crate::okx::duckdb_repository::{get_default_kline_repo, get_instrument_repo, OkxInstrumentRepository, OkxKlineRepository};
+use crate::okx::duckdb_repository::{OkxInstrumentRepository, OkxKlineRepository, get_default_kline_repo, get_instrument_repo};
 use crate::okx::okx_consts::InstrumentType;
+use async_trait::async_trait;
 use governor::Jitter;
 use li::tools::time::UnixTimeStamp;
-use li::websocket::connection::{CommandMessage, ConnectionAction, ToServerMessage, WebSocketConnection, WebSocketInterface};
+use li::websocket::connection::{
+    CommandMessage, ConnectionAction, MessageHandlerTrait, ShareMessageHandler, ToServerMessage, WebSocketConnection, WebSocketInterface,
+};
 use log::{error, info, warn};
 use std::cmp::max;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
-use tokio::sync::broadcast;
 use tokio::sync::Mutex;
+use tokio::sync::broadcast;
 use yue::models::HistoryInterval;
 use yue::okx::models::websocket::{ArgBody, OkxWebsocketResponse};
-use yue::okx::restful_api::{default_okx_api, HistoryParams, InstrumentsParam, OKxApi};
+use yue::okx::restful_api::{HistoryParams, InstrumentsParam, OKxApi, default_okx_api};
 use yue::okx::websocket_channel::{CommandRequest, OXK_BUSINESS_WEBSOCKET};
 
 #[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
@@ -286,6 +289,45 @@ pub async fn fetch_and_update_instruments(
     Ok(())
 }
 
+pub struct KlineHandler {
+    kline_repo: OkxKlineRepository,
+}
+
+impl KlineHandler {
+    pub fn new(kline_repo: OkxKlineRepository) -> Self {
+        Self { kline_repo }
+    }
+}
+
+#[async_trait]
+impl MessageHandlerTrait<OkxWebsocketResponse> for KlineHandler {
+    ///
+    /// 处理订阅的消息。对于订阅的消息。
+    /// 1. 把Kline的数据存入数据库。
+    /// 2. 判断已经订阅的数据
+    ///
+    async fn handle_message(&self, message: &OkxWebsocketResponse) {
+        match message {
+            OkxWebsocketResponse::SubscribeResponse(_) => {
+                //FUTURE: 这里可以判断一下是订阅成功
+                //看到okx是一个一个回来的，比如说我订阅了A，B，C。一起订阅的，但是最后回来的是三条消息。
+            }
+            OkxWebsocketResponse::Kline(payload) => {
+                let pos = OkxKlinePo::from_ws_response(&payload);
+                for po in pos {
+                    if po.confirm != 1 {
+                        //过滤没有完成的kline
+                        continue;
+                    }
+                    if let Err(e) = self.kline_repo.insert_history(po).await {
+                        warn!("Failed to insert okx kline history: {:?}", e);
+                    }
+                }
+            }
+        }
+    }
+}
+
 ///
 /// 经过思考。最后决定，按照每个品类，进行处理。而不是统一的处理。
 /// 1. 交易品种是会更新的。而交易品种的更新。这个也是需要维护的。
@@ -303,7 +345,6 @@ pub async fn fetch_and_update_instruments(
 pub struct OptionService {
     instruments: Arc<RwLock<Vec<InstrumentPo>>>,
     common_io: CommonIOService,
-    sender: broadcast::Sender<OkxKlinePo>,
     interval: HistoryInterval,
     refresh_corn: String,
 }
@@ -322,7 +363,6 @@ impl OptionService {
         interval: Option<HistoryInterval>,
         refresh_corn: Option<String>,
     ) -> Self {
-        let (sender, _) = broadcast::channel(10000);
         Self {
             instruments: Arc::new(RwLock::new(vec![])),
             common_io: create_common_io_service(
@@ -330,25 +370,18 @@ impl OptionService {
                 kline_repo.unwrap_or_else(|| get_default_kline_repo(None)),
                 api.unwrap_or_else(|| default_okx_api()),
             ),
-            sender,
             interval: interval.unwrap_or(HistoryInterval::OneHour),
-            refresh_corn: refresh_corn.unwrap_or("18 18 */6 * *".to_string()),
+            refresh_corn: refresh_corn.unwrap_or("18 18 */6 * * *".to_string()),
         }
     }
 
     #[cfg(test)]
-    fn new_with_mock(
-        inst_ids: Arc<RwLock<Vec<InstrumentPo>>>,
-        common_io: CommonIOService,
-        sender: broadcast::Sender<OkxKlinePo>,
-        interval: HistoryInterval,
-    ) -> Self {
+    fn new_with_mock(inst_ids: Arc<RwLock<Vec<InstrumentPo>>>, common_io: CommonIOService, interval: HistoryInterval) -> Self {
         Self {
             instruments: inst_ids,
             common_io,
-            sender,
             interval,
-            refresh_corn: "18 * * * *".to_string(),
+            refresh_corn: "18 * * * * *".to_string(),
         }
     }
 
@@ -368,25 +401,29 @@ impl OptionService {
     ///
     /// 开启一个定时任务。定时任务的主要功能是刷新inst_ids。然后更新订阅的kline。
     ///
-    pub async fn start(&self) -> Result<(), YuError> {
+    pub async fn start(&self) -> Result<broadcast::Sender<OkxKlinePo>, YuError> {
+        let handler = Arc::new(KlineHandler::new(self.common_io.get_kline_repo()));
         let instruments_share = self.instruments.clone();
         let common_io = self.common_io.clone();
         let instruments = Self::refresh_instruments(common_io.clone(), instruments_share.clone()).await?;
         let app_config = get_config();
         let proxy = app_config.proxy_url.clone();
-        let websocket_interface = Self::listen_option_kline(instruments, proxy.clone(), None).await?;
-
+        let interval = self.interval.clone();
+        let websocket_interface = Self::listen_option_kline(instruments, &interval, proxy.clone(), Some(handler.clone()), None).await?;
+        let (tx, _) = broadcast::channel(1000);
         // shared interface stored across cron_job invocations
         let shared_interface: Arc<Mutex<Arc<WebSocketInterface<OkxWebsocketResponse>>>> = Arc::new(Mutex::new(websocket_interface));
 
         let interface_for_cron = shared_interface.clone();
         let instruments_for_cron = instruments_share.clone();
-
-        let _ = cron_job!("0 01 * * * *", move |_uuid, _locked| {
+        let handler_for_cron = handler.clone();
+        let _ = cron_job!(self.refresh_corn.as_str(), move |_uuid, _locked| {
             let instruments_each = instruments_for_cron.clone();
             let common_io_each = common_io.clone();
             let interface_each = interface_for_cron.clone();
             let proxy_each = proxy.clone();
+            let handler_each = handler_for_cron.clone();
+            let interval_each = interval.clone();
             Box::pin(async move {
                 let _ = Self::refresh_instruments(common_io_each.clone(), instruments_each.clone()).await;
 
@@ -401,9 +438,9 @@ impl OptionService {
 
                 if insts.is_empty() {
                     return;
-                }
+                };
 
-                match Self::listen_option_kline(insts.clone(), proxy_each, None).await {
+                match Self::listen_option_kline(insts.clone(), &interval_each, proxy_each, Some(handler_each), None).await {
                     Ok(new_interface) => {
                         // swap old interface with new one, then try close old
                         let mut guard = interface_each.lock().await;
@@ -441,7 +478,7 @@ impl OptionService {
             })
         });
 
-        Ok(())
+        Ok(tx)
     }
 
     ///
@@ -449,20 +486,25 @@ impl OptionService {
     ///
     pub async fn listen_option_kline(
         instruments: Vec<InstrumentPo>,
+        interval: &HistoryInterval,
         proxy: Option<String>,
+        handler: Option<ShareMessageHandler<OkxWebsocketResponse>>,
         batch_num: Option<usize>,
     ) -> Result<Arc<WebSocketInterface<OkxWebsocketResponse>>, YuError> {
         let reconnect_interval = Duration::from_secs(5);
-        let interface = WebSocketConnection::run::<OkxWebsocketResponse>(OXK_BUSINESS_WEBSOCKET.to_string(), reconnect_interval, proxy, None).await;
+        let interface =
+            WebSocketConnection::run::<OkxWebsocketResponse>(OXK_BUSINESS_WEBSOCKET.to_string(), reconnect_interval, proxy, handler).await;
         info!("✓ oxk kline WebSocket 客户端已启动");
         let batch_num = batch_num.unwrap_or(380);
+        let frequency = match interval {
+            HistoryInterval::OneMinute => "candle1m".to_string(),
+            HistoryInterval::FiveMinutes => "candle5m".to_string(),
+            HistoryInterval::OneHour => "candle1h".to_string(),
+        };
         for (i, chunk) in instruments.chunks(batch_num).enumerate() {
             let mut args = vec![];
             for inst in chunk {
-                let arg = ArgBody::builder()
-                    .channel("candle1m".to_string())
-                    .inst_id(inst.inst_id.to_string())
-                    .build();
+                let arg = ArgBody::builder().channel(frequency.clone()).inst_id(inst.inst_id.to_string()).build();
                 args.push(arg);
             }
 
@@ -542,7 +584,7 @@ impl OptionService {
 
 #[cfg(test)]
 mod tests {
-    use super::{fetch_and_update_instruments, fetch_history, CommonIOService, MockCommonIOServiceTrait, OptionService};
+    use super::{CommonIOService, KlineHandler, MockCommonIOServiceTrait, OptionService, fetch_and_update_instruments, fetch_history};
     use crate::errors::YuError;
     use crate::okx::duck_po::InstrumentPo;
     use crate::okx::duckdb_repository::OkxInstrumentRepository;
@@ -550,9 +592,11 @@ mod tests {
     use crate::okx::duckdb_tables::initial_okx_tables;
     use crate::okx::okx_consts::InstrumentType;
     use crate::test_utils::create_memory_db_provider;
+    use li::websocket::connection::MessageHandlerTrait;
     use std::sync::{Arc, RwLock};
     use yue::models::HistoryInterval;
     use yue::okx::models::common::{CandleResponse, InstrumentInfo, OkxListResponse};
+    use yue::okx::models::websocket::{ArgBody, KlinePayload, OkxWebsocketResponse};
     use yue::okx::restful_api::{InstrumentsParam, MockOKXApiTrait, OKxApi};
 
     ///
@@ -899,7 +943,6 @@ mod tests {
             .return_once(|_, _, _, _, _, _| Ok(vec![]));
 
         let common_io: CommonIOService = link_mock_common_io_service(mock_common_io, mock_instrument_repo, mock_kline_repo, mock_api);
-        let (tx, _) = tokio::sync::broadcast::channel(10000);
 
         let inst_po = InstrumentPo::builder()
             .inst_id("BTC1".to_string())
@@ -907,7 +950,7 @@ mod tests {
             .base_ccy("BTC".to_string())
             .list_time(start_time)
             .build();
-        let option_service = OptionService::new_with_mock(Arc::new(RwLock::new(vec![inst_po])), common_io, tx, HistoryInterval::OneHour);
+        let option_service = OptionService::new_with_mock(Arc::new(RwLock::new(vec![inst_po])), common_io, HistoryInterval::OneHour);
 
         let res = option_service.initial_candle(0).await;
         assert!(res.is_ok());
@@ -936,7 +979,6 @@ mod tests {
             .return_once(|_, _, _, _, _, _| Ok(vec![]));
 
         let common_io: CommonIOService = link_mock_common_io_service(mock_common_io, mock_instrument_repo, mock_kline_repo, mock_api);
-        let (tx, _) = tokio::sync::broadcast::channel(10000);
 
         let inst_po = InstrumentPo::builder()
             .inst_id("BTC1".to_string())
@@ -944,7 +986,7 @@ mod tests {
             .base_ccy("BTC".to_string())
             .list_time(HistoryInterval::OneHour.to_milliseconds() + 1)
             .build();
-        let option_service = OptionService::new_with_mock(Arc::new(RwLock::new(vec![inst_po])), common_io, tx, HistoryInterval::OneHour);
+        let option_service = OptionService::new_with_mock(Arc::new(RwLock::new(vec![inst_po])), common_io, HistoryInterval::OneHour);
 
         let res = option_service.initial_candle(0).await;
         assert!(res.is_ok());
@@ -973,7 +1015,6 @@ mod tests {
             .return_once(|_, _, _, _, _, _| Ok(vec![]));
 
         let common_io: CommonIOService = link_mock_common_io_service(mock_common_io, mock_instrument_repo, mock_kline_repo, mock_api);
-        let (tx, _) = tokio::sync::broadcast::channel(10000);
 
         let inst_po = InstrumentPo::builder()
             .inst_id("BTC1".to_string())
@@ -981,9 +1022,51 @@ mod tests {
             .base_ccy("BTC".to_string())
             .list_time(HistoryInterval::OneHour.to_milliseconds() + 1)
             .build();
-        let option_service = OptionService::new_with_mock(Arc::new(RwLock::new(vec![inst_po])), common_io, tx, HistoryInterval::OneHour);
+        let option_service = OptionService::new_with_mock(Arc::new(RwLock::new(vec![inst_po])), common_io, HistoryInterval::OneHour);
 
         let res = option_service.initial_candle(HistoryInterval::OneHour.to_milliseconds() * 3).await;
         assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    pub async fn test_option_kline_handler() {
+        let mut mock_kline_repo = MockOkxKlineRepositoryTrait::new();
+        mock_kline_repo
+            .expect_insert_history()
+            .times(1)
+            .withf(|po| po.ts == 111)
+            .returning(|_| Ok(()));
+
+        let handler = KlineHandler::new(Arc::new(mock_kline_repo));
+
+        let arg_body = ArgBody::builder().inst_id("BTC-1".to_string()).channel("111".to_string()).build();
+        let confirm_data = vec![
+            "111".to_string(),
+            "222".to_string(),
+            "333".to_string(),
+            "4444".to_string(),
+            "555".to_string(),
+            "666".to_string(),
+            "777".to_string(),
+            "888".to_string(),
+            "1".to_string(),
+        ];
+        let un_confirm_data = vec![
+            "0".to_string(),
+            "222".to_string(),
+            "333".to_string(),
+            "4444".to_string(),
+            "555".to_string(),
+            "666".to_string(),
+            "777".to_string(),
+            "888".to_string(),
+            "0".to_string(),
+        ];
+        let confirm_response_play = KlinePayload::builder()
+            .arg(arg_body.clone())
+            .data(vec![confirm_data, un_confirm_data])
+            .build();
+
+        handler.handle_message(&OkxWebsocketResponse::Kline(confirm_response_play)).await;
     }
 }
