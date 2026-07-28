@@ -2,7 +2,7 @@ use crate::config::get_config;
 use crate::cron_job;
 use crate::errors::YuError;
 use crate::okx::duck_po::{InstrumentPo, OkxKlinePo};
-use crate::okx::duckdb_repository::{OkxInstrumentRepository, OkxKlineRepository, get_default_kline_repo, get_instrument_repo};
+use crate::okx::duckdb_repository::{get_default_kline_repo, get_instrument_repo, OkxInstrumentRepository, OkxKlineRepository};
 use crate::okx::okx_consts::InstrumentType;
 use governor::Jitter;
 use li::tools::time::UnixTimeStamp;
@@ -12,11 +12,11 @@ use std::cmp::max;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
-use tokio::sync::Mutex;
 use tokio::sync::broadcast;
+use tokio::sync::Mutex;
 use yue::models::HistoryInterval;
 use yue::okx::models::websocket::{ArgBody, OkxWebsocketResponse};
-use yue::okx::restful_api::{HistoryParams, InstrumentsParam, OKxApi, default_okx_api};
+use yue::okx::restful_api::{default_okx_api, HistoryParams, InstrumentsParam, OKxApi};
 use yue::okx::websocket_channel::{CommandRequest, OXK_BUSINESS_WEBSOCKET};
 
 #[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
@@ -374,7 +374,7 @@ impl OptionService {
         let instruments = Self::refresh_instruments(common_io.clone(), instruments_share.clone()).await?;
         let app_config = get_config();
         let proxy = app_config.proxy_url.clone();
-        let websocket_interface = Self::listen_option_kline(instruments, proxy.clone()).await?;
+        let websocket_interface = Self::listen_option_kline(instruments, proxy.clone(), None).await?;
 
         // shared interface stored across cron_job invocations
         let shared_interface: Arc<Mutex<Arc<WebSocketInterface<OkxWebsocketResponse>>>> = Arc::new(Mutex::new(websocket_interface));
@@ -403,7 +403,7 @@ impl OptionService {
                     return;
                 }
 
-                match Self::listen_option_kline(insts.clone(), proxy_each).await {
+                match Self::listen_option_kline(insts.clone(), proxy_each, None).await {
                     Ok(new_interface) => {
                         // swap old interface with new one, then try close old
                         let mut guard = interface_each.lock().await;
@@ -444,29 +444,37 @@ impl OptionService {
         Ok(())
     }
 
+    ///
+    /// 根据batch_num,分批订阅kline，为了防止超过64K的限制
+    ///
     pub async fn listen_option_kline(
         instruments: Vec<InstrumentPo>,
         proxy: Option<String>,
+        batch_num: Option<usize>,
     ) -> Result<Arc<WebSocketInterface<OkxWebsocketResponse>>, YuError> {
         let reconnect_interval = Duration::from_secs(5);
         let interface = WebSocketConnection::run::<OkxWebsocketResponse>(OXK_BUSINESS_WEBSOCKET.to_string(), reconnect_interval, proxy, None).await;
         info!("✓ oxk kline WebSocket 客户端已启动");
-        let mut args = vec![];
-        for inst in instruments.iter() {
-            let arg = ArgBody::builder()
-                .channel("candle1m".to_string())
-                .inst_id(inst.inst_id.to_string())
+        let batch_num = batch_num.unwrap_or(380);
+        for (i, chunk) in instruments.chunks(batch_num).enumerate() {
+            let mut args = vec![];
+            for inst in chunk {
+                let arg = ArgBody::builder()
+                    .channel("candle1m".to_string())
+                    .inst_id(inst.inst_id.to_string())
+                    .build();
+                args.push(arg);
+            }
+
+            let request = CommandRequest::builder()
+                .id((i + 1).to_string())
+                .op("subscribe".to_string())
+                .args(args)
                 .build();
-            args.push(arg);
+            let command_test = serde_json::to_string(&request)?;
+            interface.send_command(CommandMessage::ToServer(ToServerMessage::text(command_test)));
         }
 
-        let request = CommandRequest::builder()
-            .id("1".to_string())
-            .op("subscribe".to_string())
-            .args(args)
-            .build();
-        let command_test = serde_json::to_string(&request)?;
-        interface.send_command(CommandMessage::ToServer(ToServerMessage::text(command_test)));
         Ok(interface)
     }
 
@@ -534,7 +542,7 @@ impl OptionService {
 
 #[cfg(test)]
 mod tests {
-    use super::{CommonIOService, MockCommonIOServiceTrait, OptionService, fetch_and_update_instruments, fetch_history};
+    use super::{fetch_and_update_instruments, fetch_history, CommonIOService, MockCommonIOServiceTrait, OptionService};
     use crate::errors::YuError;
     use crate::okx::duck_po::InstrumentPo;
     use crate::okx::duckdb_repository::OkxInstrumentRepository;
