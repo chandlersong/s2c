@@ -1,17 +1,24 @@
+use crate::config::get_config;
+use crate::cron_job;
 use crate::errors::YuError;
 use crate::okx::duck_po::{InstrumentPo, OkxKlinePo};
 use crate::okx::duckdb_repository::{OkxInstrumentRepository, OkxKlineRepository, get_default_kline_repo, get_instrument_repo};
 use crate::okx::okx_consts::InstrumentType;
 use governor::Jitter;
 use li::tools::time::UnixTimeStamp;
-use log::{error, warn};
+use li::websocket::connection::{CommandMessage, ConnectionAction, ToServerMessage, WebSocketConnection, WebSocketInterface};
+use log::{error, info, warn};
 use std::cmp::max;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
+use tokio::sync::Mutex;
 use tokio::sync::broadcast;
 use yue::models::HistoryInterval;
+use yue::okx::models::websocket::{ArgBody, OkxWebsocketResponse};
 use yue::okx::restful_api::{HistoryParams, InstrumentsParam, OKxApi, default_okx_api};
+use yue::okx::websocket_channel::{CommandRequest, OXK_BUSINESS_WEBSOCKET};
+
 #[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
 #[async_trait::async_trait]
 pub trait CommonIOServiceTrait {
@@ -285,21 +292,25 @@ pub async fn fetch_and_update_instruments(
 /// 2. 每个品种要维护的信息其实不一样。如果按照品类进行维护，那些纵向的排序很麻烦。
 /// 3. 从用户角度，往往是交易几个具体的品种。而不是一起来弄的。
 ///
-/// # 主要功能。
-/// 1. 维护相应的inst_ids
-/// 2. 维护Kline，包括Kline和option info
+/// # 主要的功能
+/// 1. 更新instrument和更新相应的订阅kline的数据。
+///     - 这个其实是该服务驱动的第一步。
+/// 2. 订阅合理的Kline数据。然后发送
+/// 3. 检查数据差异。如果必要初始化数d d
+///
 ///
 ///
 pub struct OptionService {
-    inst_ids: Arc<RwLock<Vec<InstrumentPo>>>,
+    instruments: Arc<RwLock<Vec<InstrumentPo>>>,
     common_io: CommonIOService,
     sender: broadcast::Sender<OkxKlinePo>,
     interval: HistoryInterval,
+    refresh_corn: String,
 }
 
 impl Default for OptionService {
     fn default() -> Self {
-        Self::new(None, None, None, None)
+        Self::new(None, None, None, None, None)
     }
 }
 
@@ -309,10 +320,11 @@ impl OptionService {
         kline_repo: Option<OkxKlineRepository>,
         api: Option<OKxApi>,
         interval: Option<HistoryInterval>,
+        refresh_corn: Option<String>,
     ) -> Self {
         let (sender, _) = broadcast::channel(10000);
         Self {
-            inst_ids: Arc::new(RwLock::new(vec![])),
+            instruments: Arc::new(RwLock::new(vec![])),
             common_io: create_common_io_service(
                 instrument_repo.unwrap_or_else(|| get_instrument_repo(None)),
                 kline_repo.unwrap_or_else(|| get_default_kline_repo(None)),
@@ -320,6 +332,7 @@ impl OptionService {
             ),
             sender,
             interval: interval.unwrap_or(HistoryInterval::OneHour),
+            refresh_corn: refresh_corn.unwrap_or("18 18 */6 * *".to_string()),
         }
     }
 
@@ -331,46 +344,149 @@ impl OptionService {
         interval: HistoryInterval,
     ) -> Self {
         Self {
-            inst_ids,
+            instruments: inst_ids,
             common_io,
             sender,
             interval,
+            refresh_corn: "18 * * * *".to_string(),
         }
     }
 
-    pub fn update_instruments(&self, instruments: Vec<InstrumentPo>) -> Result<(), YuError> {
-        match self.inst_ids.write() {
+    pub fn update_instruments(share_instruments: Arc<RwLock<Vec<InstrumentPo>>>, instruments: Vec<InstrumentPo>) -> Result<(), YuError> {
+        match share_instruments.write() {
             Ok(mut guard) => {
                 *guard = instruments;
                 Ok(())
             }
             Err(e) => {
-                log::error!("failed to acquire inst_ids write lock: {:?}", e);
-                Err(YuError::CustomError(format!("failed to acquire inst_ids write lock: {:?}", e)))
+                log::error!("failed to acquire instruments write lock: {:?}", e);
+                Err(YuError::CustomError(format!("failed to acquire instruments write lock: {:?}", e)))
             }
         }
     }
 
-    pub async fn refresh_inst_ids(&self) -> Result<(), YuError> {
+    ///
+    /// 开启一个定时任务。定时任务的主要功能是刷新inst_ids。然后更新订阅的kline。
+    ///
+    pub async fn start(&self) -> Result<(), YuError> {
+        let instruments_share = self.instruments.clone();
+        let common_io = self.common_io.clone();
+        let instruments = Self::refresh_instruments(common_io.clone(), instruments_share.clone()).await?;
+        let app_config = get_config();
+        let proxy = app_config.proxy_url.clone();
+        let websocket_interface = Self::listen_option_kline(instruments, proxy.clone()).await?;
+
+        // shared interface stored across cron_job invocations
+        let shared_interface: Arc<Mutex<Arc<WebSocketInterface<OkxWebsocketResponse>>>> = Arc::new(Mutex::new(websocket_interface));
+
+        let interface_for_cron = shared_interface.clone();
+        let instruments_for_cron = instruments_share.clone();
+
+        let _ = cron_job!("0 01 * * * *", move |_uuid, _locked| {
+            let instruments_each = instruments_for_cron.clone();
+            let common_io_each = common_io.clone();
+            let interface_each = interface_for_cron.clone();
+            let proxy_each = proxy.clone();
+            Box::pin(async move {
+                let _ = Self::refresh_instruments(common_io_each.clone(), instruments_each.clone()).await;
+
+                // after refreshing instruments, exercise websocket: recreate and swap
+                let insts = match instruments_each.read() {
+                    Ok(g) => g.clone(),
+                    Err(e) => {
+                        error!("failed to read instruments for ws exercise in cron: {:?}", e);
+                        return;
+                    }
+                };
+
+                if insts.is_empty() {
+                    return;
+                }
+
+                match Self::listen_option_kline(insts.clone(), proxy_each).await {
+                    Ok(new_interface) => {
+                        // swap old interface with new one, then try close old
+                        let mut guard = interface_each.lock().await;
+                        // replace the current Arc with the new one, taking ownership of the old Arc
+                        let old_interface = std::mem::replace(&mut *guard, new_interface.clone());
+
+                        // attempt to close previous connection
+                        let cmd_sender = old_interface.command_sender();
+                        let mut attempt = 0usize;
+                        loop {
+                            attempt += 1;
+                            let cmd = CommandMessage::Connection(ConnectionAction::Close);
+                            match cmd_sender.send(cmd) {
+                                Ok(_) => {
+                                    info!("Sent Close command to previous connection (attempt {})", attempt);
+                                    break;
+                                }
+                                Err(e) => {
+                                    error!("Error close prev connection on attempt {}: {:?}", attempt, e);
+                                    if attempt >= 10 {
+                                        error!("Giving up closing previous connection after {} attempts.", attempt);
+                                        break;
+                                    } else {
+                                        let jitter = Jitter::up_to(Duration::from_millis(500));
+                                        tokio::time::sleep(jitter + Duration::ZERO).await;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("failed to recreate websocket for exercise in cron: {:?}", e);
+                    }
+                }
+            })
+        });
+
+        Ok(())
+    }
+
+    pub async fn listen_option_kline(
+        instruments: Vec<InstrumentPo>,
+        proxy: Option<String>,
+    ) -> Result<Arc<WebSocketInterface<OkxWebsocketResponse>>, YuError> {
+        let reconnect_interval = Duration::from_secs(5);
+        let interface = WebSocketConnection::run::<OkxWebsocketResponse>(OXK_BUSINESS_WEBSOCKET.to_string(), reconnect_interval, proxy, None).await;
+        info!("✓ oxk kline WebSocket 客户端已启动");
+        let mut args = vec![];
+        for inst in instruments.iter() {
+            let arg = ArgBody::builder()
+                .channel("candle1m".to_string())
+                .inst_id(inst.inst_id.to_string())
+                .build();
+            args.push(arg);
+        }
+
+        let request = CommandRequest::builder()
+            .id("1".to_string())
+            .op("subscribe".to_string())
+            .args(args)
+            .build();
+        let command_test = serde_json::to_string(&request)?;
+        interface.send_command(CommandMessage::ToServer(ToServerMessage::text(command_test)));
+        Ok(interface)
+    }
+
+    pub async fn refresh_instruments(
+        common_io: CommonIOService,
+        share_instruments: Arc<RwLock<Vec<InstrumentPo>>>,
+    ) -> Result<Vec<InstrumentPo>, YuError> {
         // call for BTC and ETH
-        let _ = self
-            .common_io
+        let _ = common_io
             .fetch_and_update_instruments(InstrumentsParam::query_option("BTC-USD"), InstrumentType::Option)
             .await;
-        let _ = self
-            .common_io
+        let _ = common_io
             .fetch_and_update_instruments(InstrumentsParam::query_option("ETH-USD"), InstrumentType::Option)
             .await;
-        let live_instruments = self
-            .common_io
-            .get_instrument_repo()
-            .get_instrument_by_type_live(InstrumentType::Option)
-            .await;
+        let live_instruments = common_io.get_instrument_repo().get_instrument_by_type_live(InstrumentType::Option).await;
         match live_instruments {
             Ok(instruments) => {
                 // update in-memory inst_ids
-                self.update_instruments(instruments)?;
-                Ok(())
+                Self::update_instruments(share_instruments, instruments.clone())?;
+                Ok(instruments)
             }
             Err(err) => {
                 log::error!("skip refresh failed to query okx instruments: {:?}", err);
@@ -393,7 +509,7 @@ impl OptionService {
     ///
     pub async fn initial_candle(&self, earliest_timestamp: UnixTimeStamp) -> Result<(), YuError> {
         let inst_vec = self
-            .inst_ids
+            .instruments
             .read()
             .map_err(|e| YuError::CustomError(format!("failed to acquire inst_ids read lock: {:?}", e)))?;
         let kline_repo = self.common_io.get_kline_repo();

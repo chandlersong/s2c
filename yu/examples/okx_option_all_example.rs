@@ -26,6 +26,6 @@ async fn main() -> Result<(), YuError> {
     initial_okx_tables(None)?;
 
     let service = OptionService::default();
-    service.refresh_inst_ids().await;
+    service.start().await?;
     Ok(())
 }

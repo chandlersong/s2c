@@ -21,7 +21,8 @@ pub async fn get_scheduler() -> Arc<JobScheduler> {
 // ====================== 宏定义（支持 uuid + locked） ======================
 
 /// 添加 cron 任务（支持 uuid 和 locked）
-/// 用法： cron_job!("*/10 * * * * *", |uuid, locked| { Box::pin(async move { ... }) })
+/// 用法： cron_job!("*/10 * * * * *", |uuid, locked| { Box::pin(async move { ... }) })】
+/// 秒 分 小时 日期(每月） 月 周
 #[macro_export]
 macro_rules! cron_job {
     ($cron:expr, $closure:expr) => {{
