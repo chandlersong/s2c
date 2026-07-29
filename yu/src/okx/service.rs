@@ -338,7 +338,7 @@ impl MessageHandlerTrait<OkxWebsocketResponse> for KlineHandler {
 /// 1. 更新instrument和更新相应的订阅kline的数据。
 ///     - 这个其实是该服务驱动的第一步。
 /// 2. 订阅合理的Kline数据。然后发送
-/// 3. 检查数据差异。如果必要初始化数d d
+/// 3. 检查数据差异。如果必要初始化数据
 ///
 ///
 ///
