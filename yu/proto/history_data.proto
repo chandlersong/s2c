@@ -2,7 +2,14 @@ syntax = "proto3";
 package grpc_sync;
 
 
-message PolymarketAssertInfo{
+enum Exchange {
+  EXCHANGE_UNSPECIFIED = 0;
+  POLYMARKET = 1;
+  OKX = 2;
+}
+
+
+message PolymarketInstrument{
   string series_id = 1;
   string series_slug = 2;
   string event_id = 3;
@@ -14,8 +21,33 @@ message PolymarketAssertInfo{
   uint64 latest_timestamp = 9;
 }
 
-message PolyMarketAssetInfoList{
-  map<string, PolymarketAssertInfo> assets = 1;
+message OkxInstrument{
+  string inst_id = 1;
+  string inst_type = 2;
+  string inst_family = 3;
+  string base_ccy = 4;
+  string quote_ccy = 5;
+  string settle_ccy = 6;
+  uint64 list_time = 7;
+  uint64 exp_time = 8;
+  double tick_sz = 9;
+  double lot_sz = 10;
+  double min_sz = 11;
+  string alias = 12;
+  string state = 13;
+  string inst_id_code = 14;
+  string inst_category = 15;
+}
+
+message Instrument {
+  oneof payload {
+    PolymarketInstrument polymarket = 1;     // polymarket资产
+    OkxInstrument okx = 2;     // okx资产
+  }
+}
+
+message InstrumentInfoList{
+  map<string, Instrument> instruments = 1;
 }
 
 // 服务器端和客户端同步的服务
@@ -25,7 +57,7 @@ message PolyMarketAssetInfoList{
 // 3. 推送信息给client端最新的消息。 PolyMarketHistoryList
 service SyncInterface {
   // 1. 获取服务器里面的所有资产的最新时间戳
-  rpc GetPolyMarketAssertInfo(Empty) returns (PolyMarketAssetInfoList) {}
+  rpc GetInstrumentInfo(Empty) returns (InstrumentInfoList) {}
 
   // 2. client提供asset id和timestamp，server把timestamp之后的所有数据推送给client
   rpc SyncHistory(SyncRequest) returns (stream ServerMessage) {}
@@ -36,7 +68,8 @@ service SyncInterface {
 
 message ServerMessage {
   oneof payload {
-    PolyMarketHistoryList polymarket_history = 1;     // 批量
+    PolyMarketHistoryList polymarket_history = 1;     // polymarket
+    OkxKlineList okx_kline_history = 2;     // okx kline
   }
 }
 // 空消息
@@ -46,6 +79,7 @@ message Empty {}
 message SyncRequest {
   string asset_id = 1;  // 资产ID
   uint64 timestamp = 2;  // 起始时间戳，server推送该时间之后的所有数据
+  Exchange exchange = 3; // 交易所类型
 }
 
 // 订阅最新消息请求
@@ -61,5 +95,25 @@ message PolyMarketHistory {
 
 message PolyMarketHistoryList {
   repeated PolyMarketHistory history_list = 1;
+  uint64 timestamp = 2;
+}
+
+message OkxKline {
+  uint64 id = 1;
+  string inst_id = 2;
+  uint64 ts = 3;
+  double open = 4;
+  double high = 5;
+  double low = 6;
+  double close = 7;
+  double vol = 8;
+  double vol_ccy = 9;
+  double vol_ccy_quote = 10;
+  uint32 confirm = 11;
+}
+
+
+message OkxKlineList {
+  repeated OkxKline kline_list = 1;
   uint64 timestamp = 2;
 }

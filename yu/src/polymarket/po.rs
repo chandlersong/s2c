@@ -1,5 +1,5 @@
 use crate::duck_db::DuckDBPO;
-use crate::sync::sync_server::grpc_sync::PolyMarketHistory;
+use crate::sync::models::grpc_sync::PolyMarketHistory;
 use duckdb::appender_params_from_iter;
 use serde::{Deserialize, Serialize};
 
@@ -32,7 +32,7 @@ impl From<PolyMarketHistory> for PolyMarketHistoryPo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PolyMarketAssetInfoPo {
+pub struct PolyMarketInstrumentPo {
     pub series_id: String,
     pub series_slug: String,
     pub event_id: String,
@@ -43,7 +43,7 @@ pub struct PolyMarketAssetInfoPo {
     pub asset_slug: String,
 }
 
-impl DuckDBPO for PolyMarketAssetInfoPo {
+impl DuckDBPO for PolyMarketInstrumentPo {
     fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>> {
         appender_params_from_iter(vec![
             &self.series_id as &dyn duckdb::ToSql,

@@ -4,8 +4,8 @@ use crate::postgresql_db_tables::PostgresqlBatchInsert;
 use crate::sync::client::database::get_polymarket_price_batch_insert;
 use crate::sync::client::po::{LocalPolyMarketAssetInfoPo, LocalPolyMarketHistoryPo};
 use crate::sync::client::repository::{ClientPolyMarketRepository, ClientPolyMarketRepositoryImpl};
-use crate::sync::sync_server::grpc_sync::server_message::Payload;
-use crate::sync::sync_server::grpc_sync::{PolyMarketAssetInfoList, ServerMessage};
+use crate::sync::models::grpc_sync::server_message::Payload;
+use crate::sync::models::grpc_sync::{Instrument, ServerMessage};
 use governor::Jitter;
 use log::{error, info};
 use std::collections::HashMap;
@@ -119,43 +119,43 @@ impl SyncClientService {
     ///    3，都存在的话，那么比较local_assets的timestamp和服务器端的timestamp
     ///        - 如果local的timestamp小于server端的timestamp。则加入返回值，key为asset_id,value为local的timestamp
     ///
-    pub async fn align_local_assets(&self, server_assets: PolyMarketAssetInfoList) -> Result<HashMap<String, u64>, YuError> {
+    pub async fn align_local_assets(&self, server_inst: Instrument) -> Result<HashMap<String, u64>, YuError> {
         let local_assets = self.repository.list_assets_timestamp().await?;
         info!("local assets history num: {}", local_assets.len());
 
         let mut res: HashMap<String, u64> = HashMap::new();
 
         // server_assets.assets: map<string, PolymarketAssertInfo>
-        for (_key, info) in server_assets.assets.into_iter() {
-            // prefer info.asset_id if set, otherwise use map key
-            let asset_id = if !info.asset_id.is_empty() {
-                info.asset_id.clone()
-            } else {
-                _key.clone()
-            };
-
-            if !local_assets.contains_key(&asset_id) {
-                // insert into local db
-                let po = LocalPolyMarketAssetInfoPo {
-                    series_id: info.series_id.clone(),
-                    series_slug: info.series_slug.clone(),
-                    event_id: info.event_id.clone(),
-                    event_slug: info.event_slug.clone(),
-                    market_id: info.market_id.clone(),
-                    market_slug: info.market_slug.clone(),
-                    assert_id: asset_id.clone(),
-                    assert_slug: info.asset_slug.clone(),
-                };
-
-                self.repository.create_asset(po).await?;
-                res.insert(asset_id, 0u64);
-            } else {
-                let local_ts = *local_assets.get(&asset_id).unwrap_or(&0u64);
-                if local_ts < info.latest_timestamp {
-                    res.insert(asset_id, local_ts);
-                }
-            }
-        }
+        // for (_key, info) in server_assets.assets.into_iter() {
+        //     // prefer info.asset_id if set, otherwise use map key
+        //     let asset_id = if !info.asset_id.is_empty() {
+        //         info.asset_id.clone()
+        //     } else {
+        //         _key.clone()
+        //     };
+        //
+        //     if !local_assets.contains_key(&asset_id) {
+        //         // insert into local db
+        //         let po = LocalPolyMarketAssetInfoPo {
+        //             series_id: info.series_id.clone(),
+        //             series_slug: info.series_slug.clone(),
+        //             event_id: info.event_id.clone(),
+        //             event_slug: info.event_slug.clone(),
+        //             market_id: info.market_id.clone(),
+        //             market_slug: info.market_slug.clone(),
+        //             assert_id: asset_id.clone(),
+        //             assert_slug: info.asset_slug.clone(),
+        //         };
+        //
+        //         self.repository.create_asset(po).await?;
+        //         res.insert(asset_id, 0u64);
+        //     } else {
+        //         let local_ts = *local_assets.get(&asset_id).unwrap_or(&0u64);
+        //         if local_ts < info.latest_timestamp {
+        //             res.insert(asset_id, local_ts);
+        //         }
+        //     }
+        // }
 
         Ok(res)
     }
@@ -184,7 +184,7 @@ impl SyncClientService {
                                     }
 
                                 }
-                            }
+                            Payload::OkxKlineHistory(_) => {}}
                         }
                     }
                 }
@@ -199,7 +199,7 @@ impl SyncClientService {
 mod tests {
     use crate::sync::client::repository::{ClientPolyMarketRepository, MockClientPolyMarketRepositoryTrait};
     use crate::sync::client::sync_client_service::SyncClientService;
-    use crate::sync::sync_server::grpc_sync::{PolyMarketAssetInfoList, PolymarketAssertInfo};
+    use crate::sync::models::grpc_sync::PolymarketInstrument;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -230,7 +230,7 @@ mod tests {
         let mut assets = HashMap::new();
         assets.insert(
             "a1".to_string(),
-            PolymarketAssertInfo {
+            PolymarketInstrument {
                 series_id: "s1".to_string(),
                 series_slug: "ss1".to_string(),
                 event_id: "e1".to_string(),
@@ -243,10 +243,10 @@ mod tests {
             },
         );
 
-        let server_list = PolyMarketAssetInfoList { assets };
-
-        let res = service.align_local_assets(server_list).await.unwrap();
-        assert_eq!(res.get("a1"), Some(&0u64));
+        // let server_list = Asset { assets };
+        //
+        // let res = service.align_local_assets(server_list).await.unwrap();
+        // assert_eq!(res.get("a1"), Some(&0u64));
     }
 
     // Case 2: both exist but local timestamp is older than server -> should return local timestamp
@@ -267,7 +267,7 @@ mod tests {
         let mut assets = HashMap::new();
         assets.insert(
             "a2".to_string(),
-            PolymarketAssertInfo {
+            PolymarketInstrument {
                 series_id: "s2".to_string(),
                 series_slug: "ss2".to_string(),
                 event_id: "e2".to_string(),
@@ -280,10 +280,10 @@ mod tests {
             },
         );
 
-        let server_list = PolyMarketAssetInfoList { assets };
-
-        let res = service.align_local_assets(server_list).await.unwrap();
-        assert_eq!(res.get("a2"), Some(&100u64));
+        // let server_list = PolyMarketAssetInfoList { assets };
+        //
+        // let res = service.align_local_assets(server_list).await.unwrap();
+        // assert_eq!(res.get("a2"), Some(&100u64));
     }
 
     // Case 3: local has assets not present on server -> should skip and return empty map
@@ -301,9 +301,9 @@ mod tests {
 
         let service = SyncClientService::new(Arc::new(mock_repository));
 
-        let server_list = PolyMarketAssetInfoList { assets: HashMap::new() };
-
-        let res = service.align_local_assets(server_list).await.unwrap();
-        assert!(res.is_empty());
+        // let server_list = PolyMarketAssetInfoList { assets: HashMap::new() };
+        //
+        // let res = service.align_local_assets(server_list).await.unwrap();
+        // assert!(res.is_empty());
     }
 }

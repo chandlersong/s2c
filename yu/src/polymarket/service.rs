@@ -2,8 +2,8 @@ use crate::duck_db::{DuckDBDSProvider, DuckDBPO};
 use crate::duck_db_tables::DuckDbTableTrait;
 use crate::errors::YuError;
 use crate::polymarket::db_consts::PolyMarketTables::AssertInfo;
-use crate::polymarket::po::PolyMarketAssetInfoPo;
-use crate::sync::sync_server::grpc_sync::PolyMarketHistory;
+use crate::polymarket::po::PolyMarketInstrumentPo;
+use crate::sync::models::grpc_sync::PolyMarketHistory;
 use async_trait::async_trait;
 use li::tools::time::unix_time_now_u64_utc_seconds;
 use log::{error, info, trace, warn};
@@ -162,7 +162,7 @@ pub async fn new_series_history_market_service(
     history_broadcast: broadcast::Sender<PolyMarketHistory>,
     client: PolymarketApi,
     ds_provider: Option<DuckDBDSProvider>,
-    assert_infos: Arc<RwLock<Vec<PolyMarketAssetInfoPo>>>,
+    assert_infos: Arc<RwLock<Vec<PolyMarketInstrumentPo>>>,
 ) -> SeriesHistoryMarketService {
     Arc::new(SeriesHistoryMarketServiceImpl::new(series_ids, interval, history_broadcast, client, ds_provider, assert_infos).await)
 }
@@ -183,7 +183,7 @@ pub struct SeriesHistoryMarketServiceImpl {
     history_broadcast: broadcast::Sender<PolyMarketHistory>,
     client: PolymarketApi,
     ds_provider: DuckDBDSProvider,
-    assert_infos: Arc<RwLock<Vec<PolyMarketAssetInfoPo>>>,
+    assert_infos: Arc<RwLock<Vec<PolyMarketInstrumentPo>>>,
 }
 
 impl SeriesHistoryMarketServiceImpl {
@@ -193,7 +193,7 @@ impl SeriesHistoryMarketServiceImpl {
         history_broadcast: broadcast::Sender<PolyMarketHistory>,
         client: PolymarketApi,
         ds_provider: Option<DuckDBDSProvider>,
-        assert_infos: Arc<RwLock<Vec<PolyMarketAssetInfoPo>>>,
+        assert_infos: Arc<RwLock<Vec<PolyMarketInstrumentPo>>>,
     ) -> Self {
         let res = Self {
             series_ids,
@@ -227,7 +227,7 @@ impl SeriesHistoryMarketServiceImpl {
     ///
     /// 返回所有数据库中的PolyMarketAssertInfoPo
     ///
-    async fn refresh_assert_info_in_db(&self, markets: &Vec<MarketWithAddition>) -> Result<Vec<PolyMarketAssetInfoPo>, YuError> {
+    async fn refresh_assert_info_in_db(&self, markets: &Vec<MarketWithAddition>) -> Result<Vec<PolyMarketInstrumentPo>, YuError> {
         // acquire a connection
         let mut conn = match self.ds_provider.acquire() {
             Ok(c) => c,
@@ -239,7 +239,7 @@ impl SeriesHistoryMarketServiceImpl {
 
         // 读取已存在的条目并同时收集 asset_id
         let mut existing: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let mut all_pos: Vec<PolyMarketAssetInfoPo> = Vec::new();
+        let mut all_pos: Vec<PolyMarketInstrumentPo> = Vec::new();
         let sql = "SELECT series_id, series_slug, event_id, event_slug, market_id, market_slug, asset_id, assert_slug FROM polymarket_assert_info;";
         match conn.prepare(sql) {
             Ok(mut stmt) => {
@@ -257,7 +257,7 @@ impl SeriesHistoryMarketServiceImpl {
                                     if let Ok(asset_id) = row.get::<usize, String>(6) {
                                         let assert_slug: String = row.get(7).unwrap_or_default();
                                         existing.insert(asset_id.clone());
-                                        all_pos.push(PolyMarketAssetInfoPo {
+                                        all_pos.push(PolyMarketInstrumentPo {
                                             series_id: series_id.clone(),
                                             series_slug: series_slug.clone(),
                                             event_id: event_id.clone(),
@@ -293,7 +293,7 @@ impl SeriesHistoryMarketServiceImpl {
             }
         }
 
-        let mut new_pos: Vec<PolyMarketAssetInfoPo> = Vec::new();
+        let mut new_pos: Vec<PolyMarketInstrumentPo> = Vec::new();
 
         for market in markets.iter() {
             match &market.market.clob_token_ids {
@@ -311,7 +311,7 @@ impl SeriesHistoryMarketServiceImpl {
                             None => index.to_string(),
                             Some(outcomes) => outcomes.get(index).cloned().unwrap_or(index.to_string()),
                         };
-                        let po = PolyMarketAssetInfoPo {
+                        let po = PolyMarketInstrumentPo {
                             series_id: market.series_id.clone(),
                             series_slug: market.series_slug.clone(),
                             event_id: market.event_id.clone(),

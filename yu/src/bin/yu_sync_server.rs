@@ -10,11 +10,11 @@ use yu::cron_job;
 use yu::duck_db::DuckDBDSProvider;
 use yu::errors::YuError;
 use yu::polymarket::database::initial_tables;
-use yu::polymarket::po::PolyMarketAssetInfoPo;
+use yu::polymarket::po::PolyMarketInstrumentPo;
 use yu::polymarket::service::new_series_history_market_service;
-use yu::sync::sync_server::grpc_sync::PolyMarketHistory;
-use yu::sync::sync_server::grpc_sync::sync_interface_server::SyncInterfaceServer;
-use yu::sync::sync_server::{YuSyncServer, get_asset_timestamp};
+use yu::sync::models::grpc_sync::PolyMarketHistory;
+use yu::sync::models::grpc_sync::sync_interface_server::SyncInterfaceServer;
+use yu::sync::server::sync_server::{YuSyncServer, get_asset_timestamp};
 use yue::http_client::init_http_client;
 use yue::models::HistoryInterval;
 use yue::polymarket::restful_api::default_polymarket_api;
@@ -104,7 +104,7 @@ async fn start_polymarket_history(
     series_ids: Vec<String>,
     asset_timestamp: HashMap<String, u64>,
     polymarket_history_tx: Sender<PolyMarketHistory>,
-    asset_infos: Arc<RwLock<Vec<PolyMarketAssetInfoPo>>>,
+    asset_infos: Arc<RwLock<Vec<PolyMarketInstrumentPo>>>,
 ) -> Result<Sender<PolyMarketHistory>, YuError> {
     let series_history_service = new_series_history_market_service(
         series_ids,

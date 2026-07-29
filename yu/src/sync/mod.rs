@@ -1,2 +1,3 @@
 pub mod client;
-pub mod sync_server;
+pub mod models;
+pub mod server;

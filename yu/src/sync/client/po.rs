@@ -1,5 +1,5 @@
 use crate::postgresql_db::CopyInsertable;
-use crate::sync::sync_server::grpc_sync::PolyMarketHistory;
+use crate::sync::models::grpc_sync::PolyMarketHistory;
 use sqlx::{FromRow, Row};
 use yue::tools::get_snow_flake_id_u64;
 
