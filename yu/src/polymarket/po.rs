@@ -1,11 +1,12 @@
 use crate::duck_db::DuckDBPO;
 use crate::sync::models::grpc_sync::PolyMarketHistory;
+use bon::Builder;
 use duckdb::appender_params_from_iter;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 pub struct PolyMarketHistoryPo {
-    pub asset_id: String,
+    pub instrument_id: u64,
     pub timestamp: u64,
     pub price: f64,
 }
@@ -13,18 +14,17 @@ pub struct PolyMarketHistoryPo {
 impl DuckDBPO for PolyMarketHistoryPo {
     fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>> {
         appender_params_from_iter(vec![
-            &self.asset_id as &dyn duckdb::ToSql,
+            &self.instrument_id as &dyn duckdb::ToSql,
             &self.timestamp as &dyn duckdb::ToSql,
             &self.price as &dyn duckdb::ToSql,
         ])
     }
 }
 
-impl From<PolyMarketHistory> for PolyMarketHistoryPo {
-    fn from(history: PolyMarketHistory) -> Self {
-        let asset_id = history.asset_id.clone();
+impl PolyMarketHistoryPo {
+    pub fn from_vo(instrument_id: u64, history: PolyMarketHistory) -> Self {
         Self {
-            asset_id,
+            instrument_id,
             timestamp: history.timestamp,
             price: history.price,
         }
@@ -33,6 +33,7 @@ impl From<PolyMarketHistory> for PolyMarketHistoryPo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolyMarketInstrumentPo {
+    pub id: u64,
     pub series_id: String,
     pub series_slug: String,
     pub event_id: String,
@@ -41,11 +42,14 @@ pub struct PolyMarketInstrumentPo {
     pub market_slug: String,
     pub asset_id: String,
     pub asset_slug: String,
+    pub start_ms: u64,
+    pub end_ms: u64,
 }
 
 impl DuckDBPO for PolyMarketInstrumentPo {
     fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>> {
         appender_params_from_iter(vec![
+            &self.id as &dyn duckdb::ToSql,
             &self.series_id as &dyn duckdb::ToSql,
             &self.series_slug as &dyn duckdb::ToSql,
             &self.event_id as &dyn duckdb::ToSql,
@@ -54,6 +58,8 @@ impl DuckDBPO for PolyMarketInstrumentPo {
             &self.market_slug as &dyn duckdb::ToSql,
             &self.asset_id as &dyn duckdb::ToSql,
             &self.asset_slug as &dyn duckdb::ToSql,
+            &self.start_ms as &dyn duckdb::ToSql,
+            &self.end_ms as &dyn duckdb::ToSql,
         ])
     }
 }

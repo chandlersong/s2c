@@ -16,7 +16,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{RwLock, broadcast, mpsc, oneshot};
-use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 use yue::okx::models::common::InstrumentInfo;
 use yue::query_message::{DataSourceProviderTrait, InsertPayload, QueryCommand};
@@ -143,62 +142,7 @@ impl YuSyncServer {
         asset_infos: Arc<RwLock<Vec<PolyMarketInstrumentPo>>>,
     ) {
         info!("Sync server run loop started");
-
-        loop {
-            tokio::select! {
-                command = commands_rx.recv() => {
-                    match command {
-                        Some(SyncInternalCommand::QueryAssetTimestamp(tx)) => {
-                            let mut message_info:HashMap<String,PolymarketInstrument> = HashMap::new();
-
-                            let assets = asset_infos.read().await.clone();
-                            info!("开始查询内存中的asset 列表：现有{}",assets.len());
-                            for a in assets {
-                                let asset_id = a.asset_id;
-                                let info  = PolymarketInstrument{
-                                    series_id: asset_id.clone(),
-                                    series_slug: a.series_slug.clone(),
-                                    event_id: a.event_id.clone(),
-                                    event_slug: a.event_slug.clone(),
-                                    market_id: a.market_id.clone(),
-                                    market_slug: a.market_slug.clone(),
-                                    asset_id: asset_id.clone(),
-                                    asset_slug:a.asset_slug.clone(),
-                                    latest_timestamp: asset_timestamp.get(&asset_id).unwrap_or(&0).clone(),
-                                };
-                                message_info.insert(asset_id, info);
-                            }
-                            // let message = AssetInfoList{assets: message_info};
-                            // if let Err(e) = tx.send(Ok(message)){
-                            //     error!("send asset timestamp failed: {:?}", e);
-                            // }
-                        }
-                        None => {
-                            // internal command channel closed,退出 loop
-                            info!("Sync internal command channel closed, stopping run loop");
-                            break;
-                        }
-                    }
-                }
-                history = history_rx.recv() => {
-                    match history {
-                        Ok(poly_market_history) => {
-                            let latest_timestamp = poly_market_history.timestamp;
-                            let asset_id = poly_market_history.asset_id.clone();
-                            asset_timestamp.insert(asset_id,latest_timestamp);
-                            let po = PolyMarketHistoryPo::from(poly_market_history);
-                            let command = QueryCommand::Insert(InsertPayload::new_no_replay(po));
-                            if let Err(e) = polymarket_table.send(command).await {
-                                error!("send insert to polymarket_table failed: {:?}", e);
-                            }
-                        }
-                        Err(e) => {
-                            error!("recv history failed: {:?}", e);
-                        }
-                    }
-                }
-            }
-        }
+        todo!("1. 获取asset列表，2. 启动监听循环，3. 收到消息，4. 处理查询。");
     }
 
     ///

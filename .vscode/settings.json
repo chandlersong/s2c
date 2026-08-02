@@ -2,5 +2,10 @@
     "makefile.configureOnOpen": false,
     "chat.tools.terminal.autoApprove": {
         "mv": true
-    }
+    },
+    "python.testing.pytestArgs": [
+        "testdata"
+    ],
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true
 }

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio::sync::{RwLock, broadcast};
 use yu::config::get_config;
 use yu::errors::YuError;
-use yu::polymarket::service::{SeriesHistoryMarketServiceImpl, SeriesHistoryMarketServiceTrait};
+use yu::polymarket::service::{SeriesHistoryMarketServiceImpl, SeriesHistoryMarketServiceTrait, new_series_history_market_service};
 use yue::http_client::init_http_client;
 use yue::models::HistoryInterval;
 use yue::polymarket::restful_api::default_polymarket_api;
@@ -27,23 +27,15 @@ async fn main() -> Result<(), YuError> {
     special_log.insert("series_history_market_service_example".to_string(), LevelFilter::Trace);
     setup_logger(Some(LevelFilter::Warn), special_log).unwrap();
 
-    let series_ids = vec!["45".to_string(), "10151".to_string(), "10041".to_string()];
-    let (tx, mut rx) = broadcast::channel(10);
-    let service = SeriesHistoryMarketServiceImpl::new(
-        series_ids,
-        HistoryInterval::OneHour,
-        tx,
-        default_polymarket_api(),
-        None,
-        Arc::new(RwLock::new(vec![])),
-    )
-    .await;
+    // let series_ids = vec!["45".to_string(), "10151".to_string(), "10041".to_string()];
+    let series_ids = vec!["45".to_string()];
+    let service = new_series_history_market_service(series_ids, HistoryInterval::OneHour, default_polymarket_api(), None).await;
+    service.sync_instrument().await?;
+    let instruments = service.list_instruments().await?;
+    info!("find instruments num: {}", instruments.len());
+    // tokio::spawn(async move {
+    //     service.fetch_last_round_data().await.expect("TODO: panic message");
+    // });
 
-    tokio::spawn(async move {
-        service.fetch_last_round_data().await.expect("TODO: panic message");
-    });
-    while let Ok(h) = rx.recv().await {
-        info!("fetch asset{} at {} : {:?}", h.asset_id, h.timestamp, h.price);
-    }
     Ok(())
 }

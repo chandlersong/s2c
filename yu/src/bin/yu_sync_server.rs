@@ -62,7 +62,6 @@ async fn main() -> Result<(), YuError> {
         sync_server_config.get_batch_size(),
     )
     .await;
-    // let series_ids = vec!["45".to_string(), "10151".to_string(), "10041".to_string()];
     let series_ids = match sync_server_config.series_ids {
         None => {
             error!("No sync server series_ids provided");
@@ -79,14 +78,6 @@ async fn main() -> Result<(), YuError> {
             ids.clone()
         }
     };
-    match start_polymarket_history(series_ids, asset_timestamp.clone(), polymarket_history_tx, asset_infos).await {
-        Ok(value) => value,
-        Err(error) => {
-            error!("polymarket seies history启动失败！！！程序退出:{}", error);
-            return Err(error);
-        }
-    };
-
     info!("sync server start at  → {}", addr);
     Server::builder()
         .add_service(SyncInterfaceServer::new(server))
@@ -98,59 +89,4 @@ async fn main() -> Result<(), YuError> {
         })?;
     info!("sync server stop at  → {}", addr);
     Ok(())
-}
-
-async fn start_polymarket_history(
-    series_ids: Vec<String>,
-    asset_timestamp: HashMap<String, u64>,
-    polymarket_history_tx: Sender<PolyMarketHistory>,
-    asset_infos: Arc<RwLock<Vec<PolyMarketInstrumentPo>>>,
-) -> Result<Sender<PolyMarketHistory>, YuError> {
-    let series_history_service = new_series_history_market_service(
-        series_ids,
-        HistoryInterval::OneHour,
-        polymarket_history_tx.clone(),
-        default_polymarket_api(),
-        None,
-        asset_infos,
-    )
-    .await;
-    if let Err(e) = series_history_service.initial_history_data(asset_timestamp.clone()).await {
-        error!("Error initializing series history: {}", e);
-        return Err(e);
-    }
-
-    let series_history_service_clone = series_history_service.clone();
-    //每天4点，因为好像很多都是4点刷新
-    let _ = cron_job!("* 10 04 * * *", move |_uuid, _locked| {
-        let history_split_market_job = series_history_service_clone.clone();
-        Box::pin(async move {
-            info!("start refresh polymarket open market");
-            match history_split_market_job.clone().refresh_open_markets().await {
-                Ok(_) => {
-                    info!("refresh polymarket open market");
-                }
-                Err(e) => {
-                    error!("refresh polymarket open market: {}", e);
-                }
-            };
-        })
-    });
-
-    //每小时刷新一次
-    let _ = cron_job!("30 0 * * * *", move |_, _| {
-        let refresh_history_clone = series_history_service.clone();
-        info!("start polymarket fetch last one hour data");
-        Box::pin(async move {
-            match refresh_history_clone.clone().fetch_last_round_data().await {
-                Ok(_) => {
-                    debug!("polymarket fetch last one hour data success");
-                }
-                Err(e) => {
-                    error!("polymarket fetch last one hour data failed: {}", e);
-                }
-            };
-        })
-    });
-    Ok(polymarket_history_tx)
 }
