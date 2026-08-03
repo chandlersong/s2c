@@ -1,11 +1,10 @@
 use li::tools::logs::setup_logger;
 use log::{LevelFilter, info};
 use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::{RwLock, broadcast};
 use yu::config::get_config;
 use yu::errors::YuError;
-use yu::polymarket::service::{SeriesHistoryMarketServiceImpl, SeriesHistoryMarketServiceTrait, new_series_history_market_service};
+use yu::polymarket::database::initial_polymarket_tables;
+use yu::polymarket::service::default_series_history_market_service;
 use yue::http_client::init_http_client;
 use yue::models::HistoryInterval;
 use yue::polymarket::restful_api::default_polymarket_api;
@@ -27,9 +26,10 @@ async fn main() -> Result<(), YuError> {
     special_log.insert("series_history_market_service_example".to_string(), LevelFilter::Trace);
     setup_logger(Some(LevelFilter::Warn), special_log).unwrap();
 
+    initial_polymarket_tables(None)?;
     // let series_ids = vec!["45".to_string(), "10151".to_string(), "10041".to_string()];
     let series_ids = vec!["45".to_string()];
-    let service = new_series_history_market_service(series_ids, HistoryInterval::OneHour, default_polymarket_api(), None).await;
+    let service = default_series_history_market_service(series_ids, HistoryInterval::OneHour, default_polymarket_api(), None).await;
     service.sync_instrument().await?;
     let instruments = service.list_instruments().await?;
     info!("find instruments num: {}", instruments.len());

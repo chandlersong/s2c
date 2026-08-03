@@ -9,9 +9,9 @@ use yu::config::get_config;
 use yu::cron_job;
 use yu::duck_db::DuckDBDSProvider;
 use yu::errors::YuError;
-use yu::polymarket::database::initial_tables;
+use yu::polymarket::database::initial_polymarket_tables;
 use yu::polymarket::po::PolyMarketInstrumentPo;
-use yu::polymarket::service::new_series_history_market_service;
+use yu::polymarket::service::default_series_history_market_service;
 use yu::sync::models::grpc_sync::PolyMarketHistory;
 use yu::sync::models::grpc_sync::sync_interface_server::SyncInterfaceServer;
 use yu::sync::server::sync_server::{YuSyncServer, get_asset_timestamp};
@@ -40,7 +40,7 @@ async fn main() -> Result<(), YuError> {
         init_http_client(None);
     }
     let mut special_log = HashMap::new();
-    if let Err(e) = initial_tables(None) {
+    if let Err(e) = initial_polymarket_tables(None) {
         error!("Error initial tables: {}", e);
         return Err(e);
     }

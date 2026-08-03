@@ -7,7 +7,7 @@ use log::info;
 use std::sync::OnceLock;
 use yue::query_message::DataSourceProviderTrait;
 
-pub fn initial_tables(provider: Option<DuckDBDSProvider>) -> Result<(), YuError> {
+pub fn initial_polymarket_tables(provider: Option<DuckDBDSProvider>) -> Result<(), YuError> {
     let db_provider = provider.unwrap_or_else(|| DuckDBDSProvider::default());
     let conn = db_provider.acquire()?;
     for table in ALL_POLYMARKET_TABLES.iter() {

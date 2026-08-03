@@ -1,9 +1,7 @@
-use crate::duck_db::{DuckDBDSProvider, DuckDBPO};
-use crate::duck_db_tables::DuckDbTableTrait;
+use crate::duck_db::DuckDBDSProvider;
 use crate::errors::YuError;
-use crate::polymarket::db_consts::PolyMarketTables::AssertInfo;
+use crate::polymarket::duckdb_repository::{PolyMarketInstrumentRepository, get_default_instrument_repo, get_instrument_repo};
 use crate::polymarket::po::{PolyMarketHistoryPo, PolyMarketInstrumentPo};
-use crate::sync::models::grpc_sync::PolyMarketHistory;
 use async_trait::async_trait;
 use li::tools::time::{UnixTimeStamp, unix_time_now_u64_utc_seconds};
 use log::{error, info, trace, warn};
@@ -22,6 +20,8 @@ use yue::tools::get_snow_flake_id_u64;
 async fn split_series_markets_with_client(
     api: PolymarketApi,
     series_id: String,
+    existing_instruments: HashMap<String, String>,
+    inst_repo: PolyMarketInstrumentRepository,
 ) -> Result<(Vec<PolyMarketInstrumentPo>, Vec<PolyMarketInstrumentPo>), YuError> {
     let mut open_markets: Vec<PolyMarketInstrumentPo> = Vec::new();
     let mut close_markets: Vec<PolyMarketInstrumentPo> = Vec::new();
@@ -66,7 +66,7 @@ async fn split_series_markets_with_client(
                                     );
                                     continue;
                                 }
-                                let market_with_addition = PolyMarketInstrumentPo {
+                                let po = PolyMarketInstrumentPo {
                                     id: get_snow_flake_id_u64(),
                                     series_id: series_id_val.clone(),
                                     series_slug: series_slug.clone(),
@@ -79,11 +79,14 @@ async fn split_series_markets_with_client(
                                     start_ms: start_data,
                                     end_ms: end_data,
                                 };
-                                open_asset_markets_map.insert(inst_id.clone(), market_with_addition.clone());
+                                if !existing_instruments.contains_key(inst_id) {
+                                    inst_repo.insert_instrument(&po).await?;
+                                }
+                                open_asset_markets_map.insert(inst_id.clone(), po.clone());
                                 if now > start_data && now < end_data {
-                                    open_markets.push(market_with_addition)
+                                    open_markets.push(po)
                                 } else {
-                                    close_markets.push(market_with_addition)
+                                    close_markets.push(po)
                                 }
                             }
                         }
@@ -111,18 +114,22 @@ async fn split_series_markets_with_client(
 async fn get_all_instruments(
     series_ids: &Vec<String>,
     api: &PolymarketApi,
+    inst_repo: PolyMarketInstrumentRepository,
 ) -> Result<(Vec<PolyMarketInstrumentPo>, Vec<PolyMarketInstrumentPo>), YuError> {
     let mut open_markets: Vec<PolyMarketInstrumentPo> = vec![];
     let mut close_markets: Vec<PolyMarketInstrumentPo> = vec![];
 
     // 并发为每个 series id 运行 split_series_markets
     let mut handles = Vec::with_capacity(series_ids.len());
+    let existing_instruments = inst_repo.get_instrument_dictionary().await?;
     for id in series_ids {
         let id_cloned = id.clone();
         let client_cloned = api.clone();
-        handles.push(tokio::spawn(
-            async move { split_series_markets_with_client(client_cloned, id_cloned).await },
-        ));
+        let inst_repo_cloned = inst_repo.clone();
+        let existing_instrument_cloned = existing_instruments.clone();
+        handles.push(tokio::spawn(async move {
+            split_series_markets_with_client(client_cloned, id_cloned, existing_instrument_cloned, inst_repo_cloned).await
+        }));
     }
 
     for handle in handles {
@@ -161,13 +168,17 @@ pub trait SeriesHistoryMarketServiceTrait: Send + Sync {
 
 pub type SeriesHistoryMarketService = Arc<dyn SeriesHistoryMarketServiceTrait>;
 
-pub async fn new_series_history_market_service(
+pub async fn default_series_history_market_service(
     series_ids: Vec<String>,
     interval: HistoryInterval,
     client: PolymarketApi,
     ds_provider: Option<DuckDBDSProvider>,
 ) -> SeriesHistoryMarketService {
-    Arc::new(SeriesHistoryMarketServiceImpl::new(series_ids, interval, client))
+    let inst_repo = match ds_provider {
+        None => get_default_instrument_repo(),
+        Some(provider) => get_instrument_repo(provider),
+    };
+    Arc::new(SeriesHistoryMarketServiceImpl::new(series_ids, interval, client, inst_repo))
 }
 
 ///
@@ -185,15 +196,17 @@ pub struct SeriesHistoryMarketServiceImpl {
     interval: HistoryInterval,
     client: PolymarketApi,
     instruments: Arc<RwLock<Vec<PolyMarketInstrumentPo>>>,
+    inst_repo: PolyMarketInstrumentRepository,
 }
 
 impl SeriesHistoryMarketServiceImpl {
-    fn new(series_ids: Vec<String>, interval: HistoryInterval, client: PolymarketApi) -> Self {
+    fn new(series_ids: Vec<String>, interval: HistoryInterval, client: PolymarketApi, inst_repo: PolyMarketInstrumentRepository) -> Self {
         Self {
             series_ids,
             interval,
             client,
             instruments: Arc::new(RwLock::new(Vec::new())),
+            inst_repo,
         }
     }
 }
@@ -207,7 +220,7 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
     }
 
     async fn sync_instrument(&self) -> Result<Vec<PolyMarketInstrumentPo>, YuError> {
-        let (open, _) = get_all_instruments(&self.series_ids, &self.client).await?;
+        let (open, _) = get_all_instruments(&self.series_ids, &self.client, self.inst_repo.clone()).await?;
         {
             let mut instruments = self.instruments.write().await;
             *instruments = open.clone();
@@ -235,13 +248,109 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
 #[cfg(test)]
 mod tests {
     use crate::errors::YuError;
+    use crate::polymarket::duckdb_repository::MockPolyMarketInstrumentRepositoryTrait;
+    use crate::polymarket::service::{SeriesHistoryMarketServiceImpl, SeriesHistoryMarketServiceTrait};
     use crate::test_utils::create_memory_duckdb_provider;
     use serde_json::from_value;
     use serde_json::json;
+    use std::collections::HashMap;
     use std::sync::Arc;
     use yue::models::HistoryInterval;
     use yue::polymarket::restful_api::{MockPolymarketApiTrait, PolymarketApi};
     use yue::polymarket::restful_models::{Event, GetPricesHistoryResponse, MarketPriceHistoryPoint, Series};
+
+    ///
+    /// 测试目的主要是为了验证sync的逻辑是否正常。因为根据instrument的逻辑。
+    /// 数据准备：
+    /// 1. 返回的series和相应的market
+    /// 2. 其中market m1的instrument已经存在于数据库中。但是market m2则是新的。
+    ///
+    /// 结果
+    /// 1. 保存m2里面的两个token
+    ///
+    #[tokio::test]
+    pub async fn test_sync_instrument() -> Result<(), YuError> {
+        // 构造 Series / Event / Market JSON 并反序列化为结构体
+        let series_json = json!({
+            "id": "s1",
+            "slug": "series1",
+            "events": [ { "id": "e1", "slug": "event1" } ]
+        });
+        let series: Series = from_value(series_json).expect("deserialize series");
+
+        let market1 = json!({
+            "id": "m1",
+            "slug": "market1",
+            "conditionId": "c1",
+            "marketMakerAddress": "addr",
+            "startDate": "2026-01-01T00:00:00Z",
+            "endDate": "2027-01-01T00:00:00Z",
+            "clobTokenIds": ["token11", "token12"],
+            "outcomes": ["Yes", "No"]
+        });
+
+        let market2 = json!({
+            "id": "m2",
+            "slug": "market2",
+            "conditionId": "c2",
+            "marketMakerAddress": "addr",
+            "startDate": "2026-01-01T00:00:00Z",
+            "endDate": "2027-01-01T00:00:00Z",
+            "clobTokenIds": ["token21", "token22"],
+            "outcomes": ["Yes", "No"]
+        });
+        // 仅保留 market_json 以便嵌入 event_json；无需单独绑定 market 变量
+        let event_json = json!({
+            "id": "e1",
+            "slug": "event1",
+            "markets": [ market1.clone(),market2.clone() ]
+        });
+        let event: Event = from_value(event_json).expect("deserialize event");
+
+        // 设置 MockPolymarketClient
+        let mut mock_api = MockPolymarketApiTrait::new();
+
+        // query_series_by_id -> return series with minimal info
+        let series_clone = series.clone();
+        mock_api.expect_query_series_by_id().returning(move |_id, _| {
+            let s = series_clone.clone();
+            Ok(s)
+        });
+
+        // query_event_id -> return event with markets
+        let event_clone = event.clone();
+        mock_api.expect_query_event_id().returning(move |_id, _inc_chat, _inc_tmplt| {
+            let e = event_clone.clone();
+            Ok(e)
+        });
+
+        let mut mock_inst_repo = MockPolyMarketInstrumentRepositoryTrait::new();
+        mock_inst_repo.expect_get_instrument_dictionary().returning(|| {
+            Ok(HashMap::from([
+                ("token11".to_string(), "1".to_string()),
+                ("token12".to_string(), "2".to_string()),
+            ]))
+        });
+
+        mock_inst_repo
+            .expect_insert_instrument()
+            .withf(|po| po.asset_id == "token22")
+            .times(1)
+            .returning(|_| Ok(()));
+        mock_inst_repo
+            .expect_insert_instrument()
+            .withf(|po| po.asset_id == "token21")
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let client: PolymarketApi = Arc::new(mock_api);
+        let inst_repo = Arc::new(mock_inst_repo);
+        let series_ids = vec!["s1".to_string()];
+        let service = SeriesHistoryMarketServiceImpl::new(series_ids, HistoryInterval::OneHour, client, inst_repo);
+        let instruments = service.sync_instrument().await?;
+        assert_eq!(instruments.len(), 4);
+        Ok(())
+    }
 
     #[tokio::test]
     pub async fn test_series_history_service_with_mock_client() -> Result<(), YuError> {
@@ -309,71 +418,6 @@ mod tests {
         // let (tx, mut rx) = tokio::sync::broadcast::channel(16);
         let series_ids = vec!["s1".to_string()];
 
-        let (provider, _) = create_memory_duckdb_provider();
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    pub async fn test_initial_data_with_mock_client() -> Result<(), YuError> {
-        // 构造 Series / Event / Market JSON 并反序列化为结构体
-        let series_json = json!({
-            "id": "s1",
-            "slug": "series1",
-            "events": [ { "id": "e1", "slug": "event1" } ]
-        });
-        let series: Series = from_value(series_json).expect("deserialize series");
-
-        let market_json = json!({
-            "id": "m1",
-            "slug": "market1",
-            "conditionId": "c1",
-            "marketMakerAddress": "addr",
-            "startDate": "2026-01-01T00:00:00Z",
-            "endDate": "2027-01-01T00:00:00Z",
-            "clobTokenIds": ["tokenA"],
-            "outcomes": ["Yes", "No"]
-        });
-        let event_json = json!({
-            "id": "e1",
-            "slug": "event1",
-            "markets": [ market_json.clone() ]
-        });
-        let event: Event = from_value(event_json).expect("deserialize event");
-
-        // prices history response
-        let history_resp = GetPricesHistoryResponse {
-            history: vec![MarketPriceHistoryPoint { t: 1000, p: 0.42 }],
-        };
-
-        // 设置 MockPolymarketClient
-        let mut mock = MockPolymarketApiTrait::new();
-
-        // query_series_by_id -> return series with minimal info
-        let series_clone = series.clone();
-        mock.expect_query_series_by_id().returning(move |_id, _| {
-            let s = series_clone.clone();
-            Ok(s)
-        });
-
-        // query_event_id -> return event with markets
-        let event_clone = event.clone();
-        mock.expect_query_event_id().returning(move |_id, _inc_chat, _inc_tmplt| {
-            let e = event_clone.clone();
-            Ok(e)
-        });
-
-        // query_prices_history -> return history_resp
-        let history_clone = history_resp.clone();
-        mock.expect_query_prices_history().returning(move |_q| {
-            let r = history_clone.clone();
-            Ok(r)
-        });
-
-        let client: PolymarketApi = Arc::new(mock);
-
-        let series_ids = vec!["s1".to_string()];
-        let interval = HistoryInterval::OneMinute;
         let (provider, _) = create_memory_duckdb_provider();
 
         Ok(())
