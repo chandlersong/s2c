@@ -1,24 +1,15 @@
-use async_trait::async_trait;
 use li::tools::logs::setup_logger;
 use li::tools::time::unix_2_readable;
-use li::websocket::connection::{CommandMessage, MessageHandlerTrait, ToServerMessage, WebSocketConnection};
 use log::{LevelFilter, error, info};
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
 use yu::config::get_config;
 use yu::errors::YuError;
 use yu::okx::duckdb_repository::get_default_kline_repo;
 use yu::okx::duckdb_tables::initial_okx_tables;
 use yu::okx::service::fetch_history;
-use yue::binance::bn_models::spot_websocket_stream::{
-    BinanceSpotWebSocketStreamResponse, BinanceSpotWebSocketStreamWrapper, DepthUpdateStreamPayload,
-};
 use yue::http_client::init_http_client;
 use yue::models::HistoryInterval;
-use yue::okx::models::websocket::{ArgBody, OkxWebsocketResponse};
 use yue::okx::restful_api::default_okx_api;
-use yue::okx::websocket_channel::{CommandRequest, OXK_BUSINESS_WEBSOCKET, OXK_PUBLIC_WEBSOCKET};
 
 #[tokio::main]
 async fn main() -> Result<(), YuError> {
@@ -52,7 +43,7 @@ async fn main() -> Result<(), YuError> {
     );
     let mut fist_kline_timestamp = interval.get_now_close_unix_ms_utc() + interval.to_milliseconds();
     let interval_ms = interval.to_milliseconds();
-    let klines = fetch_history(inst_id.clone(), start, end, &interval, &okx_api, &kline_repo, None, Some(5)).await?;
+    let klines = fetch_history(inst_id, start, end, &interval, &okx_api, &kline_repo, None, Some(5)).await?;
     info!("find {} klines", klines.len());
     for kline in &klines {
         let real_gap = fist_kline_timestamp - kline.ts;

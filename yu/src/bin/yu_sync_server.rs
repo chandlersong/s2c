@@ -1,23 +1,16 @@
 use li::tools::logs::{parse_level, setup_logger};
-use log::{LevelFilter, debug, error, info};
+use log::{LevelFilter, error, info};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::broadcast::Sender;
 use tokio::sync::{RwLock, broadcast};
 use tonic::transport::Server;
 use yu::config::get_config;
-use yu::cron_job;
 use yu::duck_db::DuckDBDSProvider;
 use yu::errors::YuError;
 use yu::polymarket::database::initial_polymarket_tables;
-use yu::polymarket::po::PolyMarketInstrumentPo;
-use yu::polymarket::service::default_series_history_market_service;
-use yu::sync::models::grpc_sync::PolyMarketHistory;
 use yu::sync::models::grpc_sync::sync_interface_server::SyncInterfaceServer;
 use yu::sync::server::sync_server::{YuSyncServer, get_asset_timestamp};
 use yue::http_client::init_http_client;
-use yue::models::HistoryInterval;
-use yue::polymarket::restful_api::default_polymarket_api;
 
 #[tokio::main]
 async fn main() -> Result<(), YuError> {
