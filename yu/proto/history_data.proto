@@ -77,7 +77,7 @@ message Empty {}
 
 // 历史数据同步请求
 message SyncRequest {
-  string asset_id = 1;  // 资产ID
+  uint64 inst_id = 1;   // 资产ID
   uint64 timestamp = 2;  // 起始时间戳，server推送该时间之后的所有数据
   Exchange exchange = 3; // 交易所类型
 }
@@ -88,7 +88,7 @@ message SubscribeRequest {
 }
 
 message PolyMarketHistory {
-  string asset_id = 1;
+  uint64 inst_id = 1;
   uint64 timestamp = 2;
   double price = 3;
 }

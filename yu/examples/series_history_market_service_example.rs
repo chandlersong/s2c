@@ -7,7 +7,6 @@ use yu::polymarket::database::initial_polymarket_tables;
 use yu::polymarket::service::default_series_history_market_service;
 use yue::http_client::init_http_client;
 use yue::models::HistoryInterval;
-use yue::polymarket::restful_api::default_polymarket_api;
 
 #[tokio::main]
 async fn main() -> Result<(), YuError> {
@@ -29,13 +28,19 @@ async fn main() -> Result<(), YuError> {
     initial_polymarket_tables(None)?;
     // let series_ids = vec!["45".to_string(), "10151".to_string(), "10041".to_string()];
     let series_ids = vec!["45".to_string()];
-    let service = default_series_history_market_service(series_ids, HistoryInterval::OneHour, default_polymarket_api(), None).await;
+    let service = default_series_history_market_service(series_ids, HistoryInterval::OneHour).await;
     service.sync_instrument().await?;
     let instruments = service.list_instruments().await?;
     info!("find instruments num: {}", instruments.len());
-    // tokio::spawn(async move {
-    //     service.fetch_last_round_data().await.expect("TODO: panic message");
-    // });
-
+    let mut rx = service.subscribe_history_broadcast();
+    tokio::spawn(async move {
+        service.fetch_latest_history().await.expect("TODO: panic message");
+    });
+    tokio::spawn(async move {
+        while let Ok(history) = rx.recv().await {
+            info!("receive history: {}", history);
+        }
+    });
+    tokio::time::sleep(tokio::time::Duration::from_mins(5)).await;
     Ok(())
 }

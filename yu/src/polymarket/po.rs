@@ -2,6 +2,7 @@ use crate::duck_db::DuckDBPO;
 use crate::sync::models::grpc_sync::PolyMarketHistory;
 use bon::Builder;
 use duckdb::appender_params_from_iter;
+use li::tools::time::unix_2_readable;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Builder)]
@@ -28,6 +29,19 @@ impl PolyMarketHistoryPo {
             timestamp: history.timestamp,
             price: history.price,
         }
+    }
+}
+
+// Provide a Display implementation so the PO can be printed with `{}` and `.to_string()`
+impl std::fmt::Display for PolyMarketHistoryPo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "PolyMarketHistoryPo {{ instrument_id: {}, timestamp: {}, price: {} }}",
+            self.instrument_id,
+            unix_2_readable(&(self.timestamp * 1000)),
+            self.price
+        )
     }
 }
 

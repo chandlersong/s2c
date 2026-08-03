@@ -40,7 +40,7 @@ async fn main() -> Result<(), YuError> {
     for i in 0..1000u64 {
         let item = LocalPolyMarketHistoryPo {
             id: i + 1,
-            asset_id: format!("series_{}", i + 1),
+            inst_id: 123,
             timestamp: now,
             price: 100.0 + ((i % 100) as f64) * 0.123, // 简单变化，避免全相同
             batch_timestamp: now,

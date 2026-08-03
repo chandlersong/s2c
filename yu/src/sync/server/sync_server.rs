@@ -200,7 +200,7 @@ impl YuSyncServer {
                     // 执行带分页的查询，绑定 offset 参数
                     let mapped_iter = match stmt.query_map(params![offset as i64], |row| {
                         Ok(PolyMarketHistory {
-                            asset_id: row.get("asset_id")?,
+                            inst_id: row.get("asset_id")?,
                             timestamp: row.get("timestamp")?,
                             price: row.get("price")?,
                         })
@@ -358,26 +358,6 @@ impl YuSyncServer {
 }
 #[tonic::async_trait]
 impl SyncInterface for YuSyncServer {
-    // async fn get_poly_market_assert_info(&self, _request: Request<Empty>) -> Result<Response<PolyMarketAssetInfoList>, Status> {
-    //     let (tx, rx) = oneshot::channel();
-    //
-    //     // 发送内部命令到后台 task
-    //     if let Err(e) = self.commands_sender.send(SyncInternalCommand::QueryAssetTimestamp(tx)).await {
-    //         error!("send query asset timestamp failed: {:?}", e);
-    //         return Err(Status::internal("sync server not running"));
-    //     }
-    //
-    //     // 等待后台返回
-    //     match rx.await {
-    //         Ok(Ok(asset_ts)) => Ok(Response::new(asset_ts)),
-    //         Ok(Err(status)) => Err(status),
-    //         Err(e) => {
-    //             error!("get asset timestamp failed,{}", e);
-    //             Err(Status::internal("internal server error"))
-    //         }
-    //     }
-    // }
-
     async fn get_instrument_info(&self, request: Request<Empty>) -> Result<Response<InstrumentInfoList>, Status> {
         todo!()
     }

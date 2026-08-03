@@ -21,7 +21,7 @@ pub struct LocalPolyMarketAssetInfoPo {
 #[derive(Clone, Debug)]
 pub struct LocalPolyMarketHistoryPo {
     pub id: u64,
-    pub asset_id: String,
+    pub inst_id: u64,
     pub timestamp: u64,
     pub price: f64,
     pub batch_timestamp: u64,
@@ -31,7 +31,7 @@ impl LocalPolyMarketHistoryPo {
     pub fn from_polymarket_history(history: PolyMarketHistory, batch_timestamp: u64) -> LocalPolyMarketHistoryPo {
         LocalPolyMarketHistoryPo {
             id: get_snow_flake_id_u64(),
-            asset_id: history.asset_id,
+            inst_id: history.inst_id,
             timestamp: history.timestamp,
             price: history.price,
             batch_timestamp,
@@ -44,7 +44,7 @@ impl<'r> FromRow<'r, sqlx::postgres::PgRow> for LocalPolyMarketHistoryPo {
     fn from_row(row: &'r sqlx::postgres::PgRow) -> Result<Self, sqlx::Error> {
         let id_i64: i64 = row.try_get("id")?;
         // 注意列名是 asset_id
-        let asset_id: String = row.try_get("asset_id")?;
+        let asset_id: i64 = row.try_get("asset_id")?;
 
         // timestamp 在数据库中为 timestamptz 时，使用 chrono::DateTime<Utc> 读取并转换为秒
         let timestamp_dt: chrono::DateTime<chrono::Utc> = row.try_get("timestamp")?;
@@ -57,7 +57,7 @@ impl<'r> FromRow<'r, sqlx::postgres::PgRow> for LocalPolyMarketHistoryPo {
 
         Ok(Self {
             id: id_i64 as u64,
-            asset_id,
+            inst_id: asset_id as u64,
             timestamp,
             price,
             batch_timestamp,
@@ -83,6 +83,6 @@ impl CopyInsertable for LocalPolyMarketHistoryPo {
             _ => chrono::Utc.timestamp_opt(0, 0).single().unwrap(),
         };
         let bts = bts_dt.to_rfc3339();
-        format!("{},{},{},{},{}", self.id, self.asset_id, ts, self.price, bts)
+        format!("{},{},{},{},{}", self.id, self.inst_id, ts, self.price, bts)
     }
 }

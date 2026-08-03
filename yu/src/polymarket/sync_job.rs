@@ -1,5 +1,5 @@
 use crate::errors::YuError;
-use crate::polymarket::service::{SeriesHistoryMarketService, default_series_history_market_service};
+use crate::polymarket::service::SeriesHistoryMarketService;
 use yue::models::HistoryInterval;
 use yue::polymarket::restful_api::default_polymarket_api;
 

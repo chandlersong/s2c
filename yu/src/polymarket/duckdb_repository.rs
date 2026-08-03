@@ -1,12 +1,18 @@
 use crate::duck_db::DuckDBDSProvider;
+use crate::duck_db_tables::DuckTableTableChannel;
 use crate::errors::YuError;
-use crate::polymarket::po::PolyMarketInstrumentPo;
+use crate::polymarket::database::get_polymarket_price_history_table;
+use crate::polymarket::po::{PolyMarketHistoryPo, PolyMarketInstrumentPo};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
-use yue::query_message::DataSourceProviderTrait;
+use tokio::sync::oneshot;
+use yue::query_message::{DataSourceProviderTrait, InsertPayload, QueryCommand};
 use yue::tools::get_snow_flake_id_u64;
 
+///
+/// 查询polymarket_instruments
+///
 #[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
 #[async_trait]
 pub trait PolyMarketInstrumentRepositoryTrait {
@@ -17,22 +23,45 @@ pub trait PolyMarketInstrumentRepositoryTrait {
     ///
     /// 返回表中id和asset_id的关系。key为asset_id,val为数据库id
     ///
-    async fn get_instrument_dictionary(&self) -> Result<HashMap<String, String>, YuError>;
+    async fn get_instrument_dictionary(&self) -> Result<HashMap<String, u64>, YuError>;
 }
+
+///
+/// 查询polymarket_price_history
+///
 #[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
 #[async_trait]
-pub trait PolyMarketHistoryRepositoryTrait {}
+pub trait PolyMarketHistoryRepositoryTrait {
+    async fn insert_history(&self, po: PolyMarketHistoryPo) -> Result<(), YuError>;
+
+    ///
+    /// 返回表中id和timestamp的关系。key为instrument_id,val为数据库中最大的timestamp
+    ///
+    async fn get_max_timestamp_dictionary(&self) -> Result<HashMap<String, u64>, YuError>;
+}
 
 pub type PolyMarketInstrumentRepository = Arc<dyn PolyMarketInstrumentRepositoryTrait + Send + Sync>;
 pub type PolyMarketHistoryRepository = Arc<dyn PolyMarketHistoryRepositoryTrait + Send + Sync>;
 
-pub fn get_default_instrument_repo() -> PolyMarketInstrumentRepository {
-    Arc::new(PolyMarketInstrumentRepositoryImpl::default())
+pub fn get_instrument_repo(provider: Option<DuckDBDSProvider>) -> PolyMarketInstrumentRepository {
+    match provider {
+        None => Arc::new(PolyMarketInstrumentRepositoryImpl::default()),
+        Some(p) => Arc::new(PolyMarketInstrumentRepositoryImpl { provider: p }),
+    }
 }
 
-pub fn get_instrument_repo(provider: DuckDBDSProvider) -> PolyMarketInstrumentRepository {
-    Arc::new(PolyMarketInstrumentRepositoryImpl { provider })
+pub fn get_history_repo(
+    provider: Option<DuckDBDSProvider>,
+    db_channel: Option<DuckTableTableChannel<PolyMarketHistoryPo>>,
+) -> PolyMarketHistoryRepository {
+    let db_provider = provider.unwrap_or_else(|| DuckDBDSProvider::default());
+    let channel = db_channel.unwrap_or_else(|| get_polymarket_price_history_table());
+    Arc::new(PolyMarketHistoryRepositoryImpl {
+        provider: db_provider,
+        channel,
+    })
 }
+
 pub struct PolyMarketInstrumentRepositoryImpl {
     provider: DuckDBDSProvider,
 }
@@ -119,13 +148,65 @@ impl PolyMarketInstrumentRepositoryTrait for PolyMarketInstrumentRepositoryImpl 
         Ok(())
     }
 
-    async fn get_instrument_dictionary(&self) -> Result<HashMap<String, String>, YuError> {
+    async fn get_instrument_dictionary(&self) -> Result<HashMap<String, u64>, YuError> {
         let conn = self.provider.acquire()?;
         let mut stmt = conn.prepare("SELECT id, asset_id FROM polymarket_instruments;")?;
         let mut rows = stmt.query([])?;
-        let mut res: HashMap<String, String> = HashMap::new();
+        let mut res: HashMap<String, u64> = HashMap::new();
         while let Some(row) = rows.next()? {
             // id might be stored as i64/u64/string
+            let id = if let Ok(v) = row.get::<usize, u64>(0) {
+                v
+            } else if let Ok(v) = row.get::<usize, i64>(0) {
+                v as u64
+            } else if let Ok(v) = row.get::<usize, String>(0) {
+                v.parse::<u64>().unwrap_or(0)
+            } else {
+                continue;
+            };
+            let asset_id: String = row.get(1)?;
+            res.insert(asset_id, id);
+        }
+        Ok(res)
+    }
+}
+
+pub struct PolyMarketHistoryRepositoryImpl {
+    provider: DuckDBDSProvider,
+    channel: DuckTableTableChannel<PolyMarketHistoryPo>,
+}
+
+impl Default for PolyMarketHistoryRepositoryImpl {
+    fn default() -> Self {
+        Self {
+            provider: DuckDBDSProvider::default(),
+            channel: get_polymarket_price_history_table(),
+        }
+    }
+}
+
+#[async_trait]
+impl PolyMarketHistoryRepositoryTrait for PolyMarketHistoryRepositoryImpl {
+    async fn insert_history(&self, po: PolyMarketHistoryPo) -> Result<(), YuError> {
+        let (tx, rx) = oneshot::channel();
+        let command = QueryCommand::Insert(InsertPayload::new(po, tx));
+        self.channel
+            .send(command)
+            .await
+            .map_err(|e| YuError::new(&format!("Failed to send command: {}", e)))?;
+        match rx.await {
+            Ok(_) => Ok(()),
+            Err(e) => Err(YuError::new(&format!("Failed to receive response: {}", e))),
+        }
+    }
+
+    async fn get_max_timestamp_dictionary(&self) -> Result<HashMap<String, u64>, YuError> {
+        let conn = self.provider.acquire()?;
+        let mut stmt = conn.prepare("SELECT instrument_id, max(timestamp) FROM polymarket_price_history GROUP BY instrument_id;")?;
+        let mut rows = stmt.query([])?;
+        let mut res: HashMap<String, u64> = HashMap::new();
+        while let Some(row) = rows.next()? {
+            // instrument_id may be stored as u64/i64/string
             let id_str = if let Ok(v) = row.get::<usize, u64>(0) {
                 v.to_string()
             } else if let Ok(v) = row.get::<usize, i64>(0) {
@@ -135,8 +216,22 @@ impl PolyMarketInstrumentRepositoryTrait for PolyMarketInstrumentRepositoryImpl 
             } else {
                 continue;
             };
-            let asset_id: String = row.get(1)?;
-            res.insert(asset_id, id_str);
+
+            // max(timestamp) may be numeric or string
+            let max_ts: u64 = if let Ok(v) = row.get::<usize, u64>(1) {
+                v
+            } else if let Ok(v) = row.get::<usize, i64>(1) {
+                v as u64
+            } else if let Ok(s) = row.get::<usize, String>(1) {
+                match s.parse::<u64>() {
+                    Ok(n) => n,
+                    Err(_) => continue,
+                }
+            } else {
+                continue;
+            };
+
+            res.insert(id_str, max_ts);
         }
         Ok(res)
     }
