@@ -1,18 +1,15 @@
-use crate::duck_db::DuckDBDSProvider;
-use crate::duck_db_tables::DuckTableTableChannel;
 use crate::errors::YuError;
 use crate::polymarket::duckdb_repository::{PolyMarketHistoryRepository, PolyMarketInstrumentRepository, get_history_repo, get_instrument_repo};
 use crate::polymarket::po::{PolyMarketHistoryPo, PolyMarketInstrumentPo};
-use crate::sync::models::grpc_sync::PolyMarketHistory;
 use async_trait::async_trait;
-use li::tools::time::{UnixTimeStamp, unix_time_now_u64_utc_seconds};
-use log::{error, info, trace, warn};
+use li::tools::time::unix_time_now_u64_utc_seconds;
+use log::{error, info, trace};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, broadcast};
 use yue::models::HistoryInterval;
 use yue::polymarket::restful_api::{PolymarketApi, default_polymarket_api};
-use yue::polymarket::restful_models::{GetPricesHistoryQuery, Market};
+use yue::polymarket::restful_models::GetPricesHistoryQuery;
 use yue::tools::get_snow_flake_id_u64;
 
 /**
@@ -322,8 +319,8 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
                 None => instrument.start_ms,
                 Some(v) => v.clone(),
             };
-            // tests expect query.start_ts to be start_ts +30, so use saturating_sub to avoid underflow
-            let query_start = start_ts.saturating_add(30);
+            // tests expect query.start_ts to be start_ts - 30, so use saturating_sub to avoid underflow
+            let query_start = start_ts.saturating_sub(30);
             if (query_start > now) || ((now - start_ts) < self.interval.to_second()) {
                 continue;
             }
@@ -378,6 +375,7 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
 mod tests {
     use crate::errors::YuError;
     use crate::polymarket::duckdb_repository::{MockPolyMarketHistoryRepositoryTrait, MockPolyMarketInstrumentRepositoryTrait};
+    use crate::polymarket::po::PolyMarketInstrumentPo;
     use crate::polymarket::service::{SeriesHistoryMarketServiceImpl, SeriesHistoryMarketServiceTrait};
     use serde_json::from_value;
     use serde_json::json;
@@ -385,7 +383,7 @@ mod tests {
     use std::sync::Arc;
     use yue::models::HistoryInterval;
     use yue::polymarket::restful_api::{MockPolymarketApiTrait, PolymarketApi};
-    use yue::polymarket::restful_models::{Event, GetPricesHistoryResponse, MarketPriceHistoryPoint, Series};
+    use yue::polymarket::restful_models::{Event, GetPricesHistoryQuery, GetPricesHistoryResponse, MarketPriceHistoryPoint, Series};
 
     ///
     /// 测试目的主要是为了验证sync的逻辑是否正常。因为根据instrument的逻辑。
@@ -486,71 +484,77 @@ mod tests {
         Ok(())
     }
 
+    ///
+    /// 测试query_and_broadcast的两个功能。
+    /// 1. 过滤返回超过结束时间的history
+    /// 2. 会把history的timestamp规整。
+    ///
     #[tokio::test]
-    pub async fn test_series_history_service_with_mock_client() -> Result<(), YuError> {
+    pub async fn test_query_and_broadcast() -> Result<(), YuError> {
         // 构造 Series / Event / Market JSON 并反序列化为结构体
-        let interval = HistoryInterval::OneMinute;
-        let series_json = json!({
-            "id": "s1",
-            "slug": "series1",
-            "events": [ { "id": "e1", "slug": "event1" } ]
-        });
-        let series: Series = from_value(series_json).expect("deserialize series");
-
-        let market_json = json!({
-            "id": "m1",
-            "slug": "market1",
-            "conditionId": "c1",
-            "marketMakerAddress": "addr",
-            "startDate": "2026-01-01T00:00:00Z",
-            "endDate": "2027-01-01T00:00:00Z",
-            "clobTokenIds": ["tokenA"],
-            "outcomes": ["Yes", "No"]
-        });
+        let interval = HistoryInterval::OneHour;
         // 仅保留 market_json 以便嵌入 event_json；无需单独绑定 market 变量
-        let event_json = json!({
-            "id": "e1",
-            "slug": "event1",
-            "markets": [ market_json.clone() ]
-        });
-        let event: Event = from_value(event_json).expect("deserialize event");
-
-        // prices history response
+        let interval_sec = interval.to_second();
+        // 因为真实情况，他会返回时间的东西。所以这里也就做过滤。
         let history_resp = GetPricesHistoryResponse {
-            history: vec![MarketPriceHistoryPoint {
-                t: interval.get_now_close_unix_sec_utc(),
-                p: 0.42,
-            }],
+            history: vec![
+                MarketPriceHistoryPoint {
+                    t: interval.get_now_close_unix_sec_utc() + 10,
+                    p: 0.1,
+                },
+                MarketPriceHistoryPoint {
+                    t: interval.get_now_close_unix_sec_utc() + 60 * 10,
+                    p: 0.2,
+                },
+            ],
         };
 
         // 设置 MockPolymarketClient
-        let mut mock = MockPolymarketApiTrait::new();
-
-        // query_series_by_id -> return series with minimal info
-        let series_clone = series.clone();
-        mock.expect_query_series_by_id().returning(move |_id, _| {
-            let s = series_clone.clone();
-            Ok(s)
-        });
-
-        // query_event_id -> return event with markets
-        let event_clone = event.clone();
-        mock.expect_query_event_id().returning(move |_id, _inc_chat, _inc_tmplt| {
-            let e = event_clone.clone();
-            Ok(e)
-        });
+        let mut mock_api = MockPolymarketApiTrait::new();
 
         // query_prices_history -> return history_resp
         let history_clone = history_resp.clone();
-        mock.expect_query_prices_history().returning(move |_q| {
+        mock_api.expect_query_prices_history().returning(move |_q| {
             let r = history_clone.clone();
             Ok(r)
         });
 
-        let client: PolymarketApi = Arc::new(mock);
-
-        // let (tx, mut rx) = tokio::sync::broadcast::channel(16);
+        let client: PolymarketApi = Arc::new(mock_api);
         let series_ids = vec!["s1".to_string()];
+        let mock_inst_repo = MockPolyMarketInstrumentRepositoryTrait::new();
+        let inst_repo = Arc::new(mock_inst_repo);
+        let mut mock_history_repo = MockPolyMarketHistoryRepositoryTrait::new();
+        let expected_timestamp = interval.get_now_close_unix_sec_utc();
+        mock_history_repo
+            .expect_insert_history()
+            .times(1)
+            .withf(move |po| po.price == 0.1 && po.timestamp == expected_timestamp)
+            .returning(|_| Ok(()));
+        let history_repo = Arc::new(mock_history_repo);
+
+        let service = SeriesHistoryMarketServiceImpl::new(series_ids, HistoryInterval::OneHour, client, inst_repo, history_repo);
+        let query_payload = GetPricesHistoryQuery {
+            market: "market_slug".to_string(),
+            start_ts: Some(interval.get_now_close_unix_sec_utc() + 10),
+            end_ts: Some(interval.get_now_close_unix_sec_utc() + 60 * 10),
+            interval: Some(interval.as_ref().to_string()),
+            fidelity: Some((interval.to_second() / 60) as u32),
+        };
+        let inst = PolyMarketInstrumentPo::builder()
+            .id(123)
+            .series_id("series_id".to_string())
+            .series_slug("series_slug".to_string())
+            .event_id("event_id".to_string())
+            .event_slug("event_slug".to_string())
+            .market_slug("market_slug".to_string())
+            .market_id("market_id".to_string())
+            .asset_id("asset_id".to_string())
+            .asset_slug("asset_slug".to_string())
+            .start_ms(1)
+            .end_ms(1)
+            .build();
+        let po = service.query_and_broadcast(query_payload, &inst).await;
+        assert_eq!(po.len() == 1, true);
 
         Ok(())
     }

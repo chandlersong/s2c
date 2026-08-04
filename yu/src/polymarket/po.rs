@@ -45,7 +45,7 @@ impl std::fmt::Display for PolyMarketHistoryPo {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 pub struct PolyMarketInstrumentPo {
     pub id: u64,
     pub series_id: String,
