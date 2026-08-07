@@ -38,6 +38,8 @@ pub trait PolyMarketHistoryRepositoryTrait {
     /// 返回表中id和timestamp的关系。key为instrument_id,val为数据库中最大的timestamp
     ///
     async fn get_max_timestamp_dictionary(&self) -> Result<HashMap<String, u64>, YuError>;
+
+    async fn get_history_before(&self, inst_id: u64, start_ms: u64) -> Result<Vec<PolyMarketHistoryPo>, YuError>;
 }
 
 pub type PolyMarketInstrumentRepository = Arc<dyn PolyMarketInstrumentRepositoryTrait + Send + Sync>;
@@ -233,6 +235,65 @@ impl PolyMarketHistoryRepositoryTrait for PolyMarketHistoryRepositoryImpl {
 
             res.insert(id_str, max_ts);
         }
+        Ok(res)
+    }
+
+    async fn get_history_before(&self, inst_id: u64, start_ms: u64) -> Result<Vec<PolyMarketHistoryPo>, YuError> {
+        let conn = self.provider.acquire()?;
+
+        // Query by numeric instrument_id
+        let sql = format!(
+            "SELECT instrument_id, timestamp, price FROM polymarket_price_history WHERE instrument_id = {} AND timestamp <= {} ORDER BY timestamp DESC;",
+            inst_id, start_ms
+        );
+
+        let mut stmt = conn.prepare(sql.as_str())?;
+        let mut rows = stmt.query([])?;
+        let mut res: Vec<PolyMarketHistoryPo> = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            // instrument_id may be stored as u64, i64 or string
+            let instrument_id: u64 = if let Ok(v) = row.get::<usize, u64>(0) {
+                v
+            } else if let Ok(v) = row.get::<usize, i64>(0) {
+                v as u64
+            } else if let Ok(s) = row.get::<usize, String>(0) {
+                s.parse::<u64>().unwrap_or(0)
+            } else {
+                0
+            };
+
+            // timestamp may be numeric or string
+            let timestamp: u64 = if let Ok(v) = row.get::<usize, u64>(1) {
+                v
+            } else if let Ok(v) = row.get::<usize, i64>(1) {
+                v as u64
+            } else if let Ok(s) = row.get::<usize, String>(1) {
+                s.parse::<u64>().unwrap_or(0)
+            } else {
+                0
+            };
+
+            // price as f64 (or parse from string/int)
+            let price: f64 = if let Ok(v) = row.get::<usize, f64>(2) {
+                v
+            } else if let Ok(v) = row.get::<usize, i64>(2) {
+                v as f64
+            } else if let Ok(v) = row.get::<usize, i32>(2) {
+                v as f64
+            } else if let Ok(s) = row.get::<usize, String>(2) {
+                s.parse::<f64>().unwrap_or(0.0)
+            } else {
+                0.0
+            };
+
+            res.push(PolyMarketHistoryPo {
+                instrument_id,
+                timestamp,
+                price,
+            });
+        }
+
         Ok(res)
     }
 }
