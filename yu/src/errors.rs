@@ -28,6 +28,8 @@ pub enum YuError {
     CustomError(String),
     #[error("{0},exceed max error: {1}")]
     MaxErrorReached(String, usize),
+    #[error("missing configuration:{0}")]
+    ConfigError(String),
 }
 
 impl YuError {

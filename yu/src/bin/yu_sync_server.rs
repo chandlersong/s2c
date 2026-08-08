@@ -8,6 +8,7 @@ use yu::config::get_config;
 use yu::duck_db::DuckDBDSProvider;
 use yu::errors::YuError;
 use yu::polymarket::database::initial_polymarket_tables;
+use yu::polymarket::sync_job::start_polymarket_sync_series_job;
 use yu::sync::models::grpc_sync::sync_interface_server::SyncInterfaceServer;
 use yu::sync::server::sync_server::{YuSyncServer, get_asset_timestamp};
 use yue::http_client::init_http_client;
@@ -44,33 +45,9 @@ async fn main() -> Result<(), YuError> {
     special_log.insert("li".to_string(), parse_level(log_in_config));
     setup_logger(Some(LevelFilter::Warn), special_log)?;
 
-    let asset_timestamp = get_asset_timestamp(DuckDBDSProvider::default()).await;
-    let (polymarket_history_tx, _) = broadcast::channel(100000);
-    let asset_infos = Arc::new(RwLock::new(vec![]));
-    let server = YuSyncServer::new(
-        polymarket_history_tx.clone(),
-        asset_timestamp.clone(),
-        None,
-        asset_infos.clone(),
-        sync_server_config.get_batch_size(),
-    )
-    .await;
-    let series_ids = match sync_server_config.series_ids {
-        None => {
-            error!("No sync server series_ids provided");
-            return Err(YuError::new("sync_server的series id没有找到"));
-        }
-        Some(ref ids) => {
-            if ids.is_empty() {
-                error!("sync server series_ids is empty");
-                return Err(YuError::new("sync_server的series id没有找到"));
-            }
-            for id in ids {
-                info!("Sync server subscribe series id: {}", id);
-            }
-            ids.clone()
-        }
-    };
+    let polymarket_history_service = start_polymarket_sync_series_job().await?;
+
+    let server = YuSyncServer::new(polymarket_history_service).await;
     info!("sync server start at  → {}", addr);
     Server::builder()
         .add_service(SyncInterfaceServer::new(server))

@@ -322,7 +322,7 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
             }
 
             let query_param = GetPricesHistoryQuery {
-                market: instrument.market_slug.clone(),
+                market: instrument.asset_id.clone(),
                 start_ts: Some(query_start),
                 end_ts: Some(now.clone() + 10),
                 interval: Some(self.interval.as_ref().to_string()),
@@ -331,6 +331,7 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
             // index 可用于调试或区分不同 asset_id
             self.query_and_broadcast(query_param, instrument).await;
         }
+        info!("finish to initial polymarket history data");
         Ok(())
     }
 

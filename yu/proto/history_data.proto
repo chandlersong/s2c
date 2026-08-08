@@ -10,33 +10,35 @@ enum Exchange {
 
 
 message PolymarketInstrument{
-  string series_id = 1;
-  string series_slug = 2;
-  string event_id = 3;
-  string event_slug = 4;
-  string market_id = 5;
-  string market_slug = 6;
-  string asset_id = 7;
-  string asset_slug = 8;
-  uint64 latest_timestamp = 9;
+  uint64 server_id = 1;
+  string series_id = 2;
+  string series_slug = 3;
+  string event_id = 4;
+  string event_slug = 5;
+  string market_id = 6;
+  string market_slug = 7;
+  string asset_id = 8;
+  string asset_slug = 9;
+  uint64 latest_timestamp = 10;
 }
 
 message OkxInstrument{
-  string inst_id = 1;
-  string inst_type = 2;
-  string inst_family = 3;
-  string base_ccy = 4;
-  string quote_ccy = 5;
-  string settle_ccy = 6;
-  uint64 list_time = 7;
-  uint64 exp_time = 8;
-  double tick_sz = 9;
-  double lot_sz = 10;
-  double min_sz = 11;
-  string alias = 12;
-  string state = 13;
-  string inst_id_code = 14;
-  string inst_category = 15;
+  uint64 server_id = 1;
+  string inst_id = 2;
+  string inst_type = 3;
+  string inst_family = 4;
+  string base_ccy = 5;
+  string quote_ccy = 6;
+  string settle_ccy = 7;
+  uint64 list_time = 8;
+  uint64 exp_time = 9;
+  double tick_sz = 10;
+  double lot_sz = 11;
+  double min_sz = 12;
+  string alias = 13;
+  string state = 14;
+  string inst_id_code = 15;
+  string inst_category = 16;
 }
 
 message Instrument {
