@@ -310,21 +310,22 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
         let fidelity = self.interval.to_second() / 60;
         info!("start to initial polymarket history data");
         let max_timestamp_dictionary = self.history_repo.get_max_timestamp_dictionary().await?;
+        let gap = self.interval.to_second() - 31;
         for instrument in self.instruments.read().await.iter() {
-            let start_ts = match max_timestamp_dictionary.get(instrument.asset_id.as_str()) {
-                None => instrument.start_ms,
-                Some(v) => v.clone(),
+            //如果是数据库里的那么该往后，如果是默认的，最好往前。
+
+            let start_ts = match max_timestamp_dictionary.get(&instrument.id) {
+                None => instrument.start_ms.saturating_sub(1),
+                Some(v) => v.clone().saturating_add(30),
             };
-            // tests expect query.start_ts to be start_ts - 30, so use saturating_sub to avoid underflow
-            let query_start = start_ts.saturating_sub(30);
-            if (query_start > now) || ((now - start_ts) < self.interval.to_second()) {
+            if (start_ts >= now) || ((now - start_ts) < gap) {
                 continue;
             }
 
             let query_param = GetPricesHistoryQuery {
                 market: instrument.asset_id.clone(),
-                start_ts: Some(query_start),
-                end_ts: Some(now.clone() + 10),
+                start_ts: Some(start_ts),
+                end_ts: Some(now.clone() + 120),
                 interval: Some(self.interval.as_ref().to_string()),
                 fidelity: Some(fidelity.clone() as u32),
             };

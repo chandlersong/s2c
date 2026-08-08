@@ -37,7 +37,7 @@ pub trait PolyMarketHistoryRepositoryTrait {
     ///
     /// 返回表中id和timestamp的关系。key为instrument_id,val为数据库中最大的timestamp
     ///
-    async fn get_max_timestamp_dictionary(&self) -> Result<HashMap<String, u64>, YuError>;
+    async fn get_max_timestamp_dictionary(&self) -> Result<HashMap<u64, u64>, YuError>;
 
     async fn get_history_before(&self, inst_id: u64, start_ms: u64) -> Result<Vec<PolyMarketHistoryPo>, YuError>;
 }
@@ -202,19 +202,22 @@ impl PolyMarketHistoryRepositoryTrait for PolyMarketHistoryRepositoryImpl {
         }
     }
 
-    async fn get_max_timestamp_dictionary(&self) -> Result<HashMap<String, u64>, YuError> {
+    async fn get_max_timestamp_dictionary(&self) -> Result<HashMap<u64, u64>, YuError> {
         let conn = self.provider.acquire()?;
         let mut stmt = conn.prepare("SELECT instrument_id, max(timestamp) FROM polymarket_price_history GROUP BY instrument_id;")?;
         let mut rows = stmt.query([])?;
-        let mut res: HashMap<String, u64> = HashMap::new();
+        let mut res: HashMap<u64, u64> = HashMap::new();
         while let Some(row) = rows.next()? {
             // instrument_id may be stored as u64/i64/string
-            let id_str = if let Ok(v) = row.get::<usize, u64>(0) {
-                v.to_string()
-            } else if let Ok(v) = row.get::<usize, i64>(0) {
-                v.to_string()
-            } else if let Ok(v) = row.get::<usize, String>(0) {
+            let id = if let Ok(v) = row.get::<usize, u64>(0) {
                 v
+            } else if let Ok(v) = row.get::<usize, i64>(0) {
+                v as u64
+            } else if let Ok(v) = row.get::<usize, String>(0) {
+                match v.parse::<u64>() {
+                    Ok(n) => n,
+                    Err(_) => continue,
+                }
             } else {
                 continue;
             };
@@ -233,7 +236,7 @@ impl PolyMarketHistoryRepositoryTrait for PolyMarketHistoryRepositoryImpl {
                 continue;
             };
 
-            res.insert(id_str, max_ts);
+            res.insert(id, max_ts);
         }
         Ok(res)
     }
