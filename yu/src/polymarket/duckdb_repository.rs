@@ -246,7 +246,7 @@ impl PolyMarketHistoryRepositoryTrait for PolyMarketHistoryRepositoryImpl {
 
         // Query by numeric instrument_id
         let sql = format!(
-            "SELECT instrument_id, timestamp, price FROM polymarket_price_history WHERE instrument_id = {} AND timestamp <= {} ORDER BY timestamp DESC;",
+            "SELECT instrument_id, timestamp, price FROM polymarket_price_history WHERE instrument_id = {} AND timestamp >= {} ORDER BY timestamp DESC;",
             inst_id, start_ms
         );
 

@@ -13,7 +13,7 @@ use yu::errors::YuError;
 use yu::sync::client::database::initial_grpc_client_tables;
 use yu::sync::client::sync_client_service::{GrpcChannelManager, SyncClientService};
 use yu::sync::models::grpc_sync::sync_interface_client::SyncInterfaceClient;
-use yu::sync::models::grpc_sync::{Empty, ServerMessage, SubscribeRequest};
+use yu::sync::models::grpc_sync::{Empty, Exchange, ServerMessage, SubscribeRequest, SyncRequest};
 use yue::http_client::init_http_client;
 
 #[tokio::main]
@@ -137,33 +137,22 @@ async fn async_sync_server(
     manager: Arc<GrpcChannelManager>,
 ) -> Result<(), YuError> {
     let mut server = SyncInterfaceClient::new(manager.connect().await);
-    let resp = server.get_instrument_info(Request::new(Empty {})).await?;
+    let resp = server.list_instrument(Request::new(Empty {})).await?;
     let inst_list = resp.into_inner();
     info!("获取asset列表个数.{}", inst_list.instruments.len());
     let diff_from_server = client_service.align_local_instrument(inst_list).await?;
-    for (key, val) in diff_from_server.iter() {
-        info!("diff instrument {} from {}", key, unix_2_readable(val));
+    info!("align_local_assets done. 需要同步的asset个数:{}", diff_from_server.len());
+    for (inst_id, ts) in diff_from_server {
+        let stream = server
+            .sync_history(Request::new(SyncRequest {
+                inst_id,
+                timestamp: ts,
+                exchange: Exchange::Polymarket.into(),
+            }))
+            .await?
+            .into_inner();
+        forward_server_stream(stream, local_db_tx.clone()).await?;
     }
-    // let adjust_assets = match diff_from_server {
-    //     Ok(diff) => {
-    //         info!("align_local_assets done. 需要同步的asset个数:{}", diff.len());
-    //         diff
-    //     }
-    //     Err(e) => {
-    //         error!("align_local_assets fail. {}", e);
-    //         HashMap::new()
-    //     }
-    // };
-    // for (assert_id, ts) in adjust_assets {
-    //     let stream = server
-    //         .sync_history(Request::new(SyncRequest {
-    //             asset_id: assert_id,
-    //             timestamp: ts,
-    //         }))
-    //         .await?
-    //         .into_inner();
-    //     forward_server_stream(stream, local_db_tx.clone()).await?;
-    // }
 
     Ok(())
 }

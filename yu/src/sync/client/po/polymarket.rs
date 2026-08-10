@@ -52,7 +52,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for LocalPolyMarketInstrumentP
 }
 
 ///
-/// 这里的时间戳，都是seconds
+/// 这里的时间戳，都是milliseconds
 ///
 #[derive(Clone, Debug)]
 pub struct LocalPolyMarketHistoryPo {
@@ -64,10 +64,10 @@ pub struct LocalPolyMarketHistoryPo {
 }
 
 impl LocalPolyMarketHistoryPo {
-    pub fn from_polymarket_history(history: PolyMarketHistory, batch_timestamp: u64) -> LocalPolyMarketHistoryPo {
+    pub fn from_polymarket_history(history: PolyMarketHistory, local_inst_id: u64, batch_timestamp: u64) -> LocalPolyMarketHistoryPo {
         LocalPolyMarketHistoryPo {
             id: get_snow_flake_id_u64(),
-            inst_id: history.inst_id,
+            inst_id: local_inst_id,
             timestamp: history.timestamp,
             price: history.price,
             batch_timestamp,
@@ -103,22 +103,28 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for LocalPolyMarketHistoryPo {
 
 impl CopyInsertable for LocalPolyMarketHistoryPo {
     fn columns() -> &'static str {
-        "id,asset_id,timestamp,price,batch_timestamp"
+        "id,instrument_id,timestamp,price,batch_timestamp"
     }
 
     fn to_csv_row(&self) -> String {
-        // 将 epoch 秒转换为 Postgres 可识别的 timestamptz 文本（ISO 8601）
+        // 将 epoch 毫秒转换为 Postgres 可识别的 timestamptz 文本（ISO 8601）
         use chrono::{LocalResult, TimeZone};
-        let ts_dt = match chrono::Utc.timestamp_opt(self.timestamp as i64, 0) {
+        let ts_secs = (self.timestamp / 1000) as i64;
+        let ts_nanos = ((self.timestamp % 1000) * 1_000_000) as u32;
+        let ts_dt = match chrono::Utc.timestamp_opt(ts_secs, ts_nanos) {
             LocalResult::Single(dt) => dt,
             _ => chrono::Utc.timestamp_opt(0, 0).single().unwrap(),
         };
         let ts = ts_dt.to_rfc3339();
-        let bts_dt = match chrono::Utc.timestamp_opt(self.batch_timestamp as i64, 0) {
+
+        let bts_secs = (self.batch_timestamp / 1000) as i64;
+        let bts_nanos = ((self.batch_timestamp % 1000) * 1_000_000) as u32;
+        let bts_dt = match chrono::Utc.timestamp_opt(bts_secs, bts_nanos) {
             LocalResult::Single(dt) => dt,
             _ => chrono::Utc.timestamp_opt(0, 0).single().unwrap(),
         };
         let bts = bts_dt.to_rfc3339();
+
         format!("{},{},{},{},{}", self.id, self.inst_id, ts, self.price, bts)
     }
 }

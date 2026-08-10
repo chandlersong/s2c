@@ -2,10 +2,10 @@ use crate::duck_db::DuckDBDSProvider;
 use crate::polymarket::service::SeriesHistoryMarketService;
 use crate::sync::models::grpc_sync::sync_interface_server::SyncInterface;
 use crate::sync::models::grpc_sync::{
-    Empty, InstrumentInfoList, PolyMarketHistory, PolyMarketHistoryList, PolymarketInstrument, ServerMessage, SubscribeRequest, SyncRequest,
+    Empty, InstrumentList, PolyMarketHistory, PolyMarketHistoryList, PolymarketInstrument, ServerMessage, SubscribeRequest, SyncRequest,
     server_message,
 };
-use li::tools::time::unix_time_now_u64_utc_seconds;
+use li::tools::time::unix_time_now_u64_utc;
 use log::error;
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -94,7 +94,7 @@ impl YuSyncServer {
 }
 #[tonic::async_trait]
 impl SyncInterface for YuSyncServer {
-    async fn get_instrument_info(&self, request: Request<Empty>) -> Result<Response<InstrumentInfoList>, Status> {
+    async fn list_instrument(&self, request: Request<Empty>) -> Result<Response<InstrumentList>, Status> {
         let polymarket_instruments = self.polymarket_history_service.list_instruments().await;
 
         let mut instruments_map: HashMap<String, crate::sync::models::grpc_sync::Instrument> = HashMap::new();
@@ -112,7 +112,7 @@ impl SyncInterface for YuSyncServer {
                     instruments_map.insert(asset_id, instrument);
                 }
 
-                Ok(Response::new(InstrumentInfoList {
+                Ok(Response::new(InstrumentList {
                     instruments: instruments_map,
                 }))
             }
@@ -140,7 +140,7 @@ impl SyncInterface for YuSyncServer {
                         // send an empty list once
                         let list = PolyMarketHistoryList {
                             history_list: vec![],
-                            timestamp: unix_time_now_u64_utc_seconds(),
+                            timestamp: unix_time_now_u64_utc(),
                         };
                         let msg = ServerMessage {
                             payload: Some(server_message::Payload::PolymarketHistory(list)),
@@ -160,7 +160,7 @@ impl SyncInterface for YuSyncServer {
                         }
                         let list = PolyMarketHistoryList {
                             history_list: histories,
-                            timestamp: unix_time_now_u64_utc_seconds(),
+                            timestamp: unix_time_now_u64_utc(),
                         };
                         let msg = ServerMessage {
                             payload: Some(server_message::Payload::PolymarketHistory(list)),
@@ -189,6 +189,3 @@ impl SyncInterface for YuSyncServer {
         todo!()
     }
 }
-
-#[cfg(test)]
-pub mod tests {}

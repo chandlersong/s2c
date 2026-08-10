@@ -50,7 +50,7 @@ message Instrument {
   }
 }
 
-message InstrumentInfoList{
+message InstrumentList{
   map<string, Instrument> instruments = 1;
 }
 
@@ -61,7 +61,7 @@ message InstrumentInfoList{
 // 3. 推送信息给client端最新的消息。 PolyMarketHistoryList
 service SyncInterface {
   // 1. 获取服务器里面的所有资产的最新时间戳
-  rpc GetInstrumentInfo(Empty) returns (InstrumentInfoList) {}
+  rpc ListInstrument(Empty) returns (InstrumentList) {}
 
   // 2. client提供asset id和timestamp，server把timestamp之后的所有数据推送给client
   rpc SyncHistory(SyncRequest) returns (stream ServerMessage) {}

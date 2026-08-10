@@ -13,6 +13,14 @@ pub trait ClientPolyMarketRepositoryTrait {
     //返回server id+timestamp
     async fn list_instrument_timestamps(&self) -> Result<HashMap<u64, u64>, YuError>;
 
+    //返回一个mapping。key是每个的server_id,value是LocalPolyMarketInstrumentPo
+    async fn server_id_instrument_dictionary(&self) -> Result<HashMap<u64, LocalPolyMarketInstrumentPo>, YuError> {
+        let all_instruments = self.list_all_instrument().await?;
+
+        let map: HashMap<u64, LocalPolyMarketInstrumentPo> = all_instruments.into_iter().map(|inst| (inst.server_id, inst)).collect();
+
+        Ok(map)
+    }
     /// Insert a new asset info into polymarket_assert_info table.
     async fn create_instruments(&self, po: LocalPolyMarketInstrumentPo) -> Result<(), YuError>;
 }
@@ -40,7 +48,12 @@ impl ClientPolyMarketRepositoryTrait for ClientPolyMarketRepositoryImpl {
     }
 
     async fn list_instrument_timestamps(&self) -> Result<HashMap<u64, u64>, YuError> {
-        let sql = "SELECT asset_id, EXTRACT(EPOCH FROM max(timestamp))::bigint as max_ts FROM polymarket_instruments GROUP BY asset_id";
+        let sql = r#"
+            SELECT pi.server_id::bigint AS server_id, (EXTRACT(EPOCH FROM max(pph.timestamp)) * 1000)::bigint AS max_ts
+            FROM polymarket_instruments pi
+            JOIN polymarket_price_history pph ON pph.instrument_id = pi.id
+            GROUP BY pi.server_id
+        "#;
         let rows: Vec<(i64, i64)> = sqlx::query_as(sql).fetch_all(&self.pg_pool).await?;
 
         let map: HashMap<u64, u64> = rows.into_iter().map(|(k, v)| (k as u64, v as u64)).collect();

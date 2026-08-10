@@ -5,13 +5,13 @@ use crate::sync::client::database::get_polymarket_price_batch_insert;
 use crate::sync::client::po::polymarket::{LocalPolyMarketHistoryPo, LocalPolyMarketInstrumentPo};
 use crate::sync::client::repository::polymarket::{ClientPolyMarketRepository, ClientPolyMarketRepositoryImpl};
 use crate::sync::models::grpc_sync::server_message::Payload;
-use crate::sync::models::grpc_sync::{InstrumentInfoList, ServerMessage, instrument};
+use crate::sync::models::grpc_sync::{InstrumentList, ServerMessage, instrument};
 use governor::Jitter;
 use log::{error, info};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
-use tokio::sync::{Mutex, Notify, mpsc};
+use tokio::sync::{Mutex, Notify, RwLock, mpsc};
 use tonic::transport::{Channel, Endpoint};
 use yue::tools::get_snow_flake_id_u64;
 
@@ -94,12 +94,14 @@ impl GrpcChannelManager {
 
 pub struct SyncClientService {
     repository: ClientPolyMarketRepository,
+    instrument_dict: Arc<RwLock<HashMap<u64, LocalPolyMarketInstrumentPo>>>,
 }
 
 impl Default for SyncClientService {
     fn default() -> Self {
         Self {
             repository: ClientPolyMarketRepositoryImpl::from_pool(get_sync_client_pg_pool_sync().expect("get_sync_client_pg_pool_sync failed")),
+            instrument_dict: Arc::new(Default::default()),
         }
     }
 }
@@ -120,7 +122,7 @@ impl SyncClientService {
     ///    3，都存在的话，那么比较local_assets的timestamp和服务器端的timestamp
     ///        - 如果local的timestamp小于server端的timestamp。则加入返回值，key为asset_id,value为local的timestamp
     ///
-    pub async fn align_local_instrument(&self, server_inst: InstrumentInfoList) -> Result<HashMap<u64, u64>, YuError> {
+    pub async fn align_local_instrument(&self, server_inst: InstrumentList) -> Result<HashMap<u64, u64>, YuError> {
         // fetch local instruments and build a lookup by assert_id -> end_ts
         let local_inst = self.repository.list_all_instrument().await?;
         let mut local_map: HashMap<u64, u64> = HashMap::new();
@@ -130,6 +132,8 @@ impl SyncClientService {
         info!("local instruments num: {}", local_map.len());
 
         let mut res: HashMap<u64, u64> = HashMap::new();
+
+        let local_history_latest = self.repository.list_instrument_timestamps().await?;
 
         // server_inst.instruments: map<string, PolymarketAssertInfo>
         for (_, inst) in server_inst.instruments.into_iter() {
@@ -161,16 +165,19 @@ impl SyncClientService {
                             self.repository.create_instruments(po).await?;
                             res.insert(inst_id, instrument.start_ms);
                         } else {
-                            let local_ts = *local_map.get(&inst_id).unwrap_or(&0u64);
-                            if local_ts < instrument.latest_timestamp {
-                                res.insert(inst_id, local_ts);
-                            }
+                            let local_ts = *local_history_latest.get(&inst_id).unwrap_or(&0u64);
+
+                            res.insert(inst_id, local_ts + 1);
                         }
                     }
                 }
             }
         }
-
+        {
+            let inst_map = self.repository.server_id_instrument_dictionary().await?;
+            let mut guard = self.instrument_dict.write().await;
+            *guard = inst_map;
+        }
         Ok(res)
     }
 
@@ -184,6 +191,10 @@ impl SyncClientService {
         let (tx, mut rx) = mpsc::channel::<ServerMessage>(10000);
 
         let do_batch_insert = batch_insert.unwrap_or_else(|| get_polymarket_price_batch_insert());
+
+        // build server_id -> LocalPolyMarketInstrumentPo mapping to translate server inst_id to local inst id
+        let server_id_map = self.instrument_dict.clone();
+
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -193,12 +204,20 @@ impl SyncClientService {
                             Payload::PolymarketHistory(history) => {
                                     let batch_timestamp = history.timestamp;
                                     for h in history.history_list.into_iter() {
-                                        let po = LocalPolyMarketHistoryPo::from_polymarket_history(h, batch_timestamp);
-                                        do_batch_insert.insert_data(po).await;
+                                        // map server inst id to local inst id when available
+                                        match server_id_map.read().await.get(&h.inst_id){
+                                            None => {
+                                                error!("server inst_id {} not found in local mapping, skipping", h.inst_id);
+                                            }
+                                            Some(po) => {
+                                                 let local_inst_id = po.id;
+                                                 let po = LocalPolyMarketHistoryPo::from_polymarket_history(h, local_inst_id, batch_timestamp);
+                                                 do_batch_insert.insert_data(po).await;
+                                            }
+                                        }
                                     }
-
                                 }
-                            Payload::OkxKlineHistory(_) => {}}
+                            Payload::OkxKlineHistory(_) => {} }
                         }
                     }
                 }
