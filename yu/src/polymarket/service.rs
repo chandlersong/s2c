@@ -75,8 +75,8 @@ async fn split_series_markets_with_client(
                                     market_slug: market.slug.clone(),
                                     asset_id: inst_id.clone(),
                                     asset_slug: format!("{}_{}", market.slug, inst_slug[idx]),
-                                    start_ms: start_data,
-                                    end_ms: end_data,
+                                    start_ms: start_data * 1000,
+                                    end_ms: end_data * 1000,
                                 };
                                 let id_db = existing_instruments.get(inst_id);
                                 match id_db {
@@ -218,7 +218,7 @@ impl SeriesHistoryMarketServiceImpl {
         }
     }
 
-    pub async fn query_and_broadcast(&self, query_payload: GetPricesHistoryQuery, inst: &PolyMarketInstrumentPo) -> Vec<PolyMarketHistoryPo> {
+    pub async fn query_and_broadcast_history(&self, query_payload: GetPricesHistoryQuery, inst: &PolyMarketInstrumentPo) -> Vec<PolyMarketHistoryPo> {
         let asset_id = inst.asset_id.clone();
 
         let query_payload_log = query_payload.clone();
@@ -234,7 +234,7 @@ impl SeriesHistoryMarketServiceImpl {
                     if h.t > end_timestamp || h.t < start_timestamp {
                         continue;
                     }
-                    let timestamp = self.interval.get_close_unix_sec(h.t);
+                    let timestamp = self.interval.get_close_unix_sec(h.t) * 1000;
                     if pre_history_data.contains_key(&timestamp) {
                         let prev_t = pre_history_data.get(&timestamp).unwrap();
                         error!(
@@ -312,11 +312,10 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
         let max_timestamp_dictionary = self.history_repo.get_max_timestamp_dictionary().await?;
         let gap = self.interval.to_second() - 31;
         for instrument in self.instruments.read().await.iter() {
-            //如果是数据库里的那么该往后，如果是默认的，最好往前。
-
+            //如果数据从polymarket_price_history来，那么最好+30s。这样防止重复，如果从polymarket_instruments，则往后
             let start_ts = match max_timestamp_dictionary.get(&instrument.id) {
-                None => instrument.start_ms.saturating_sub(1),
-                Some(v) => v.clone().saturating_add(30),
+                None => instrument.start_ms.saturating_div(1000).saturating_sub(1),
+                Some(v) => v.saturating_div(1000).saturating_add(30),
             };
             if (start_ts >= now) || ((now - start_ts) < gap) {
                 continue;
@@ -330,7 +329,7 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
                 fidelity: Some(fidelity.clone() as u32),
             };
             // index 可用于调试或区分不同 asset_id
-            self.query_and_broadcast(query_param, instrument).await;
+            self.query_and_broadcast_history(query_param, instrument).await;
         }
         info!("finish to initial polymarket history data");
         Ok(())
@@ -355,7 +354,7 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
                 fidelity: Some(fidelity.clone() as u32),
             };
             // index 可用于调试或区分不同 asset_id
-            res.extend(self.query_and_broadcast(query_param, instrument).await);
+            res.extend(self.query_and_broadcast_history(query_param, instrument).await);
         }
         Ok(res)
     }
@@ -547,7 +546,7 @@ mod tests {
             .start_ms(1)
             .end_ms(1)
             .build();
-        let po = service.query_and_broadcast(query_payload, &inst).await;
+        let po = service.query_and_broadcast_history(query_payload, &inst).await;
         assert_eq!(po.len() == 1, true);
 
         Ok(())

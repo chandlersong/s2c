@@ -1,28 +1,30 @@
 use crate::postgresql_db::PostgresqlTableTrait;
 
 #[derive(Clone)]
-pub enum PolyMarketTables {
+pub enum ClientsTables {
     PriceHistory,
-    AssertInfo,
+    Instruments,
 }
 
-impl PostgresqlTableTrait for PolyMarketTables {
+impl PostgresqlTableTrait for ClientsTables {
     fn table_name(&self) -> &'static str {
         match self {
-            PolyMarketTables::PriceHistory => "polymarket_price_history",
-            PolyMarketTables::AssertInfo => "polymarket_assert_info",
+            ClientsTables::PriceHistory => "polymarket_price_history",
+            ClientsTables::Instruments => "polymarket_instruments",
         }
     }
 
     fn create_table_statement(&self) -> &'static str {
         match self {
-            PolyMarketTables::PriceHistory => CREATE_POLYMARKET_PRICE_HISTORY_TABLE,
-            PolyMarketTables::AssertInfo => CREATE_POLYMARKET_ASSERT_INFO_TABLE,
+            ClientsTables::PriceHistory => CREATE_POLYMARKET_PRICE_HISTORY_TABLE,
+            ClientsTables::Instruments => CREATE_POLYMARKET_INSTRUMENTS_TABLE,
         }
     }
 }
-pub const CREATE_POLYMARKET_ASSERT_INFO_TABLE: &str = r#"
-CREATE TABLE IF NOT EXISTS polymarket_assert_info (
+pub const CREATE_POLYMARKET_INSTRUMENTS_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS polymarket_instruments (
+        id BIGINT PRIMARY KEY,
+        server_id BIGINT,
         series_id VARCHAR,
         series_slug VARCHAR,
         event_id VARCHAR,
@@ -30,22 +32,23 @@ CREATE TABLE IF NOT EXISTS polymarket_assert_info (
         market_id VARCHAR,
         market_slug VARCHAR,
         assert_id VARCHAR,
-        assert_slug VARCHAR
-
+        assert_slug VARCHAR,
+        start_ms BIGINT,
+        end_ms BIGINT
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_CREATE_POLYMARKET_ASSERT_INFO_TABLE_MAIN ON polymarket_assert_info(assert_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_CREATE_POLYMARKET_INSTRUMENTS_TABLE_MAIN ON polymarket_instruments(assert_id);
 "#;
 
 pub const CREATE_POLYMARKET_PRICE_HISTORY_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS polymarket_price_history (
-    id bigint,
-    asset_id TEXT,
-    timestamp timestamptz NOT NULL,
+    id BIGINT,
+    instrument_id BIGINT,
+    timestamp TIMESTAMPTZ NOT NULL,
     price DOUBLE PRECISION,
-    batch_timestamp timestamptz
+    batch_timestamp TIMESTAMPTZ
 );
 ALTER TABLE polymarket_price_history
-  ADD CONSTRAINT polymarket_history_pkey PRIMARY KEY (asset_id, timestamp);
+  ADD CONSTRAINT polymarket_history_pkey PRIMARY KEY (instrument_id, timestamp);
 SELECT create_hypertable(
   'polymarket_price_history',
   'timestamp',
@@ -54,9 +57,9 @@ SELECT create_hypertable(
 ALTER TABLE polymarket_price_history SET (
   timescaledb.enable_columnstore,
   timescaledb.orderby = 'timestamp DESC',
-  timescaledb.segmentby = 'asset_id'
+  timescaledb.segmentby = 'instrument_id'
 );
 SELECT add_compression_policy('polymarket_price_history', INTERVAL '30 days');
 "#;
 
-pub(crate) const ALL_CLIENT_POLYMARKET_TABLES: &[PolyMarketTables] = &[PolyMarketTables::PriceHistory, PolyMarketTables::AssertInfo];
+pub(crate) const ALL_CLIENT_TABLES: &[ClientsTables] = &[ClientsTables::PriceHistory, ClientsTables::Instruments];

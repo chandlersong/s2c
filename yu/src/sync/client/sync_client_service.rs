@@ -2,10 +2,10 @@ use crate::errors::YuError;
 use crate::postgresql_db::get_sync_client_pg_pool_sync;
 use crate::postgresql_db_tables::PostgresqlBatchInsert;
 use crate::sync::client::database::get_polymarket_price_batch_insert;
-use crate::sync::client::po::{LocalPolyMarketAssetInfoPo, LocalPolyMarketHistoryPo};
-use crate::sync::client::repository::{ClientPolyMarketRepository, ClientPolyMarketRepositoryImpl};
+use crate::sync::client::po::polymarket::{LocalPolyMarketHistoryPo, LocalPolyMarketInstrumentPo};
+use crate::sync::client::repository::polymarket::{ClientPolyMarketRepository, ClientPolyMarketRepositoryImpl};
 use crate::sync::models::grpc_sync::server_message::Payload;
-use crate::sync::models::grpc_sync::{Instrument, ServerMessage};
+use crate::sync::models::grpc_sync::{InstrumentInfoList, ServerMessage, instrument};
 use governor::Jitter;
 use log::{error, info};
 use std::collections::HashMap;
@@ -13,6 +13,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::{Mutex, Notify, mpsc};
 use tonic::transport::{Channel, Endpoint};
+use yue::tools::get_snow_flake_id_u64;
 
 struct ConnectionHolder {
     channel: OnceLock<Channel>,
@@ -119,43 +120,56 @@ impl SyncClientService {
     ///    3，都存在的话，那么比较local_assets的timestamp和服务器端的timestamp
     ///        - 如果local的timestamp小于server端的timestamp。则加入返回值，key为asset_id,value为local的timestamp
     ///
-    pub async fn align_local_assets(&self, server_inst: Instrument) -> Result<HashMap<String, u64>, YuError> {
-        let local_assets = self.repository.list_assets_timestamp().await?;
-        info!("local assets history num: {}", local_assets.len());
+    pub async fn align_local_instrument(&self, server_inst: InstrumentInfoList) -> Result<HashMap<u64, u64>, YuError> {
+        // fetch local instruments and build a lookup by assert_id -> end_ts
+        let local_inst = self.repository.list_all_instrument().await?;
+        let mut local_map: HashMap<u64, u64> = HashMap::new();
+        for inst in local_inst.into_iter() {
+            local_map.insert(inst.server_id.clone(), inst.end_ms);
+        }
+        info!("local instruments num: {}", local_map.len());
 
-        let mut res: HashMap<String, u64> = HashMap::new();
+        let mut res: HashMap<u64, u64> = HashMap::new();
 
-        // server_assets.assets: map<string, PolymarketAssertInfo>
-        // for (_key, info) in server_assets.assets.into_iter() {
-        //     // prefer info.asset_id if set, otherwise use map key
-        //     let asset_id = if !info.asset_id.is_empty() {
-        //         info.asset_id.clone()
-        //     } else {
-        //         _key.clone()
-        //     };
-        //
-        //     if !local_assets.contains_key(&asset_id) {
-        //         // insert into local db
-        //         let po = LocalPolyMarketAssetInfoPo {
-        //             series_id: info.series_id.clone(),
-        //             series_slug: info.series_slug.clone(),
-        //             event_id: info.event_id.clone(),
-        //             event_slug: info.event_slug.clone(),
-        //             market_id: info.market_id.clone(),
-        //             market_slug: info.market_slug.clone(),
-        //             assert_id: asset_id.clone(),
-        //             assert_slug: info.asset_slug.clone(),
-        //         };
-        //
-        //         self.repository.create_asset(po).await?;
-        //         res.insert(asset_id, 0u64);
-        //     } else {
-        //         let local_ts = *local_assets.get(&asset_id).unwrap_or(&0u64);
-        //         if local_ts < info.latest_timestamp {
-        //             res.insert(asset_id, local_ts);
-        //         }
-        //     }
-        // }
+        // server_inst.instruments: map<string, PolymarketAssertInfo>
+        for (_, inst) in server_inst.instruments.into_iter() {
+            if let Some(payload) = inst.payload {
+                match payload {
+                    instrument::Payload::Okx(_) => {
+                        // skip okx for now
+                        continue;
+                    }
+                    instrument::Payload::Polymarket(instrument) => {
+                        let inst_id = instrument.server_id;
+                        if !local_map.contains_key(&inst_id) {
+                            // insert into local db
+                            let po = LocalPolyMarketInstrumentPo {
+                                id: get_snow_flake_id_u64(),
+                                server_id: instrument.server_id,
+                                series_id: instrument.series_id.clone(),
+                                series_slug: instrument.series_slug.clone(),
+                                event_id: instrument.event_id.clone(),
+                                event_slug: instrument.event_slug.clone(),
+                                market_id: instrument.market_id.clone(),
+                                market_slug: instrument.market_slug.clone(),
+                                assert_id: instrument.asset_id.clone(),
+                                assert_slug: instrument.asset_slug.clone(),
+                                start_ms: instrument.start_ms,
+                                end_ms: instrument.end_ms,
+                            };
+
+                            self.repository.create_instruments(po).await?;
+                            res.insert(inst_id, instrument.start_ms);
+                        } else {
+                            let local_ts = *local_map.get(&inst_id).unwrap_or(&0u64);
+                            if local_ts < instrument.latest_timestamp {
+                                res.insert(inst_id, local_ts);
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         Ok(res)
     }

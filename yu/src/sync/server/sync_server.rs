@@ -1,26 +1,18 @@
 use crate::duck_db::DuckDBDSProvider;
-use crate::duck_db_tables::{DuckDbTableTrait, DuckTableTableChannel, request_data_source_provider_from_table};
-use crate::polymarket::database::get_polymarket_price_history_table;
-use crate::polymarket::db_consts::PolyMarketTables::PriceHistory;
-use crate::polymarket::po::{PolyMarketHistoryPo, PolyMarketInstrumentPo};
 use crate::polymarket::service::SeriesHistoryMarketService;
 use crate::sync::models::grpc_sync::sync_interface_server::SyncInterface;
 use crate::sync::models::grpc_sync::{
     Empty, InstrumentInfoList, PolyMarketHistory, PolyMarketHistoryList, PolymarketInstrument, ServerMessage, SubscribeRequest, SyncRequest,
     server_message,
 };
-use duckdb::params;
 use li::tools::time::unix_time_now_u64_utc_seconds;
-use log::{error, info};
+use log::error;
 use std::collections::HashMap;
 use std::pin::Pin;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tokio::sync::{RwLock, broadcast, mpsc, oneshot};
-use tokio_stream::wrappers::ReceiverStream;
+use tokio::sync::{mpsc, oneshot};
 use tonic::{Request, Response, Status};
 use yue::okx::models::common::InstrumentInfo;
-use yue::query_message::{DataSourceProviderTrait, InsertPayload, QueryCommand};
+use yue::query_message::DataSourceProviderTrait;
 // for decoding prost-encoded payloads into PolyMarketHistory
 
 ///

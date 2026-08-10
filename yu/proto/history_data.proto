@@ -19,7 +19,9 @@ message PolymarketInstrument{
   string market_slug = 7;
   string asset_id = 8;
   string asset_slug = 9;
-  uint64 latest_timestamp = 10;
+  uint64 start_ms = 10;
+  uint64 end_ms = 11;
+  uint64 latest_timestamp = 12;
 }
 
 message OkxInstrument{

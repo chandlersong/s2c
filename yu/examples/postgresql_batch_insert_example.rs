@@ -7,7 +7,8 @@ use yu::config::get_config;
 use yu::errors::YuError;
 use yu::postgresql_db::get_sync_client_pg_pool;
 use yu::postgresql_db_tables::PostgresqlBatchInsertImpl;
-use yu::sync::client::po::LocalPolyMarketHistoryPo;
+use yu::sync::client::database::initial_grpc_client_tables;
+use yu::sync::client::po::polymarket::LocalPolyMarketHistoryPo;
 
 #[tokio::main]
 async fn main() -> Result<(), YuError> {
@@ -25,16 +26,7 @@ async fn main() -> Result<(), YuError> {
     info!("准备执行动态建表 SQL，已校验表名: {}", table_name);
 
     // 使用与 LocalPolyMarketHistoryPo 对应的列类型（bigint 而非 timestamptz）
-    let create_table_sql = "CREATE TABLE IF NOT EXISTS batch_insert_example (
-            id bigint,
-            asset_id TEXT,
-            timestamp timestamptz,
-            price DOUBLE PRECISION,
-            batch_timestamp timestamptz
-        );";
-    if let Err(e) = sqlx::query(create_table_sql).execute(&pg_pool).await {
-        error!("创建数据库表失败:{}", e);
-    }
+    initial_grpc_client_tables(Some(pg_pool.clone())).await?;
     let batch_insert = PostgresqlBatchInsertImpl::<LocalPolyMarketHistoryPo>::new(table_name, pg_pool.clone()).await;
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
     for i in 0..1000u64 {

@@ -16,6 +16,8 @@ pub mod grpc_sync {
                 market_slug: value.market_slug,
                 asset_id: value.asset_id.clone(),
                 asset_slug: value.asset_slug,
+                start_ms: value.start_ms,
+                end_ms: value.end_ms,
                 latest_timestamp: unix_time_now_u64_utc(),
             }
         }

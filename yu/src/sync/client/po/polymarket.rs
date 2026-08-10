@@ -1,10 +1,12 @@
 use crate::postgresql_db::CopyInsertable;
 use crate::sync::models::grpc_sync::PolyMarketHistory;
-use sqlx::{FromRow, Row};
+use sqlx::Row;
 use yue::tools::get_snow_flake_id_u64;
 
-#[derive(Debug, FromRow)]
-pub struct LocalPolyMarketAssetInfoPo {
+#[derive(Debug)]
+pub struct LocalPolyMarketInstrumentPo {
+    pub id: u64,
+    pub server_id: u64,
     pub series_id: String,
     pub series_slug: String,
     pub event_id: String,
@@ -13,6 +15,40 @@ pub struct LocalPolyMarketAssetInfoPo {
     pub market_slug: String,
     pub assert_id: String,
     pub assert_slug: String,
+    pub start_ms: u64,
+    pub end_ms: u64,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for LocalPolyMarketInstrumentPo {
+    fn from_row(row: &'r sqlx::postgres::PgRow) -> Result<Self, sqlx::Error> {
+        let id_i64: i64 = row.try_get("id")?;
+        let server_id_i64: i64 = row.try_get("server_id")?;
+        let series_id: String = row.try_get("series_id")?;
+        let series_slug: String = row.try_get("series_slug")?;
+        let event_id: String = row.try_get("event_id")?;
+        let event_slug: String = row.try_get("event_slug")?;
+        let market_id: String = row.try_get("market_id")?;
+        let market_slug: String = row.try_get("market_slug")?;
+        let assert_id: String = row.try_get("assert_id")?;
+        let assert_slug: String = row.try_get("assert_slug")?;
+        let start_ms_i64: i64 = row.try_get("start_ms")?;
+        let end_ms_i64: i64 = row.try_get("end_ms")?;
+
+        Ok(Self {
+            id: id_i64 as u64,
+            server_id: server_id_i64 as u64,
+            series_id,
+            series_slug,
+            event_id,
+            event_slug,
+            market_id,
+            market_slug,
+            assert_id,
+            assert_slug,
+            start_ms: start_ms_i64 as u64,
+            end_ms: end_ms_i64 as u64,
+        })
+    }
 }
 
 ///
@@ -40,7 +76,7 @@ impl LocalPolyMarketHistoryPo {
 }
 
 // 手动实现 FromRow，支持从 timestamptz/BigInt 等类型读取并转换为 u64
-impl<'r> FromRow<'r, sqlx::postgres::PgRow> for LocalPolyMarketHistoryPo {
+impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for LocalPolyMarketHistoryPo {
     fn from_row(row: &'r sqlx::postgres::PgRow) -> Result<Self, sqlx::Error> {
         let id_i64: i64 = row.try_get("id")?;
         // 注意列名是 asset_id
