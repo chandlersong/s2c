@@ -157,6 +157,6 @@ async fn async_sync_server(
             .into_inner();
         forward_server_stream(stream, local_db_tx.clone()).await?;
     }
-
+    info!("async_sync_server done. 历史数据异步写入，可能过会儿更新");
     Ok(())
 }
