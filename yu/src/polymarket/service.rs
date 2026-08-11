@@ -237,8 +237,8 @@ impl SeriesHistoryMarketServiceImpl {
                     let timestamp = self.interval.get_close_unix_ms(h.t);
                     if pre_history_data.contains_key(&timestamp) {
                         let prev_t = pre_history_data.get(&timestamp).unwrap();
-                        error!(
-                            "duplicate timestamp found, asset_id is {},prev_t is {},current t is {},\
+                        trace!(
+                            "duplicate timestamp found, inst_id is {},prev_t is {},current t is {},\
                             query info, start:{},end:{},interval:{}",
                             asset_id,
                             prev_t,

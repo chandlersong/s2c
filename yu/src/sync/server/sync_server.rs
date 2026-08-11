@@ -218,7 +218,7 @@ impl YuSyncServer {
 }
 #[tonic::async_trait]
 impl SyncInterface for YuSyncServer {
-    async fn list_instrument(&self, request: Request<Empty>) -> Result<Response<InstrumentList>, Status> {
+    async fn list_instrument(&self, _request: Request<Empty>) -> Result<Response<InstrumentList>, Status> {
         let polymarket_instruments = self.polymarket_history_service.list_instruments().await;
 
         let mut instruments_map: HashMap<String, crate::sync::models::grpc_sync::Instrument> = HashMap::new();
@@ -312,7 +312,6 @@ impl SyncInterface for YuSyncServer {
     async fn subscribe_latest(&self, _request: Request<SubscribeRequest>) -> Result<Response<Self::SubscribeLatestStream>, Status> {
         let (tx, rx) = mpsc::channel::<Result<ServerMessage, Status>>(16);
         let request = _request.into_inner();
-        let id = get_snow_flake_id_u64();
         //FUTURE: 以后做点session管理之类工作
         let payload = SubscribePayload {
             id: request.client_id, // You can set this to a unique ID if needed

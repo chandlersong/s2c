@@ -1,5 +1,4 @@
 use li::tools::logs::{parse_level, setup_logger};
-use li::tools::time::{unix_2_readable, unix_seconds_2_readable};
 use log::{LevelFilter, error, info};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -63,13 +62,13 @@ async fn main() -> Result<(), YuError> {
         }
     };
 
-    // let subscribe_server_tx = tx.clone();
-    // let subscribe_server_connection = connection_manager.clone();
-    // tokio::spawn(async move {
-    //     if let Err(e) = subscribe(subscribe_server_tx, subscribe_server_connection).await {
-    //         error!("Error in subscribe: {}", e);
-    //     }
-    // });
+    let subscribe_server_tx = tx.clone();
+    let subscribe_server_connection = connection_manager.clone();
+    tokio::spawn(async move {
+        if let Err(e) = subscribe(subscribe_server_tx, subscribe_server_connection).await {
+            error!("Error in subscribe: {}", e);
+        }
+    });
 
     let sync_server_tx = tx.clone();
     let sync_server_manager = connection_manager.clone();
