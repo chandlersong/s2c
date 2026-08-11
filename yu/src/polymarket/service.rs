@@ -341,7 +341,8 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
 
     async fn fetch_latest_history(&self) -> Result<Vec<PolyMarketHistoryPo>, YuError> {
         let now = self.interval.get_now_close_unix_sec_utc();
-        let start_ts = now - self.interval.to_second() + 5 * 60; // 获取过去一小时的数据
+        //FUTURE: 这里加的时间不支持变动的interval。以让他offset的时间，能够支持动态的interval。
+        let start_ts = now - self.interval.to_second() + 120; // 获取过去一小时的数据
         let end_ts = now + 60; // 获取过去一小时的数据
         let fidelity = self.interval.to_second() / 60;
         let mut res = vec![];
