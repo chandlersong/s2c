@@ -15,6 +15,7 @@ use yu::sync::client::sync_client_service::{GrpcChannelManager, SyncClientServic
 use yu::sync::models::grpc_sync::sync_interface_client::SyncInterfaceClient;
 use yu::sync::models::grpc_sync::{Empty, Exchange, ServerMessage, SubscribeRequest, SyncRequest};
 use yue::http_client::init_http_client;
+use yue::tools::get_snow_flake_id_u64;
 
 #[tokio::main]
 async fn main() -> Result<(), YuError> {
@@ -75,7 +76,7 @@ async fn main() -> Result<(), YuError> {
     let sync_client_service = client_service.clone();
     tokio::spawn(async move {
         if let Err(e) = async_sync_server(sync_client_service, sync_server_tx, sync_server_manager).await {
-            error!("Error in async_sync_server: {}", e);
+            error!("Error when initial instruments with server: {}", e);
         }
     });
 
@@ -90,7 +91,7 @@ async fn main() -> Result<(), YuError> {
         Box::pin(async move {
             info!("start refresh binance exchange info");
             if let Err(e) = async_sync_server(sync_client_service, sync_tx, sync_manager).await {
-                error!("Error in async_sync_server: {}", e);
+                error!("Error when async instruments with server: {}", e);
             }
         })
     });
@@ -120,7 +121,11 @@ async fn subscribe(local_db_tx: Sender<ServerMessage>, manager: Arc<GrpcChannelM
     loop {
         let connection = manager.connect().await;
         let mut server = SyncInterfaceClient::new(connection);
-        let stream = server.subscribe_latest(Request::new(SubscribeRequest {})).await?.into_inner();
+        //FUTURE：把这个identify改成配置文件的参数
+        let id = get_snow_flake_id_u64();
+        info!("subscribe_latest called with assigned id: {}", id);
+        let request = SubscribeRequest { client_id: id };
+        let stream = server.subscribe_latest(Request::new(request)).await?.into_inner();
         if let Err(e) = forward_server_stream(stream, local_db_tx.clone()).await {
             error!("error forwarding server stream: {}", e);
             manager.reconnect().await;

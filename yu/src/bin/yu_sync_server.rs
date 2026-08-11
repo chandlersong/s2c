@@ -44,7 +44,7 @@ async fn main() -> Result<(), YuError> {
 
     let polymarket_history_service = start_polymarket_sync_series_job().await?;
 
-    let server = YuSyncServer::new(polymarket_history_service).await;
+    let server = YuSyncServer::create_and_start(polymarket_history_service).await?;
     info!("sync server start at  → {}", addr);
     Server::builder()
         .add_service(SyncInterfaceServer::new(server))

@@ -163,7 +163,7 @@ impl SyncClientService {
                             };
 
                             self.repository.create_instruments(po).await?;
-                            res.insert(inst_id, instrument.start_ms);
+                            res.insert(inst_id, instrument.start_ms - 1);
                         } else {
                             let local_ts = *local_history_latest.get(&inst_id).unwrap_or(&0u64);
 

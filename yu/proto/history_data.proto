@@ -88,7 +88,7 @@ message SyncRequest {
 
 // 订阅最新消息请求
 message SubscribeRequest {
-  // 预留字段，后续可添加过滤条件（如指定asset_id列表）
+  uint64 client_id = 1; //用户表示自己的身份，方便server端区分不同的client，有client端自己定义
 }
 
 message PolyMarketHistory {
