@@ -487,7 +487,6 @@ mod tests {
         // 构造 Series / Event / Market JSON 并反序列化为结构体
         let interval = HistoryInterval::OneHour;
         // 仅保留 market_json 以便嵌入 event_json；无需单独绑定 market 变量
-        let interval_sec = interval.to_second();
         // 因为真实情况，他会返回时间的东西。所以这里也就做过滤。
         let history_resp = GetPricesHistoryResponse {
             history: vec![
