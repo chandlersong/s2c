@@ -1,7 +1,8 @@
 use crate::config::get_config;
+use crate::cron_job;
 use crate::errors::YuError;
 use crate::polymarket::service::{SeriesHistoryMarketService, default_series_history_market_service};
-use log::error;
+use log::{error, info};
 use yue::models::HistoryInterval;
 
 ///
@@ -30,6 +31,18 @@ pub async fn start_polymarket_sync_series_job() -> Result<SeriesHistoryMarketSer
         if let Err(e) = initial_service.initial_history_data().await {
             error!("Error initializing polymarket history data: {:?}", e);
         }
+    });
+
+    let sync_history_job = service.clone();
+    let _ = cron_job!("1 2 * * * *", move |_uuid, _locked| {
+        let each_sync = sync_history_job.clone();
+        Box::pin(async move {
+            //TODO: 正常后，改成debug level
+            info!("start fetch last hour history from polymarket server");
+            if let Err(e) = each_sync.fetch_latest_history().await {
+                error!("Error when async instruments with server: {}", e);
+            }
+        })
     });
 
     Ok(service)
