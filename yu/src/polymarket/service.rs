@@ -234,7 +234,7 @@ impl SeriesHistoryMarketServiceImpl {
                     if h.t > end_timestamp || h.t < start_timestamp {
                         continue;
                     }
-                    let timestamp = self.interval.get_close_unix_ms(h.t);
+                    let timestamp = self.interval.get_close_unix_ms(h.t * 1000);
                     if pre_history_data.contains_key(&timestamp) {
                         let prev_t = pre_history_data.get(&timestamp).unwrap();
                         trace!(
@@ -491,11 +491,11 @@ mod tests {
         let history_resp = GetPricesHistoryResponse {
             history: vec![
                 MarketPriceHistoryPoint {
-                    t: interval.get_now_close_unix_ms_utc() + 10,
+                    t: interval.get_now_close_unix_sec_utc() + 10,
                     p: 0.1,
                 },
                 MarketPriceHistoryPoint {
-                    t: interval.get_now_close_unix_ms_utc() + 60 * 10,
+                    t: interval.get_now_close_unix_sec_utc() + 60 * 10,
                     p: 0.2,
                 },
             ],
@@ -527,8 +527,8 @@ mod tests {
         let service = SeriesHistoryMarketServiceImpl::new(series_ids, HistoryInterval::OneHour, client, inst_repo, history_repo);
         let query_payload = GetPricesHistoryQuery {
             market: "market_slug".to_string(),
-            start_ts: Some(interval.get_now_close_unix_ms_utc() + 10),
-            end_ts: Some(interval.get_now_close_unix_ms_utc() + 60 * 10),
+            start_ts: Some(interval.get_now_close_unix_sec_utc() + 10),
+            end_ts: Some(interval.get_now_close_unix_sec_utc() + 60 * 10),
             interval: Some(interval.as_ref().to_string()),
             fidelity: Some((interval.to_second() / 60) as u32),
         };
