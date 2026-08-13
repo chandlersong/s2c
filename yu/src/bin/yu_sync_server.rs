@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use tonic::transport::Server;
 use yu::config::get_config;
 use yu::errors::YuError;
+use yu::okx::sync_job::start_okx_option_service;
 use yu::polymarket::database::initial_polymarket_tables;
 use yu::polymarket::sync_job::start_polymarket_sync_series_job;
 use yu::sync::models::grpc_sync::sync_interface_server::SyncInterfaceServer;
@@ -43,8 +44,8 @@ async fn main() -> Result<(), YuError> {
     setup_logger(Some(LevelFilter::Warn), special_log)?;
 
     let polymarket_history_service = start_polymarket_sync_series_job().await?;
-
-    let server = YuSyncServer::create_and_start(polymarket_history_service).await?;
+    let okx_option_service = start_okx_option_service().await?;
+    let server = YuSyncServer::create_and_start(polymarket_history_service, okx_option_service).await?;
     info!("sync server start at  → {}", addr);
     Server::builder()
         .add_service(SyncInterfaceServer::new(server))

@@ -22,4 +22,28 @@ pub mod grpc_sync {
             }
         }
     }
+
+    // Map okx InstrumentPo to proto OkxInstrument
+    impl From<crate::okx::duck_po::InstrumentPo> for OkxInstrument {
+        fn from(value: crate::okx::duck_po::InstrumentPo) -> Self {
+            OkxInstrument {
+                server_id: value.id,
+                inst_id: value.inst_identify,
+                inst_type: value.inst_type,
+                inst_family: value.inst_family.unwrap_or_default(),
+                base_ccy: value.base_ccy,
+                quote_ccy: value.quote_ccy.unwrap_or_default(),
+                settle_ccy: value.settle_ccy.unwrap_or_default(),
+                list_time: value.list_time.unwrap_or(0),
+                exp_time: value.exp_time.unwrap_or(0),
+                tick_sz: value.tick_sz.unwrap_or(0.0),
+                lot_sz: value.lot_sz.unwrap_or(0.0),
+                min_sz: value.min_sz.unwrap_or(0.0),
+                alias: value.alias.unwrap_or_default(),
+                state: value.state.unwrap_or_default(),
+                inst_id_code: value.inst_id_code.unwrap_or_default(),
+                inst_category: value.inst_category.unwrap_or_default(),
+            }
+        }
+    }
 }

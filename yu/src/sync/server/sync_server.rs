@@ -1,5 +1,6 @@
 use crate::duck_db::DuckDBDSProvider;
 use crate::errors::YuError;
+use crate::okx::service::OptionService;
 use crate::polymarket::po::PolyMarketHistoryPo;
 use crate::polymarket::service::SeriesHistoryMarketService;
 use crate::sync::models::grpc_sync::sync_interface_server::SyncInterface;
@@ -11,6 +12,7 @@ use li::tools::time::unix_time_now_u64_utc;
 use log::{error, info, trace};
 use std::collections::HashMap;
 use std::pin::Pin;
+use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 use tonic::{Request, Response, Status};
 use yue::query_message::DataSourceProviderTrait;
@@ -87,18 +89,23 @@ struct SubscribePayload {
 
 pub struct YuSyncServer {
     polymarket_history_service: SeriesHistoryMarketService,
+    okx_option_service: Arc<OptionService>,
     batch_size: usize,
     command_channel: mpsc::Sender<SyncInternalCommand>,
 }
 
 impl YuSyncServer {
-    pub async fn create_and_start(polymarket_history_service: SeriesHistoryMarketService) -> Result<Self, YuError> {
+    pub async fn create_and_start(
+        polymarket_history_service: SeriesHistoryMarketService,
+        okx_option_service: Arc<OptionService>,
+    ) -> Result<Self, YuError> {
         let (command_channel, command_rx) = mpsc::channel::<SyncInternalCommand>(100);
 
         let polymarket_history_receiver = polymarket_history_service.subscribe_history_broadcast();
         Self::start_broadcast_history(command_rx, polymarket_history_receiver, 500, 1000).await?;
         Ok(Self {
             polymarket_history_service,
+            okx_option_service,
             batch_size: 500,
             command_channel,
         })
@@ -219,7 +226,7 @@ impl YuSyncServer {
 impl SyncInterface for YuSyncServer {
     async fn list_instrument(&self, _request: Request<Empty>) -> Result<Response<InstrumentList>, Status> {
         let polymarket_instruments = self.polymarket_history_service.list_instruments().await;
-
+        let okx_option_instruments = self.okx_option_service.list_instruments().await;
         let mut instruments_map: HashMap<String, crate::sync::models::grpc_sync::Instrument> = HashMap::new();
 
         match polymarket_instruments {
@@ -234,16 +241,33 @@ impl SyncInterface for YuSyncServer {
                     };
                     instruments_map.insert(asset_id, instrument);
                 }
-
-                Ok(Response::new(InstrumentList {
-                    instruments: instruments_map,
-                }))
             }
             Err(e) => {
                 error!("list_instruments error: {:?}", e);
-                Err(Status::internal(format!("list_instruments error: {:?}", e)))
+                return Err(Status::internal(format!("list polymarket instruments error: {:?}", e)));
             }
-        }
+        };
+
+        match okx_option_instruments {
+            Ok(okx_list) => {
+                for inst in okx_list {
+                    let key = inst.inst_identify.clone();
+                    let okx = crate::sync::models::grpc_sync::OkxInstrument::from(inst);
+                    let instrument = crate::sync::models::grpc_sync::Instrument {
+                        payload: Some(crate::sync::models::grpc_sync::instrument::Payload::Okx(okx)),
+                    };
+                    instruments_map.insert(key, instrument);
+                }
+            }
+            Err(e) => {
+                error!("list_okx_instruments error: {:?}", e);
+                return Err(Status::internal(format!("list okx option instruments error: {:?}", e)));
+            }
+        };
+
+        Ok(Response::new(InstrumentList {
+            instruments: instruments_map,
+        }))
     }
 
     type SyncHistoryStream = Pin<Box<dyn tokio_stream::Stream<Item = Result<ServerMessage, Status>> + Send + 'static>>;
