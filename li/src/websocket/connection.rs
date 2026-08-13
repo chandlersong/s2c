@@ -36,7 +36,11 @@ pub enum CommandMessage {
 
 pub enum ConnectionAction {
     Close,
-    Reconnection,
+    Reconnection(ReconnectionPayload),
+}
+
+pub struct ReconnectionPayload {
+    pub initial_command: Vec<WsMessage>,
 }
 
 ///
@@ -227,10 +231,10 @@ impl WebSocketConnection {
         // 准备 handler：如果用户没有提供，则构造默认的 BroadcastMessageHandler
 
         tokio::spawn(async move {
+            let mut message_cache = vec![];
             loop {
                 info!("正在连接到 WebSocket: {}", take_or_all_cow_with_ellipsis(url.as_str(), 50));
                 Self::broadcast_event(&event_tx, WebSocketEvent::Reconnecting);
-                let mut message_cache = vec![];
 
                 match Self::connect_and_run(
                     &url,
@@ -244,8 +248,9 @@ impl WebSocketConnection {
                 .await
                 {
                     Ok(action) => match action {
-                        ConnectionAction::Reconnection => {
+                        ConnectionAction::Reconnection(payload) => {
                             info!("主动连接重启：{}", take_or_all_cow_with_ellipsis(url.as_str(), 50));
+                            message_cache = payload.initial_command;
                         }
                         ConnectionAction::Close => {
                             info!("主动连接关闭：{}", take_or_all_cow_with_ellipsis(url.as_str(), 50));
@@ -384,7 +389,11 @@ impl WebSocketConnection {
                                     } else {
                                         info!("关闭connection关闭:{}",take_or_all_cow_with_ellipsis(url, 50));
                                     }
-                                    return Ok(ConnectionAction::Reconnection);
+                                    return Ok(ConnectionAction::Reconnection(
+                                       ReconnectionPayload {
+                                          initial_command: initial_command.clone(),
+                                       }
+                                    ));
                                 }
                                 WsMessage::Frame(_) => {}
                             }
@@ -407,7 +416,9 @@ impl WebSocketConnection {
                                 info!("关闭connection关闭:{}",take_or_all_cow_with_ellipsis(url, 50));
                             }
                             Self::broadcast_event(event_tx,WebSocketEvent::Disconnected);
-                            return Ok(ConnectionAction::Reconnection);
+                            return Ok(ConnectionAction::Reconnection(ReconnectionPayload {
+                                initial_command: initial_command.clone(),
+                            }));
                         }
                     }
                 }
