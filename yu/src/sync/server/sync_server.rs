@@ -274,56 +274,120 @@ impl SyncInterface for YuSyncServer {
 
     async fn sync_history(&self, request: Request<SyncRequest>) -> Result<Response<Self::SyncHistoryStream>, Status> {
         let (tx, rx) = mpsc::channel::<Result<ServerMessage, Status>>(16);
-        let query_service = self.polymarket_history_service.clone();
         let inst_id = request.get_ref().inst_id.clone();
         let timestamp = request.get_ref().timestamp.clone();
         let batch_size = self.batch_size;
 
-        // Spawn a task to query history and stream results back through tx
-        tokio::spawn(async move {
-            match query_service.query_instrument_history(inst_id, timestamp).await {
-                Ok(history_vec) => {
-                    if history_vec.is_empty() {
-                        // send an empty list once
-                        let list = PolyMarketHistoryList {
-                            history_list: vec![],
-                            timestamp: unix_time_now_u64_utc(),
-                        };
-                        let msg = ServerMessage {
-                            payload: Some(server_message::Payload::PolymarketHistory(list)),
-                        };
-                        let _ = tx.send(Ok(msg)).await;
-                        return;
-                    }
+        // determine exchange from request (prost generates from_i32)
+        let exchange_opt = crate::sync::models::grpc_sync::Exchange::from_i32(request.get_ref().exchange);
 
-                    for chunk in history_vec.chunks(batch_size) {
-                        let mut histories: Vec<PolyMarketHistory> = Vec::with_capacity(chunk.len());
-                        for h in chunk.iter() {
-                            histories.push(PolyMarketHistory {
-                                inst_id: h.instrument_id,
-                                timestamp: h.timestamp,
-                                price: h.price,
-                            });
+        match exchange_opt {
+            Some(crate::sync::models::grpc_sync::Exchange::Polymarket) => {
+                let query_service = self.polymarket_history_service.clone();
+                // Spawn a task to query polymarket history and stream results back through tx
+                tokio::spawn(async move {
+                    match query_service.query_instrument_history(inst_id, timestamp).await {
+                        Ok(history_vec) => {
+                            if history_vec.is_empty() {
+                                // send an empty list once
+                                let list = PolyMarketHistoryList {
+                                    history_list: vec![],
+                                    timestamp: unix_time_now_u64_utc(),
+                                };
+                                let msg = ServerMessage {
+                                    payload: Some(server_message::Payload::PolymarketHistory(list)),
+                                };
+                                let _ = tx.send(Ok(msg)).await;
+                                return;
+                            }
+
+                            for chunk in history_vec.chunks(batch_size) {
+                                let mut histories: Vec<PolyMarketHistory> = Vec::with_capacity(chunk.len());
+                                for h in chunk.iter() {
+                                    histories.push(PolyMarketHistory {
+                                        inst_id: h.instrument_id,
+                                        timestamp: h.timestamp,
+                                        price: h.price,
+                                    });
+                                }
+                                let list = PolyMarketHistoryList {
+                                    history_list: histories,
+                                    timestamp: unix_time_now_u64_utc(),
+                                };
+                                let msg = ServerMessage {
+                                    payload: Some(server_message::Payload::PolymarketHistory(list)),
+                                };
+                                if tx.send(Ok(msg)).await.is_err() {
+                                    // receiver dropped, stop streaming
+                                    break;
+                                }
+                            }
                         }
-                        let list = PolyMarketHistoryList {
-                            history_list: histories,
-                            timestamp: unix_time_now_u64_utc(),
-                        };
-                        let msg = ServerMessage {
-                            payload: Some(server_message::Payload::PolymarketHistory(list)),
-                        };
-                        if tx.send(Ok(msg)).await.is_err() {
-                            // receiver dropped, stop streaming
-                            break;
+                        Err(e) => {
+                            let status = Status::internal(format!("query history error: {:?}", e));
+                            let _ = tx.send(Err(status)).await;
                         }
                     }
-                }
-                Err(e) => {
-                    let status = Status::internal(format!("query history error: {:?}", e));
-                    let _ = tx.send(Err(status)).await;
-                }
+                });
             }
-        });
+            Some(crate::sync::models::grpc_sync::Exchange::Okx) => {
+                let okx_service = self.okx_option_service.clone();
+                // Spawn a task to query okx kline and stream results back through tx
+                tokio::spawn(async move {
+                    match okx_service.find_candle_after(inst_id, timestamp).await {
+                        Ok(kline_vec) => {
+                            if kline_vec.is_empty() {
+                                let list = crate::sync::models::grpc_sync::OkxKlineList {
+                                    kline_list: vec![],
+                                    timestamp: unix_time_now_u64_utc(),
+                                };
+                                let msg = ServerMessage {
+                                    payload: Some(server_message::Payload::OkxKlineHistory(list)),
+                                };
+                                let _ = tx.send(Ok(msg)).await;
+                                return;
+                            }
+
+                            for chunk in kline_vec.chunks(batch_size) {
+                                let mut klines: Vec<crate::sync::models::grpc_sync::OkxKline> = Vec::with_capacity(chunk.len());
+                                for k in chunk.iter() {
+                                    klines.push(crate::sync::models::grpc_sync::OkxKline {
+                                        id: k.id,
+                                        inst_id: k.inst_id.to_string(),
+                                        ts: k.ts,
+                                        open: k.open,
+                                        high: k.high,
+                                        low: k.low,
+                                        close: k.close,
+                                        vol: k.vol,
+                                        vol_ccy: k.vol_ccy,
+                                        vol_ccy_quote: k.vol_ccy_quote,
+                                        confirm: k.confirm as u32,
+                                    });
+                                }
+                                let list = crate::sync::models::grpc_sync::OkxKlineList {
+                                    kline_list: klines,
+                                    timestamp: unix_time_now_u64_utc(),
+                                };
+                                let msg = ServerMessage {
+                                    payload: Some(server_message::Payload::OkxKlineHistory(list)),
+                                };
+                                if tx.send(Ok(msg)).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let status = Status::internal(format!("query okx kline error: {:?}", e));
+                            let _ = tx.send(Err(status)).await;
+                        }
+                    }
+                });
+            }
+            _ => {
+                return Err(Status::invalid_argument("unsupported or unspecified exchange"));
+            }
+        }
 
         Ok(Response::new(
             Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx)) as Self::SyncHistoryStream
