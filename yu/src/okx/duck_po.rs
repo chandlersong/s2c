@@ -12,7 +12,7 @@ use yue::tools::get_snow_flake_id_u64;
 #[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 pub struct OkxKlinePo {
     pub id: u64,
-    pub inst_id: String,
+    pub inst_id: u64,
     pub ts: u64,
     pub open: f64,
     pub high: f64,
@@ -25,12 +25,12 @@ pub struct OkxKlinePo {
 }
 
 impl OkxKlinePo {
-    pub fn from_kline_response(inst_id: &str, response: CandleResponse) -> Vec<Self> {
+    pub fn from_kline_response(inst_id: u64, response: CandleResponse) -> Vec<Self> {
         let mut res = Vec::<Self>::new();
         for candle in response.data {
             res.push(Self {
                 id: get_snow_flake_id_u64(),
-                inst_id: inst_id.to_string(),
+                inst_id,
                 ts: candle[0].parse().unwrap(),
                 open: candle[1].parse().unwrap(),
                 high: candle[2].parse().unwrap(),
@@ -45,13 +45,12 @@ impl OkxKlinePo {
         res
     }
 
-    pub fn from_ws_response(payload: &KlinePayload) -> Vec<Self> {
+    pub fn from_ws_response(inst_id: u64, payload: &KlinePayload) -> Vec<Self> {
         let mut res = Vec::<Self>::new();
-        let inst_id = payload.arg.inst_id.to_string();
         for candle in &payload.data {
             res.push(Self {
                 id: get_snow_flake_id_u64(),
-                inst_id: inst_id.to_string(),
+                inst_id,
                 ts: candle[0].parse().unwrap(),
                 open: candle[1].parse().unwrap(),
                 high: candle[2].parse().unwrap(),
@@ -87,7 +86,8 @@ impl DuckDBPO for OkxKlinePo {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 pub struct InstrumentPo {
-    pub inst_id: String,
+    pub id: u64,
+    pub inst_identify: String,
     pub inst_type: String,
     pub inst_family: Option<String>,
     pub base_ccy: String,
@@ -118,7 +118,8 @@ impl InstrumentPo {
 impl DuckDBPO for InstrumentPo {
     fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>> {
         appender_params_from_iter(vec![
-            &self.inst_id as &dyn duckdb::ToSql,
+            &self.id as &dyn duckdb::ToSql,
+            &self.inst_identify as &dyn duckdb::ToSql,
             &self.inst_type as &dyn duckdb::ToSql,
             &self.inst_family as &dyn duckdb::ToSql,
             &self.base_ccy as &dyn duckdb::ToSql,
@@ -140,7 +141,8 @@ impl DuckDBPO for InstrumentPo {
 impl From<InstrumentInfo> for InstrumentPo {
     fn from(info: InstrumentInfo) -> Self {
         InstrumentPo {
-            inst_id: info.inst_id,
+            id: get_snow_flake_id_u64(),
+            inst_identify: info.inst_id,
             inst_type: info.inst_type,
             inst_family: info.inst_family,
             base_ccy: info.base_ccy,
@@ -163,24 +165,26 @@ impl<'a> TryFrom<&'a Row<'a>> for InstrumentPo {
     type Error = YuError;
 
     fn try_from(row: &Row) -> Result<Self, Self::Error> {
-        let inst_id: String = row.get(0)?;
-        let inst_type: String = row.get(1)?;
-        let inst_family: Option<String> = row.get(2)?;
-        let base_ccy: String = row.get(3)?;
-        let quote_ccy: Option<String> = row.get(4)?;
-        let settle_ccy: Option<String> = row.get(5)?;
-        let list_time: Option<u64> = row.get(6)?;
-        let exp_time: Option<u64> = row.get(7)?;
-        let tick_sz: Option<f64> = row.get(8)?;
-        let lot_sz: Option<f64> = row.get(9)?;
-        let min_sz: Option<f64> = row.get(10)?;
-        let alias: Option<String> = row.get(11)?;
-        let state: Option<String> = row.get(12)?;
-        let inst_id_code: Option<String> = row.get(13)?;
-        let inst_category: Option<String> = row.get(14)?;
+        let id: u64 = row.get(0)?;
+        let inst_identify: String = row.get(1)?;
+        let inst_type: String = row.get(2)?;
+        let inst_family: Option<String> = row.get(3)?;
+        let base_ccy: String = row.get(4)?;
+        let quote_ccy: Option<String> = row.get(5)?;
+        let settle_ccy: Option<String> = row.get(6)?;
+        let list_time: Option<u64> = row.get(7)?;
+        let exp_time: Option<u64> = row.get(8)?;
+        let tick_sz: Option<f64> = row.get(9)?;
+        let lot_sz: Option<f64> = row.get(10)?;
+        let min_sz: Option<f64> = row.get(11)?;
+        let alias: Option<String> = row.get(12)?;
+        let state: Option<String> = row.get(13)?;
+        let inst_id_code: Option<String> = row.get(14)?;
+        let inst_category: Option<String> = row.get(15)?;
 
         Ok(InstrumentPo {
-            inst_id,
+            id,
+            inst_identify,
             inst_type,
             inst_family,
             base_ccy,

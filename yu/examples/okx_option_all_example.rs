@@ -1,6 +1,7 @@
 use li::tools::logs::setup_logger;
 use log::{LevelFilter, info};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
 use yu::config::get_config;
@@ -27,8 +28,13 @@ async fn main() -> Result<(), YuError> {
     setup_logger(Some(LevelFilter::Warn), special_log)?;
     initial_okx_tables(None)?;
 
-    let service = OptionService::default();
+    let service = Arc::new(OptionService::default());
     service.start().await?;
+    let sync_inst_service = service.clone();
+
+    tokio::spawn(async move {
+        let _ = sync_inst_service.initial_candle(0).await;
+    });
 
     sleep(Duration::from_mins(10)).await;
     Ok(())

@@ -11,7 +11,6 @@ use li::websocket::connection::{
     CommandMessage, ConnectionAction, MessageHandlerTrait, ShareMessageHandler, ToServerMessage, WebSocketConnection, WebSocketInterface,
 };
 use log::{error, info, warn};
-use std::cmp::max;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -30,7 +29,8 @@ pub trait CommonIOServiceTrait {
     fn get_okx_api(&self) -> OKxApi;
     async fn fetch_history(
         &self,
-        inst_id: &str,
+        inst_identify: &str,
+        inst_id: u64,
         start_ts: u64,
         end_ts: u64,
         interval: &HistoryInterval,
@@ -93,7 +93,8 @@ impl CommonIOServiceTrait for CommonIOServiceImpl {
 
     async fn fetch_history(
         &self,
-        inst_id: &str,
+        inst_identify: &str,
+        inst_id: u64,
         start_ts: u64,
         end_ts: u64,
         interval: &HistoryInterval,
@@ -101,6 +102,7 @@ impl CommonIOServiceTrait for CommonIOServiceImpl {
         max_error_num: Option<usize>,
     ) -> Result<Vec<OkxKlinePo>, YuError> {
         fetch_history(
+            inst_identify,
             inst_id,
             start_ts,
             end_ts,
@@ -142,7 +144,8 @@ impl CommonIOServiceTrait for CommonIOServiceImpl {
 ///
 ///
 pub async fn fetch_history(
-    inst_id: &str,
+    inst_identify: &str,
+    inst_id: u64,
     start_ts: u64,
     end_ts: u64,
     interval: &HistoryInterval,
@@ -155,13 +158,13 @@ pub async fn fetch_history(
 
     let mut error_count: usize = 0;
     let mut current_end_ts = end_ts;
-    let inst_id_up = inst_id.to_uppercase();
+    let inst_id_up = inst_identify;
     let limit = limit_num.unwrap_or(300).to_string();
     let jitter = Jitter::up_to(Duration::from_millis(2000));
     loop {
         // build params: omit `before` for the very first call (no pagination cursor)
         let request_param = HistoryParams::builder()
-            .inst_id(inst_id.to_string())
+            .inst_id(inst_id_up.to_string())
             .after(current_end_ts.to_string())
             .before(start_ts.to_string())
             .bar(interval.as_ref().to_uppercase())
@@ -181,7 +184,7 @@ pub async fn fetch_history(
             }
         };
 
-        let mut batch = OkxKlinePo::from_kline_response(&inst_id_up, candles);
+        let mut batch = OkxKlinePo::from_kline_response(inst_id, candles);
 
         // filter out records outside [start_ts, end_ts] or confirm == 0
         batch.retain(|p| p.ts >= start_ts && p.ts <= end_ts && p.confirm != 0);
@@ -248,7 +251,7 @@ pub async fn fetch_and_update_instruments(
     let mut existing: HashMap<String, InstrumentPo> = HashMap::new();
     let instruments = instrument_repo.get_instrument_by_type(inst_type).await?;
     for instr in instruments {
-        existing.insert(instr.inst_id.clone(), instr);
+        existing.insert(instr.inst_identify.clone(), instr);
     }
     // call API
     match api.list_instruments(param).await {
@@ -291,11 +294,21 @@ pub async fn fetch_and_update_instruments(
 
 pub struct KlineHandler {
     kline_repo: OkxKlineRepository,
+    instrument_repo: OkxInstrumentRepository,
+    inst_id_identify_map: Arc<RwLock<HashMap<String, InstrumentPo>>>,
 }
 
 impl KlineHandler {
-    pub fn new(kline_repo: OkxKlineRepository) -> Self {
-        Self { kline_repo }
+    pub fn new(
+        kline_repo: OkxKlineRepository,
+        instrument_repo: OkxInstrumentRepository,
+        inst_id_identify_map: HashMap<String, InstrumentPo>,
+    ) -> Self {
+        Self {
+            kline_repo,
+            instrument_repo,
+            inst_id_identify_map: Arc::new(RwLock::new(inst_id_identify_map)),
+        }
     }
 }
 
@@ -313,7 +326,45 @@ impl MessageHandlerTrait<OkxWebsocketResponse> for KlineHandler {
                 //看到okx是一个一个回来的，比如说我订阅了A，B，C。一起订阅的，但是最后回来的是三条消息。
             }
             OkxWebsocketResponse::Kline(payload) => {
-                let pos = OkxKlinePo::from_ws_response(&payload);
+                // 如果查不到，就不如数据库，主要是为了防止脏数据。然后数据应该在更新instrument的时候补全。
+                let inst_identify = payload.arg.inst_id.to_string();
+                // 尝试从内存map读取
+                let mut inst_opt = {
+                    let guard = self.inst_id_identify_map.read().unwrap();
+                    guard.get(&inst_identify).cloned()
+                };
+
+                // 如果内存中没有，从仓库查询并更新map
+                if inst_opt.is_none() {
+                    match self.instrument_repo.get_instrument_by_identify(&inst_identify).await {
+                        Ok(po) => {
+                            match self.inst_id_identify_map.write() {
+                                Ok(mut w) => {
+                                    w.insert(inst_identify.clone(), po.clone());
+                                }
+                                Err(e) => {
+                                    warn!("failed to acquire inst_id_identify_map write lock: {:?}", e);
+                                }
+                            }
+                            inst_opt = Some(po);
+                        }
+                        Err(e) => {
+                            warn!("Received kline for unknown instrument: {}: {:?}", inst_identify, e);
+                            return;
+                        }
+                    }
+                }
+
+                let inst = match inst_opt {
+                    Some(i) => i,
+                    None => {
+                        // 理论上不应到这里，但防御性返回
+                        warn!("Instrument lookup failed for {}", inst_identify);
+                        return;
+                    }
+                };
+
+                let pos = OkxKlinePo::from_ws_response(inst.id, &payload);
                 for po in pos {
                     if po.confirm != 1 {
                         //过滤没有完成的kline
@@ -402,10 +453,17 @@ impl OptionService {
     /// 开启一个定时任务。定时任务的主要功能是刷新inst_ids。然后更新订阅的kline。
     ///
     pub async fn start(&self) -> Result<broadcast::Sender<OkxKlinePo>, YuError> {
-        let handler = Arc::new(KlineHandler::new(self.common_io.get_kline_repo()));
         let instruments_share = self.instruments.clone();
         let common_io = self.common_io.clone();
         let instruments = Self::refresh_instruments(common_io.clone(), instruments_share.clone()).await?;
+        let kline_repo = self.common_io.get_kline_repo();
+        let instrument_repo = self.common_io.get_instrument_repo();
+        let id_identify_dict = instruments
+            .clone()
+            .into_iter()
+            .map(|inst| (inst.inst_identify.clone(), inst))
+            .collect::<HashMap<String, InstrumentPo>>();
+        let handler = Arc::new(KlineHandler::new(kline_repo, instrument_repo, id_identify_dict));
         let app_config = get_config();
         let proxy = app_config.proxy_url.clone();
         let interval = self.interval.clone();
@@ -425,7 +483,9 @@ impl OptionService {
             let handler_each = handler_for_cron.clone();
             let interval_each = interval.clone();
             Box::pin(async move {
+                info!("开始刷新okx option");
                 let _ = Self::refresh_instruments(common_io_each.clone(), instruments_each.clone()).await;
+                info!("结束刷新okx option");
 
                 // after refreshing instruments, exercise websocket: recreate and swap
                 let insts = match instruments_each.read() {
@@ -504,7 +564,10 @@ impl OptionService {
         for (i, chunk) in instruments.chunks(batch_num).enumerate() {
             let mut args = vec![];
             for inst in chunk {
-                let arg = ArgBody::builder().channel(frequency.clone()).inst_id(inst.inst_id.to_string()).build();
+                let arg = ArgBody::builder()
+                    .channel(frequency.clone())
+                    .inst_id(inst.inst_identify.to_string())
+                    .build();
                 args.push(arg);
             }
 
@@ -518,6 +581,26 @@ impl OptionService {
         }
 
         Ok(interface)
+    }
+
+    pub async fn list_instruments(&self) -> Result<Vec<InstrumentPo>, YuError> {
+        let live_instruments = self
+            .common_io
+            .get_instrument_repo()
+            .get_instrument_by_type_live(InstrumentType::Option)
+            .await;
+        match live_instruments {
+            Ok(instruments) => Ok(instruments),
+            Err(err) => {
+                log::error!("failed to query okx instruments: {:?}", err);
+                Err(err)
+            }
+        }
+    }
+
+    pub async fn find_candle_after(&self, inst_id: u64, ts: u64) -> Result<Vec<OkxKlinePo>, YuError> {
+        let kline_repo = self.common_io.get_kline_repo();
+        kline_repo.find_kline_after(inst_id, ts).await
     }
 
     pub async fn refresh_instruments(
@@ -558,25 +641,27 @@ impl OptionService {
     /// - 结束时间: interval最近的时间戳+1
     ///
     pub async fn initial_candle(&self, earliest_timestamp: UnixTimeStamp) -> Result<(), YuError> {
+        // 先从 RwLock 中克隆出一份 Vec，避免持有读锁跨 await，确保 Send
         let inst_vec = self
             .instruments
             .read()
-            .map_err(|e| YuError::CustomError(format!("failed to acquire inst_ids read lock: {:?}", e)))?;
+            .map_err(|e| YuError::CustomError(format!("failed to acquire inst_ids read lock: {:?}", e)))?
+            .clone();
         let kline_repo = self.common_io.get_kline_repo();
+        let max_timestamp_mapping = kline_repo.max_timestamp_group_by_inst_id().await?;
         let interval = self.interval.clone();
         let end = interval.get_now_close_unix_ms_utc() + 10;
+        info!("开始初始化，okx option k线，需要同步数量: {}", inst_vec.len());
         for inst in inst_vec.iter() {
-            let latest_timestamp = kline_repo
-                .instrument_max_timestamp(inst.inst_id.as_ref())
-                .await?
-                .unwrap_or_else(|| inst.list_time.unwrap_or(0));
-            let start = interval.get_close_unix_ms(max(latest_timestamp, earliest_timestamp)) + 1;
+            let latest_timestamp = max_timestamp_mapping.get(&inst.id).cloned().unwrap_or(inst.list_time.unwrap_or(0));
+            let start = interval.get_close_unix_ms(std::cmp::max(latest_timestamp, earliest_timestamp)) + 1;
             //以后发送给前端
             let _ = self
                 .common_io
-                .fetch_history(inst.inst_id.as_ref(), start, end, &interval, None, None)
+                .fetch_history(inst.inst_identify.as_ref(), inst.id, start, end, &interval, None, None)
                 .await?;
         }
+        info!("完成初始化，okx option k线");
 
         Ok(())
     }
@@ -593,6 +678,7 @@ mod tests {
     use crate::okx::okx_consts::InstrumentType;
     use crate::test_utils::create_memory_db_provider;
     use li::websocket::connection::MessageHandlerTrait;
+    use std::collections::HashMap;
     use std::sync::{Arc, RwLock};
     use yue::models::HistoryInterval;
     use yue::okx::models::common::{CandleResponse, InstrumentInfo, OkxListResponse};
@@ -634,7 +720,7 @@ mod tests {
         mock_inst_repo
             .expect_insert_instrument()
             .times(1)
-            .withf(|instrument_info| instrument_info.inst_id == "BTC-1")
+            .withf(|instrument_info| instrument_info.inst_identify == "BTC-1")
             .returning(|_| Ok(()));
 
         let inst_repo: OkxInstrumentRepository = Arc::new(mock_inst_repo);
@@ -684,13 +770,15 @@ mod tests {
         // DB has BTC-1 with state live, BTC-2 with state suspend
         let mut mock_inst_repo = MockOkxInstrumentRepositoryTrait::new();
         let db_btc1 = InstrumentPo::builder()
-            .inst_id("BTC-1".to_string())
+            .id(123)
+            .inst_identify("BTC-1".to_string())
             .inst_type("OPTION".to_string())
             .base_ccy("BTC".to_string())
             .state("live".to_string())
             .build();
         let db_btc2 = InstrumentPo::builder()
-            .inst_id("BTC-2".to_string())
+            .id(789)
+            .inst_identify("BTC-2".to_string())
             .inst_type("OPTION".to_string())
             .base_ccy("BTC".to_string())
             .state("suspend".to_string())
@@ -704,7 +792,7 @@ mod tests {
         mock_inst_repo
             .expect_update_instrument()
             .times(1)
-            .withf(|instrument_info: &InstrumentPo| instrument_info.inst_id == "BTC-2" && instrument_info.state == Some("live".to_string()))
+            .withf(|instrument_info: &InstrumentPo| instrument_info.inst_identify == "BTC-2" && instrument_info.state == Some("live".to_string()))
             .returning(|_| Ok(()));
 
         let inst_repo: OkxInstrumentRepository = Arc::new(mock_inst_repo);
@@ -786,7 +874,7 @@ mod tests {
         let api: OKxApi = Arc::new(mock_api);
         let kline_repo: OkxKlineRepository = Arc::new(mock_kline_repo);
 
-        let res = fetch_history("btc-usd", start, end, &interval, &api, &kline_repo, Some(2), None).await?;
+        let res = fetch_history("btc-usd", 123, start, end, &interval, &api, &kline_repo, Some(2), None).await?;
         assert_eq!(res.len(), 3);
 
         Ok(())
@@ -864,7 +952,7 @@ mod tests {
         let api: OKxApi = Arc::new(mock_api);
         let kline_repo: OkxKlineRepository = Arc::new(mock_kline_repo);
 
-        let res = fetch_history("btc-usd", start, end, &interval, &api, &kline_repo, Some(2), None).await?;
+        let res = fetch_history("btc-usd", 123, start, end, &interval, &api, &kline_repo, Some(2), None).await?;
         assert_eq!(res.len(), 2);
 
         Ok(())
@@ -893,7 +981,7 @@ mod tests {
         let api: OKxApi = Arc::new(mock_api);
         let kline_repo: OkxKlineRepository = Arc::new(mock_kline_repo);
 
-        let res = fetch_history("btc-usd", start, end, &interval, &api, &kline_repo, Some(2), Some(2)).await;
+        let res = fetch_history("btc-usd", 123, start, end, &interval, &api, &kline_repo, Some(2), Some(2)).await;
         match res {
             Err(YuError::MaxErrorReached(msg, cnt)) => {
                 assert!(msg.contains("fetch okx kline net error"));
@@ -928,10 +1016,7 @@ mod tests {
 
         let mock_instrument_repo = MockOkxInstrumentRepositoryTrait::new();
         let mut mock_kline_repo = MockOkxKlineRepositoryTrait::new();
-        mock_kline_repo
-            .expect_instrument_max_timestamp()
-            .withf(|inst_id| inst_id == "BTC1")
-            .returning(|_| Ok(None));
+        mock_kline_repo.expect_max_timestamp_group_by_inst_id().returning(|| Ok(HashMap::new()));
 
         let mock_api = MockOKXApiTrait::new();
         let mut mock_common_io = MockCommonIOServiceTrait::new();
@@ -939,13 +1024,14 @@ mod tests {
         mock_common_io
             .expect_fetch_history()
             .times(1)
-            .withf(move |inst_id, start_ts, _, _, _, _| inst_id == "BTC1" && start_ts == &expected_start)
-            .return_once(|_, _, _, _, _, _| Ok(vec![]));
+            .withf(move |inst_id, _, start_ts, _, _, _, _| inst_id == "BTC1" && start_ts == &expected_start)
+            .return_once(|_, _, _, _, _, _, _| Ok(vec![]));
 
         let common_io: CommonIOService = link_mock_common_io_service(mock_common_io, mock_instrument_repo, mock_kline_repo, mock_api);
 
         let inst_po = InstrumentPo::builder()
-            .inst_id("BTC1".to_string())
+            .id(123)
+            .inst_identify("BTC1".to_string())
             .inst_type("OPTION".to_string())
             .base_ccy("BTC".to_string())
             .list_time(start_time)
@@ -964,24 +1050,25 @@ mod tests {
     pub async fn test_option_service_initial_kline_has_value() {
         let mock_instrument_repo = MockOkxInstrumentRepositoryTrait::new();
         let mut mock_kline_repo = MockOkxKlineRepositoryTrait::new();
-        mock_kline_repo
-            .expect_instrument_max_timestamp()
-            .withf(|inst_id| inst_id == "BTC1")
-            .returning(|_| Ok(Some(HistoryInterval::OneHour.to_milliseconds() * 2 + 1)));
-
+        mock_kline_repo.expect_max_timestamp_group_by_inst_id().returning(|| {
+            let mut res = HashMap::<u64, u64>::new();
+            res.insert(123, HistoryInterval::OneHour.to_milliseconds() * 2 + 1);
+            Ok(res)
+        });
         let mock_api = MockOKXApiTrait::new();
         let mut mock_common_io = MockCommonIOServiceTrait::new();
         let expected_start = HistoryInterval::OneHour.to_milliseconds() * 2 + 1;
         mock_common_io
             .expect_fetch_history()
             .times(1)
-            .withf(move |inst_id, start_ts, _, _, _, _| inst_id == "BTC1" && start_ts == &expected_start)
-            .return_once(|_, _, _, _, _, _| Ok(vec![]));
+            .withf(move |inst_id, _, start_ts, _, _, _, _| inst_id == "BTC1" && start_ts == &expected_start)
+            .return_once(|_, _, _, _, _, _, _| Ok(vec![]));
 
         let common_io: CommonIOService = link_mock_common_io_service(mock_common_io, mock_instrument_repo, mock_kline_repo, mock_api);
 
         let inst_po = InstrumentPo::builder()
-            .inst_id("BTC1".to_string())
+            .id(123)
+            .inst_identify("BTC1".to_string())
             .inst_type("OPTION".to_string())
             .base_ccy("BTC".to_string())
             .list_time(HistoryInterval::OneHour.to_milliseconds() + 1)
@@ -1000,24 +1087,25 @@ mod tests {
     pub async fn test_option_service_initial_max_timestamp() {
         let mock_instrument_repo = MockOkxInstrumentRepositoryTrait::new();
         let mut mock_kline_repo = MockOkxKlineRepositoryTrait::new();
-        mock_kline_repo
-            .expect_instrument_max_timestamp()
-            .withf(|inst_id| inst_id == "BTC1")
-            .returning(|_| Ok(Some(HistoryInterval::OneHour.to_milliseconds() * 2 + 1)));
-
+        mock_kline_repo.expect_max_timestamp_group_by_inst_id().returning(|| {
+            let mut res = HashMap::<u64, u64>::new();
+            res.insert(123, HistoryInterval::OneHour.to_milliseconds() * 2 + 1);
+            Ok(res)
+        });
         let mock_api = MockOKXApiTrait::new();
         let mut mock_common_io = MockCommonIOServiceTrait::new();
         let expected_start = HistoryInterval::OneHour.to_milliseconds() * 3 + 1;
         mock_common_io
             .expect_fetch_history()
             .times(1)
-            .withf(move |inst_id, start_ts, _, _, _, _| inst_id == "BTC1" && start_ts == &expected_start)
-            .return_once(|_, _, _, _, _, _| Ok(vec![]));
+            .withf(move |inst_id, _, start_ts, _, _, _, _| inst_id == "BTC1" && start_ts == &expected_start)
+            .return_once(|_, _, _, _, _, _, _| Ok(vec![]));
 
         let common_io: CommonIOService = link_mock_common_io_service(mock_common_io, mock_instrument_repo, mock_kline_repo, mock_api);
 
         let inst_po = InstrumentPo::builder()
-            .inst_id("BTC1".to_string())
+            .id(123)
+            .inst_identify("BTC1".to_string())
             .inst_type("OPTION".to_string())
             .base_ccy("BTC".to_string())
             .list_time(HistoryInterval::OneHour.to_milliseconds() + 1)
@@ -1036,8 +1124,17 @@ mod tests {
             .times(1)
             .withf(|po| po.ts == 111)
             .returning(|_| Ok(()));
+        let mock_inst_repo = MockOkxInstrumentRepositoryTrait::new();
+        let inst_po = InstrumentPo::builder()
+            .id(123)
+            .inst_identify("BTC-1".to_string())
+            .inst_type("OPTION".to_string())
+            .base_ccy("BTC".to_string())
+            .list_time(HistoryInterval::OneHour.to_milliseconds() + 1)
+            .build();
+        let empty_map = HashMap::from([("BTC-1".to_string(), inst_po)]);
 
-        let handler = KlineHandler::new(Arc::new(mock_kline_repo));
+        let handler = KlineHandler::new(Arc::new(mock_kline_repo), Arc::new(mock_inst_repo), empty_map);
 
         let arg_body = ArgBody::builder().inst_id("BTC-1".to_string()).channel("111".to_string()).build();
         let confirm_data = vec![

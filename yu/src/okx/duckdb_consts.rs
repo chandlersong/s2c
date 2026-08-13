@@ -27,29 +27,29 @@ impl DuckDbTableTrait for OkxTables {
 }
 pub const CREATE_OKX_INSTRUMENTS_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS OKX_INSTRUMENTS (
-        instId VARCHAR,
-        instType VARCHAR,
-        instFamily VARCHAR,
-        baseCcy VARCHAR,
-        quoteCcy VARCHAR,
-        settleCcy VARCHAR,
-        listTime BIGINT,
-        expTime BIGINT,
-        tickSz DOUBLE,
-        lotSz DOUBLE,
-        minSz DOUBLE,
+        id BIGINT PRIMARY KEY,
+        inst_identify VARCHAR,
+        inst_type VARCHAR,
+        inst_family VARCHAR,
+        base_ccy VARCHAR,
+        quote_ccy VARCHAR,
+        settle_ccy VARCHAR,
+        list_time BIGINT,
+        exp_time BIGINT,
+        tick_sz DOUBLE,
+        lot_sz DOUBLE,
+        min_sz DOUBLE,
         alias VARCHAR,
         state VARCHAR,
-        instIdCode VARCHAR,
-        instCategory VARCHAR
+        inst_id_code VARCHAR,
+        inst_category VARCHAR
 );
-CREATE UNIQUE INDEX IF NOT EXISTS IDX_CREATE_OKX_INSTRUMENTS_MAIN ON okx_instruments(instId);
 "#;
 
 pub const OKX_KLINE: &str = r#"
 CREATE TABLE IF NOT EXISTS OKX_KLINE (
         id BIGINT PRIMARY KEY,
-        instId VARCHAR,
+        inst_id BIGINT,
         timestamp BIGINT,
         open DOUBLE,
         high DOUBLE,
@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS OKX_KLINE (
         volCcyQuote DOUBLE,
         confirm int
 );
-CREATE UNIQUE INDEX IF NOT EXISTS IDX_CREATE_OKX_KLINE_MAIN ON OKX_KLINE(instId, timestamp);
+CREATE UNIQUE INDEX IF NOT EXISTS IDX_CREATE_OKX_KLINE_MAIN ON OKX_KLINE(inst_id, timestamp);
 "#;
 
 pub(crate) const ALL_OKX_TABLES: &[OkxTables] = &[OkxTables::Kline, OkxTables::Instruments];

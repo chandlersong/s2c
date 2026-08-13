@@ -5,15 +5,17 @@ use crate::okx::duck_po::{InstrumentPo, OkxKlinePo};
 use crate::okx::duckdb_tables::get_okx_kline_table;
 use crate::okx::okx_consts::InstrumentType;
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 use yue::query_message::{BatchInsertPayload, DataSourceProviderTrait, InsertPayload, QueryCommand};
+use yue::tools::get_snow_flake_id_u64;
 
 #[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
 #[async_trait]
 pub trait OkxInstrumentRepositoryTrait {
     async fn get_instrument_by_type(&self, inst_type: InstrumentType) -> Result<Vec<InstrumentPo>, YuError>;
-    async fn get_instrument_by_id(&self, inst_id: &str) -> Result<InstrumentPo, YuError>;
+    async fn get_instrument_by_identify(&self, inst_identify: &str) -> Result<InstrumentPo, YuError>;
     async fn get_instrument_by_type_live(&self, inst_type: InstrumentType) -> Result<Vec<InstrumentPo>, YuError>;
 
     async fn insert_instrument(&self, instrument: InstrumentPo) -> Result<(), YuError>;
@@ -27,11 +29,15 @@ pub trait OkxInstrumentRepositoryTrait {
 #[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
 #[async_trait]
 pub trait OkxKlineRepositoryTrait {
-    async fn instrument_max_timestamp(&self, inst_id: &str) -> Result<Option<u64>, YuError>;
+    async fn instrument_max_timestamp(&self, inst_id: u64) -> Result<Option<u64>, YuError>;
+
+    async fn max_timestamp_group_by_inst_id(&self) -> Result<HashMap<u64, u64>, YuError>;
 
     async fn insert_history(&self, po: OkxKlinePo) -> Result<(), YuError>;
 
     async fn batch_insert(&self, po_vec: Vec<OkxKlinePo>) -> Result<(), YuError>;
+
+    async fn find_kline_after(&self, inst_id: u64, ts: u64) -> Result<Vec<OkxKlinePo>, YuError>;
 }
 
 pub type OkxInstrumentRepository = Arc<dyn OkxInstrumentRepositoryTrait + Send + Sync>;
@@ -58,14 +64,14 @@ struct OkxInstrumentRepositoryImpl {
 impl OkxInstrumentRepositoryTrait for OkxInstrumentRepositoryImpl {
     async fn get_instrument_by_type(&self, inst_type: InstrumentType) -> Result<Vec<InstrumentPo>, YuError> {
         let conn = self.provider.acquire()?;
-        let mut stmt = conn.prepare("SELECT instId, instType, instFamily, baseCcy, quoteCcy, settleCcy, listTime, expTime, tickSz, lotSz, minSz, alias, state, instIdCode, instCategory FROM OKX_INSTRUMENTS where instType = ?;")?;
+        let mut stmt = conn.prepare("SELECT id, inst_identify, inst_type, inst_family, base_ccy, quote_ccy, settle_ccy, list_time, exp_time, tick_sz, lot_sz, min_sz, alias, state, inst_id_code, inst_category FROM OKX_INSTRUMENTS where inst_type = ?;")?;
         let rows = stmt.query([inst_type.as_str()])?;
         InstrumentPo::from_db_to_vec(rows)
     }
 
-    async fn get_instrument_by_id(&self, inst_id: &str) -> Result<InstrumentPo, YuError> {
+    async fn get_instrument_by_identify(&self, inst_id: &str) -> Result<InstrumentPo, YuError> {
         let conn = self.provider.acquire()?;
-        let mut stmt = conn.prepare("SELECT instId, instType, instFamily, baseCcy, quoteCcy, settleCcy, listTime, expTime, tickSz, lotSz, minSz, alias, state, instIdCode, instCategory FROM OKX_INSTRUMENTS where instId = ?;")?;
+        let mut stmt = conn.prepare("SELECT id, inst_identify, inst_type, inst_family, base_ccy, quote_ccy, settle_ccy, list_time, exp_time, tick_sz, lot_sz, min_sz, alias, state, inst_id_code, inst_category FROM OKX_INSTRUMENTS where id = ?;")?;
         let mut rows = stmt.query([inst_id])?;
         // Expect at most one row. Read the first row if present and convert it to InstrumentPo.
         if let Some(row) = rows.next()? {
@@ -78,7 +84,7 @@ impl OkxInstrumentRepositoryTrait for OkxInstrumentRepositoryImpl {
 
     async fn get_instrument_by_type_live(&self, inst_type: InstrumentType) -> Result<Vec<InstrumentPo>, YuError> {
         let conn = self.provider.acquire()?;
-        let mut stmt = conn.prepare("SELECT instId, instType, instFamily, baseCcy, quoteCcy, settleCcy, listTime, expTime, tickSz, lotSz, minSz, alias, state, instIdCode, instCategory FROM OKX_INSTRUMENTS where instType = ? and state='live';")?;
+        let mut stmt = conn.prepare("SELECT id, inst_identify, inst_type, inst_family, base_ccy, quote_ccy, settle_ccy, list_time, exp_time, tick_sz, lot_sz, min_sz, alias, state, inst_id_code, inst_category FROM OKX_INSTRUMENTS where inst_type = ? and state='live';")?;
         let rows = stmt.query([inst_type.as_str()])?;
         InstrumentPo::from_db_to_vec(rows)
     }
@@ -100,8 +106,9 @@ impl OkxInstrumentRepositoryTrait for OkxInstrumentRepositoryImpl {
         let min_sz = instrument.min_sz.map(|f| f.to_string()).unwrap_or_else(|| "NULL".to_string());
 
         let insert_sql = format!(
-            "INSERT INTO OKX_INSTRUMENTS(instId, instType, instFamily, baseCcy, quoteCcy, settleCcy, listTime, expTime, tickSz, lotSz, minSz, alias, state, instIdCode, instCategory) VALUES ('{}','{}',{},'{}',{},{},{},{},{},{},{},{},{} ,{},{});",
-            esc(&instrument.inst_id),
+            "INSERT INTO OKX_INSTRUMENTS(id, inst_identify, inst_type, inst_family, base_ccy, quote_ccy, settle_ccy, list_time, exp_time, tick_sz, lot_sz, min_sz, alias, state, inst_id_code, inst_category) VALUES ({},'{}','{}',{},'{}',{},{},{},{},{},{},{},{},{},{},{});",
+            get_snow_flake_id_u64(),
+            esc(&instrument.inst_identify),
             esc(&instrument.inst_type),
             q_str(&instrument.inst_family),
             esc(&instrument.base_ccy),
@@ -137,7 +144,8 @@ impl OkxInstrumentRepositoryTrait for OkxInstrumentRepositoryImpl {
         let min_sz = instrument.min_sz.map(|f| f.to_string()).unwrap_or_else(|| "NULL".to_string());
 
         let update_sql = format!(
-            "UPDATE OKX_INSTRUMENTS SET instType='{}', instFamily={}, baseCcy='{}', quoteCcy={}, settleCcy={}, listTime={}, expTime={}, tickSz={}, lotSz={}, minSz={}, alias={}, state={}, instIdCode={}, instCategory={} WHERE instId='{}';",
+            "UPDATE OKX_INSTRUMENTS SET inst_identify='{}', inst_type='{}', inst_family={}, base_ccy='{}', quote_ccy={}, settle_ccy={}, list_time={}, exp_time={}, tick_sz={}, lot_sz={}, min_sz={}, alias={}, state={}, inst_id_code={}, inst_category={} WHERE id={};",
+            esc(&instrument.inst_identify),
             esc(&instrument.inst_type),
             q_str(&instrument.inst_family),
             esc(&instrument.base_ccy),
@@ -152,7 +160,7 @@ impl OkxInstrumentRepositoryTrait for OkxInstrumentRepositoryImpl {
             q_str(&instrument.state),
             q_str(&instrument.inst_id_code),
             q_str(&instrument.inst_category),
-            esc(&instrument.inst_id)
+            instrument.id
         );
 
         conn.execute(update_sql.as_str(), [])?;
@@ -176,9 +184,9 @@ impl Default for OkxKlinePoRepositoryImpl {
 
 #[async_trait]
 impl OkxKlineRepositoryTrait for OkxKlinePoRepositoryImpl {
-    async fn instrument_max_timestamp(&self, inst_id: &str) -> Result<Option<u64>, YuError> {
+    async fn instrument_max_timestamp(&self, inst_id: u64) -> Result<Option<u64>, YuError> {
         let conn = self.provider.acquire()?;
-        let mut stmt = conn.prepare("SELECT max(timestamp) FROM OKX_KLINE where instId = ?;")?;
+        let mut stmt = conn.prepare("SELECT max(timestamp) FROM OKX_KLINE where inst_id = ?;")?;
         let mut rows = stmt.query([inst_id])?;
         if let Some(row) = rows.next()? {
             let max_timestamp: Option<u64> = row.get(0)?;
@@ -186,6 +194,19 @@ impl OkxKlineRepositoryTrait for OkxKlinePoRepositoryImpl {
         } else {
             Ok(None)
         }
+    }
+
+    async fn max_timestamp_group_by_inst_id(&self) -> Result<HashMap<u64, u64>, YuError> {
+        let conn = self.provider.acquire()?;
+        let mut stmt = conn.prepare("SELECT inst_id, max(timestamp) FROM OKX_KLINE GROUP BY inst_id;")?;
+        let mut rows = stmt.query([])?;
+        let mut res: HashMap<u64, u64> = HashMap::new();
+        while let Some(row) = rows.next()? {
+            let inst_id: u64 = row.get(0)?;
+            let max_timestamp: u64 = row.get(1)?;
+            res.insert(inst_id, max_timestamp);
+        }
+        Ok(res)
     }
 
     async fn insert_history(&self, po: OkxKlinePo) -> Result<(), YuError> {
@@ -213,5 +234,41 @@ impl OkxKlineRepositoryTrait for OkxKlinePoRepositoryImpl {
             Ok(Err(e)) => Err(YuError::new(&format!("Failed to receive command: {}", e))),
             Err(e) => Err(YuError::new(&format!("Failed to receive command: {}", e))),
         }
+    }
+
+    async fn find_kline_after(&self, inst_id: u64, ts: u64) -> Result<Vec<OkxKlinePo>, YuError> {
+        let conn = self.provider.acquire()?;
+        let mut stmt = conn.prepare("SELECT id, inst_id, timestamp, open, high, low, close, volume, volCcy, volCcyQuote, confirm FROM OKX_KLINE WHERE inst_id = ? AND timestamp > ? ORDER BY timestamp ASC;")?;
+        let mut rows = stmt.query([inst_id, ts])?;
+        let mut res: Vec<OkxKlinePo> = Vec::new();
+        while let Some(row) = rows.next()? {
+            let id: u64 = row.get(0)?;
+            let inst_id_db: u64 = row.get(1)?;
+            let ts_db: u64 = row.get(2)?;
+            let open: f64 = row.get(3)?;
+            let high: f64 = row.get(4)?;
+            let low: f64 = row.get(5)?;
+            let close: f64 = row.get(6)?;
+            let vol: f64 = row.get(7)?;
+            let vol_ccy: f64 = row.get(8)?;
+            let vol_ccy_quote: f64 = row.get(9)?;
+            let confirm_i: i32 = row.get(10)?;
+            let confirm: u8 = confirm_i as u8;
+
+            res.push(OkxKlinePo {
+                id,
+                inst_id: inst_id_db,
+                ts: ts_db,
+                open,
+                high,
+                low,
+                close,
+                vol,
+                vol_ccy,
+                vol_ccy_quote,
+                confirm,
+            });
+        }
+        Ok(res)
     }
 }

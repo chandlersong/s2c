@@ -309,7 +309,7 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
         let now = self.interval.get_now_close_unix_sec_utc();
         let fidelity = self.interval.to_second() / 60;
         info!("start to initial polymarket history data");
-        let max_timestamp_dictionary = self.history_repo.get_max_timestamp_dictionary().await?;
+        let max_timestamp_dictionary = self.history_repo.max_timestamp_group_by_inst_id().await?;
         let gap = self.interval.to_second() - 31;
         for instrument in self.instruments.read().await.iter() {
             //如果数据从polymarket_price_history来，那么最好+30s。这样防止重复，如果从polymarket_instruments，则往后

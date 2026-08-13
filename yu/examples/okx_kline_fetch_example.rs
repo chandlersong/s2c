@@ -29,7 +29,7 @@ async fn main() -> Result<(), YuError> {
     setup_logger(Some(LevelFilter::Warn), special_log)?;
     initial_okx_tables(None)?;
     //到时候自己找一个
-    let inst_id = "BTC-USD-260726-72000-C";
+    let inst_id = "BTC-USD-260925-75000-C";
     let interval = HistoryInterval::OneHour;
     let end = interval.get_now_close_unix_ms_utc() + 1;
     let start = interval.get_now_close_unix_ms_utc() - 150 * interval.to_milliseconds();
@@ -43,7 +43,7 @@ async fn main() -> Result<(), YuError> {
     );
     let mut fist_kline_timestamp = interval.get_now_close_unix_ms_utc() + interval.to_milliseconds();
     let interval_ms = interval.to_milliseconds();
-    let klines = fetch_history(inst_id, start, end, &interval, &okx_api, &kline_repo, None, Some(5)).await?;
+    let klines = fetch_history(inst_id, 123, start, end, &interval, &okx_api, &kline_repo, None, Some(5)).await?;
     info!("find {} klines", klines.len());
     for kline in &klines {
         let real_gap = fist_kline_timestamp - kline.ts;

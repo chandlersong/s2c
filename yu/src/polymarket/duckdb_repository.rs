@@ -37,7 +37,7 @@ pub trait PolyMarketHistoryRepositoryTrait {
     ///
     /// 返回表中id和timestamp的关系。key为instrument_id,val为数据库中最大的timestamp
     ///
-    async fn get_max_timestamp_dictionary(&self) -> Result<HashMap<u64, u64>, YuError>;
+    async fn max_timestamp_group_by_inst_id(&self) -> Result<HashMap<u64, u64>, YuError>;
 
     async fn get_history_before(&self, inst_id: u64, start_ms: u64) -> Result<Vec<PolyMarketHistoryPo>, YuError>;
 }
@@ -202,7 +202,7 @@ impl PolyMarketHistoryRepositoryTrait for PolyMarketHistoryRepositoryImpl {
         }
     }
 
-    async fn get_max_timestamp_dictionary(&self) -> Result<HashMap<u64, u64>, YuError> {
+    async fn max_timestamp_group_by_inst_id(&self) -> Result<HashMap<u64, u64>, YuError> {
         let conn = self.provider.acquire()?;
         let mut stmt = conn.prepare("SELECT instrument_id, max(timestamp) FROM polymarket_price_history GROUP BY instrument_id;")?;
         let mut rows = stmt.query([])?;
