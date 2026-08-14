@@ -1,5 +1,5 @@
 use li::tools::logs::setup_logger;
-use log::{LevelFilter, error, info};
+use log::{LevelFilter, info};
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
