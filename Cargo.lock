@@ -2982,6 +2982,7 @@ dependencies = [
  "async-trait",
  "aws-config",
  "aws-sdk-dynamodb",
+ "bon",
  "chrono",
  "cron",
  "fern",

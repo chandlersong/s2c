@@ -2,6 +2,7 @@ use crate::errors::LiError;
 use crate::tools::words::take_or_all_cow_with_ellipsis;
 use crate::websocket::models::WebSocketMessage;
 use async_trait::async_trait;
+use bon::Builder;
 use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, info, trace, warn};
 use std::fmt::Debug;
@@ -15,6 +16,21 @@ use tokio_tungstenite::tungstenite::http::Uri;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
+
+#[derive(Debug, Builder, Clone)]
+pub struct ConnectionConfig {
+    pub ping_frequency: Duration,
+    pub reconnect_interval: Duration,
+}
+
+impl Default for ConnectionConfig {
+    fn default() -> Self {
+        Self {
+            ping_frequency: Duration::from_secs(60),
+            reconnect_interval: Duration::from_secs(5),
+        }
+    }
+}
 
 /// WebSocket 事件，发送给订阅者
 #[derive(Clone, Debug)]
@@ -214,7 +230,7 @@ impl WebSocketConnection {
     /// 默认的 `BroadcastMessageHandler`，它会把消息广播到 `message_tx`。
     pub async fn run<M>(
         url: String,
-        reconnect_interval: Duration,
+        connection_config: Option<ConnectionConfig>,
         proxy: Option<String>,
         message_handler: Option<ShareMessageHandler<M>>,
     ) -> Arc<WebSocketInterface<M>>
@@ -227,7 +243,7 @@ impl WebSocketConnection {
         let (event_tx, _) = broadcast::channel(EVENT_CACHE);
         let (command_tx, mut command_rx) = mpsc::unbounded_channel();
         let res = Arc::new(WebSocketInterfaceImpl::new(message_tx.clone(), event_tx.clone(), command_tx.clone()));
-
+        let connection_config = connection_config.unwrap_or_default();
         // 准备 handler：如果用户没有提供，则构造默认的 BroadcastMessageHandler
 
         tokio::spawn(async move {
@@ -244,6 +260,7 @@ impl WebSocketConnection {
                     &mut command_rx,
                     &mut message_cache,
                     m_handler.clone(),
+                    connection_config.clone(),
                 )
                 .await
                 {
@@ -260,8 +277,8 @@ impl WebSocketConnection {
                     Err(e) => error!("连接错误: {}", e),
                 }
 
-                warn!("将在 {} 秒后重新连接...", reconnect_interval.as_secs());
-                sleep(reconnect_interval).await;
+                warn!("将在 {} 秒后重新连接...", connection_config.reconnect_interval.as_secs());
+                sleep(connection_config.reconnect_interval).await;
             }
         });
         res
@@ -283,6 +300,7 @@ impl WebSocketConnection {
         command_rx: &mut UnboundedReceiver<CommandMessage>,
         initial_command: &mut Vec<WsMessage>,
         message_handler: ShareMessageHandler<M>,
+        connection_config: ConnectionConfig,
     ) -> Result<ConnectionAction, LiError> {
         let (ws_stream, _) = if let Some(proxy_url) = proxy {
             info!("使用代理连接: {}", proxy_url);
@@ -431,7 +449,7 @@ impl WebSocketConnection {
                     }
                 }
                 // 心跳
-                _ = sleep(Duration::from_secs(60)) => {
+                _ = sleep(connection_config.ping_frequency) => {
                     let ping = WsMessage::Ping(vec![1u8, 2u8, 3u8].into());
                     if let Err(e) = write.send(ping).await {
                         error!("发送心跳 Ping 失败: {}", e);

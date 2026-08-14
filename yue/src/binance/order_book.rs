@@ -285,15 +285,9 @@ pub struct OrderBookService {
 
 impl OrderBookService {
     pub async fn spot(proxy: Option<String>) -> Self {
-        let reconnect_interval = Duration::from_secs(5);
         let center = Arc::new(OrderBookCenter::new());
-        let interface = WebSocketConnection::run::<BinanceSpotWebSocketStreamWrapper>(
-            SPOT_STREAM_WEBSOCKET.to_string(),
-            reconnect_interval,
-            proxy,
-            Some(center.clone()),
-        )
-        .await;
+        let interface =
+            WebSocketConnection::run::<BinanceSpotWebSocketStreamWrapper>(SPOT_STREAM_WEBSOCKET.to_string(), None, proxy, Some(center.clone())).await;
         Self {
             web_socket_interface: interface,
             order_book_center: center,

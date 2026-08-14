@@ -37,9 +37,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 步骤 1: 创建 WebSocket 客户端
     // 自动从环境变量读取代理配置
     let url = "wss://fstream.binance.com/stream?streams=btcusdt@kline_5m/ethusdt@kline_5m".to_string();
-    let reconnect_interval = Duration::from_secs(5);
     let proxy = Some("http://127.0.0.1:7891".to_string());
-    let interface = WebSocketConnection::run(url, reconnect_interval, proxy, None).await;
+    let interface = WebSocketConnection::run(url, None, proxy, None).await;
     info!("✓ WebSocket 客户端已启动");
 
     let mut message_rx: Receiver<TextMessage> = interface.get_message_receiver().unwrap();

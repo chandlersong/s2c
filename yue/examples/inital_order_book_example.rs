@@ -52,11 +52,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_http_client(proxy.clone());
     info!("✓ HTTP 客户端已初始化");
     let (tx, rx) = mpsc::unbounded_channel();
-    let reconnect_interval = Duration::from_secs(5);
     let handler = Arc::new(WebsocketSubscribe { tx });
     let interface = WebSocketConnection::run::<BinanceSpotWebSocketStreamWrapper>(
         SPOT_STREAM_WEBSOCKET.to_string(),
-        reconnect_interval,
+        None,
         Some(proxy.unwrap().to_string()),
         Some(handler),
     )

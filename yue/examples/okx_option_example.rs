@@ -58,11 +58,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let all_btc_option = btc_option.data;
     tokio::spawn(async move {
-        let reconnect_interval = Duration::from_secs(5);
         let proxy = Some("http://127.0.0.1:7891".to_string());
         let handler = Arc::new(PrinterMessageHandler {});
-        let interface =
-            WebSocketConnection::run::<OkxWebsocketResponse>(OXK_BUSINESS_WEBSOCKET.to_string(), reconnect_interval, proxy, Some(handler)).await;
+        let interface = WebSocketConnection::run::<OkxWebsocketResponse>(OXK_BUSINESS_WEBSOCKET.to_string(), None, proxy, Some(handler)).await;
         info!("✓ WebSocket 客户端已启动");
         let mut args = vec![];
         for inst in all_btc_option.iter() {

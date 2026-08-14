@@ -5,8 +5,7 @@ use async_trait::async_trait;
 use li::websocket::connection::{CommandMessage, MessageHandlerTrait, ToServerMessage, WebSocketConnection, WebSocketInterface};
 use log::{error, trace};
 use std::sync::Arc;
-use std::time::Duration;
-use yue::binance::bn_json_websocket::{StreamCommandRequest, SPOT_STREAM_WEBSOCKET, WS_SUBSCRIBE_COMMAND};
+use yue::binance::bn_json_websocket::{SPOT_STREAM_WEBSOCKET, StreamCommandRequest, WS_SUBSCRIBE_COMMAND};
 use yue::binance::bn_models::spot_websocket_stream::{BinanceSpotWebSocketStreamResponse, BinanceSpotWebSocketStreamWrapper};
 use yue::errors::YueError;
 use yue::query_message::{InsertPayload, QueryCommand};
@@ -44,10 +43,8 @@ impl TradingService {
         let saver = Arc::new(TradingSaver {
             table: get_spot_trading_table(),
         });
-        let reconnect_interval = Duration::from_secs(5);
         let interface =
-            WebSocketConnection::run::<BinanceSpotWebSocketStreamWrapper>(SPOT_STREAM_WEBSOCKET.to_string(), reconnect_interval, proxy, Some(saver))
-                .await;
+            WebSocketConnection::run::<BinanceSpotWebSocketStreamWrapper>(SPOT_STREAM_WEBSOCKET.to_string(), None, proxy, Some(saver)).await;
         Self {
             web_socket_interface: interface,
         }

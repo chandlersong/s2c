@@ -8,7 +8,8 @@ use async_trait::async_trait;
 use governor::Jitter;
 use li::tools::time::UnixTimeStamp;
 use li::websocket::connection::{
-    CommandMessage, ConnectionAction, MessageHandlerTrait, ShareMessageHandler, ToServerMessage, WebSocketConnection, WebSocketInterface,
+    CommandMessage, ConnectionAction, ConnectionConfig, MessageHandlerTrait, ShareMessageHandler, ToServerMessage, WebSocketConnection,
+    WebSocketInterface,
 };
 use log::{error, info, warn};
 use std::collections::HashMap;
@@ -556,9 +557,12 @@ impl OptionService {
         handler: Option<ShareMessageHandler<OkxWebsocketResponse>>,
         batch_num: Option<usize>,
     ) -> Result<Arc<WebSocketInterface<OkxWebsocketResponse>>, YuError> {
-        let reconnect_interval = Duration::from_secs(5);
+        let websocket_config = ConnectionConfig::builder()
+            .ping_frequency(Duration::from_secs(28))
+            .reconnect_interval(Duration::from_secs(5))
+            .build();
         let interface =
-            WebSocketConnection::run::<OkxWebsocketResponse>(OXK_BUSINESS_WEBSOCKET.to_string(), reconnect_interval, proxy, handler).await;
+            WebSocketConnection::run::<OkxWebsocketResponse>(OXK_BUSINESS_WEBSOCKET.to_string(), Some(websocket_config), proxy, handler).await;
         info!("✓ oxk kline WebSocket 客户端已启动");
         let batch_num = batch_num.unwrap_or(380);
         let frequency = match interval {
