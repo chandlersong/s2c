@@ -449,6 +449,11 @@ impl OptionService {
         }
     }
 
+    pub async fn initial_instruments(&self) -> Result<Vec<InstrumentPo>, YuError> {
+        let instruments = Self::refresh_instruments(self.common_io.clone(), self.instruments.clone()).await?;
+        Ok(instruments)
+    }
+
     ///
     /// 开启一个定时任务。定时任务的主要功能是刷新inst_ids。然后更新订阅的kline。
     ///

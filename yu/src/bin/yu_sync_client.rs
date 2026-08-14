@@ -54,7 +54,7 @@ async fn main() -> Result<(), YuError> {
     //
     // // 1) 调用 GetLatestTimestamps
 
-    let tx = match client_service.start_batch_insert(None).await {
+    let tx = match client_service.start_batch_insert(None, None).await {
         Ok(sender) => sender,
         Err(e) => {
             error!("error starting batch insert: {}", e);
@@ -143,15 +143,30 @@ async fn async_sync_server(
     let mut server = SyncInterfaceClient::new(manager.connect().await);
     let resp = server.list_instrument(Request::new(Empty {})).await?;
     let inst_list = resp.into_inner();
-    info!("获取asset列表个数.{}", inst_list.instruments.len());
+    info!("获取instrument列表个数.{}", inst_list.instruments.len());
     let diff_from_server = client_service.align_local_instrument(inst_list).await?;
-    info!("align_local_assets done. 需要同步的asset个数:{}", diff_from_server.len());
-    for (inst_id, ts) in diff_from_server {
+    info!("align_local_instrument done.");
+    info!("需要同步polymarket的instrument个数{}", diff_from_server.polymarket_diff.len());
+    info!("需要同步polymarket的oxk option个数{}", diff_from_server.okx_option_diff.len());
+    info!("开始同步polymarket历史数据到本地数据库");
+    for (inst_id, ts) in diff_from_server.polymarket_diff {
         let stream = server
             .sync_history(Request::new(SyncRequest {
                 inst_id,
                 timestamp: ts,
                 exchange: Exchange::Polymarket.into(),
+            }))
+            .await?
+            .into_inner();
+        forward_server_stream(stream, local_db_tx.clone()).await?;
+    }
+    info!("开始同步okx历史数据到本地数据库");
+    for (inst_id, ts) in diff_from_server.okx_option_diff {
+        let stream = server
+            .sync_history(Request::new(SyncRequest {
+                inst_id,
+                timestamp: ts,
+                exchange: Exchange::Okx.into(),
             }))
             .await?
             .into_inner();

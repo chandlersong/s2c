@@ -2,7 +2,7 @@ use crate::errors::YuError;
 use crate::postgresql_db::{PostgresqlTableTrait, get_sync_client_pg_pool_sync};
 use crate::postgresql_db_tables::{PostgresqlBatchInsert, PostgresqlBatchInsertImpl};
 use crate::sync::client::db_consts::ALL_CLIENT_TABLES;
-use crate::sync::client::db_consts::ClientsTables::PriceHistory;
+use crate::sync::client::db_consts::ClientsTables;
 use crate::sync::client::po::polymarket::LocalPolyMarketHistoryPo;
 use futures::executor::block_on;
 use log::{error, info};
@@ -29,13 +29,27 @@ pub async fn initial_grpc_client_tables(option_pool: Option<PgPool>) -> Result<(
 }
 
 pub(crate) static POLYMARKET_PRICE_BATCH_INSERT: OnceLock<PostgresqlBatchInsert<LocalPolyMarketHistoryPo>> = OnceLock::new();
+pub(crate) static OKX_KLINE_BATCH_INSERT: OnceLock<PostgresqlBatchInsert<crate::sync::client::po::okx::LocalOkxKlinePo>> = OnceLock::new();
 
 pub fn get_polymarket_price_batch_insert() -> PostgresqlBatchInsert<LocalPolyMarketHistoryPo> {
     POLYMARKET_PRICE_BATCH_INSERT
         .get_or_init(|| {
             let pool = get_sync_client_pg_pool_sync().expect("get_sync_client_pg_pool failed");
             let batch_insert = block_on(PostgresqlBatchInsertImpl::<LocalPolyMarketHistoryPo>::new(
-                PriceHistory.table_name(),
+                ClientsTables::PriceHistory.table_name(),
+                pool,
+            ));
+            batch_insert
+        })
+        .clone()
+}
+
+pub fn get_okx_kline_batch_insert() -> PostgresqlBatchInsert<crate::sync::client::po::okx::LocalOkxKlinePo> {
+    OKX_KLINE_BATCH_INSERT
+        .get_or_init(|| {
+            let pool = get_sync_client_pg_pool_sync().expect("get_sync_client_pg_pool failed");
+            let batch_insert = block_on(PostgresqlBatchInsertImpl::<crate::sync::client::po::okx::LocalOkxKlinePo>::new(
+                ClientsTables::OkxPriceHistory.table_name(),
                 pool,
             ));
             batch_insert

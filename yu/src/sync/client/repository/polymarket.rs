@@ -10,7 +10,7 @@ use std::sync::Arc;
 pub trait ClientPolyMarketRepositoryTrait {
     async fn list_all_instrument(&self) -> Result<Vec<LocalPolyMarketInstrumentPo>, YuError>;
 
-    //返回server id+timestamp
+    //返回server id+数据库中timestamp
     async fn list_instrument_timestamps(&self) -> Result<HashMap<u64, u64>, YuError>;
 
     //返回一个mapping。key是每个的server_id,value是LocalPolyMarketInstrumentPo

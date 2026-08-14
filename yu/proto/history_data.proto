@@ -104,7 +104,7 @@ message PolyMarketHistoryList {
 
 message OkxKline {
   uint64 id = 1;
-  string inst_id = 2;
+  uint64 inst_id = 2;
   uint64 ts = 3;
   double open = 4;
   double high = 5;

@@ -279,7 +279,7 @@ impl SyncInterface for YuSyncServer {
         let batch_size = self.batch_size;
 
         // determine exchange from request (prost generates from_i32)
-        let exchange_opt = crate::sync::models::grpc_sync::Exchange::from_i32(request.get_ref().exchange);
+        let exchange_opt = crate::sync::models::grpc_sync::Exchange::try_from(request.get_ref().exchange).ok();
 
         match exchange_opt {
             Some(crate::sync::models::grpc_sync::Exchange::Polymarket) => {
@@ -353,7 +353,7 @@ impl SyncInterface for YuSyncServer {
                                 for k in chunk.iter() {
                                     klines.push(crate::sync::models::grpc_sync::OkxKline {
                                         id: k.id,
-                                        inst_id: k.inst_id.to_string(),
+                                        inst_id: k.inst_id,
                                         ts: k.ts,
                                         open: k.open,
                                         high: k.high,
