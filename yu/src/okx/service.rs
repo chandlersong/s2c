@@ -657,16 +657,17 @@ impl OptionService {
             .read()
             .map_err(|e| YuError::CustomError(format!("failed to acquire inst_ids read lock: {:?}", e)))?
             .clone();
+        let total = inst_vec.len();
         let kline_repo = self.common_io.get_kline_repo();
         let max_timestamp_mapping = kline_repo.max_timestamp_group_by_inst_id().await?;
         // clone into Arc so it can be cheaply shared into async tasks
         let max_ts_map = std::sync::Arc::new(max_timestamp_mapping);
         let interval = self.interval.clone();
         let end = interval.get_now_close_unix_ms_utc() + 10;
-        info!("开始初始化，okx option k线，需要同步数量: {}", inst_vec.len());
+        info!("开始初始化，okx option k线，需要同步数量: {}", total);
 
         // 并发控制
-        let concurrency = max_sync.unwrap_or(8).max(1);
+        let concurrency = max_sync.unwrap_or(10).max(1);
         let common_io = self.common_io.clone();
         let earliest = earliest_timestamp;
 
@@ -685,14 +686,19 @@ impl OptionService {
         }))
         .buffer_unordered(concurrency);
 
-        // 收集结果并在遇到第一个错误时返回
+        // 收集结果并在遇到第一个错误时返回，同时打印进度
         let mut any_error: Option<YuError> = None;
         futures::pin_mut!(stream);
+        let mut completed: usize = 0;
         while let Some(res) = stream.next().await {
+            completed = completed.saturating_add(1);
             match res {
-                Ok(_) => {}
+                Ok(_) => {
+                    let pct = if total > 0 { (completed as f64 / total as f64) * 100.0 } else { 100.0 };
+                    info!("initial_candle progress: {}/{} ({:.1}%)", completed, total, pct);
+                }
                 Err(e) => {
-                    error!("initial_candle task failed: {:?}", e);
+                    error!("initial_candle task failed at {}/{}: {:?}", completed, total, e);
                     any_error = Some(e);
                     break;
                 }
