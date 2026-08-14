@@ -663,7 +663,6 @@ impl OptionService {
         // clone into Arc so it can be cheaply shared into async tasks
         let max_ts_map = std::sync::Arc::new(max_timestamp_mapping);
         let interval = self.interval.clone();
-        let end = interval.get_now_close_unix_ms_utc() + 10;
         info!("开始初始化，okx option k线，需要同步数量: {}", total);
 
         // 并发控制
@@ -675,11 +674,12 @@ impl OptionService {
             let common_io = common_io.clone();
             let interval = interval.clone();
             let max_ts_map = max_ts_map.clone();
-            let end = end;
+
             let earliest = earliest;
             async move {
                 let latest_timestamp = max_ts_map.get(&inst.id).cloned().unwrap_or(inst.list_time.unwrap_or(0));
                 let start = interval.get_close_unix_ms(std::cmp::max(latest_timestamp, earliest)) + 1;
+                let end = interval.get_now_close_unix_ms_utc() + 10;
                 let gap = interval.to_milliseconds();
                 if end <= start || (end.saturating_sub(start) < gap) {
                     debug!(
