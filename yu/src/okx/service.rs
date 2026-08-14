@@ -7,12 +7,12 @@ use crate::okx::okx_consts::InstrumentType;
 use async_trait::async_trait;
 use futures::stream::StreamExt;
 use governor::Jitter;
-use li::tools::time::UnixTimeStamp;
+use li::tools::time::{UnixTimeStamp, unix_2_readable};
 use li::websocket::connection::{
     CommandMessage, ConnectionAction, ConnectionConfig, MessageHandlerTrait, ShareMessageHandler, ToServerMessage, WebSocketConnection,
     WebSocketInterface,
 };
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -670,15 +670,28 @@ impl OptionService {
         let concurrency = max_sync.unwrap_or(10).max(1);
         let common_io = self.common_io.clone();
         let earliest = earliest_timestamp;
-
         // 并发拉取，每个任务返回 Result<Vec<OkxKlinePo>, YuError>
         let stream = futures::stream::iter(inst_vec.into_iter().map(move |inst| {
             let common_io = common_io.clone();
             let interval = interval.clone();
             let max_ts_map = max_ts_map.clone();
+            let end = end;
+            let earliest = earliest;
             async move {
                 let latest_timestamp = max_ts_map.get(&inst.id).cloned().unwrap_or(inst.list_time.unwrap_or(0));
                 let start = interval.get_close_unix_ms(std::cmp::max(latest_timestamp, earliest)) + 1;
+                let gap = interval.to_milliseconds();
+                if end <= start || (end.saturating_sub(start) < gap) {
+                    debug!(
+                        "Skipping fetch_history for {} as the time gap is too small: end={}, start={}, window_ms={}",
+                        inst.inst_identify,
+                        unix_2_readable(&end),
+                        unix_2_readable(&start),
+                        gap
+                    );
+                    return Ok(vec![]);
+                }
+
                 common_io
                     .fetch_history(inst.inst_identify.as_ref(), inst.id, start, end, &interval, None, None)
                     .await
