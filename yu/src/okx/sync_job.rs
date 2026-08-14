@@ -8,7 +8,7 @@ pub async fn start_okx_option_service() -> Result<Arc<OptionService>, YuError> {
 
     let service = Arc::new(OptionService::default());
     service.start().await?;
-    // service.initial_candle(0).await?;
+    service.initial_candle(0).await?;
     // service.initial_instruments().await?;
     Ok(service)
 }
