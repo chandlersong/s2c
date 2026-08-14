@@ -8,7 +8,7 @@ pub async fn start_okx_option_service() -> Result<Arc<OptionService>, YuError> {
 
     let service = Arc::new(OptionService::default());
     service.start().await?;
-    if let Err(e) = service.initial_candle(0).await {
+    if let Err(e) = service.initial_candle(0, None).await {
         eprintln!("Error initializing okx candle: {:?}", e);
     }
     // service.initial_instruments().await?;

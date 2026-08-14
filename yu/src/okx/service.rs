@@ -5,6 +5,7 @@ use crate::okx::duck_po::{InstrumentPo, OkxKlinePo};
 use crate::okx::duckdb_repository::{OkxInstrumentRepository, OkxKlineRepository, get_default_kline_repo, get_instrument_repo};
 use crate::okx::okx_consts::InstrumentType;
 use async_trait::async_trait;
+use futures::stream::StreamExt;
 use governor::Jitter;
 use li::tools::time::UnixTimeStamp;
 use li::websocket::connection::{
@@ -649,7 +650,7 @@ impl OptionService {
     ///
     /// - 结束时间: interval最近的时间戳+1
     ///
-    pub async fn initial_candle(&self, earliest_timestamp: UnixTimeStamp) -> Result<(), YuError> {
+    pub async fn initial_candle(&self, earliest_timestamp: UnixTimeStamp, max_sync: Option<usize>) -> Result<(), YuError> {
         // 先从 RwLock 中克隆出一份 Vec，避免持有读锁跨 await，确保 Send
         let inst_vec = self
             .instruments
@@ -658,20 +659,51 @@ impl OptionService {
             .clone();
         let kline_repo = self.common_io.get_kline_repo();
         let max_timestamp_mapping = kline_repo.max_timestamp_group_by_inst_id().await?;
+        // clone into Arc so it can be cheaply shared into async tasks
+        let max_ts_map = std::sync::Arc::new(max_timestamp_mapping);
         let interval = self.interval.clone();
         let end = interval.get_now_close_unix_ms_utc() + 10;
         info!("开始初始化，okx option k线，需要同步数量: {}", inst_vec.len());
-        for inst in inst_vec.iter() {
-            let latest_timestamp = max_timestamp_mapping.get(&inst.id).cloned().unwrap_or(inst.list_time.unwrap_or(0));
-            let start = interval.get_close_unix_ms(std::cmp::max(latest_timestamp, earliest_timestamp)) + 1;
-            //以后发送给前端
-            let _ = self
-                .common_io
-                .fetch_history(inst.inst_identify.as_ref(), inst.id, start, end, &interval, None, None)
-                .await?;
-        }
-        info!("完成初始化，okx option k线");
 
+        // 并发控制
+        let concurrency = max_sync.unwrap_or(8).max(1);
+        let common_io = self.common_io.clone();
+        let earliest = earliest_timestamp;
+
+        // 并发拉取，每个任务返回 Result<Vec<OkxKlinePo>, YuError>
+        let stream = futures::stream::iter(inst_vec.into_iter().map(move |inst| {
+            let common_io = common_io.clone();
+            let interval = interval.clone();
+            let max_ts_map = max_ts_map.clone();
+            async move {
+                let latest_timestamp = max_ts_map.get(&inst.id).cloned().unwrap_or(inst.list_time.unwrap_or(0));
+                let start = interval.get_close_unix_ms(std::cmp::max(latest_timestamp, earliest)) + 1;
+                common_io
+                    .fetch_history(inst.inst_identify.as_ref(), inst.id, start, end, &interval, None, None)
+                    .await
+            }
+        }))
+        .buffer_unordered(concurrency);
+
+        // 收集结果并在遇到第一个错误时返回
+        let mut any_error: Option<YuError> = None;
+        futures::pin_mut!(stream);
+        while let Some(res) = stream.next().await {
+            match res {
+                Ok(_) => {}
+                Err(e) => {
+                    error!("initial_candle task failed: {:?}", e);
+                    any_error = Some(e);
+                    break;
+                }
+            }
+        }
+
+        if let Some(e) = any_error {
+            return Err(e);
+        }
+
+        info!("完成初始化，okx option k线");
         Ok(())
     }
 }
@@ -1047,7 +1079,7 @@ mod tests {
             .build();
         let option_service = OptionService::new_with_mock(Arc::new(RwLock::new(vec![inst_po])), common_io, HistoryInterval::OneHour);
 
-        let res = option_service.initial_candle(0).await;
+        let res = option_service.initial_candle(0, None).await;
         assert!(res.is_ok());
     }
 
@@ -1084,7 +1116,7 @@ mod tests {
             .build();
         let option_service = OptionService::new_with_mock(Arc::new(RwLock::new(vec![inst_po])), common_io, HistoryInterval::OneHour);
 
-        let res = option_service.initial_candle(0).await;
+        let res = option_service.initial_candle(0, None).await;
         assert!(res.is_ok());
     }
 
@@ -1121,7 +1153,7 @@ mod tests {
             .build();
         let option_service = OptionService::new_with_mock(Arc::new(RwLock::new(vec![inst_po])), common_io, HistoryInterval::OneHour);
 
-        let res = option_service.initial_candle(HistoryInterval::OneHour.to_milliseconds() * 3).await;
+        let res = option_service.initial_candle(HistoryInterval::OneHour.to_milliseconds() * 3, None).await;
         assert!(res.is_ok());
     }
 
