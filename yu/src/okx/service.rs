@@ -699,16 +699,24 @@ impl OptionService {
         }))
         .buffer_unordered(concurrency);
 
-        // 收集结果并在遇到第一个错误时返回，同时打印进度
+        // 收集结果并在遇到第一个错误时返回，同时按间隔打印进度（每隔 5 分钟）
         let mut any_error: Option<YuError> = None;
         futures::pin_mut!(stream);
         let mut completed: usize = 0;
+        let start_instant = std::time::Instant::now();
+        let mut last_log = start_instant;
+        let log_interval = Duration::from_mins(8); // 8 minutes
+
         while let Some(res) = stream.next().await {
             completed = completed.saturating_add(1);
             match res {
                 Ok(_) => {
-                    let pct = if total > 0 { (completed as f64 / total as f64) * 100.0 } else { 100.0 };
-                    info!("initial_candle progress: {}/{} ({:.1}%)", completed, total, pct);
+                    // 每隔 log_interval 打印一次，或在全部完成时打印一次
+                    if last_log.elapsed() >= log_interval || completed == total {
+                        let pct = if total > 0 { (completed as f64 / total as f64) * 100.0 } else { 100.0 };
+                        info!("initial_candle progress: {}/{} ({:.1}%)", completed, total, pct);
+                        last_log = std::time::Instant::now();
+                    }
                 }
                 Err(e) => {
                     error!("initial_candle task failed at {}/{}: {:?}", completed, total, e);
