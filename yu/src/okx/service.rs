@@ -652,14 +652,20 @@ impl OptionService {
     ///
     pub async fn initial_candle(&self, earliest_timestamp: UnixTimeStamp, max_sync: Option<usize>) -> Result<(), YuError> {
         // 先从 RwLock 中克隆出一份 Vec，避免持有读锁跨 await，确保 Send
+
+        let kline_repo = self.common_io.get_kline_repo();
+        let mini_ts = self.interval.get_now_close_unix_ms_utc() - self.interval.to_milliseconds() + 1;
+        let max_timestamp_mapping = kline_repo.max_timestamp_group_by_inst_id_before(mini_ts).await?;
         let inst_vec = self
             .instruments
             .read()
             .map_err(|e| YuError::CustomError(format!("failed to acquire inst_ids read lock: {:?}", e)))?
-            .clone();
+            .iter()
+            .filter(|inst| max_timestamp_mapping.contains_key(&inst.id))
+            .cloned()
+            .collect::<Vec<InstrumentPo>>();
         let total = inst_vec.len();
-        let kline_repo = self.common_io.get_kline_repo();
-        let max_timestamp_mapping = kline_repo.max_timestamp_group_by_inst_id().await?;
+
         // clone into Arc so it can be cheaply shared into async tasks
         let max_ts_map = std::sync::Arc::new(max_timestamp_mapping);
         let interval = self.interval.clone();
