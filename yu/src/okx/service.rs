@@ -687,11 +687,27 @@ impl OptionService {
 
         let kline_repo = self.common_io.get_kline_repo();
         let max_timestamp_mapping = kline_repo.max_timestamp_group_by_inst_id().await?;
-        let inst_vec = self
+        let raw_inst_vec = self
             .live_instruments
             .read()
             .map_err(|e| YuError::CustomError(format!("failed to acquire inst_ids read lock: {:?}", e)))?
             .clone();
+
+        let mut inst_vec: Vec<InstrumentPo> = vec![];
+        let min_timestamp = self.interval.get_now_close_unix_ms_utc();
+        for inst in raw_inst_vec {
+            let latest_timestamp = max_timestamp_mapping.get(&inst.id);
+            match latest_timestamp {
+                Some(&ts) => {
+                    if ts < min_timestamp {
+                        inst_vec.push(inst);
+                    }
+                }
+                None => {
+                    inst_vec.push(inst);
+                }
+            }
+        }
 
         let total = inst_vec.len();
 
