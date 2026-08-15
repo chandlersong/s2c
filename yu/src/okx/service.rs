@@ -679,20 +679,20 @@ impl OptionService {
     ///
     /// - 结束时间: interval最近的时间戳+1
     ///
+    /// FUTURE:
+    /// 1. 更新非live的instrument的candle。主要是为了一些历史数据
+    ///
     pub async fn initial_candle(&self, earliest_timestamp: UnixTimeStamp, max_sync: Option<usize>) -> Result<(), YuError> {
         // 先从 RwLock 中克隆出一份 Vec，避免持有读锁跨 await，确保 Send
 
         let kline_repo = self.common_io.get_kline_repo();
-        let mini_ts = self.interval.get_now_close_unix_ms_utc() - self.interval.to_milliseconds() + 1;
-        let max_timestamp_mapping = kline_repo.max_timestamp_group_by_inst_id_before(mini_ts).await?;
+        let max_timestamp_mapping = kline_repo.max_timestamp_group_by_inst_id().await?;
         let inst_vec = self
             .live_instruments
             .read()
             .map_err(|e| YuError::CustomError(format!("failed to acquire inst_ids read lock: {:?}", e)))?
-            .iter()
-            .filter(|inst| max_timestamp_mapping.contains_key(&inst.id))
-            .cloned()
-            .collect::<Vec<InstrumentPo>>();
+            .clone();
+
         let total = inst_vec.len();
 
         // clone into Arc so it can be cheaply shared into async tasks
@@ -1120,16 +1120,14 @@ mod tests {
 
         let mock_instrument_repo = MockOkxInstrumentRepositoryTrait::new();
         let mut mock_kline_repo = MockOkxKlineRepositoryTrait::new();
-        mock_kline_repo
-            .expect_max_timestamp_group_by_inst_id_before()
-            .returning(|_| Ok(HashMap::new()));
+        mock_kline_repo.expect_max_timestamp_group_by_inst_id().returning(|| Ok(HashMap::new()));
 
         let mock_api = MockOKXApiTrait::new();
         let mut mock_common_io = MockCommonIOServiceTrait::new();
         let expected_start = start_time;
         mock_common_io
             .expect_fetch_history()
-            .times(0)
+            .times(1)
             .withf(move |inst_id, _, start_ts, _, _, _, _| inst_id == "BTC1" && start_ts == &expected_start)
             .return_once(|_, _, _, _, _, _, _| Ok(vec![]));
 
@@ -1156,7 +1154,7 @@ mod tests {
     pub async fn test_option_service_initial_kline_has_value() {
         let mock_instrument_repo = MockOkxInstrumentRepositoryTrait::new();
         let mut mock_kline_repo = MockOkxKlineRepositoryTrait::new();
-        mock_kline_repo.expect_max_timestamp_group_by_inst_id_before().returning(|_| {
+        mock_kline_repo.expect_max_timestamp_group_by_inst_id().returning(|| {
             let mut res = HashMap::<u64, u64>::new();
             res.insert(123, HistoryInterval::OneHour.to_milliseconds() * 2 + 1);
             Ok(res)
@@ -1193,7 +1191,7 @@ mod tests {
     pub async fn test_option_service_initial_max_timestamp() {
         let mock_instrument_repo = MockOkxInstrumentRepositoryTrait::new();
         let mut mock_kline_repo = MockOkxKlineRepositoryTrait::new();
-        mock_kline_repo.expect_max_timestamp_group_by_inst_id_before().returning(|_| {
+        mock_kline_repo.expect_max_timestamp_group_by_inst_id().returning(|| {
             let mut res = HashMap::<u64, u64>::new();
             res.insert(123, HistoryInterval::OneHour.to_milliseconds() * 2 + 1);
             Ok(res)
