@@ -218,7 +218,7 @@ impl SeriesHistoryMarketServiceImpl {
         }
     }
 
-    pub async fn query_and_broadcast_history(&self, query_payload: GetPricesHistoryQuery, inst: &PolyMarketInstrumentPo) -> Vec<PolyMarketHistoryPo> {
+    pub async fn query_history(&self, query_payload: GetPricesHistoryQuery, inst: &PolyMarketInstrumentPo) -> Vec<PolyMarketHistoryPo> {
         let asset_id = inst.asset_id.clone();
 
         let query_payload_log = query_payload.clone();
@@ -262,7 +262,6 @@ impl SeriesHistoryMarketServiceImpl {
                             asset_id, entry.timestamp, entry.price, e
                         );
                     });
-                    self.broadcast_message(entry, &inst.asset_slug, h.t);
                 }
             }
             Err(e) => {
@@ -329,7 +328,7 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
                 fidelity: Some(fidelity.clone() as u32),
             };
             // index 可用于调试或区分不同 asset_id
-            self.query_and_broadcast_history(query_param, instrument).await;
+            self.query_history(query_param, instrument).await;
         }
         info!("finish to initial polymarket history data");
         Ok(())
@@ -346,6 +345,7 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
         let end_ts = now + 60; // 获取过去一小时的数据
         let fidelity = self.interval.to_second() / 60;
         let mut res = vec![];
+
         for instrument in self.instruments.read().await.iter() {
             let query_param = GetPricesHistoryQuery {
                 market: instrument.asset_id.to_string(),
@@ -355,7 +355,11 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
                 fidelity: Some(fidelity.clone() as u32),
             };
             // index 可用于调试或区分不同 asset_id
-            res.extend(self.query_and_broadcast_history(query_param, instrument).await);
+            let pos = self.query_history(query_param, instrument).await;
+            for h in pos.iter() {
+                self.broadcast_message(h.clone(), &instrument.asset_slug, h.timestamp);
+            }
+            res.extend(pos);
         }
         Ok(res)
     }
@@ -546,7 +550,7 @@ mod tests {
             .start_ms(1)
             .end_ms(1)
             .build();
-        let po = service.query_and_broadcast_history(query_payload, &inst).await;
+        let po = service.query_history(query_payload, &inst).await;
         assert_eq!(po.len() == 1, true);
 
         Ok(())

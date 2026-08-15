@@ -441,7 +441,7 @@ impl OptionService {
                 api.unwrap_or_else(|| default_okx_api()),
             ),
             interval: interval.unwrap_or(HistoryInterval::OneHour),
-            refresh_corn: refresh_corn.unwrap_or("18 18 */6 * * *".to_string()),
+            refresh_corn: refresh_corn.unwrap_or("18 18 * * * *".to_string()),
             kline_broadcast_sender,
         }
     }
