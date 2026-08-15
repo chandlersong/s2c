@@ -1,3 +1,4 @@
+use crate::binance::models::po::KlinePo;
 use crate::config::get_config;
 use crate::cron_job;
 use crate::errors::YuError;
@@ -12,7 +13,7 @@ use li::websocket::connection::{
     CommandMessage, ConnectionAction, ConnectionConfig, MessageHandlerTrait, ShareMessageHandler, ToServerMessage, WebSocketConnection,
     WebSocketInterface,
 };
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -22,6 +23,7 @@ use yue::models::HistoryInterval;
 use yue::okx::models::websocket::{ArgBody, OkxWebsocketResponse};
 use yue::okx::restful_api::{HistoryParams, InstrumentsParam, OKxApi, default_okx_api};
 use yue::okx::websocket_channel::{CommandRequest, OXK_BUSINESS_WEBSOCKET};
+use yue::tools::get_snow_flake_id_string;
 
 #[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
 #[async_trait::async_trait]
@@ -298,6 +300,7 @@ pub struct KlineHandler {
     kline_repo: OkxKlineRepository,
     instrument_repo: OkxInstrumentRepository,
     inst_id_identify_map: Arc<RwLock<HashMap<String, InstrumentPo>>>,
+    broadcast_sender: broadcast::Sender<OkxKlinePo>,
 }
 
 impl KlineHandler {
@@ -305,11 +308,13 @@ impl KlineHandler {
         kline_repo: OkxKlineRepository,
         instrument_repo: OkxInstrumentRepository,
         inst_id_identify_map: HashMap<String, InstrumentPo>,
+        broadcast_sender: broadcast::Sender<OkxKlinePo>,
     ) -> Self {
         Self {
             kline_repo,
             instrument_repo,
             inst_id_identify_map: Arc::new(RwLock::new(inst_id_identify_map)),
+            broadcast_sender,
         }
     }
 }
@@ -323,7 +328,15 @@ impl MessageHandlerTrait<OkxWebsocketResponse> for KlineHandler {
     ///
     async fn handle_message(&self, message: &OkxWebsocketResponse) {
         match message {
-            OkxWebsocketResponse::SubscribeResponse(_) => {
+            OkxWebsocketResponse::SubscribeResponse(response) => {
+                if response.event.eq("subscribe") {
+                    trace!("Subscribed to channel: {:?}", response);
+                } else if response.event.eq("error") {
+                    warn!("Received unexpected subscribe response: {:?}", response.msg);
+                } else {
+                    //因为现在文档也才3个。而取消订阅不太重要。所以这里就放弃
+                    trace!("Received unsubscribe response: {:?}", response.msg);
+                }
                 //FUTURE: 这里可以判断一下是订阅成功
                 //看到okx是一个一个回来的，比如说我订阅了A，B，C。一起订阅的，但是最后回来的是三条消息。
             }
@@ -372,8 +385,11 @@ impl MessageHandlerTrait<OkxWebsocketResponse> for KlineHandler {
                         //过滤没有完成的kline
                         continue;
                     }
-                    if let Err(e) = self.kline_repo.insert_history(po).await {
+                    if let Err(e) = self.kline_repo.insert_history(po.clone()).await {
                         warn!("Failed to insert okx kline history: {:?}", e);
+                    }
+                    if let Err(e) = self.broadcast_sender.send(po) {
+                        warn!("Failed to broadcast okx kline: {:?}", e);
                     }
                 }
             }
@@ -393,13 +409,14 @@ impl MessageHandlerTrait<OkxWebsocketResponse> for KlineHandler {
 /// 2. 订阅合理的Kline数据。然后发送
 /// 3. 检查数据差异。如果必要初始化数据
 ///
-///
+/// live_instruments: 原则上来说，只是有一些还在交易的品种。然后这些品种的kline数据是需要订阅的。
 ///
 pub struct OptionService {
-    instruments: Arc<RwLock<Vec<InstrumentPo>>>,
+    live_instruments: Arc<RwLock<Vec<InstrumentPo>>>,
     common_io: CommonIOService,
     interval: HistoryInterval,
     refresh_corn: String,
+    kline_broadcast_sender: broadcast::Sender<OkxKlinePo>,
 }
 
 impl Default for OptionService {
@@ -416,8 +433,9 @@ impl OptionService {
         interval: Option<HistoryInterval>,
         refresh_corn: Option<String>,
     ) -> Self {
+        let (kline_broadcast_sender, _kline_broadcast_receiver) = broadcast::channel(1000);
         Self {
-            instruments: Arc::new(RwLock::new(vec![])),
+            live_instruments: Arc::new(RwLock::new(vec![])),
             common_io: create_common_io_service(
                 instrument_repo.unwrap_or_else(|| get_instrument_repo(None)),
                 kline_repo.unwrap_or_else(|| get_default_kline_repo(None)),
@@ -425,16 +443,19 @@ impl OptionService {
             ),
             interval: interval.unwrap_or(HistoryInterval::OneHour),
             refresh_corn: refresh_corn.unwrap_or("18 18 */6 * * *".to_string()),
+            kline_broadcast_sender,
         }
     }
 
     #[cfg(test)]
     fn new_with_mock(inst_ids: Arc<RwLock<Vec<InstrumentPo>>>, common_io: CommonIOService, interval: HistoryInterval) -> Self {
+        let (kline_broadcast_sender, _kline_broadcast_receiver) = broadcast::channel(1000);
         Self {
-            instruments: inst_ids,
+            live_instruments: inst_ids,
             common_io,
             interval,
             refresh_corn: "18 * * * * *".to_string(),
+            kline_broadcast_sender,
         }
     }
 
@@ -451,16 +472,20 @@ impl OptionService {
         }
     }
 
+    pub async fn subscribe_kline(&self) -> broadcast::Receiver<OkxKlinePo> {
+        self.kline_broadcast_sender.subscribe()
+    }
+
     pub async fn initial_instruments(&self) -> Result<Vec<InstrumentPo>, YuError> {
-        let instruments = Self::refresh_instruments(self.common_io.clone(), self.instruments.clone()).await?;
+        let instruments = Self::refresh_instruments(self.common_io.clone(), self.live_instruments.clone()).await?;
         Ok(instruments)
     }
 
     ///
     /// 开启一个定时任务。定时任务的主要功能是刷新inst_ids。然后更新订阅的kline。
     ///
-    pub async fn start(&self) -> Result<broadcast::Sender<OkxKlinePo>, YuError> {
-        let instruments_share = self.instruments.clone();
+    pub async fn start(&self) -> Result<(), YuError> {
+        let instruments_share = self.live_instruments.clone();
         let common_io = self.common_io.clone();
         let instruments = Self::refresh_instruments(common_io.clone(), instruments_share.clone()).await?;
         let kline_repo = self.common_io.get_kline_repo();
@@ -470,12 +495,18 @@ impl OptionService {
             .into_iter()
             .map(|inst| (inst.inst_identify.clone(), inst))
             .collect::<HashMap<String, InstrumentPo>>();
-        let handler = Arc::new(KlineHandler::new(kline_repo, instrument_repo, id_identify_dict));
+
+        let handler = Arc::new(KlineHandler::new(
+            kline_repo,
+            instrument_repo,
+            id_identify_dict,
+            self.kline_broadcast_sender.clone(),
+        ));
         let app_config = get_config();
         let proxy = app_config.proxy_url.clone();
         let interval = self.interval.clone();
         let websocket_interface = Self::listen_option_kline(instruments, &interval, proxy.clone(), Some(handler.clone()), None).await?;
-        let (tx, _) = broadcast::channel(1000);
+
         // shared interface stored across cron_job invocations
         let shared_interface: Arc<Mutex<Arc<WebSocketInterface<OkxWebsocketResponse>>>> = Arc::new(Mutex::new(websocket_interface));
 
@@ -493,7 +524,6 @@ impl OptionService {
                 info!("开始刷新okx option");
                 let _ = Self::refresh_instruments(common_io_each.clone(), instruments_each.clone()).await;
                 info!("结束刷新okx option");
-
                 // after refreshing instruments, exercise websocket: recreate and swap
                 let insts = match instruments_each.read() {
                     Ok(g) => g.clone(),
@@ -545,7 +575,7 @@ impl OptionService {
             })
         });
 
-        Ok(tx)
+        Ok(())
     }
 
     ///
@@ -569,9 +599,9 @@ impl OptionService {
         let frequency = match interval {
             HistoryInterval::OneMinute => "candle1m".to_string(),
             HistoryInterval::FiveMinutes => "candle5m".to_string(),
-            HistoryInterval::OneHour => "candle1h".to_string(),
+            HistoryInterval::OneHour => "candle1H".to_string(),
         };
-        for (i, chunk) in instruments.chunks(batch_num).enumerate() {
+        for (_, chunk) in instruments.chunks(batch_num).enumerate() {
             let mut args = vec![];
             for inst in chunk {
                 let arg = ArgBody::builder()
@@ -582,7 +612,7 @@ impl OptionService {
             }
 
             let request = CommandRequest::builder()
-                .id((i + 1).to_string())
+                .id(get_snow_flake_id_string())
                 .op("subscribe".to_string())
                 .args(args)
                 .build();
@@ -657,7 +687,7 @@ impl OptionService {
         let mini_ts = self.interval.get_now_close_unix_ms_utc() - self.interval.to_milliseconds() + 1;
         let max_timestamp_mapping = kline_repo.max_timestamp_group_by_inst_id_before(mini_ts).await?;
         let inst_vec = self
-            .instruments
+            .live_instruments
             .read()
             .map_err(|e| YuError::CustomError(format!("failed to acquire inst_ids read lock: {:?}", e)))?
             .iter()
@@ -754,6 +784,7 @@ mod tests {
     use li::websocket::connection::MessageHandlerTrait;
     use std::collections::HashMap;
     use std::sync::{Arc, RwLock};
+    use tokio::sync::broadcast;
     use yue::models::HistoryInterval;
     use yue::okx::models::common::{CandleResponse, InstrumentInfo, OkxListResponse};
     use yue::okx::models::websocket::{ArgBody, KlinePayload, OkxWebsocketResponse};
@@ -1210,7 +1241,8 @@ mod tests {
             .build();
         let empty_map = HashMap::from([("BTC-1".to_string(), inst_po)]);
 
-        let handler = KlineHandler::new(Arc::new(mock_kline_repo), Arc::new(mock_inst_repo), empty_map);
+        let (tx, _) = broadcast::channel(1);
+        let handler = KlineHandler::new(Arc::new(mock_kline_repo), Arc::new(mock_inst_repo), empty_map, tx);
 
         let arg_body = ArgBody::builder().inst_id("BTC-1".to_string()).channel("111".to_string()).build();
         let confirm_data = vec![

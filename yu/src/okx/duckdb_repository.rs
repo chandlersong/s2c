@@ -5,6 +5,7 @@ use crate::okx::duck_po::{InstrumentPo, OkxKlinePo};
 use crate::okx::duckdb_tables::get_okx_kline_table;
 use crate::okx::okx_consts::InstrumentType;
 use async_trait::async_trait;
+use li::tools::time::unix_time_now_u64_utc;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -82,10 +83,14 @@ impl OkxInstrumentRepositoryTrait for OkxInstrumentRepositoryImpl {
         }
     }
 
+    ///
+    /// 现在的手段没办法通过state字段去更新。所以按照时间去更新
+    ///
     async fn get_instrument_by_type_live(&self, inst_type: InstrumentType) -> Result<Vec<InstrumentPo>, YuError> {
         let conn = self.provider.acquire()?;
-        let mut stmt = conn.prepare("SELECT id, inst_identify, inst_type, inst_family, base_ccy, quote_ccy, settle_ccy, list_time, exp_time, tick_sz, lot_sz, min_sz, alias, state, inst_id_code, inst_category FROM OKX_INSTRUMENTS where inst_type = ? and state='live';")?;
-        let rows = stmt.query([inst_type.as_str()])?;
+        let now = unix_time_now_u64_utc();
+        let mut stmt = conn.prepare("SELECT id, inst_identify, inst_type, inst_family, base_ccy, quote_ccy, settle_ccy, list_time, exp_time, tick_sz, lot_sz, min_sz, alias, state, inst_id_code, inst_category FROM OKX_INSTRUMENTS where inst_type = ? and exp_time > ?;")?;
+        let rows = stmt.query([inst_type.as_str(), now.to_string().as_str()])?;
         InstrumentPo::from_db_to_vec(rows)
     }
 

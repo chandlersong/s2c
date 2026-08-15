@@ -36,7 +36,7 @@ pub struct SubscribeResponsePayload {
 
     /// 事件时间
     #[serde(rename = "event")]
-    pub event: Option<String>,
+    pub event: String,
 
     #[serde(rename = "code")]
     pub code: Option<String>,

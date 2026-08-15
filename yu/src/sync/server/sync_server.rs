@@ -1,11 +1,12 @@
 use crate::duck_db::DuckDBDSProvider;
 use crate::errors::YuError;
+use crate::okx::duck_po::OkxKlinePo;
 use crate::okx::service::OptionService;
 use crate::polymarket::po::PolyMarketHistoryPo;
 use crate::polymarket::service::SeriesHistoryMarketService;
 use crate::sync::models::grpc_sync::sync_interface_server::SyncInterface;
 use crate::sync::models::grpc_sync::{
-    Empty, InstrumentList, PolyMarketHistory, PolyMarketHistoryList, PolymarketInstrument, ServerMessage, SubscribeRequest, SyncRequest,
+    Empty, InstrumentList, OkxKline, PolyMarketHistory, PolyMarketHistoryList, PolymarketInstrument, ServerMessage, SubscribeRequest, SyncRequest,
     server_message,
 };
 use li::tools::time::unix_time_now_u64_utc;
@@ -102,7 +103,8 @@ impl YuSyncServer {
         let (command_channel, command_rx) = mpsc::channel::<SyncInternalCommand>(100);
 
         let polymarket_history_receiver = polymarket_history_service.subscribe_history_broadcast();
-        Self::start_broadcast_history(command_rx, polymarket_history_receiver, 500, 1000).await?;
+        let okx_option_kline_receiver = okx_option_service.subscribe_kline().await;
+        Self::start_broadcast_history(command_rx, polymarket_history_receiver, okx_option_kline_receiver, 500, 1000).await?;
         Ok(Self {
             polymarket_history_service,
             okx_option_service,
@@ -133,13 +135,16 @@ impl YuSyncServer {
     async fn start_broadcast_history(
         mut command_rx: mpsc::Receiver<SyncInternalCommand>,
         mut polymarket_history_receiver: broadcast::Receiver<PolyMarketHistoryPo>,
+        mut okx_option_kline_receiver: broadcast::Receiver<OkxKlinePo>,
         max_cache_size: usize,
         max_loop_mill_seconds: usize,
     ) -> Result<(), YuError> {
         tokio::spawn(async move {
             info!("开启广播历史数据的任务");
             // 临时缓存单条 history（proto）用于批量发送
-            let mut batch_buffer: Vec<PolyMarketHistory> = Vec::with_capacity(max_cache_size);
+            let mut pm_batch_buffer: Vec<PolyMarketHistory> = Vec::new();
+            // 为 okx kline 增加缓存，行为与 polymarket 缓存一致
+            let mut okx_batch_buffer: Vec<OkxKline> = Vec::new();
             let mut last_broadcast_timestamp: u64 = unix_time_now_u64_utc();
             let mut history_tx_map: HashMap<u64, mpsc::Sender<Result<ServerMessage, Status>>> = HashMap::new();
 
@@ -156,11 +161,37 @@ impl YuSyncServer {
                                     timestamp: po.timestamp,
                                     price: po.price,
                                 };
-                                batch_buffer.push(item);
+                                pm_batch_buffer.push(item);
                             }
                             Err(e) => {
                                 error!("history broadcast receiver error: {:?}", e);
                                 // 如果没有活跃发送者，短暂休眠再试
+                                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                            }
+                        }
+                    }
+                    recv_okx = okx_option_kline_receiver.recv() => {
+                        match recv_okx {
+                            Ok(po) => {
+                                trace!("Received okx kline broadcast inst_id: {} ts: {}", po.inst_id, po.ts);
+                                // 转成 proto 并缓存，按批次发送（与 polymarket 行为一致）
+                                let k = crate::sync::models::grpc_sync::OkxKline {
+                                    id: po.id,
+                                    inst_id: po.inst_id,
+                                    ts: po.ts,
+                                    open: po.open,
+                                    high: po.high,
+                                    low: po.low,
+                                    close: po.close,
+                                    vol: po.vol,
+                                    vol_ccy: po.vol_ccy,
+                                    vol_ccy_quote: po.vol_ccy_quote,
+                                    confirm: po.confirm as u32,
+                                };
+                                okx_batch_buffer.push(k);
+                            }
+                            Err(e) => {
+                                error!("okx kline broadcast receiver error: {:?}", e);
                                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                             }
                         }
@@ -179,17 +210,37 @@ impl YuSyncServer {
                     }
                 }
 
-                // 检查是否需要触发发送：缓存大小或时间间隔
+                // 检查是否需要触发发送：缓存大小或时间间隔（对 polymarket 和 okx 都适用）
                 let now_ms = unix_time_now_u64_utc();
                 let elapsed_ms = now_ms.saturating_sub(last_broadcast_timestamp);
-                if !batch_buffer.is_empty() && (batch_buffer.len() >= max_cache_size || elapsed_ms as usize >= max_loop_mill_seconds) {
-                    // 打包成一条 ServerMessage
-                    let list = PolyMarketHistoryList {
-                        history_list: batch_buffer.clone(),
-                        timestamp: unix_time_now_u64_utc(),
+                let poly_needs = !pm_batch_buffer.is_empty() && (pm_batch_buffer.len() >= max_cache_size);
+                let okx_needs = !okx_batch_buffer.is_empty() && (okx_batch_buffer.len() >= max_cache_size);
+                let time_needs = elapsed_ms as usize >= max_loop_mill_seconds && (!pm_batch_buffer.is_empty() || !okx_batch_buffer.is_empty());
+
+                if poly_needs || okx_needs || time_needs {
+                    // 准备要发送的消息（如果对应缓存非空）
+                    let poly_msg_opt = if !pm_batch_buffer.is_empty() {
+                        let list = PolyMarketHistoryList {
+                            history_list: pm_batch_buffer.clone(),
+                            timestamp: unix_time_now_u64_utc(),
+                        };
+                        Some(ServerMessage {
+                            payload: Some(server_message::Payload::PolymarketHistory(list)),
+                        })
+                    } else {
+                        None
                     };
-                    let msg = ServerMessage {
-                        payload: Some(server_message::Payload::PolymarketHistory(list)),
+
+                    let okx_msg_opt = if !okx_batch_buffer.is_empty() {
+                        let list = crate::sync::models::grpc_sync::OkxKlineList {
+                            kline_list: okx_batch_buffer.clone(),
+                            timestamp: unix_time_now_u64_utc(),
+                        };
+                        Some(ServerMessage {
+                            payload: Some(server_message::Payload::OkxKlineHistory(list)),
+                        })
+                    } else {
+                        None
                     };
 
                     // 发送给所有订阅者，检测并清理已关闭的channel
@@ -200,12 +251,22 @@ impl YuSyncServer {
                             remove_keys.push(*id);
                             continue;
                         }
-                        // 克隆消息并发送
-                        let send_res = tx.send(Ok(msg.clone())).await;
-                        if let Err(e) = send_res {
-                            error!("Failed to send history to subscriber {}: {:?}", id, e);
-                            // 发送失败通常表示接收方已关闭
-                            remove_keys.push(*id);
+
+                        if let Some(ref msg) = poly_msg_opt {
+                            let send_res = tx.send(Ok(msg.clone())).await;
+                            if let Err(e) = send_res {
+                                error!("Failed to send history to subscriber {}: {:?}", id, e);
+                                remove_keys.push(*id);
+                                continue; // if this tx failed, skip okx send for this id
+                            }
+                        }
+
+                        if let Some(ref msg) = okx_msg_opt {
+                            let send_res = tx.send(Ok(msg.clone())).await;
+                            if let Err(e) = send_res {
+                                error!("Failed to send okx kline to subscriber {}: {:?}", id, e);
+                                remove_keys.push(*id);
+                            }
                         }
                     }
 
@@ -215,7 +276,8 @@ impl YuSyncServer {
 
                     // 更新状态并清空缓存
                     last_broadcast_timestamp = now_ms;
-                    batch_buffer.clear();
+                    pm_batch_buffer.clear();
+                    okx_batch_buffer.clear();
                 }
             }
         });
@@ -425,9 +487,12 @@ mod tests {
     async fn test_batch_send_on_size() {
         let (command_tx, command_rx) = mpsc::channel::<SyncInternalCommand>(100);
         let (poly_tx, poly_rx) = broadcast::channel::<PolyMarketHistoryPo>(16);
+        let (_okx_tx, okx_rx) = broadcast::channel::<OkxKlinePo>(16);
 
         // spawn the broadcaster
-        let _ = YuSyncServer::start_broadcast_history(command_rx, poly_rx, 3, 10_000).await.unwrap();
+        let _ = YuSyncServer::start_broadcast_history(command_rx, poly_rx, okx_rx, 3, 10_000)
+            .await
+            .unwrap();
 
         // create a client and subscribe
         let (client_tx, mut client_rx) = mpsc::channel::<Result<ServerMessage, Status>>(16);
@@ -464,9 +529,10 @@ mod tests {
     async fn test_time_based_flush() {
         let (command_tx, command_rx) = mpsc::channel::<SyncInternalCommand>(100);
         let (poly_tx, poly_rx) = broadcast::channel::<PolyMarketHistoryPo>(16);
+        let (_okx_tx, okx_rx) = broadcast::channel::<OkxKlinePo>(16);
 
         // use small time threshold (ms)
-        let _ = YuSyncServer::start_broadcast_history(command_rx, poly_rx, 10, 800).await.unwrap();
+        let _ = YuSyncServer::start_broadcast_history(command_rx, poly_rx, okx_rx, 10, 800).await.unwrap();
 
         let (client_tx, mut client_rx) = mpsc::channel::<Result<ServerMessage, Status>>(16);
         let payload = SubscribePayload { id: 2u64, tx: client_tx };
@@ -500,8 +566,11 @@ mod tests {
     async fn test_remove_closed_subscriber() {
         let (command_tx, command_rx) = mpsc::channel::<SyncInternalCommand>(100);
         let (poly_tx, poly_rx) = broadcast::channel::<PolyMarketHistoryPo>(16);
+        let (_okx_tx, okx_rx) = broadcast::channel::<OkxKlinePo>(16);
 
-        let _ = YuSyncServer::start_broadcast_history(command_rx, poly_rx, 1, 10_000).await.unwrap();
+        let _ = YuSyncServer::start_broadcast_history(command_rx, poly_rx, okx_rx, 1, 10_000)
+            .await
+            .unwrap();
 
         // active subscriber
         let (active_tx, mut active_rx) = mpsc::channel::<Result<ServerMessage, Status>>(16);
@@ -543,8 +612,11 @@ mod tests {
     async fn test_subscribe_after_start() {
         let (command_tx, command_rx) = mpsc::channel::<SyncInternalCommand>(100);
         let (poly_tx, poly_rx) = broadcast::channel::<PolyMarketHistoryPo>(16);
+        let (_okx_tx, okx_rx) = broadcast::channel::<OkxKlinePo>(16);
 
-        let _ = YuSyncServer::start_broadcast_history(command_rx, poly_rx, 1, 10_000).await.unwrap();
+        let _ = YuSyncServer::start_broadcast_history(command_rx, poly_rx, okx_rx, 1, 10_000)
+            .await
+            .unwrap();
 
         // register subscriber after start
         let (client_tx, mut client_rx) = mpsc::channel::<Result<ServerMessage, Status>>(16);
