@@ -1,5 +1,5 @@
 use li::tools::logs::setup_logger;
-use log::{info, warn, LevelFilter};
+use log::{LevelFilter, info, warn};
 use std::collections::HashMap;
 use tokio::sync::watch;
 use yu::binance::bn_dashboard::BinanceDashboard;
@@ -30,6 +30,7 @@ async fn main() -> Result<(), YuError> {
     if let Err(_e) = initial_tables(None) {
         warn!("币安表创建失败,{}", _e);
     }
+    #[allow(deprecated)]
     let dash_board = BinanceDashboard::debug_mode(app_config.get_data_retention_hours());
     let snapshot = dash_board.execute().await?;
     let (dash_board_watch, _) = watch::channel(snapshot);

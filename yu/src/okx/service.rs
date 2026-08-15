@@ -1,4 +1,3 @@
-use crate::binance::models::po::KlinePo;
 use crate::config::get_config;
 use crate::cron_job;
 use crate::errors::YuError;

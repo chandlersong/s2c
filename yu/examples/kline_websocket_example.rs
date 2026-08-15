@@ -1,5 +1,5 @@
 use li::tools::logs::setup_logger;
-use log::{error, LevelFilter};
+use log::{LevelFilter, error};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -18,9 +18,10 @@ async fn main() -> Result<(), YuError> {
     special_log.insert("yu".to_string(), LevelFilter::Trace);
     special_log.insert("kline_websocket_example".to_string(), LevelFilter::Trace);
     special_log.insert("yue".to_string(), LevelFilter::Trace);
-    setup_logger(Some(LevelFilter::Warn), special_log).unwrap();
+    setup_logger(Some(LevelFilter::Warn), special_log)?;
 
     let proxy = app_config.proxy_url.clone();
+    #[allow(deprecated)]
     let dash_board = Arc::new(BinanceDashboard::debug_mode(app_config.get_data_retention_hours()));
     let snapshot = dash_board.execute().await?;
     let (dash_board_watch, _) = watch::channel(snapshot);

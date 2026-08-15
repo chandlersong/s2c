@@ -1,5 +1,5 @@
 use li::tools::logs::setup_logger;
-use log::{info, warn, LevelFilter};
+use log::{LevelFilter, info, warn};
 use std::collections::HashMap;
 use yu::binance::bn_backend_service::{get_spot_kline_table, get_swap_kline_table};
 use yu::binance::bn_dashboard::BinanceDashboard;
@@ -32,6 +32,7 @@ async fn main() -> Result<(), YuError> {
         warn!("币安表创建失败,{}", _e);
     }
     //初始化数据
+    #[allow(deprecated)]
     let dash_board = BinanceDashboard::debug_mode(app_config.get_data_retention_hours());
     dash_board.execute().await?;
     let spot_all = dash_board.spot_all_symbols();

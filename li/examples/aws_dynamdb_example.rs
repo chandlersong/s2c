@@ -2,6 +2,7 @@ use li::aws::dynamodb::{create_dynamodb_client, create_kline_table};
 use li::errors::LiError;
 use serde::{Deserialize, Serialize};
 
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize, Debug)]
 struct User {
     user_id: String,
