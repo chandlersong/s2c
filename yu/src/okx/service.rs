@@ -1090,7 +1090,9 @@ mod tests {
 
         let mock_instrument_repo = MockOkxInstrumentRepositoryTrait::new();
         let mut mock_kline_repo = MockOkxKlineRepositoryTrait::new();
-        mock_kline_repo.expect_max_timestamp_group_by_inst_id().returning(|| Ok(HashMap::new()));
+        mock_kline_repo
+            .expect_max_timestamp_group_by_inst_id_before()
+            .returning(|_| Ok(HashMap::new()));
 
         let mock_api = MockOKXApiTrait::new();
         let mut mock_common_io = MockCommonIOServiceTrait::new();
@@ -1124,7 +1126,7 @@ mod tests {
     pub async fn test_option_service_initial_kline_has_value() {
         let mock_instrument_repo = MockOkxInstrumentRepositoryTrait::new();
         let mut mock_kline_repo = MockOkxKlineRepositoryTrait::new();
-        mock_kline_repo.expect_max_timestamp_group_by_inst_id().returning(|| {
+        mock_kline_repo.expect_max_timestamp_group_by_inst_id_before().returning(|_| {
             let mut res = HashMap::<u64, u64>::new();
             res.insert(123, HistoryInterval::OneHour.to_milliseconds() * 2 + 1);
             Ok(res)
@@ -1161,7 +1163,7 @@ mod tests {
     pub async fn test_option_service_initial_max_timestamp() {
         let mock_instrument_repo = MockOkxInstrumentRepositoryTrait::new();
         let mut mock_kline_repo = MockOkxKlineRepositoryTrait::new();
-        mock_kline_repo.expect_max_timestamp_group_by_inst_id().returning(|| {
+        mock_kline_repo.expect_max_timestamp_group_by_inst_id_before().returning(|_| {
             let mut res = HashMap::<u64, u64>::new();
             res.insert(123, HistoryInterval::OneHour.to_milliseconds() * 2 + 1);
             Ok(res)
