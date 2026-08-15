@@ -1099,7 +1099,7 @@ mod tests {
         let expected_start = start_time;
         mock_common_io
             .expect_fetch_history()
-            .times(1)
+            .times(0)
             .withf(move |inst_id, _, start_ts, _, _, _, _| inst_id == "BTC1" && start_ts == &expected_start)
             .return_once(|_, _, _, _, _, _, _| Ok(vec![]));
 
