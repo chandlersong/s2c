@@ -720,6 +720,8 @@ impl OptionService {
         let concurrency = max_sync.unwrap_or(10).max(1);
         let common_io = self.common_io.clone();
         let earliest = earliest_timestamp;
+        //因为已经启动监听，那么应该是以开始时间+1分钟为结束
+        let end = interval.get_now_close_unix_ms_utc() + 60 * 1000; // 结束时间是当前时间的下一个间隔的开始时间
         // 并发拉取，每个任务返回 Result<Vec<OkxKlinePo>, YuError>
         let stream = futures::stream::iter(inst_vec.into_iter().map(move |inst| {
             let common_io = common_io.clone();
@@ -730,7 +732,6 @@ impl OptionService {
             async move {
                 let latest_timestamp = max_ts_map.get(&inst.id).cloned().unwrap_or(inst.list_time.unwrap_or(0));
                 let start = interval.get_close_unix_ms(std::cmp::max(latest_timestamp, earliest)) + 1;
-                let end = interval.get_now_close_unix_ms_utc() + 10;
                 let gap = interval.to_milliseconds();
                 if end <= start || (end.saturating_sub(start) < gap) {
                     debug!(
