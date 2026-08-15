@@ -198,7 +198,7 @@ impl OkxKlineRepositoryTrait for OkxKlinePoRepositoryImpl {
 
     async fn max_timestamp_group_by_inst_id_before(&self, before: u64) -> Result<HashMap<u64, u64>, YuError> {
         let conn = self.provider.acquire()?;
-        let mut stmt = conn.prepare("SELECT inst_id, max(timestamp) FROM OKX_KLINE WHERE timestamp < ? GROUP BY inst_id;")?;
+        let mut stmt = conn.prepare("SELECT inst_id, max(timestamp) FROM OKX_KLINE GROUP BY inst_id HAVING max(timestamp) < ?;")?;
         let mut rows = stmt.query([before])?;
         let mut res: HashMap<u64, u64> = HashMap::new();
         while let Some(row) = rows.next()? {
