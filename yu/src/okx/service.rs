@@ -697,9 +697,10 @@ impl OptionService {
             .clone();
 
         let mut inst_vec: Vec<InstrumentPo> = vec![];
-        let min_timestamp = self.interval.get_now_close_unix_ms_utc();
+        let min_timestamp = self.interval.get_now_close_unix_ms_utc() - self.interval.to_milliseconds() + 1;
         let mut amend_count = 0;
         let mut initial_count = 0;
+        let total = raw_inst_vec.len();
         for inst in raw_inst_vec {
             let latest_timestamp = max_timestamp_mapping.get(&inst.id);
             match latest_timestamp {
@@ -716,14 +717,17 @@ impl OptionService {
             }
         }
 
-        let total = inst_vec.len();
-
         // clone into Arc so it can be cheaply shared into async tasks
-        let max_ts_map = std::sync::Arc::new(max_timestamp_mapping);
+        let max_ts_map = Arc::new(max_timestamp_mapping);
         let interval = self.interval.clone();
+        let count_initial = inst_vec.len();
         info!(
-            "开始初始化，okx option k线，需要同步数量:{}, 补全的kline数量:{},初始化数量:{}",
-            total, amend_count, initial_count
+            "开始初始化，okx option k线，live instrument count:{},需要同步数量:{},kline中instrument数量{}, 补全的kline数量:{},初始化数量:{}",
+            total,
+            count_initial,
+            max_ts_map.len(),
+            amend_count,
+            initial_count
         );
 
         // 并发控制
