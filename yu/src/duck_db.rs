@@ -1,5 +1,6 @@
 use crate::config::get_config;
 use duckdb::DuckdbConnectionManager;
+use log::info;
 use r2d2;
 use r2d2::{Pool, PooledConnection};
 use serde::de::DeserializeOwned;
@@ -28,9 +29,11 @@ fn get_duck_connection_manager() -> DuckdbConnectionManager {
     let db_config = get_config().database.as_ref();
     if let Some(db_config) = db_config {
         if let Some(path) = &db_config.path {
+            info!("Using DuckDB file at path: {}", path);
             return DuckdbConnectionManager::file(path).unwrap();
         }
     }
+    info!("Using memory DuckDB file at path");
     DuckdbConnectionManager::memory().unwrap()
 }
 
