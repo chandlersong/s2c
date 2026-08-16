@@ -1,6 +1,5 @@
 use crate::config::get_config;
 use duckdb::DuckdbConnectionManager;
-use log::info;
 use r2d2;
 use r2d2::{Pool, PooledConnection};
 use serde::de::DeserializeOwned;
