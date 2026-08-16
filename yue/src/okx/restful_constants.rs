@@ -11,8 +11,8 @@ use tokio::sync::RwLock;
 /// 这个其实和之前不一样。
 /// 所以，这里用最低的来做2s，10个
 ///
-pub static BURST_NUM: u32 = 10;
-pub static SPOT_RATE_PER_MINUTE: u32 = 10;
+pub static BURST_NUM: u32 = 8;
+pub static SPOT_RATE_PER_MINUTE: u32 = 8;
 fn create_default_rate_limiter(bucket_size: u32, burst_size: Option<u32>) -> Arc<RwLock<Arc<DefaultRateLimiter>>> {
     let real_burst_size = burst_size.unwrap_or(bucket_size);
     // Interpret `bucket_size` as tokens per second. For example, bucket_size=10 -> 10 tokens/sec -> 20 tokens/2s
@@ -27,7 +27,7 @@ pub const OKX_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
     Arc::new(HostInfo::new(
         "https://openapi.okx.com",
         SPOT_RATE_PER_MINUTE,
-        create_default_rate_limiter(10, Some(20)),
+        create_default_rate_limiter(BURST_NUM, Some(SPOT_RATE_PER_MINUTE)),
     ))
 });
 
