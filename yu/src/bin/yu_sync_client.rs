@@ -153,8 +153,8 @@ async fn async_sync_server(
         let stream = server
             .sync_history(Request::new(SyncRequest {
                 inst_id,
-                start_ms: 0,
-                end_ms: 0,
+                start_ms: ts.0,
+                end_ms: ts.1,
                 exchange: Exchange::Polymarket.into(),
             }))
             .await?
@@ -166,8 +166,8 @@ async fn async_sync_server(
         let stream = server
             .sync_history(Request::new(SyncRequest {
                 inst_id,
-                start_ms: 0,
-                end_ms: 0,
+                start_ms: ts.0,
+                end_ms: ts.1,
                 exchange: Exchange::Okx.into(),
             }))
             .await?
