@@ -618,6 +618,7 @@ impl OptionService {
             let command_test = serde_json::to_string(&request)?;
             interface.send_command(CommandMessage::ToServer(ToServerMessage::text(command_test)));
         }
+        info!("✓ oxk kline WebSocket 客户端已订阅 {} 个品种", instruments.len());
 
         Ok(interface)
     }
