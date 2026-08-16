@@ -70,10 +70,10 @@ impl OkxInstrumentRepositoryTrait for OkxInstrumentRepositoryImpl {
         InstrumentPo::from_db_to_vec(rows)
     }
 
-    async fn get_instrument_by_identify(&self, inst_id: &str) -> Result<InstrumentPo, YuError> {
+    async fn get_instrument_by_identify(&self, inst_identify: &str) -> Result<InstrumentPo, YuError> {
         let conn = self.provider.acquire()?;
-        let mut stmt = conn.prepare("SELECT id, inst_identify, inst_type, inst_family, base_ccy, quote_ccy, settle_ccy, list_time, exp_time, tick_sz, lot_sz, min_sz, alias, state, inst_id_code, inst_category FROM OKX_INSTRUMENTS where id = ?;")?;
-        let mut rows = stmt.query([inst_id])?;
+        let mut stmt = conn.prepare("SELECT id, inst_identify, inst_type, inst_family, base_ccy, quote_ccy, settle_ccy, list_time, exp_time, tick_sz, lot_sz, min_sz, alias, state, inst_id_code, inst_category FROM OKX_INSTRUMENTS where inst_identify = ?;")?;
+        let mut rows = stmt.query([inst_identify])?;
         // Expect at most one row. Read the first row if present and convert it to InstrumentPo.
         if let Some(row) = rows.next()? {
             let po = InstrumentPo::try_from(row)?;
