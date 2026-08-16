@@ -14,6 +14,7 @@ use yu::sync::client::sync_client_service::{GrpcChannelManager, SyncClientServic
 use yu::sync::models::grpc_sync::sync_interface_client::SyncInterfaceClient;
 use yu::sync::models::grpc_sync::{Empty, Exchange, ServerMessage, SubscribeRequest, SyncRequest};
 use yue::http_client::init_http_client;
+use yue::models::HistoryInterval;
 use yue::tools::get_snow_flake_id_u64;
 
 #[tokio::main]
@@ -163,11 +164,13 @@ async fn async_sync_server(
     }
     info!("开始同步okx历史数据到本地数据库");
     for (inst_id, ts) in diff_from_server.okx_option_diff {
+        //FUTURE: 因为这里时candle begin。所以要减去一个周期，以后重构的时候，通过instrument把数据的周期也传过来。然后在这里做减去周期的操作
+        let end_ms = ts.1 - HistoryInterval::OneHour.to_milliseconds();
         let stream = server
             .sync_history(Request::new(SyncRequest {
                 inst_id,
                 start_ms: ts.0,
-                end_ms: ts.1,
+                end_ms,
                 exchange: Exchange::Okx.into(),
             }))
             .await?
