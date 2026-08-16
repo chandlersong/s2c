@@ -698,22 +698,19 @@ impl OptionService {
 
         let mut inst_vec: Vec<InstrumentPo> = vec![];
         let min_timestamp = self.interval.get_now_close_unix_ms_utc();
+        let mut amend_count = 0;
+        let mut initial_count = 0;
         for inst in raw_inst_vec {
             let latest_timestamp = max_timestamp_mapping.get(&inst.id);
             match latest_timestamp {
                 Some(&ts) => {
                     if ts < min_timestamp {
-                        info!(
-                            "Instrument {} has latest timestamp {}, which is less than min_timestamp {}, will fetch history.",
-                            inst.inst_identify,
-                            unix_2_readable(&ts),
-                            unix_2_readable(&min_timestamp)
-                        );
+                        amend_count = amend_count + 1;
                         inst_vec.push(inst);
                     }
                 }
                 None => {
-                    info!("Instrument {} has no do data in kline, will fetch history.", inst.inst_identify,);
+                    initial_count = initial_count + 1;
                     inst_vec.push(inst);
                 }
             }
@@ -724,7 +721,10 @@ impl OptionService {
         // clone into Arc so it can be cheaply shared into async tasks
         let max_ts_map = std::sync::Arc::new(max_timestamp_mapping);
         let interval = self.interval.clone();
-        info!("开始初始化，okx option k线，需要同步数量: {}", total);
+        info!(
+            "开始初始化，okx option k线，需要同步数量:{}, 补全的kline数量:{},初始化数量:{}",
+            total, amend_count, initial_count
+        );
 
         // 并发控制
         let concurrency = max_sync.unwrap_or(10).max(1);

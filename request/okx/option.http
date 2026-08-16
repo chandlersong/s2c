@@ -7,7 +7,7 @@ content-type: application/json
 
 ### 获取某个option的K线
 GET {{host}}/api/v5/market/history-mark-price-candles
-    ?instId=BTC-USD-270625-140000-C
+    ?instId=ETH-USD-261225-5500-P
     &bar=1H HTTP/1.1
 content-type: application/json
 
