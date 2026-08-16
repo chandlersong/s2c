@@ -703,10 +703,17 @@ impl OptionService {
             match latest_timestamp {
                 Some(&ts) => {
                     if ts < min_timestamp {
+                        info!(
+                            "Instrument {} has latest timestamp {}, which is less than min_timestamp {}, will fetch history.",
+                            inst.inst_identify,
+                            unix_2_readable(&ts),
+                            unix_2_readable(&min_timestamp)
+                        );
                         inst_vec.push(inst);
                     }
                 }
                 None => {
+                    info!("Instrument {} has no do data in kline, will fetch history.", inst.inst_identify,);
                     inst_vec.push(inst);
                 }
             }
