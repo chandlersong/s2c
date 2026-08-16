@@ -387,8 +387,10 @@ impl MessageHandlerTrait<OkxWebsocketResponse> for KlineHandler {
                     if let Err(e) = self.kline_repo.insert_history(po.clone()).await {
                         warn!("Failed to insert okx kline history: {:?}", e);
                     }
-                    if let Err(e) = self.broadcast_sender.send(po) {
-                        warn!("Failed to broadcast okx kline: {:?}", e);
+                    if self.broadcast_sender.receiver_count() != 0 {
+                        if let Err(e) = self.broadcast_sender.send(po) {
+                            warn!("Failed to broadcast okx kline: {:?}", e);
+                        }
                     }
                 }
             }
