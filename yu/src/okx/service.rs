@@ -722,6 +722,7 @@ impl OptionService {
         let earliest = earliest_timestamp;
         //因为已经启动监听，那么应该是以开始时间30s为结束
         //因为时间是candle begin time。所以需要从上一个周期结束
+        //TODO: 检查一下不会不会因为这样漏掉。因为有时候，begin 会是非整点，会慢几秒
         let end = interval.get_now_close_unix_ms_utc() - interval.to_milliseconds(); // 结束时间是当前时间的下一个间隔的开始时间
         // 并发拉取，每个任务返回 Result<Vec<OkxKlinePo>, YuError>
         let stream = futures::stream::iter(inst_vec.into_iter().map(move |inst| {
