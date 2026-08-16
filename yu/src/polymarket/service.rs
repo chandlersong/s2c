@@ -162,7 +162,7 @@ pub trait SeriesHistoryMarketServiceTrait: Send + Sync {
 
     async fn initial_history_data(&self) -> Result<(), YuError>;
 
-    async fn query_instrument_history(&self, inst_id: u64, start_ts: u64) -> Result<Vec<PolyMarketHistoryPo>, YuError>;
+    async fn query_instrument_history(&self, inst_id: u64, start_ts: u64, end_ts: u64) -> Result<Vec<PolyMarketHistoryPo>, YuError>;
 
     async fn fetch_latest_history(&self) -> Result<Vec<PolyMarketHistoryPo>, YuError>;
 
@@ -334,8 +334,8 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
         Ok(())
     }
 
-    async fn query_instrument_history(&self, inst_id: u64, start_ts: u64) -> Result<Vec<PolyMarketHistoryPo>, YuError> {
-        self.history_repo.get_history_before(inst_id, start_ts).await
+    async fn query_instrument_history(&self, inst_id: u64, start_ts: u64, end_ts: u64) -> Result<Vec<PolyMarketHistoryPo>, YuError> {
+        self.history_repo.get_history_between(inst_id, start_ts, end_ts).await
     }
 
     async fn fetch_latest_history(&self) -> Result<Vec<PolyMarketHistoryPo>, YuError> {

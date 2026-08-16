@@ -10,6 +10,7 @@ use crate::sync::client::repository::polymarket::{ClientPolyMarketRepository, Cl
 use crate::sync::models::grpc_sync::server_message::Payload;
 use crate::sync::models::grpc_sync::{InstrumentList, ServerMessage, instrument};
 use governor::Jitter;
+use li::tools::time::unix_time_now_u64_utc;
 use log::{error, info};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
@@ -113,9 +114,10 @@ impl Default for SyncClientService {
     }
 }
 
+// key: server_id, value: (start_ms, end_ms)
 pub struct InstrumentsDiff {
-    pub polymarket_diff: HashMap<u64, u64>,
-    pub okx_option_diff: HashMap<u64, u64>,
+    pub polymarket_diff: HashMap<u64, (u64, u64)>,
+    pub okx_option_diff: HashMap<u64, (u64, u64)>,
 }
 
 impl SyncClientService {
@@ -136,6 +138,7 @@ impl SyncClientService {
     ///
     pub async fn align_local_instrument(&self, server_inst: InstrumentList) -> Result<InstrumentsDiff, YuError> {
         // fetch local instruments and build a lookup by assert_id -> end_ts
+        let now = unix_time_now_u64_utc();
         let mut pm_local_inst: HashMap<u64, u64> = HashMap::new();
         for inst in self.pm_repository.list_all_instrument().await?.into_iter() {
             pm_local_inst.insert(inst.server_id.clone(), inst.end_ms);
@@ -146,8 +149,8 @@ impl SyncClientService {
         }
         info!("local instruments num: {}", pm_local_inst.len());
 
-        let mut polymarket_diff: HashMap<u64, u64> = HashMap::new();
-        let mut okx_option_diff: HashMap<u64, u64> = HashMap::new();
+        let mut polymarket_diff: HashMap<u64, (u64, u64)> = HashMap::new();
+        let mut okx_option_diff: HashMap<u64, (u64, u64)> = HashMap::new();
 
         let local_pm_history_latest = self.pm_repository.list_instrument_timestamps().await?;
         let local_okx_history_latest = self.okx_repository.list_instrument_timestamps().await?;
@@ -200,10 +203,10 @@ impl SyncClientService {
                                 },
                             };
                             self.okx_repository.create_instruments(po).await?;
-                            okx_option_diff.insert(server_id, okx_inst.list_time - 1);
+                            okx_option_diff.insert(server_id, (okx_inst.list_time, now));
                         } else {
                             let local_ts = *local_okx_history_latest.get(&server_id).unwrap_or(&0u64);
-                            okx_option_diff.insert(server_id, local_ts + 1);
+                            okx_option_diff.insert(server_id, (local_ts, now));
                         }
 
                         // we don't add okx entries to the polymarket return map (res) because it expects u64 keys
@@ -229,10 +232,10 @@ impl SyncClientService {
                             };
 
                             self.pm_repository.create_instruments(po).await?;
-                            polymarket_diff.insert(inst_id, instrument.start_ms - 1);
+                            polymarket_diff.insert(inst_id, (instrument.start_ms, now));
                         } else {
                             let local_ts = *local_pm_history_latest.get(&inst_id).unwrap_or(&0u64);
-                            polymarket_diff.insert(inst_id, local_ts + 1);
+                            polymarket_diff.insert(inst_id, (local_ts, now));
                         }
                     }
                 }

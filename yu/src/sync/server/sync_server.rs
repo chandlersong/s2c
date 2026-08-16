@@ -337,7 +337,8 @@ impl SyncInterface for YuSyncServer {
     async fn sync_history(&self, request: Request<SyncRequest>) -> Result<Response<Self::SyncHistoryStream>, Status> {
         let (tx, rx) = mpsc::channel::<Result<ServerMessage, Status>>(16);
         let inst_id = request.get_ref().inst_id.clone();
-        let timestamp = request.get_ref().timestamp.clone();
+        let start_ms = request.get_ref().start_ms.clone();
+        let end_ms = request.get_ref().end_ms.clone();
         let batch_size = self.batch_size;
 
         // determine exchange from request (prost generates from_i32)
@@ -348,7 +349,7 @@ impl SyncInterface for YuSyncServer {
                 let query_service = self.polymarket_history_service.clone();
                 // Spawn a task to query polymarket history and stream results back through tx
                 tokio::spawn(async move {
-                    match query_service.query_instrument_history(inst_id, timestamp).await {
+                    match query_service.query_instrument_history(inst_id, start_ms, end_ms).await {
                         Ok(history_vec) => {
                             if history_vec.is_empty() {
                                 // send an empty list once
@@ -396,7 +397,7 @@ impl SyncInterface for YuSyncServer {
                 let okx_service = self.okx_option_service.clone();
                 // Spawn a task to query okx kline and stream results back through tx
                 tokio::spawn(async move {
-                    match okx_service.find_candle_after(inst_id, timestamp).await {
+                    match okx_service.find_candle_between(inst_id, start_ms, end_ms).await {
                         Ok(kline_vec) => {
                             if kline_vec.is_empty() {
                                 let list = crate::sync::models::grpc_sync::OkxKlineList {

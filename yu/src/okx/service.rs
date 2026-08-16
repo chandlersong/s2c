@@ -640,9 +640,9 @@ impl OptionService {
         }
     }
 
-    pub async fn find_candle_after(&self, inst_id: u64, ts: u64) -> Result<Vec<OkxKlinePo>, YuError> {
+    pub async fn find_candle_between(&self, inst_id: u64, start_ms: u64, end_ms: u64) -> Result<Vec<OkxKlinePo>, YuError> {
         let kline_repo = self.common_io.get_kline_repo();
-        kline_repo.find_kline_after(inst_id, ts).await
+        kline_repo.find_kline_between(inst_id, start_ms, end_ms).await
     }
 
     pub async fn refresh_instruments(

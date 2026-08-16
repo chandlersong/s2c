@@ -39,7 +39,7 @@ pub trait PolyMarketHistoryRepositoryTrait {
     ///
     async fn max_timestamp_group_by_inst_id(&self) -> Result<HashMap<u64, u64>, YuError>;
 
-    async fn get_history_before(&self, inst_id: u64, start_ms: u64) -> Result<Vec<PolyMarketHistoryPo>, YuError>;
+    async fn get_history_between(&self, inst_id: u64, start_ms: u64, end_ms: u64) -> Result<Vec<PolyMarketHistoryPo>, YuError>;
 }
 
 pub type PolyMarketInstrumentRepository = Arc<dyn PolyMarketInstrumentRepositoryTrait + Send + Sync>;
@@ -241,13 +241,13 @@ impl PolyMarketHistoryRepositoryTrait for PolyMarketHistoryRepositoryImpl {
         Ok(res)
     }
 
-    async fn get_history_before(&self, inst_id: u64, start_ms: u64) -> Result<Vec<PolyMarketHistoryPo>, YuError> {
+    async fn get_history_between(&self, inst_id: u64, start_ms: u64, end_ms: u64) -> Result<Vec<PolyMarketHistoryPo>, YuError> {
         let conn = self.provider.acquire()?;
 
         // Query by numeric instrument_id
         let sql = format!(
-            "SELECT instrument_id, timestamp, price FROM polymarket_price_history WHERE instrument_id = {} AND timestamp >= {} ORDER BY timestamp DESC;",
-            inst_id, start_ms
+            "SELECT instrument_id, timestamp, price FROM polymarket_price_history WHERE instrument_id = {} AND timestamp >= {} AND timestamp <= {} ORDER BY timestamp DESC;",
+            inst_id, start_ms, end_ms
         );
 
         let mut stmt = conn.prepare(sql.as_str())?;

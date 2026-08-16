@@ -38,7 +38,7 @@ pub trait OkxKlineRepositoryTrait {
 
     async fn batch_insert(&self, po_vec: Vec<OkxKlinePo>) -> Result<(), YuError>;
 
-    async fn find_kline_after(&self, inst_id: u64, ts: u64) -> Result<Vec<OkxKlinePo>, YuError>;
+    async fn find_kline_between(&self, inst_id: u64, start_ms: u64, end_ms: u64) -> Result<Vec<OkxKlinePo>, YuError>;
 }
 
 pub type OkxInstrumentRepository = Arc<dyn OkxInstrumentRepositoryTrait + Send + Sync>;
@@ -241,10 +241,10 @@ impl OkxKlineRepositoryTrait for OkxKlinePoRepositoryImpl {
         }
     }
 
-    async fn find_kline_after(&self, inst_id: u64, ts: u64) -> Result<Vec<OkxKlinePo>, YuError> {
+    async fn find_kline_between(&self, inst_id: u64, start_ms: u64, end_ms: u64) -> Result<Vec<OkxKlinePo>, YuError> {
         let conn = self.provider.acquire()?;
-        let mut stmt = conn.prepare("SELECT id, inst_id, timestamp, open, high, low, close, volume, volCcy, volCcyQuote, confirm FROM OKX_KLINE WHERE inst_id = ? AND timestamp > ? ORDER BY timestamp ASC;")?;
-        let mut rows = stmt.query([inst_id, ts])?;
+        let mut stmt = conn.prepare("SELECT id, inst_id, timestamp, open, high, low, close, volume, volCcy, volCcyQuote, confirm FROM OKX_KLINE WHERE inst_id = ? AND timestamp > ? AND timestamp < ? ORDER BY timestamp ASC;")?;
+        let mut rows = stmt.query([inst_id, start_ms, end_ms])?;
         let mut res: Vec<OkxKlinePo> = Vec::new();
         while let Some(row) = rows.next()? {
             let id: u64 = row.get(0)?;

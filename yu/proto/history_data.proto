@@ -82,8 +82,9 @@ message Empty {}
 // 历史数据同步请求
 message SyncRequest {
   uint64 inst_id = 1;   // 资产ID
-  uint64 timestamp = 2;  // 起始时间戳，server推送该时间之后的所有数据
-  Exchange exchange = 3; // 交易所类型
+  uint64 start_ms = 2;  // 起始时间戳，server推送该时间之后的所有数据
+  uint64 end_ms = 3;    // 结束时间戳，server推送该时间之前的所有数据
+  Exchange exchange = 4; // 交易所类型
 }
 
 // 订阅最新消息请求
