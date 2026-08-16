@@ -29,11 +29,11 @@ fn get_duck_connection_manager() -> DuckdbConnectionManager {
     let db_config = get_config().database.as_ref();
     if let Some(db_config) = db_config {
         if let Some(path) = &db_config.path {
-            print!("Using DuckDB file at path: {}", path);
+            println!("Using DuckDB file at path: {}", path);
             return DuckdbConnectionManager::file(path).unwrap();
         }
     }
-    print!("Using memory DuckDB file at path");
+    println!("Using memory DuckDB");
     DuckdbConnectionManager::memory().unwrap()
 }
 
