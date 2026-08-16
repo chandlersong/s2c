@@ -15,10 +15,8 @@ pub static BURST_NUM: u32 = 10;
 pub static SPOT_RATE_PER_MINUTE: u32 = 10;
 fn create_default_rate_limiter(bucket_size: u32, burst_size: Option<u32>) -> Arc<RwLock<Arc<DefaultRateLimiter>>> {
     let real_burst_size = burst_size.unwrap_or(bucket_size);
-    // let quota = Quota::with_period(NonZeroU32::new(bucket_size).unwrap()).allow_burst(NonZeroU32::new(real_burst_size).unwrap().into());
-    let quota = Quota::with_period(Duration::from_secs(2))
-        .unwrap()
-        .allow_burst(NonZeroU32::new(real_burst_size).unwrap().into());
+    // Interpret `bucket_size` as tokens per second. For example, bucket_size=10 -> 10 tokens/sec -> 20 tokens/2s
+    let quota = Quota::per_second(NonZeroU32::new(bucket_size).unwrap()).allow_burst(NonZeroU32::new(real_burst_size).unwrap().into());
 
     let res = RateLimiter::direct(quota);
     let limiter_with_info = res.with_middleware::<StateInformationMiddleware>();
@@ -29,7 +27,7 @@ pub const OKX_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
     Arc::new(HostInfo::new(
         "https://openapi.okx.com",
         SPOT_RATE_PER_MINUTE,
-        create_default_rate_limiter(SPOT_RATE_PER_MINUTE, Some(BURST_NUM)),
+        create_default_rate_limiter(10, Some(20)),
     ))
 });
 

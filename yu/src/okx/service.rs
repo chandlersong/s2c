@@ -731,7 +731,7 @@ impl OptionService {
         );
 
         // 并发控制
-        let concurrency = max_sync.unwrap_or(10).max(1);
+        let concurrency = max_sync.unwrap_or(20).max(1);
         let common_io = self.common_io.clone();
         let earliest = earliest_timestamp;
         //因为已经启动监听，那么应该是以开始时间30s为结束
