@@ -136,6 +136,8 @@ async fn subscribe(local_db_tx: Sender<ServerMessage>, manager: Arc<GrpcChannelM
 ///
 /// 这些信息并不是全部需要长连接的。所以暂时先不考虑锻炼身体
 ///
+/// FUTURE:
+/// 1. 可能会有一些已经关闭的instrument。这里也要同步。但是因为这里的问题其实希望client有完整信息，所以就过了吧。
 async fn async_sync_server(
     client_service: Arc<SyncClientService>,
     local_db_tx: Sender<ServerMessage>,
@@ -159,7 +161,7 @@ async fn async_sync_server(
         let stream = server
             .sync_history(Request::new(SyncRequest {
                 inst_id,
-                start_ms,
+                start_ms: start_ms + 1,
                 end_ms,
                 exchange: Exchange::Polymarket.into(),
             }))
@@ -178,7 +180,7 @@ async fn async_sync_server(
         let stream = server
             .sync_history(Request::new(SyncRequest {
                 inst_id,
-                start_ms,
+                start_ms: start_ms + 1,
                 end_ms,
                 exchange: Exchange::Okx.into(),
             }))
