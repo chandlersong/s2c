@@ -1,4 +1,4 @@
-use crate::data_integrity::models::{RepairRequest, ValidationGap, ValidationResult};
+use crate::data_integrity::models::{ValidationGap, ValidationResult};
 use crate::errors::YuError;
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -12,15 +12,23 @@ pub trait ValidationStrategyTrait: Send + Sync {
     fn name(&self) -> String;
 }
 
+/// # 二分法具体查找方法。
+/// 1. 设定start_time = min_timestamp,end_time = max_timestamp
+/// 2. 计算mid_time = (start_time + end_time) / 2
+/// 3. 设定start_time,计算mid_time计算有多少个interval_seconds的时间段，为time_slots
+/// 4，通过sql，判断start_time到mid_time的记录数是否等于time_slots，如果等于，说明左半部分没有缺失数据
+/// 5. 用同样办法检查右半
+/// 6. 递归执行2-5步，直到找到所有缺失的时间段
+/// 7. 找出的缺失时间段。都加入到ValidationResult返回
 ///
+/// # gaps的要求
+/// 1. end_time为数据库的close_time+1。
+/// 2. 返回的gaps的start_time不允许小于start，end_time不允许大于end。
 ///
-/// 因为这个逻辑，需要计算不同的数据。
-/// 通过二分查找的方式，找出 start 和 end 之间的 gap。返回 RepairRequest。
-///
-/// 规则
-/// 1. 如果 start 和 end 之间的数据数量小于等于 1，则直接返回空的 RepairRequest。
-/// 2. 如果 start 和 end 之间的数据数量大于 1，则计算中间的 mid = (start + end) / 2，
-///    计算 start 和 mid 之间的数据数量，以及 mid 和 end 之间的数据数量。
+/// 数据说明
+/// 1. 数据库中的数据，candle_begin_time和close_time相差的是interval-1。
+///    - 比如说candle_begin_time是0， interval是300_000，那么close_time是299_999
+/// 2. 传入的数据必须是interval的整点。
 ///
 ///
 pub fn binary_search_gap(
@@ -29,10 +37,8 @@ pub fn binary_search_gap(
     start: u64,
     end: u64,
     interval: &HistoryInterval,
-    data_source: BinarySearchDDataSource,
-) -> Result<Vec<RepairRequest>, YuError> {
-    use yue::tools::get_snow_flake_id_u64;
-
+    data_source: BinarySearchDS,
+) -> Result<Vec<ValidationGap>, YuError> {
     // defensive
     if start >= end {
         return Ok(Vec::new());
@@ -42,7 +48,7 @@ pub fn binary_search_gap(
     let expected = (end - start) / interval_ms;
 
     // count existing distinct slots in [start, end)
-    let actual = data_source.count_distinct_between(start, end)?;
+    let actual = data_source.count_distinct_between(identify, start, end)?;
     if actual == expected {
         return Ok(Vec::new());
     }
@@ -56,12 +62,7 @@ pub fn binary_search_gap(
             end_time: start + interval_ms,
             table: data_source.table_name(),
         };
-        let req = RepairRequest {
-            id: get_snow_flake_id_u64(),
-            strategy: "binary_search_gap".to_string(),
-            gaps: vec![gap],
-        };
-        return Ok(vec![req]);
+        return Ok(vec![gap]);
     }
 
     // compute aligned mid
@@ -71,20 +72,33 @@ pub fn binary_search_gap(
     let mut left = binary_search_gap(identify, trade_type, start, mid, interval, data_source.clone())?;
     let mut right = binary_search_gap(identify, trade_type, mid, end, interval, data_source.clone())?;
     left.append(&mut right);
-    let gaps: Vec<ValidationGap> = left.into_iter().flat_map(|req| req.gaps.into_iter()).collect();
+    let mut gaps: Vec<ValidationGap> = left;
+    gaps.extend(right);
     let gaps = merge_gaps(gaps);
     if gaps.is_empty() {
         return Ok(Vec::new());
     }
 
-    Ok(vec![RepairRequest {
-        id: get_snow_flake_id_u64(),
-        strategy: "binary_search_gap".to_string(),
-        gaps,
-    }])
+    Ok(gaps)
 }
 
-fn merge_gaps(gaps: Vec<ValidationGap>) -> Vec<ValidationGap> {
+///
+///  gaps。
+///  1. ValidationGap的排序都是按照其start_time进行排序
+///  2. 传入的ValidationGap都是interval_ms的最小单位。就是其start_time和end_time之间的差值，都是一个interval_ms的长度。
+///  3. 传入的gaps可能是无序的。
+///  4. 所有的gap的symbol和trade_type都是相同的。
+///  5. 是否相邻（规则 ：相邻定义为 next.start_time == prev.end_time）
+///  6. gap之间不可能有交集。比如[ (100, 200), (150, 300) ] 不可能出现在传入的gaps中。
+///
+///  gaps的合并
+///  gaps是无序的，需要先排序，然后合并相邻的时间段
+///  一下是几个案例
+///
+///  1. gaps = [ (t1, t2), (t2, t3) ] =>>  merged_gaps = [ (t1,  t3) ]
+///  2. gaps = [ (t1, t2), (t2, t3), (t5, t6) , (t6, t7) , (t8, t9)] =>>  merged_gaps = [ (t1,  t3)，(t5,  t7)，(t8, t9)]
+///  注意：根据注释约定，传入的 gaps 不会相互重叠，合并规则只需要处理“相邻”的情况（端点相等）。
+pub(crate) fn merge_gaps(gaps: Vec<ValidationGap>) -> Vec<ValidationGap> {
     if gaps.is_empty() {
         return Vec::new();
     }
@@ -140,16 +154,20 @@ fn merge_gaps(gaps: Vec<ValidationGap>) -> Vec<ValidationGap> {
 ///
 #[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
 #[async_trait]
-pub trait BinarySearchDataTrait: Send + Sync {
+pub trait BinarySearchDSTrait: Send + Sync {
     ///
     /// 计算start和end之间的不同数据数量
     ///
-    fn count_distinct_between(&self, start: u64, end: u64) -> Result<u64, YuError>;
+    fn count_distinct_between(&self, identify: &str, start: u64, end: u64) -> Result<u64, YuError>;
 
     fn table_name(&self) -> String;
+
+    fn symbol_column(&self) -> String;
+
+    fn time_column(&self) -> String;
 }
 
-type BinarySearchDDataSource = Arc<dyn BinarySearchDataTrait>;
+pub type BinarySearchDS = Arc<dyn BinarySearchDSTrait>;
 
 #[cfg(test)]
 mod tests {
@@ -169,9 +187,9 @@ mod tests {
         let present: Vec<u64> = (0..5).map(|i| t0 + i * interval_ms).collect();
 
         // use mockall-generated mock
-        let mut mock = MockBinarySearchDataTrait::new();
+        let mut mock = MockBinarySearchDSTrait::new();
         mock.expect_table_name().returning(|| "bn_spot_kline".to_string());
-        mock.expect_count_distinct_between().returning(move |s: u64, e: u64| {
+        mock.expect_count_distinct_between().returning(move |_: &str, s: u64, e: u64| {
             let mut c: u64 = 0;
             for &t in present.iter() {
                 if t >= s && t < e {
@@ -197,9 +215,9 @@ mod tests {
         let present_vec = vec![t0, t0 + interval_ms, t0 + 3 * interval_ms, t0 + 4 * interval_ms];
         let present = present_vec.clone();
 
-        let mut mock = MockBinarySearchDataTrait::new();
+        let mut mock = MockBinarySearchDSTrait::new();
         mock.expect_table_name().returning(|| "bn_spot_kline".to_string());
-        mock.expect_count_distinct_between().returning(move |s: u64, e: u64| {
+        mock.expect_count_distinct_between().returning(move |_: &str, s: u64, e: u64| {
             let mut c: u64 = 0;
             for &t in present.iter() {
                 if t >= s && t < e {
@@ -210,22 +228,19 @@ mod tests {
         });
 
         let ds = Arc::new(mock);
-        let reqs = binary_search_gap("BTCUSDT", "SPOT", start, end, &interval, ds)?;
-        // Expect at least one RepairRequest containing a MissingData gap for the missing slot
-        assert!(!reqs.is_empty(), "expected repair requests but none produced");
+        let gaps = binary_search_gap("BTCUSDT", "SPOT", start, end, &interval, ds)?;
+        assert!(!gaps.is_empty(), "expected gaps but none produced");
         let missing_ts = t0 + 2 * interval_ms;
         let missing_end = missing_ts + interval_ms;
         let mut found = false;
-        for req in reqs.iter() {
-            for g in req.gaps.iter() {
-                if let ValidationGap::MissingData { start_time, end_time, .. } = g {
-                    if *start_time == missing_ts && *end_time == missing_end {
-                        found = true;
-                    }
+        for g in gaps.iter() {
+            if let ValidationGap::MissingData { start_time, end_time, .. } = g {
+                if *start_time == missing_ts && *end_time == missing_end {
+                    found = true;
                 }
             }
         }
-        assert!(found, "missing slot not reported in repair requests: {:?}", reqs);
+        assert!(found, "missing slot not reported in gaps: {:?}", gaps);
         Ok(())
     }
 
@@ -238,9 +253,9 @@ mod tests {
         let end = t0 + 5 * interval_ms;
         let present = vec![t0, t0 + interval_ms, t0 + 4 * interval_ms];
 
-        let mut mock = MockBinarySearchDataTrait::new();
+        let mut mock = MockBinarySearchDSTrait::new();
         mock.expect_table_name().returning(|| "bn_spot_kline".to_string());
-        mock.expect_count_distinct_between().returning(move |s: u64, e: u64| {
+        mock.expect_count_distinct_between().returning(move |_: &str, s: u64, e: u64| {
             let mut c: u64 = 0;
             for &t in present.iter() {
                 if t >= s && t < e {
@@ -251,11 +266,10 @@ mod tests {
         });
 
         let ds = Arc::new(mock);
-        let reqs = binary_search_gap("BTCUSDT", "SPOT", start, end, &interval, ds)?;
-        assert_eq!(reqs.len(), 1, "adjacent gaps should be merged into one request");
-        assert_eq!(reqs[0].gaps.len(), 1, "adjacent gaps should be merged into one gap");
+        let gaps = binary_search_gap("BTCUSDT", "SPOT", start, end, &interval, ds)?;
+        assert_eq!(gaps.len(), 1, "adjacent gaps should be merged into one gap");
 
-        match &reqs[0].gaps[0] {
+        match &gaps[0] {
             ValidationGap::MissingData { start_time, end_time, .. } => {
                 assert_eq!(*start_time, t0 + 2 * interval_ms);
                 assert_eq!(*end_time, t0 + 4 * interval_ms);
@@ -274,9 +288,9 @@ mod tests {
         let end = t0 + 10 * interval_ms;
         let present = vec![t0, t0 + interval_ms, t0 + 4 * interval_ms, t0 + 8 * interval_ms];
 
-        let mut mock = MockBinarySearchDataTrait::new();
+        let mut mock = MockBinarySearchDSTrait::new();
         mock.expect_table_name().returning(|| "bn_spot_kline".to_string());
-        mock.expect_count_distinct_between().returning(move |s: u64, e: u64| {
+        mock.expect_count_distinct_between().returning(move |_: &str, s: u64, e: u64| {
             let mut c: u64 = 0;
             for &t in present.iter() {
                 if t >= s && t < e {
@@ -287,10 +301,9 @@ mod tests {
         });
 
         let ds = Arc::new(mock);
-        let reqs = binary_search_gap("BTCUSDT", "SPOT", start, end, &interval, ds)?;
+        let gaps = binary_search_gap("BTCUSDT", "SPOT", start, end, &interval, ds)?;
 
-        assert_eq!(reqs.len(), 1, "multiple gaps should be returned in one request");
-        assert_eq!(reqs[0].gaps.len(), 3, "expected three merged gaps");
+        assert_eq!(gaps.len(), 3, "expected three merged gaps");
 
         let expected = vec![
             (t0 + 2 * interval_ms, t0 + 4 * interval_ms),
@@ -298,7 +311,7 @@ mod tests {
             (t0 + 9 * interval_ms, t0 + 10 * interval_ms),
         ];
 
-        for (gap, (exp_start, exp_end)) in reqs[0].gaps.iter().zip(expected.into_iter()) {
+        for (gap, (exp_start, exp_end)) in gaps.iter().zip(expected.into_iter()) {
             match gap {
                 ValidationGap::MissingData { start_time, end_time, .. } => {
                     assert_eq!(*start_time, exp_start);
@@ -309,5 +322,141 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn test_merge_gaps_adjacent() {
+        let gaps = vec![
+            ValidationGap::MissingData {
+                symbol: "BTCUSDT".to_string(),
+                trade_type: "SPOT".to_string(),
+                start_time: 100,
+                end_time: 200,
+                table: "t1".to_string(),
+            },
+            ValidationGap::MissingData {
+                symbol: "BTCUSDT".to_string(),
+                trade_type: "SPOT".to_string(),
+                start_time: 200,
+                end_time: 300,
+                table: "t1".to_string(),
+            },
+            ValidationGap::MissingData {
+                symbol: "BTCUSDT".to_string(),
+                trade_type: "SPOT".to_string(),
+                start_time: 300,
+                end_time: 400,
+                table: "t1".to_string(),
+            },
+        ];
+
+        let merged = merge_gaps(gaps);
+        assert_eq!(merged.len(), 1, "expected single merged gap, got: {:?}", merged);
+        match &merged[0] {
+            ValidationGap::MissingData {
+                start_time,
+                end_time,
+                symbol,
+                table,
+                ..
+            } => {
+                assert_eq!(*start_time, 100);
+                assert_eq!(*end_time, 400);
+                assert_eq!(symbol, "BTCUSDT");
+                assert_eq!(table, "t1");
+            }
+            _ => panic!("unexpected gap variant"),
+        }
+    }
+
+    #[test]
+    fn test_merge_multi_gaps() {
+        let gaps = vec![
+            ValidationGap::MissingData {
+                symbol: "BTCUSDT".to_string(),
+                trade_type: "SPOT".to_string(),
+                start_time: 100,
+                end_time: 200,
+                table: "t1".to_string(),
+            },
+            ValidationGap::MissingData {
+                symbol: "BTCUSDT".to_string(),
+                trade_type: "SPOT".to_string(),
+                start_time: 200,
+                end_time: 300,
+                table: "t1".to_string(),
+            },
+            ValidationGap::MissingData {
+                symbol: "BTCUSDT".to_string(),
+                trade_type: "SPOT".to_string(),
+                start_time: 300,
+                end_time: 400,
+                table: "t1".to_string(),
+            },
+            ValidationGap::MissingData {
+                symbol: "BTCUSDT".to_string(),
+                trade_type: "SPOT".to_string(),
+                start_time: 500,
+                end_time: 600,
+                table: "t1".to_string(),
+            },
+            ValidationGap::MissingData {
+                symbol: "BTCUSDT".to_string(),
+                trade_type: "SPOT".to_string(),
+                start_time: 600,
+                end_time: 700,
+                table: "t1".to_string(),
+            },
+            ValidationGap::MissingData {
+                symbol: "BTCUSDT".to_string(),
+                trade_type: "SPOT".to_string(),
+                start_time: 800,
+                end_time: 900,
+                table: "t1".to_string(),
+            },
+        ];
+
+        let merged = merge_gaps(gaps);
+        assert_eq!(merged.len(), 3, "expected three merged gaps, got: {:?}", merged);
+
+        let expected: Vec<(u64, u64)> = vec![(100, 400), (500, 700), (800, 900)];
+        for (i, gap) in merged.iter().enumerate() {
+            match gap {
+                ValidationGap::MissingData {
+                    start_time,
+                    end_time,
+                    symbol,
+                    table,
+                    ..
+                } => {
+                    assert_eq!(*start_time, expected[i].0);
+                    assert_eq!(*end_time, expected[i].1);
+                    assert_eq!(symbol, "BTCUSDT");
+                    assert_eq!(table, "t1");
+                }
+                _ => panic!("unexpected gap variant"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_merge_gaps_single_and_empty() {
+        let single = vec![ValidationGap::MissingData {
+            symbol: "BTCUSDT".to_string(),
+            trade_type: "SPOT".to_string(),
+            start_time: 777,
+            end_time: 888,
+            table: "t1".to_string(),
+        }];
+        let merged_single = merge_gaps(single);
+        assert_eq!(merged_single.len(), 1, "single gap should remain single");
+        if let ValidationGap::MissingData { start_time, end_time, .. } = &merged_single[0] {
+            assert_eq!(*start_time, 777);
+            assert_eq!(*end_time, 888);
+        }
+
+        let empty: Vec<ValidationGap> = Vec::new();
+        let merged_empty = merge_gaps(empty);
+        assert!(merged_empty.is_empty(), "empty input should produce empty output");
     }
 }
