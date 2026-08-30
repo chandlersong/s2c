@@ -1,7 +1,7 @@
 use crate::binance::bn_backend_service::{get_spot_kline_table, get_swap_kline_table};
 use crate::binance::db_consts::BinanceTables;
 use crate::binance::history::HistoryKlineSaver;
-use crate::data_integrity::check::{BinarySearchDS, BinarySearchDSTrait, ValidationStrategyTrait, binary_search_gap};
+use crate::data_integrity::check::{BinarySearchDS, BinarySearchDSTrait, DuckDBBinarySearchDataImpl, ValidationStrategyTrait, binary_search_gap};
 use crate::data_integrity::models::{RepairRequest, ValidationGap, ValidationResult};
 use crate::data_integrity::repair::RepairStrategyTrait;
 use crate::duck_db::DuckDBDSProvider;
@@ -83,59 +83,6 @@ impl Default for IgnoreSymbols {
     }
 }
 
-struct SpotBinarySearchDataImpl {
-    db_provider: DuckDBDSProvider, // Database provider for data access
-    table_name: String,            // Table to validate
-    time_column: String,           // 时间检测列，改列的时间都是unix时间戳，单位毫秒
-    symbol_column: String,         // symbol的column
-}
-
-impl SpotBinarySearchDataImpl {
-    pub fn new(db_provider: DuckDBDSProvider, table_name: String, time_column: String, symbol_column: String) -> BinarySearchDS {
-        Arc::new(Self {
-            db_provider,
-            table_name,
-            time_column,
-            symbol_column,
-        })
-    }
-}
-
-impl BinarySearchDSTrait for SpotBinarySearchDataImpl {
-    fn count_distinct_between(&self, identify: &str, start: u64, end: u64) -> Result<u64, YuError> {
-        let sql = format!(
-            "SELECT COUNT(DISTINCT {time_col}) FROM {table} WHERE {time_col} >= ? AND {time_col} < ? AND {symbol_col}='{symbol}'",
-            time_col = self.time_column,
-            table = self.table_name,
-            symbol_col = self.symbol_column,
-            symbol = identify,
-        );
-        let connection = self.db_provider.acquire()?;
-        let mut stmt = connection.prepare(&sql)?;
-        let mut rows = stmt
-            .query([start as i64, end as i64])
-            .map_err(|_| YuError::new(&format!("{}, query gap from {} to {}", identify, start, end)))?;
-        if let Some(row) = rows.next()? {
-            let c: i64 = row.get(0)?;
-            Ok(c as u64)
-        } else {
-            Ok(0)
-        }
-    }
-
-    fn table_name(&self) -> String {
-        self.table_name.clone()
-    }
-
-    fn symbol_column(&self) -> String {
-        self.symbol_column.clone()
-    }
-
-    fn time_column(&self) -> String {
-        self.time_column.clone()
-    }
-}
-
 ///
 /// 检测 Binance 现货数据完整性的策略实现
 /// 以后想要转换成一个通用类。
@@ -167,7 +114,7 @@ pub struct SpotCheckStrategy {
 impl SpotCheckStrategy {
     pub fn spot_check_strategy(db_source: Option<DuckDBDSProvider>, data_retention_time: u64) -> Self {
         let db_provider = db_source.unwrap_or_else(|| DuckDBDSProvider::default());
-        let binary_search_ds = SpotBinarySearchDataImpl::new(
+        let binary_search_ds = DuckDBBinarySearchDataImpl::new(
             db_provider.clone(),
             BinanceTables::SpotKline.table_name(),
             "candle_begin_time".to_string(),
@@ -185,7 +132,7 @@ impl SpotCheckStrategy {
 
     pub fn swap_check_strategy(db_source: Option<DuckDBDSProvider>, data_retention_time: u64) -> Self {
         let db_provider = db_source.unwrap_or_else(|| DuckDBDSProvider::default());
-        let binary_search_ds = SpotBinarySearchDataImpl::new(
+        let binary_search_ds = DuckDBBinarySearchDataImpl::new(
             db_provider.clone(),
             BinanceTables::SwapKline.table_name(),
             "candle_begin_time".to_string(),

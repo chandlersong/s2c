@@ -1,8 +1,10 @@
 use crate::data_integrity::models::{ValidationGap, ValidationResult};
+use crate::duck_db::DuckDBDSProvider;
 use crate::errors::YuError;
 use async_trait::async_trait;
 use std::sync::Arc;
 use yue::models::HistoryInterval;
+use yue::query_message::DataSourceProviderTrait;
 
 /// 可插拔校验策略接口，Checker 调用实现校验逻辑。
 #[async_trait]
@@ -146,6 +148,59 @@ pub(crate) fn merge_gaps(gaps: Vec<ValidationGap>) -> Vec<ValidationGap> {
     }
     result.extend(others);
     result
+}
+
+pub struct DuckDBBinarySearchDataImpl {
+    db_provider: DuckDBDSProvider, // Database provider for data access
+    table_name: String,            // Table to validate
+    time_column: String,           // 时间检测列，改列的时间都是unix时间戳，单位毫秒
+    symbol_column: String,         // symbol的column
+}
+
+impl DuckDBBinarySearchDataImpl {
+    pub fn new(db_provider: DuckDBDSProvider, table_name: String, time_column: String, symbol_column: String) -> BinarySearchDS {
+        Arc::new(Self {
+            db_provider,
+            table_name,
+            time_column,
+            symbol_column,
+        })
+    }
+}
+
+impl BinarySearchDSTrait for DuckDBBinarySearchDataImpl {
+    fn count_distinct_between(&self, identify: &str, start: u64, end: u64) -> Result<u64, YuError> {
+        let sql = format!(
+            "SELECT COUNT(DISTINCT {time_col}) FROM {table} WHERE {time_col} >= ? AND {time_col} < ? AND {symbol_col}='{symbol}'",
+            time_col = self.time_column,
+            table = self.table_name,
+            symbol_col = self.symbol_column,
+            symbol = identify,
+        );
+        let connection = self.db_provider.acquire()?;
+        let mut stmt = connection.prepare(&sql)?;
+        let mut rows = stmt
+            .query([start as i64, end as i64])
+            .map_err(|_| YuError::new(&format!("{}, query gap from {} to {}", identify, start, end)))?;
+        if let Some(row) = rows.next()? {
+            let c: i64 = row.get(0)?;
+            Ok(c as u64)
+        } else {
+            Ok(0)
+        }
+    }
+
+    fn table_name(&self) -> String {
+        self.table_name.clone()
+    }
+
+    fn symbol_column(&self) -> String {
+        self.symbol_column.clone()
+    }
+
+    fn time_column(&self) -> String {
+        self.time_column.clone()
+    }
 }
 
 ///
