@@ -1,9 +1,13 @@
+use crate::data_integrity::check::{DuckDBBinarySearchDataImpl, binary_search_gap};
+use crate::data_integrity::models::ValidationGap;
+use crate::duck_db_tables::DuckDbTableTrait;
 use crate::errors::YuError;
+use crate::polymarket::db_consts::PolyMarketTables;
 use crate::polymarket::duckdb_repository::{PolyMarketHistoryRepository, PolyMarketInstrumentRepository, get_history_repo, get_instrument_repo};
 use crate::polymarket::po::{PolyMarketHistoryPo, PolyMarketInstrumentPo};
 use async_trait::async_trait;
-use li::tools::time::unix_time_now_u64_utc_seconds;
-use log::{error, info, trace};
+use li::tools::time::{unix_2_readable, unix_time_now_u64_utc_seconds};
+use log::{Level, debug, error, info, trace};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, broadcast};
@@ -167,6 +171,9 @@ pub trait SeriesHistoryMarketServiceTrait: Send + Sync {
     async fn fetch_latest_history(&self) -> Result<Vec<PolyMarketHistoryPo>, YuError>;
 
     fn subscribe_history_broadcast(&self) -> broadcast::Receiver<PolyMarketHistoryPo>;
+
+    //用来检测本地数据是否正确
+    async fn check_history_data(&self) -> Result<(), YuError>;
 }
 
 pub type SeriesHistoryMarketService = Arc<dyn SeriesHistoryMarketServiceTrait>;
@@ -271,7 +278,7 @@ impl SeriesHistoryMarketServiceImpl {
         res
     }
 
-    fn broadcast_message(&self, entry: PolyMarketHistoryPo, asset_slug: &str, timestamp: u64) {
+    pub fn broadcast_message(&self, entry: PolyMarketHistoryPo, asset_slug: &str, timestamp: u64) {
         if self.history_broadcast.receiver_count() != 0 {
             if let Err(e) = self.history_broadcast.send(entry) {
                 error!("asset_slug:{}, timestamp {},history_broadcast error: {:?}", asset_slug, timestamp, e);
@@ -366,6 +373,77 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
 
     fn subscribe_history_broadcast(&self) -> broadcast::Receiver<PolyMarketHistoryPo> {
         self.history_broadcast.subscribe()
+    }
+
+    ///
+    /// FUTURE：
+    /// 1. polymarket的数据本来就不完整。所以造成检查的时候，会反复拉取
+    ///
+    async fn check_history_data(&self) -> Result<(), YuError> {
+        let binary_search_ds = DuckDBBinarySearchDataImpl::new(
+            self.history_repo.get_db_provider(),
+            PolyMarketTables::PriceHistory.table_name(),
+            "timestamp".to_string(),
+            "instrument_id".to_string(),
+        );
+        let now_ms = self.interval.get_now_close_unix_ms_utc();
+        let interval_ms = self.interval.to_milliseconds();
+        for instrument in self.instruments.read().await.iter() {
+            //因为第一个时间点，应该是没有的。所以直接跳过。
+            let inst_start = self.interval.get_close_unix_ms(instrument.start_ms) + interval_ms;
+            let gaps: Vec<ValidationGap> = binary_search_gap(
+                instrument.id.to_string().as_str(),
+                "SPOT",
+                inst_start,
+                now_ms,
+                &self.interval,
+                binary_search_ds.clone(),
+            )?;
+            trace!("{} has {} gaps", instrument.asset_slug, gaps.len());
+            let fidelity = self.interval.to_second() / 60;
+            for g in gaps.iter() {
+                match g {
+                    ValidationGap::MissingData {
+                        symbol,
+                        trade_type,
+                        start_time,
+                        end_time,
+                        table,
+                    } => {
+                        if log::log_enabled!(Level::Debug) {
+                            debug!(
+                                "found gap for instrument_id:{},start_ts:{},end_ts:{},symbol:{},trade_type:{},table:{}",
+                                instrument.asset_slug,
+                                unix_2_readable(start_time),
+                                unix_2_readable(end_time),
+                                symbol,
+                                trade_type,
+                                table
+                            );
+                        }
+
+                        let start_ts = start_time / 1000;
+                        let end_ts = end_time / 1000;
+                        let query_param = GetPricesHistoryQuery {
+                            market: instrument.asset_id.to_string(),
+                            start_ts: Some(start_ts),
+                            end_ts: Some(end_ts),
+                            interval: Some(self.interval.as_ref().to_string()),
+                            fidelity: Some(fidelity.clone() as u32),
+                        };
+                        // index 可用于调试或区分不同 asset_id
+                        let pos = self.query_history(query_param, instrument).await;
+                        for h in pos.iter() {
+                            self.broadcast_message(h.clone(), &instrument.asset_slug, h.timestamp);
+                        }
+                    }
+                    _ => {
+                        error!("no gap found")
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 

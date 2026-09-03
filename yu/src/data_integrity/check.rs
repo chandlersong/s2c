@@ -261,6 +261,35 @@ mod tests {
     }
 
     #[test]
+    fn test_binary_search_gap_no_gap_even() -> Result<(), YuError> {
+        // even number of slots (10)
+        let interval = HistoryInterval::FiveMinutes;
+        let interval_ms = interval.to_milliseconds();
+        let t0: u64 = 1_700_000_000;
+        let start = t0;
+        // 10 slots: t0, t0+1*interval_ms, ..., t0+9*interval_ms
+        let end = t0 + 10 * interval_ms;
+        let present: Vec<u64> = (0..10).map(|i| t0 + i * interval_ms).collect();
+
+        let mut mock = MockBinarySearchDSTrait::new();
+        mock.expect_table_name().returning(|| "bn_spot_kline".to_string());
+        mock.expect_count_distinct_between().returning(move |_: &str, s: u64, e: u64| {
+            let mut c: u64 = 0;
+            for &t in present.iter() {
+                if t >= s && t < e {
+                    c += 1;
+                }
+            }
+            Ok(c)
+        });
+
+        let ds = Arc::new(mock);
+        let res = binary_search_gap("BTCUSDT", "SPOT", start, end, &interval, ds)?;
+        assert!(res.is_empty(), "expected no repair requests for even count but got: {:?}", res);
+        Ok(())
+    }
+
+    #[test]
     fn test_binary_search_gap_single_missing() -> Result<(), YuError> {
         let interval = HistoryInterval::FiveMinutes;
         let interval_ms = interval.to_milliseconds();

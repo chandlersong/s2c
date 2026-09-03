@@ -1,5 +1,5 @@
 use li::tools::logs::setup_logger;
-use log::{LevelFilter, info};
+use log::{LevelFilter, error, info};
 use std::collections::HashMap;
 use yu::config::get_config;
 use yu::errors::YuError;
@@ -33,6 +33,7 @@ async fn main() -> Result<(), YuError> {
     let instruments = service.list_instruments().await?;
     info!("find instruments num: {}", instruments.len());
     let mut rx = service.subscribe_history_broadcast();
+    let check_service = service.clone();
     tokio::spawn(async move {
         service.fetch_latest_history().await.expect("TODO: panic message");
     });
@@ -41,6 +42,10 @@ async fn main() -> Result<(), YuError> {
             info!("receive history: {}", history);
         }
     });
+    info!("start check history data");
+    if let Err(e) = check_service.check_history_data().await {
+        error!("check history data error: {}", e);
+    }
     tokio::time::sleep(tokio::time::Duration::from_mins(5)).await;
     Ok(())
 }

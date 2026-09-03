@@ -40,7 +40,20 @@ pub async fn start_polymarket_sync_series_job() -> Result<SeriesHistoryMarketSer
             //TODO: 正常后，改成debug level
             info!("start fetch last hour history from polymarket server");
             if let Err(e) = each_sync.fetch_latest_history().await {
-                error!("Error when async instruments with server: {}", e);
+                error!("Error when async polymarket instruments with server: {}", e);
+            }
+        })
+    });
+
+    let check_history_job = service.clone();
+
+    let _ = cron_job!("0 18 */6 * * *", move |_uuid, _locked| {
+        let each_sync = check_history_job.clone();
+        Box::pin(async move {
+            //TODO: 正常后，改成debug level
+            info!("start fetch last hour history from polymarket server");
+            if let Err(e) = each_sync.check_history_data().await {
+                error!("Error when check polymarket history data: {}", e);
             }
         })
     });

@@ -1,7 +1,7 @@
 use crate::binance::bn_backend_service::{get_spot_kline_table, get_swap_kline_table};
 use crate::binance::db_consts::BinanceTables;
 use crate::binance::history::HistoryKlineSaver;
-use crate::data_integrity::check::{BinarySearchDS, BinarySearchDSTrait, DuckDBBinarySearchDataImpl, ValidationStrategyTrait, binary_search_gap};
+use crate::data_integrity::check::{BinarySearchDS, DuckDBBinarySearchDataImpl, ValidationStrategyTrait, binary_search_gap};
 use crate::data_integrity::models::{RepairRequest, ValidationGap, ValidationResult};
 use crate::data_integrity::repair::RepairStrategyTrait;
 use crate::duck_db::DuckDBDSProvider;
@@ -228,7 +228,7 @@ impl SpotCheckStrategy {
             &self.interval,
             self.binary_search_ds.clone(),
         )?;
-        if log::max_level() <= Level::Debug {
+        if log::log_enabled!(Level::Debug) {
             for g in gaps.iter() {
                 match g {
                     ValidationGap::MissingData {

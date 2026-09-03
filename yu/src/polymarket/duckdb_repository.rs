@@ -40,6 +40,8 @@ pub trait PolyMarketHistoryRepositoryTrait {
     async fn max_timestamp_group_by_inst_id(&self) -> Result<HashMap<u64, u64>, YuError>;
 
     async fn get_history_between(&self, inst_id: u64, start_ms: u64, end_ms: u64) -> Result<Vec<PolyMarketHistoryPo>, YuError>;
+
+    fn get_db_provider(&self) -> DuckDBDSProvider;
 }
 
 pub type PolyMarketInstrumentRepository = Arc<dyn PolyMarketInstrumentRepositoryTrait + Send + Sync>;
@@ -298,5 +300,9 @@ impl PolyMarketHistoryRepositoryTrait for PolyMarketHistoryRepositoryImpl {
         }
 
         Ok(res)
+    }
+
+    fn get_db_provider(&self) -> DuckDBDSProvider {
+        self.provider.clone()
     }
 }
