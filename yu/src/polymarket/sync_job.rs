@@ -51,10 +51,11 @@ pub async fn start_polymarket_sync_series_job() -> Result<SeriesHistoryMarketSer
         let each_sync = check_history_job.clone();
         Box::pin(async move {
             //TODO: 正常后，改成debug level
-            info!("start fetch last hour history from polymarket server");
+            info!("start check polymarket history data");
             if let Err(e) = each_sync.check_history_data().await {
                 error!("Error when check polymarket history data: {}", e);
             }
+            info!("finish check polymarket history data");
         })
     });
 

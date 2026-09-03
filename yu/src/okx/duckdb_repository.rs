@@ -39,6 +39,8 @@ pub trait OkxKlineRepositoryTrait {
     async fn batch_insert(&self, po_vec: Vec<OkxKlinePo>) -> Result<(), YuError>;
 
     async fn find_kline_between(&self, inst_id: u64, start_ms: u64, end_ms: u64) -> Result<Vec<OkxKlinePo>, YuError>;
+
+    fn get_db_provider(&self) -> DuckDBDSProvider;
 }
 
 pub type OkxInstrumentRepository = Arc<dyn OkxInstrumentRepositoryTrait + Send + Sync>;
@@ -275,5 +277,9 @@ impl OkxKlineRepositoryTrait for OkxKlinePoRepositoryImpl {
             });
         }
         Ok(res)
+    }
+
+    fn get_db_provider(&self) -> DuckDBDSProvider {
+        self.provider.clone()
     }
 }

@@ -1,7 +1,11 @@
 use crate::config::get_config;
 use crate::cron_job;
+use crate::data_integrity::check::{DuckDBBinarySearchDataImpl, binary_search_gap};
+use crate::data_integrity::models::ValidationGap;
+use crate::duck_db_tables::DuckDbTableTrait;
 use crate::errors::YuError;
 use crate::okx::duck_po::{InstrumentPo, OkxKlinePo};
+use crate::okx::duckdb_consts::OkxTables;
 use crate::okx::duckdb_repository::{OkxInstrumentRepository, OkxKlineRepository, get_default_kline_repo, get_instrument_repo};
 use crate::okx::okx_consts::InstrumentType;
 use async_trait::async_trait;
@@ -12,7 +16,7 @@ use li::websocket::connection::{
     CommandMessage, ConnectionAction, ConnectionConfig, MessageHandlerTrait, ShareMessageHandler, ToServerMessage, WebSocketConnection,
     WebSocketInterface,
 };
-use log::{debug, error, info, trace, warn};
+use log::{Level, debug, error, info, trace, warn};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -799,6 +803,91 @@ impl OptionService {
         }
 
         info!("完成初始化，okx option k线");
+        Ok(())
+    }
+
+    pub(crate) async fn check_history_data(&self) -> Result<(), YuError> {
+        let binary_search_ds = DuckDBBinarySearchDataImpl::new(
+            self.common_io.get_kline_repo().get_db_provider(),
+            OkxTables::Kline.table_name(),
+            "timestamp".to_string(),
+            "inst_id".to_string(),
+        );
+        let now_ms = self.interval.get_now_close_unix_ms_utc();
+        let interval_ms = self.interval.to_milliseconds();
+        let kline_repo = self.common_io.get_kline_repo();
+        let broadcast_sender = self.kline_broadcast_sender.clone();
+        let instruments = {
+            let g = self
+                .live_instruments
+                .read()
+                .map_err(|_| YuError::new("failed to acquire live_instruments read lock"))?;
+            g.clone()
+        };
+        for instrument in instruments.iter() {
+            //因为第一个时间点，应该是没有的。所以直接跳过。
+            let inst_start = self.interval.get_close_unix_ms(instrument.list_time.unwrap()) + interval_ms;
+            let gaps: Vec<ValidationGap> = binary_search_gap(
+                instrument.id.to_string().as_str(),
+                "SPOT",
+                inst_start,
+                now_ms,
+                &self.interval,
+                binary_search_ds.clone(),
+            )?;
+            trace!("{} has {} gaps", instrument.inst_identify, gaps.len());
+            for g in gaps.iter() {
+                match g {
+                    ValidationGap::MissingData {
+                        symbol,
+                        trade_type,
+                        start_time,
+                        end_time,
+                        table,
+                    } => {
+                        if log::log_enabled!(Level::Debug) {
+                            debug!(
+                                "found gap for instrument_id:{},start_ts:{},end_ts:{},symbol:{},trade_type:{},table:{}",
+                                instrument.inst_identify,
+                                unix_2_readable(start_time),
+                                unix_2_readable(end_time),
+                                symbol,
+                                trade_type,
+                                table
+                            );
+                        }
+
+                        let start_ts = start_time / 1000;
+                        let end_ts = end_time / 1000;
+                        let pos = self
+                            .common_io
+                            .fetch_history(
+                                instrument.inst_identify.as_ref(),
+                                instrument.id,
+                                start_ts,
+                                end_ts,
+                                &self.interval,
+                                None,
+                                None,
+                            )
+                            .await?;
+                        for h in pos.iter() {
+                            if let Err(e) = kline_repo.insert_history(h.clone()).await {
+                                warn!("Failed to insert okx kline history: {:?}", e);
+                            }
+                            if broadcast_sender.receiver_count() != 0 {
+                                if let Err(e) = broadcast_sender.send(h.clone()) {
+                                    warn!("Failed to broadcast okx kline: {:?}", e);
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        error!("no gap found")
+                    }
+                }
+            }
+        }
         Ok(())
     }
 }
