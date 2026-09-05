@@ -2,6 +2,7 @@ use crate::data_integrity::models::{ValidationGap, ValidationResult};
 use crate::duck_db::DuckDBDSProvider;
 use crate::errors::YuError;
 use async_trait::async_trait;
+use sqlx::Row;
 use std::sync::Arc;
 use yue::models::HistoryInterval;
 use yue::query_message::DataSourceProviderTrait;
@@ -86,7 +87,7 @@ pub fn binary_search_gap(
 
 ///
 ///  gaps。
-///  1. ValidationGap的排序都是按照其start_time进行排序
+///  1. ValidationGap的排序都是按 照其start_time进行排序
 ///  2. 传入的ValidationGap都是interval_ms的最小单位。就是其start_time和end_time之间的差值，都是一个interval_ms的长度。
 ///  3. 传入的gaps可能是无序的。
 ///  4. 所有的gap的symbol和trade_type都是相同的。
@@ -150,6 +151,27 @@ pub(crate) fn merge_gaps(gaps: Vec<ValidationGap>) -> Vec<ValidationGap> {
     result
 }
 
+///
+/// 主要用于扇面这个binary_search_gap的方式去提供数据。
+/// 因为需要不同的数据数量，所以需要提供一个接口，计算start和end之间的不同数据数量。
+///
+#[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
+#[async_trait]
+pub trait BinarySearchDSTrait: Send + Sync {
+    ///
+    /// 计算start和end之间的不同数据数量
+    ///
+    fn count_distinct_between(&self, identify: &str, start: u64, end: u64) -> Result<u64, YuError>;
+
+    fn table_name(&self) -> String;
+
+    fn symbol_column(&self) -> String;
+
+    fn time_column(&self) -> String;
+}
+
+pub type BinarySearchDS = Arc<dyn BinarySearchDSTrait>;
+
 pub struct DuckDBBinarySearchDataImpl {
     db_provider: DuckDBDSProvider, // Database provider for data access
     table_name: String,            // Table to validate
@@ -203,26 +225,68 @@ impl BinarySearchDSTrait for DuckDBBinarySearchDataImpl {
     }
 }
 
-///
-/// 主要用于扇面这个binary_search_gap的方式去提供数据。
-/// 因为需要不同的数据数量，所以需要提供一个接口，计算start和end之间的不同数据数量。
-///
-#[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
-#[async_trait]
-pub trait BinarySearchDSTrait: Send + Sync {
-    ///
-    /// 计算start和end之间的不同数据数量
-    ///
-    fn count_distinct_between(&self, identify: &str, start: u64, end: u64) -> Result<u64, YuError>;
-
-    fn table_name(&self) -> String;
-
-    fn symbol_column(&self) -> String;
-
-    fn time_column(&self) -> String;
+pub struct PostgresqlBinarySearchDataImpl {
+    pg_pool: sqlx::PgPool,
+    table_name: String,
+    time_column: String,
+    symbol_column: String,
+    count_sql: &'static str,
 }
 
-pub type BinarySearchDS = Arc<dyn BinarySearchDSTrait>;
+impl PostgresqlBinarySearchDataImpl {
+    pub fn new(pg_pool: sqlx::PgPool, table_name: String, time_column: String, symbol_column: String) -> BinarySearchDS {
+        // construct SQL statements once and leak to &'static str after manual audit
+        let count_sql = format!(
+            "SELECT COUNT(DISTINCT {time_col}) FROM {table} WHERE {time_col} >= $1 AND {time_col} < $2 AND {symbol_col} = $3",
+            time_col = time_column,
+            table = table_name,
+            symbol_col = symbol_column,
+        );
+
+        let count_sql_static: &'static str = Box::leak(count_sql.into_boxed_str());
+
+        Arc::new(Self {
+            pg_pool,
+            table_name,
+            time_column,
+            symbol_column,
+            count_sql: count_sql_static,
+        })
+    }
+}
+
+impl BinarySearchDSTrait for PostgresqlBinarySearchDataImpl {
+    fn count_distinct_between(&self, identify: &str, start: u64, end: u64) -> Result<u64, YuError> {
+        // use prebuilt, leaked SQL string
+        let sql_static = self.count_sql;
+        let pool = self.pg_pool.clone();
+        let res = futures::executor::block_on(async move {
+            sqlx::query_scalar::<_, i64>(sql_static)
+                .bind(start as i64)
+                .bind(end as i64)
+                .bind(identify)
+                .fetch_one(&pool)
+                .await
+        });
+
+        match res {
+            Ok(c) => Ok(c as u64),
+            Err(e) => Err(YuError::new(&format!("{}, query gap from {} to {}: {}", identify, start, end, e))),
+        }
+    }
+
+    fn table_name(&self) -> String {
+        self.table_name.clone()
+    }
+
+    fn symbol_column(&self) -> String {
+        self.symbol_column.clone()
+    }
+
+    fn time_column(&self) -> String {
+        self.time_column.clone()
+    }
+}
 
 #[cfg(test)]
 mod tests {
