@@ -36,7 +36,7 @@ pub fn get_polymarket_price_batch_insert() -> PostgresqlBatchInsert<LocalPolyMar
         .get_or_init(|| {
             let pool = get_sync_client_pg_pool_sync().expect("get_sync_client_pg_pool failed");
             let batch_insert = block_on(PostgresqlBatchInsertImpl::<LocalPolyMarketHistoryPo>::new(
-                ClientsTables::PriceHistory.table_name(),
+                ClientsTables::PolymarketPriceHistory.table_name(),
                 pool,
             ));
             batch_insert

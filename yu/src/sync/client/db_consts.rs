@@ -2,8 +2,8 @@ use crate::postgresql_db::PostgresqlTableTrait;
 
 #[derive(Clone)]
 pub enum ClientsTables {
-    PriceHistory,
-    Instruments,
+    PolymarketPriceHistory,
+    PolyMarketInstruments,
     OkxPriceHistory,
     OkxInstruments,
 }
@@ -11,8 +11,8 @@ pub enum ClientsTables {
 impl PostgresqlTableTrait for ClientsTables {
     fn table_name(&self) -> &'static str {
         match self {
-            ClientsTables::PriceHistory => "polymarket_price_history",
-            ClientsTables::Instruments => "polymarket_instruments",
+            ClientsTables::PolymarketPriceHistory => "polymarket_price_history",
+            ClientsTables::PolyMarketInstruments => "polymarket_instruments",
             ClientsTables::OkxPriceHistory => "okx_kline_history",
             ClientsTables::OkxInstruments => "okx_instruments",
         }
@@ -20,8 +20,8 @@ impl PostgresqlTableTrait for ClientsTables {
 
     fn create_table_statement(&self) -> &'static str {
         match self {
-            ClientsTables::PriceHistory => CREATE_POLYMARKET_PRICE_HISTORY_TABLE,
-            ClientsTables::Instruments => CREATE_POLYMARKET_INSTRUMENTS_TABLE,
+            ClientsTables::PolymarketPriceHistory => CREATE_POLYMARKET_PRICE_HISTORY_TABLE,
+            ClientsTables::PolyMarketInstruments => CREATE_POLYMARKET_INSTRUMENTS_TABLE,
             ClientsTables::OkxPriceHistory => CREATE_OKX_KLINE_HISTORY_TABLE,
             ClientsTables::OkxInstruments => CREATE_OKX_INSTRUMENTS_TABLE,
         }
@@ -122,8 +122,8 @@ SELECT add_compression_policy('polymarket_price_history', INTERVAL '30 days');
 "#;
 
 pub(crate) const ALL_CLIENT_TABLES: &[ClientsTables] = &[
-    ClientsTables::PriceHistory,
-    ClientsTables::Instruments,
+    ClientsTables::PolymarketPriceHistory,
+    ClientsTables::PolyMarketInstruments,
     ClientsTables::OkxPriceHistory,
     ClientsTables::OkxInstruments,
 ];
