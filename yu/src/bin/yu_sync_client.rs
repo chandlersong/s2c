@@ -87,13 +87,14 @@ async fn main() -> Result<(), YuError> {
 
     let daily_sync_tx = tx.clone();
     let daily_sync_manager = connection_manager.clone();
-
+    let daily_client_service = client_service.clone();
     let _ = cron_job!("0 28 */6 * * *", move |_uuid, _locked| {
         let sync_tx = daily_sync_tx.clone();
         let sync_manager = daily_sync_manager.clone();
+        let sync_client_service = daily_client_service.clone();
         Box::pin(async move {
             info!("start refresh binance exchange info");
-            if let Err(e) = async_sync_server(sync_tx, sync_manager).await {
+            if let Err(e) = async_sync_server(sync_client_service, sync_tx, sync_manager).await {
                 error!("Error when async instruments with server: {}", e);
             }
         })
@@ -199,11 +200,17 @@ async fn initial_data(
 /// # 说明
 /// 1. instrument列表，以Sever端为准。主要是为了方便扩展。因为很多信息，比如这个instrument是否在交易等，都是在服务器端的。
 ///
-async fn async_sync_server(local_db_tx: Sender<ServerMessage>, manager: Arc<GrpcChannelManager>) -> Result<(), YuError> {
+async fn async_sync_server(
+    client_service: Arc<SyncClientService>,
+    local_db_tx: Sender<ServerMessage>,
+    manager: Arc<GrpcChannelManager>,
+) -> Result<(), YuError> {
     let mut server = SyncInterfaceClient::new(manager.connect().await);
     let resp = server.list_instrument(Request::new(Empty {})).await?;
     let inst_list = resp.into_inner();
     let pg_pool = get_sync_client_pg_pool().await?;
+    //就是把新的instrument同步到本地数据库。不做初始化相关工作。
+    let _ = client_service.align_local_instrument(inst_list.clone()).await?;
     let okx_binary_search_ds = SyncClientBinarySearchDataImpl::new(
         pg_pool.clone(),
         ClientsTables::OkxPriceHistory.table_name(),
