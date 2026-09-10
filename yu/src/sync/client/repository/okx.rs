@@ -46,7 +46,7 @@ impl ClientOkxRepositoryTrait for ClientOkxRepositoryImpl {
 
     async fn list_instrument_timestamps(&self) -> Result<HashMap<u64, u64>, YuError> {
         let sql = r#"
-            SELECT pi.server_id::bigint AS server_id, (EXTRACT(EPOCH FROM max(pph.timestamp)) * 1000)::bigint AS max_ts
+            SELECT pi.server_id::bigint AS server_id, (EXTRACT(EPOCH FROM max(pph.candle_begin_time)) * 1000)::bigint AS max_ts
             FROM okx_instruments pi
             JOIN okx_kline_history pph ON pph.instrument_id = pi.id
             GROUP BY pi.server_id
