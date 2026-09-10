@@ -17,13 +17,14 @@ pub trait ValidationStrategyTrait: Send + Sync {
 }
 
 /// # 二分法具体查找方法。
-/// 1. 设定start_time = min_timestamp,end_time = max_timestamp
-/// 2. 计算mid_time = (start_time + end_time) / 2
-/// 3. 设定start_time,计算mid_time计算有多少个interval_seconds的时间段，为time_slots
-/// 4，通过sql，判断start_time到mid_time的记录数是否等于time_slots，如果等于，说明左半部分没有缺失数据
-/// 5. 用同样办法检查右半
-/// 6. 递归执行2-5步，直到找到所有缺失的时间段
-/// 7. 找出的缺失时间段。都加入到ValidationResult返回
+/// 1. 设定start_time,计算mid_time计算有多少个interval_seconds的时间段，为expected
+/// 2，通过data_source，判断[start, end)之间有多少个不同的时间段，记为actual
+///    - 如果actual为0，且expected > 0，说明[start, end)之间所有的时间段都缺失，直接返回[start, end)作为缺失的时间段
+///    - 如果actual == expected，说明[start, end)之间没有缺失的时间段，直接返回空
+///    - 如果actual < expected，说明[start, end)之间有缺失的时间段，需要继续查找缺失的时间段
+/// 3. 计算mid_time = start_time + (end_time - start_time)/ 2
+/// 4. 递归执行1-3步，分别检查[start, mid)和[mid, end)之间的缺失时间段
+/// 5. 找出的缺失时间段。都加入到ValidationResult返回
 ///
 /// # gaps的要求
 /// 1. end_time为数据库的close_time+1。
@@ -69,15 +70,28 @@ pub fn binary_search_gap(
         return Ok(vec![gap]);
     }
 
-    // compute aligned mid
+    // 如果实际为0，说明[start, end)全部缺失，直接返回整个区间作为缺失
+    if actual == 0 && expected > 0 {
+        let gap = ValidationGap::MissingData {
+            symbol: identify.to_string(),
+            trade_type: trade_type.to_string(),
+            start_time: start,
+            end_time: end,
+            table: data_source.table_name(),
+        };
+        return Ok(vec![gap]);
+    }
+
+    // compute aligned mid（对齐到 interval 的整点）
     let mid = start + ((end - start) / 2 / interval_ms) * interval_ms;
 
     // recurse left and right
-    let mut left = binary_search_gap(identify, trade_type, start, mid, interval, data_source.clone())?;
+    let left = binary_search_gap(identify, trade_type, start, mid, interval, data_source.clone())?;
     let mut right = binary_search_gap(identify, trade_type, mid, end, interval, data_source.clone())?;
-    left.append(&mut right);
-    let mut gaps: Vec<ValidationGap> = left;
-    gaps.extend(right);
+
+    // 合并左右结果并按注释要求合并相邻区间
+    let mut gaps = left;
+    gaps.append(&mut right);
     let gaps = merge_gaps(gaps);
     if gaps.is_empty() {
         return Ok(Vec::new());
@@ -701,5 +715,35 @@ mod tests {
         let empty: Vec<ValidationGap> = Vec::new();
         let merged_empty = merge_gaps(empty);
         assert!(merged_empty.is_empty(), "empty input should produce empty output");
+    }
+
+    // 测试：当区间内没有任何数据时，应直接返回覆盖整个区间的单个 MissingData
+    // 这与注释中描述的短路逻辑一致（actual == 0 时返回 [start, end)）
+    #[test]
+    fn test_binary_search_gap_all_missing() -> Result<(), YuError> {
+        let interval = HistoryInterval::FiveMinutes;
+        let interval_ms = interval.to_milliseconds();
+        let t0: u64 = 1_700_000_000;
+        let start = t0;
+        let end = t0 + 6 * interval_ms;
+
+        // 模拟数据源在任何子区间都返回 0 个 slot
+        let mut mock = MockBinarySearchDSTrait::new();
+        mock.expect_table_name().returning(|| "bn_spot_kline".to_string());
+        mock.expect_count_distinct_between().returning(move |_: &str, _s: u64, _e: u64| Ok(0));
+
+        let ds = Arc::new(mock);
+        let gaps = binary_search_gap("BTCUSDT", "SPOT", start, end, &interval, ds)?;
+
+        // 期望只有一个缺失区间，并且正好覆盖整个输入区间
+        assert_eq!(gaps.len(), 1, "expected single full-range gap when no data present");
+        match &gaps[0] {
+            ValidationGap::MissingData { start_time, end_time, .. } => {
+                assert_eq!(*start_time, start, "gap.start_time should be clamped to input start");
+                assert_eq!(*end_time, end, "gap.end_time should be clamped to input end");
+            }
+            other => panic!("unexpected gap variant: {:?}", other),
+        }
+        Ok(())
     }
 }
