@@ -89,7 +89,7 @@ async fn main() -> Result<(), YuError> {
     let daily_sync_manager = connection_manager.clone();
     let daily_sync_client_service = client_service.clone();
 
-    let _ = cron_job!("0 30 5 * * *", move |_uuid, _locked| {
+    let _ = cron_job!("0 28 */6 * * *", move |_uuid, _locked| {
         let sync_tx = daily_sync_tx.clone();
         let sync_manager = daily_sync_manager.clone();
         let sync_client_service = daily_sync_client_service.clone();
