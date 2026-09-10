@@ -105,7 +105,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for LocalOkxKlinePo {
         let id_i64: i64 = row.try_get("id")?;
         let instrument_id_i64: i64 = row.try_get("instrument_id")?;
 
-        let timestamp_dt: chrono::DateTime<chrono::Utc> = row.try_get("timestamp")?;
+        let timestamp_dt: chrono::DateTime<chrono::Utc> = row.try_get("candle_begin_time")?;
         let timestamp = timestamp_dt.timestamp() as u64;
 
         let open: f64 = row.try_get("open")?;
@@ -139,7 +139,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for LocalOkxKlinePo {
 
 impl CopyInsertable for LocalOkxKlinePo {
     fn columns() -> &'static str {
-        "id,instrument_id,timestamp,open,high,low,close,vol,vol_ccy,vol_ccy_quote,confirm,batch_timestamp"
+        "id,instrument_id,candle_begin_time,open,high,low,close,vol,vol_ccy,vol_ccy_quote,confirm,batch_timestamp"
     }
 
     fn to_csv_row(&self) -> String {
