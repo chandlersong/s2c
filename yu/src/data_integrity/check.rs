@@ -2,8 +2,9 @@ use crate::data_integrity::models::{ValidationGap, ValidationResult};
 use crate::duck_db::DuckDBDSProvider;
 use crate::errors::YuError;
 use async_trait::async_trait;
-use sqlx::Row;
+use log::warn;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use yue::models::HistoryInterval;
 use yue::query_message::DataSourceProviderTrait;
 
@@ -201,9 +202,19 @@ impl BinarySearchDSTrait for DuckDBBinarySearchDataImpl {
         );
         let connection = self.db_provider.acquire()?;
         let mut stmt = connection.prepare(&sql)?;
+
+        let timer = Instant::now();
         let mut rows = stmt
             .query([start as i64, end as i64])
             .map_err(|_| YuError::new(&format!("{}, query gap from {} to {}", identify, start, end)))?;
+        let elapsed = timer.elapsed();
+        if elapsed > Duration::from_secs(10) {
+            warn!(
+                "Slow SQL (>10s) in count_distinct_between: sql={}, params=[start={}, end={}], elapsed={:?}",
+                sql, start, end, elapsed
+            );
+        }
+
         if let Some(row) = rows.next()? {
             let c: i64 = row.get(0)?;
             Ok(c as u64)
@@ -225,62 +236,146 @@ impl BinarySearchDSTrait for DuckDBBinarySearchDataImpl {
     }
 }
 
-pub struct PostgresqlBinarySearchDataImpl {
+///
+/// 因为同步客户端的数据库基本都是history表和instruments表分立。
+/// 而服务器端来的基本server_id在instruments表中，所以需要join instruments表来计算count。
+/// 所以需要
+/// 1. history表中有instrument_id列，指向instruments表的id列
+/// 2. instruments表中有server_id列，指向服务器端的server_id
+///
+pub struct SyncClientBinarySearchDataImpl {
     pg_pool: sqlx::PgPool,
-    table_name: String,
+    history_table_name: String,
+    instrument_table_name: String,
     time_column: String,
-    symbol_column: String,
     count_sql: &'static str,
 }
 
-impl PostgresqlBinarySearchDataImpl {
-    pub fn new(pg_pool: sqlx::PgPool, table_name: String, time_column: String, symbol_column: String) -> BinarySearchDS {
+impl SyncClientBinarySearchDataImpl {
+    pub fn new(pg_pool: sqlx::PgPool, table_name: &str, instrument_table_name: &str, time_column: &str) -> BinarySearchDS {
         // construct SQL statements once and leak to &'static str after manual audit
         let count_sql = format!(
-            "SELECT COUNT(DISTINCT {time_col}) FROM {table} WHERE {time_col} >= $1 AND {time_col} < $2 AND {symbol_col} = $3",
+            "SELECT COUNT(DISTINCT h.{time_col}) FROM {table} h join {instrument_table_name} i on h.instrument_id = i.id WHERE h.{time_col} >= $1 AND h.{time_col} < $2 AND i.server_id = $3",
             time_col = time_column,
             table = table_name,
-            symbol_col = symbol_column,
+            instrument_table_name = instrument_table_name
         );
 
         let count_sql_static: &'static str = Box::leak(count_sql.into_boxed_str());
 
         Arc::new(Self {
             pg_pool,
-            table_name,
-            time_column,
-            symbol_column,
+            history_table_name: table_name.to_string(),
+            time_column: time_column.to_string(),
+            instrument_table_name: instrument_table_name.to_string(),
             count_sql: count_sql_static,
         })
     }
+
+    pub fn instrument_table_name(&self) -> String {
+        self.instrument_table_name.clone()
+    }
 }
 
-impl BinarySearchDSTrait for PostgresqlBinarySearchDataImpl {
+impl BinarySearchDSTrait for SyncClientBinarySearchDataImpl {
     fn count_distinct_between(&self, identify: &str, start: u64, end: u64) -> Result<u64, YuError> {
         // use prebuilt, leaked SQL string
         let sql_static = self.count_sql;
         let pool = self.pg_pool.clone();
-        let res = futures::executor::block_on(async move {
-            sqlx::query_scalar::<_, i64>(sql_static)
-                .bind(start as i64)
-                .bind(end as i64)
-                .bind(identify)
-                .fetch_one(&pool)
-                .await
+        // convert milliseconds to chrono::DateTime<Utc> so bindings match timestamptz columns
+        let start_dt = {
+            let secs = (start / 1000) as i64;
+            let nsecs = ((start % 1000) * 1_000_000) as u32;
+            chrono::DateTime::<chrono::Utc>::from_timestamp(secs, nsecs)
+        };
+        let end_dt = {
+            let secs = (end / 1000) as i64;
+            let nsecs = ((end % 1000) * 1_000_000) as u32;
+            chrono::DateTime::<chrono::Utc>::from_timestamp(secs, nsecs)
+        };
+
+        // parse identify (server_id) into integer to match bigint column type
+        let identify_int = identify
+            .parse::<i64>()
+            .map_err(|_| YuError::new(&format!("invalid server id: {}", identify)))?;
+
+        let timer = Instant::now();
+
+        // Run the async query in a dedicated thread with its own runtime and send result back via channel
+        let (tx, rx) = std::sync::mpsc::channel::<Result<i64, String>>();
+        let pool_cloned = pool.clone();
+        let sql_static_clone = sql_static;
+        let start_dt_clone = start_dt;
+        let end_dt_clone = end_dt;
+        let identify_int_clone = identify_int;
+
+        std::thread::spawn(move || {
+            let rt = match tokio::runtime::Runtime::new() {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = tx.send(Err(format!("create runtime error: {}", e)));
+                    return;
+                }
+            };
+
+            let fut_res = rt.block_on(async move {
+                sqlx::query_scalar::<_, i64>(sql_static_clone)
+                    .bind(start_dt_clone)
+                    .bind(end_dt_clone)
+                    .bind(identify_int_clone)
+                    .fetch_one(&pool_cloned)
+                    .await
+            });
+
+            let _ = match fut_res {
+                Ok(v) => tx.send(Ok(v)),
+                Err(e) => tx.send(Err(e.to_string())),
+            };
         });
 
-        match res {
-            Ok(c) => Ok(c as u64),
-            Err(e) => Err(YuError::new(&format!("{}, query gap from {} to {}: {}", identify, start, end, e))),
+        // wait with timeout
+        match rx.recv_timeout(Duration::from_secs(10)) {
+            Ok(Ok(c)) => {
+                let elapsed = timer.elapsed();
+                if elapsed > Duration::from_secs(10) {
+                    warn!(
+                        "Slow SQL (>10s) in count_distinct_between: sql={}, params=[start={}, end={}, identify={}], elapsed={:?}",
+                        sql_static,
+                        start_dt.unwrap().to_rfc3339(),
+                        end_dt.unwrap().to_rfc3339(),
+                        identify_int,
+                        elapsed
+                    );
+                }
+                Ok(c as u64)
+            }
+            Ok(Err(err_str)) => Err(YuError::new(&format!("{}, query gap from {} to {}: {}", identify, start, end, err_str))),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                warn!(
+                    "Slow SQL timeout (>=10s) in count_distinct_between: sql={}, params=[start={}, end={}, identify={}], elapsed>=10s",
+                    sql_static,
+                    start_dt.unwrap().to_rfc3339(),
+                    end_dt.unwrap().to_rfc3339(),
+                    identify_int
+                );
+                Err(YuError::new(&format!(
+                    "{}, query gap from {} to {}: timeout after 10s",
+                    identify, start, end
+                )))
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(YuError::new(&format!(
+                "{}, query gap from {} to {}: executor disconnected",
+                identify, start, end
+            ))),
         }
     }
 
     fn table_name(&self) -> String {
-        self.table_name.clone()
+        self.history_table_name.clone()
     }
 
     fn symbol_column(&self) -> String {
-        self.symbol_column.clone()
+        "server_id".to_string() // hardcoded for sync client, as server_id is used to identify the symbol
     }
 
     fn time_column(&self) -> String {
