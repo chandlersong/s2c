@@ -69,7 +69,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for LocalOkxInstrumentPo {
 pub struct LocalOkxKlinePo {
     pub id: u64,
     pub instrument_id: u64, // local instrument id
-    pub timestamp: u64,
+    pub candle_begin_time: u64,
     pub open: f64,
     pub high: f64,
     pub low: f64,
@@ -86,7 +86,7 @@ impl LocalOkxKlinePo {
         LocalOkxKlinePo {
             id: get_snow_flake_id_u64(),
             instrument_id: local_inst_id,
-            timestamp: k.ts,
+            candle_begin_time: k.ts,
             open: k.open,
             high: k.high,
             low: k.low,
@@ -123,7 +123,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for LocalOkxKlinePo {
         Ok(Self {
             id: id_i64 as u64,
             instrument_id: instrument_id_i64 as u64,
-            timestamp,
+            candle_begin_time: timestamp,
             open,
             high,
             low,
@@ -144,8 +144,8 @@ impl CopyInsertable for LocalOkxKlinePo {
 
     fn to_csv_row(&self) -> String {
         use chrono::{LocalResult, TimeZone};
-        let ts_secs = (self.timestamp / 1000) as i64;
-        let ts_nanos = ((self.timestamp % 1000) * 1_000_000) as u32;
+        let ts_secs = (self.candle_begin_time / 1000) as i64;
+        let ts_nanos = ((self.candle_begin_time % 1000) * 1_000_000) as u32;
         let ts_dt = match chrono::Utc.timestamp_opt(ts_secs, ts_nanos) {
             LocalResult::Single(dt) => dt,
             _ => chrono::Utc.timestamp_opt(0, 0).single().unwrap(),
