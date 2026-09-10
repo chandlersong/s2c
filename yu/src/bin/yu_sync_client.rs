@@ -246,7 +246,7 @@ async fn async_sync_server(local_db_tx: Sender<ServerMessage>, manager: Arc<Grpc
                                     .sync_history(Request::new(SyncRequest {
                                         inst_id: server_id,
                                         start_ms: start_time,
-                                        end_ms: end_time,
+                                        end_ms: end_time - 1,
                                         exchange: Exchange::Okx.into(),
                                     }))
                                     .await?
@@ -278,7 +278,7 @@ async fn async_sync_server(local_db_tx: Sender<ServerMessage>, manager: Arc<Grpc
                                     .sync_history(Request::new(SyncRequest {
                                         inst_id: server_id,
                                         start_ms: start_time,
-                                        end_ms: end_time,
+                                        end_ms: end_time - 1,
                                         exchange: Exchange::Polymarket.into(),
                                     }))
                                     .await?

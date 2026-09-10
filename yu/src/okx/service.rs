@@ -865,7 +865,7 @@ impl OptionService {
                                 instrument.inst_identify.as_ref(),
                                 instrument.id,
                                 start_ts,
-                                end_ts,
+                                end_ts - 1,
                                 &self.interval,
                                 None,
                                 None,

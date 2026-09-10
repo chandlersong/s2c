@@ -34,6 +34,9 @@ pub trait ValidationStrategyTrait: Send + Sync {
 /// 1. 数据库中的数据，candle_begin_time和close_time相差的是interval-1。
 ///    - 比如说candle_begin_time是0， interval是300_000，那么close_time是299_999
 /// 2. 传入的数据必须是interval的整点。
+/// 3. 返回值是两边都有的。即[start,end)之间的数据。
+///     - end!=gap.end_time。那么end_time是存在的。
+///     - end==gap.end_time。那么end_time是不存在的。
 ///
 ///
 pub fn binary_search_gap(
