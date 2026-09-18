@@ -200,6 +200,7 @@ pub struct SeriesHistoryMarketServiceImpl {
     interval: HistoryInterval,
     client: PolymarketApi,
     instruments: Arc<RwLock<Vec<PolyMarketInstrumentPo>>>,
+    close_instruments: Arc<RwLock<Vec<PolyMarketInstrumentPo>>>,
     inst_repo: PolyMarketInstrumentRepository,
     history_repo: PolyMarketHistoryRepository,
     history_broadcast: broadcast::Sender<PolyMarketHistoryPo>,
@@ -219,6 +220,7 @@ impl SeriesHistoryMarketServiceImpl {
             interval,
             client,
             instruments: Arc::new(RwLock::new(Vec::new())),
+            close_instruments: Arc::new(RwLock::new(Vec::new())),
             inst_repo,
             history_repo,
             history_broadcast,
@@ -292,14 +294,20 @@ impl SeriesHistoryMarketServiceImpl {
 #[async_trait::async_trait]
 impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
     async fn list_instruments(&self) -> Result<Vec<PolyMarketInstrumentPo>, YuError> {
-        Ok(self.instruments.read().await.clone())
+        let mut res = self.instruments.read().await.clone();
+        res.extend(self.close_instruments.read().await.clone());
+        Ok(res)
     }
 
     async fn sync_instrument(&self) -> Result<Vec<PolyMarketInstrumentPo>, YuError> {
-        let (open, _) = get_all_instruments(&self.series_ids, &self.client, self.inst_repo.clone()).await?;
+        let (open, close) = get_all_instruments(&self.series_ids, &self.client, self.inst_repo.clone()).await?;
         {
             let mut instruments = self.instruments.write().await;
             *instruments = open.clone();
+        }
+        {
+            let mut instruments = self.close_instruments.write().await;
+            *instruments = close;
         }
         Ok(open)
     }
@@ -336,6 +344,29 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
             };
             // index 可用于调试或区分不同 asset_id
             self.query_history(query_param, instrument).await;
+        }
+
+        // 关于close的instrument的一些需求。
+        // 1. 我不想每次启动，都去刷新全部instrument。
+        // 2. 理论上，只有初始化的时候被调用，因为其他应该在程序的进程中，就补全。
+        // 正常来说，
+        for instrument in self.close_instruments.read().await.iter() {
+            let max_timestamp = max_timestamp_dictionary.get(&instrument.id);
+            match max_timestamp {
+                Some(ts) => {
+                    debug!("{} max timestamp is {}, skip initial", instrument.asset_slug, unix_2_readable(ts))
+                }
+                None => {
+                    let query_param = GetPricesHistoryQuery {
+                        market: instrument.asset_id.clone(),
+                        start_ts: Some(instrument.start_ms.saturating_div(1000).saturating_sub(1)),
+                        end_ts: Some(now.clone() + 120),
+                        interval: Some(self.interval.as_ref().to_string()),
+                        fidelity: Some(fidelity.clone() as u32),
+                    };
+                    self.query_history(query_param, instrument).await;
+                }
+            }
         }
         info!("finish to initial polymarket history data");
         Ok(())
