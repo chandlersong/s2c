@@ -344,7 +344,7 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
             let query_param = GetPricesHistoryQuery {
                 market: instrument.asset_id.clone(),
                 start_ts: Some(start_ts),
-                end_ts: Some(now.clone() + 120),
+                end_ts: None,
                 interval: Some(self.interval.as_ref().to_string()),
                 fidelity: Some(fidelity.clone() as u32),
             };
