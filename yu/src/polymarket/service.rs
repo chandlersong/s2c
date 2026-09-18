@@ -232,6 +232,7 @@ impl SeriesHistoryMarketServiceImpl {
         let asset_id = inst.asset_id.clone();
 
         let query_payload_log = query_payload.clone();
+        let query_payload_error_log = query_payload.clone();
         let end_timestamp = query_payload.end_ts.unwrap_or(unix_time_now_u64_utc_seconds() + 10);
         let start_timestamp = query_payload.start_ts.unwrap_or(unix_time_now_u64_utc_seconds() - 10);
         let history = self.client.query_prices_history(query_payload).await;
@@ -276,6 +277,7 @@ impl SeriesHistoryMarketServiceImpl {
             }
             Err(e) => {
                 error!("market:{},query prices history error: {:?}", inst.market_slug, e);
+                error!("query param is: {}", query_payload_error_log)
             }
         }
         res

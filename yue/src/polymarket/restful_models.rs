@@ -529,7 +529,7 @@ pub struct GetPricesHistoryResponse {
 
 /// Polymarket CLOB: GET /prices-history 查询参数
 /// 文档: https://docs.polymarket.com/api-reference/markets/get-prices-history
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetPricesHistoryQuery {
     /// 市场 token ID (必须)
@@ -546,6 +546,25 @@ pub struct GetPricesHistoryQuery {
     /// 精度 (分钟, 默认 1, 可选)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fidelity: Option<u32>,
+}
+
+impl std::fmt::Debug for GetPricesHistoryQuery {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GetPricesHistoryQuery")
+            .field("market", &self.market)
+            .field("start_ts", &self.start_ts)
+            .field("end_ts", &self.end_ts)
+            .field("interval", &self.interval)
+            .field("fidelity", &self.fidelity)
+            .field("query_string", &self.to_query_string())
+            .finish()
+    }
+}
+
+impl std::fmt::Display for GetPricesHistoryQuery {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_query_string())
+    }
 }
 
 impl GetPricesHistoryQuery {
@@ -577,6 +596,10 @@ impl GetPricesHistoryQuery {
     pub fn fidelity(mut self, fidelity: u32) -> Self {
         self.fidelity = Some(fidelity);
         self
+    }
+
+    pub fn debug(&self) -> String {
+        self.to_query_string()
     }
 
     /// 转换为 query string，用于拼接到 URL
@@ -738,5 +761,20 @@ mod tests {
         assert!(qs.contains("endTs=1710003600"));
         assert!(qs.contains("interval=1h"));
         assert!(qs.contains("fidelity=60"));
+    }
+
+    #[test]
+    fn test_get_prices_history_query_debug_output() {
+        let query = GetPricesHistoryQuery::new("token123".to_string())
+            .start_ts(1710000000)
+            .end_ts(1710003600)
+            .interval("1h")
+            .fidelity(60);
+
+        let rendered = format!("{:?}", query);
+        assert!(rendered.contains("GetPricesHistoryQuery"));
+        assert!(rendered.contains("query_string"));
+        assert!(rendered.contains("market=token123"));
+        assert_eq!(query.debug(), query.to_query_string());
     }
 }
