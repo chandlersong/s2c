@@ -27,11 +27,9 @@ pub async fn start_polymarket_sync_series_job() -> Result<SeriesHistoryMarketSer
     let service = default_series_history_market_service(series_ids.unwrap(), HistoryInterval::OneHour).await;
     service.sync_instrument().await?;
     let initial_service = service.clone();
-    tokio::spawn(async move {
-        if let Err(e) = initial_service.initial_history_data().await {
-            error!("Error initializing polymarket history data: {:?}", e);
-        }
-    });
+    if let Err(e) = initial_service.initial_history_data().await {
+        error!("Error initializing polymarket history data: {:?}", e);
+    }
 
     let sync_history_job = service.clone();
     let _ = cron_job!("1 2 * * * *", move |_uuid, _locked| {
