@@ -331,7 +331,10 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
         for instrument in self.instruments.read().await.iter() {
             //如果数据从polymarket_price_history来，那么最好+30s。这样防止重复，如果从polymarket_instruments，则往后
             let start_ts = match max_timestamp_dictionary.get(&instrument.id) {
-                None => instrument.start_ms.saturating_div(1000).saturating_sub(1),
+                None => {
+                    let res = self.interval.get_close_unix_ms(instrument.start_ms) + self.interval.to_milliseconds();
+                    res.saturating_div(1000).saturating_sub(1)
+                }
                 Some(v) => v.saturating_div(1000).saturating_add(30),
             };
             if (start_ts >= now) || ((now - start_ts) < gap) {
@@ -353,6 +356,8 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
         // 1. 我不想每次启动，都去刷新全部instrument。
         // 2. 理论上，只有初始化的时候被调用，因为其他应该在程序的进程中，就补全。
         // 正常来说，
+        // 实际情况,不填写结束，倒是能够全部查出来。好神奇。
+        //
         for instrument in self.close_instruments.read().await.iter() {
             let max_timestamp = max_timestamp_dictionary.get(&instrument.id);
             match max_timestamp {
@@ -360,10 +365,11 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
                     debug!("{} max timestamp is {}, skip initial", instrument.asset_slug, unix_2_readable(ts))
                 }
                 None => {
+                    let start_ts = self.interval.get_close_unix_ms(instrument.start_ms) + self.interval.to_milliseconds();
                     let query_param = GetPricesHistoryQuery {
                         market: instrument.asset_id.clone(),
-                        start_ts: Some(instrument.start_ms.saturating_div(1000).saturating_sub(1)),
-                        end_ts: Some(now.clone() + 120),
+                        start_ts: Some(start_ts),
+                        end_ts: None,
                         interval: Some(self.interval.as_ref().to_string()),
                         fidelity: Some(fidelity.clone() as u32),
                     };
