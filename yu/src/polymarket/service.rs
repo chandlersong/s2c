@@ -49,8 +49,9 @@ async fn split_series_markets_with_client(
                     if let Some(markets) = event.markets {
                         trace!("event:{},market num:{}", event_slug, markets.len());
                         for market in markets {
-                            // 如果不存在，按照polymarket的尿性,大概率是脏数据了。
-                            let start_data = market.start_date.unwrap_or(now + 1);
+                            // 看了一下，close的不一定存在start_date,所以以create_date为准。end_date不存在，则以now为准。
+                            let create_date = market.created_at.unwrap_or(now + 1);
+                            let start_data = market.start_date.unwrap_or(create_date);
                             let end_data = market.end_date.unwrap_or(now - 1);
                             let inst_slug = market.outcomes.unwrap();
                             for (idx, inst_id) in market.clob_token_ids.unwrap_or(vec![]).iter().enumerate() {

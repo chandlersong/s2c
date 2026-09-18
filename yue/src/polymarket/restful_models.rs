@@ -173,7 +173,8 @@ pub struct Market {
     pub comments_enabled: Option<bool>,
     pub competitive: Option<f64>,
     pub condition_id: String,
-    pub created_at: Option<String>,
+    #[serde(default, deserialize_with = "de_opt_rfc3339_to_unix")]
+    pub created_at: Option<u64>,
     pub created_by: Option<i64>,
     pub creator: Option<String>,
     pub curation_order: Option<i64>,
