@@ -344,7 +344,7 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
             let query_param = GetPricesHistoryQuery {
                 market: instrument.asset_id.clone(),
                 start_ts: Some(start_ts),
-                end_ts: None,
+                end_ts: Some(now.clone() + 120),
                 interval: Some(self.interval.as_ref().to_string()),
                 fidelity: Some(fidelity.clone() as u32),
             };
@@ -365,11 +365,12 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
                     debug!("{} max timestamp is {}, skip initial", instrument.asset_slug, unix_2_readable(ts))
                 }
                 None => {
-                    let start_ts = self.interval.get_close_unix_ms(instrument.start_ms) + self.interval.to_milliseconds();
+                    let start_ts = (self.interval.get_close_unix_ms(instrument.start_ms) + self.interval.to_milliseconds()).saturating_sub(1000);
+                    let end_ts = instrument.end_ms.saturating_sub(1000);
                     let query_param = GetPricesHistoryQuery {
                         market: instrument.asset_id.clone(),
                         start_ts: Some(start_ts),
-                        end_ts: None,
+                        end_ts: Some(end_ts),
                         interval: Some(self.interval.as_ref().to_string()),
                         fidelity: Some(fidelity.clone() as u32),
                     };
