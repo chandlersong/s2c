@@ -1,8 +1,10 @@
+use crate::models::HistoryInterval;
 use chrono::{DateTime, Utc};
 use serde::Deserializer;
 use serde::de;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
 /**
 [series schema](https://gamma-api.polymarket.com/schemas/Series.json)
 [event schema](https://gamma-api.polymarket.com/schemas/Event.json)
@@ -542,7 +544,7 @@ pub struct GetPricesHistoryQuery {
     pub end_ts: Option<u64>,
     /// 时间间隔: max, 1w, 1d, 6h, 1h (可选)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub interval: Option<String>,
+    pub interval: Option<HistoryInterval>,
     /// 精度 (分钟, 默认 1, 可选)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fidelity: Option<u32>,
@@ -588,8 +590,8 @@ impl GetPricesHistoryQuery {
         self
     }
 
-    pub fn interval(mut self, interval: &str) -> Self {
-        self.interval = Some(interval.to_string());
+    pub fn interval(mut self, interval: &HistoryInterval) -> Self {
+        self.interval = Some(interval.clone());
         self
     }
 
@@ -608,11 +610,8 @@ impl GetPricesHistoryQuery {
         if let Some(ts) = self.start_ts {
             params.push(format!("startTs={}", ts));
         }
-        if let Some(ts) = self.end_ts {
-            params.push(format!("endTs={}", ts));
-        }
         if let Some(ref interval) = self.interval {
-            params.push(format!("interval={}", interval));
+            params.push(format!("interval={}", interval.as_ref()));
         }
         if let Some(fidelity) = self.fidelity {
             params.push(format!("fidelity={}", fidelity));
@@ -753,12 +752,11 @@ mod tests {
         let query = GetPricesHistoryQuery::new("token123".to_string())
             .start_ts(1710000000)
             .end_ts(1710003600)
-            .interval("1h")
+            .interval(&HistoryInterval::OneHour)
             .fidelity(60);
         let qs = query.to_query_string();
         assert!(qs.contains("market=token123"));
         assert!(qs.contains("startTs=1710000000"));
-        assert!(qs.contains("endTs=1710003600"));
         assert!(qs.contains("interval=1h"));
         assert!(qs.contains("fidelity=60"));
     }
@@ -768,7 +766,7 @@ mod tests {
         let query = GetPricesHistoryQuery::new("token123".to_string())
             .start_ts(1710000000)
             .end_ts(1710003600)
-            .interval("1h")
+            .interval(&HistoryInterval::OneHour)
             .fidelity(60);
 
         let rendered = format!("{:?}", query);

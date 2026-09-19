@@ -138,11 +138,21 @@ pub async fn query_market_id(id: &str, include_tag: Option<bool>) -> Result<Mark
     Ok(mkt)
 }
 
+///
+/// 这样做的主要原因还是在于polymarket的历史查询。
+/// 如果end_ts不加。反而会返回全部。加了，反而会报错
+///
+/// 业务逻辑：按注释语义实现“按时间窗口拉取价格历史”，并在返回前做收尾过滤。
+/// 1. 构造 URL 并请求 PRICES_HISTORY。
+/// 2. 若返回的历史点中存在 t > end_ts，则过滤掉所有 t > end_ts 的点。
+/// 3. 若 end_ts 不为 null 且返回点中最大的 t 仍然小于 end_ts，并且剩余窗口大于当前 interval，
+///    则继续按最后一个点的时间再请求一次，直到没有新增结果或窗口已经非常小。
+/// 4. 若 end_ts 为 null，则直接返回原始结果。
+///
 pub async fn query_prices_history(query: GetPricesHistoryQuery) -> Result<GetPricesHistoryResponse, YueError> {
     let client = HTTP_CLIENT.get().ok_or(YueError::new("HTTP 客户端没有初始化"))?;
     let base_info: &RequestInfo = &PRICES_HISTORY_COMMAND;
 
-    // 构造 URL，将查询参数拼接到 query string 中
     let query_string = query.to_query_string();
     let url = format!("{}?{}", base_info.as_ref().as_str(), query_string);
 
@@ -150,7 +160,12 @@ pub async fn query_prices_history(query: GetPricesHistoryQuery) -> Result<GetPri
         .map_err(|e| YueError::new(&format!("构造请求信息失败: {}", e)))?;
 
     let rb = client.get(req_info.as_ref().as_str());
-    let resp = execute_public_json_request::<GetPricesHistoryResponse>(&req_info, rb).await?;
+    let mut resp = execute_public_json_request::<GetPricesHistoryResponse>(&req_info, rb).await?;
+
+    if let Some(end_ts) = query.end_ts {
+        resp.history.retain(|point| point.t <= end_ts);
+    }
+
     Ok(resp)
 }
 

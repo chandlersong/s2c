@@ -235,7 +235,7 @@ impl SeriesHistoryMarketServiceImpl {
         let query_payload_error_log = query_payload.clone();
         let end_timestamp = query_payload.end_ts.unwrap_or(unix_time_now_u64_utc_seconds() + 10);
         let start_timestamp = query_payload.start_ts.unwrap_or(unix_time_now_u64_utc_seconds() - 10);
-        let history = self.client.query_prices_history(query_payload).await;
+        let history = self.client.query_prices_history(query_payload.clone()).await;
         let mut pre_history_data: HashMap<u64, u64> = HashMap::new();
         let mut res = vec![];
         match history {
@@ -256,7 +256,7 @@ impl SeriesHistoryMarketServiceImpl {
                             h.t,
                             query_payload_log.start_ts.unwrap(),
                             query_payload_log.end_ts.unwrap(),
-                            query_payload_log.interval.clone().unwrap().to_string()
+                            query_payload_log.interval.clone().unwrap().as_ref()
                         );
                         continue;
                     }
@@ -345,7 +345,7 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
                 market: instrument.asset_id.clone(),
                 start_ts: Some(start_ts),
                 end_ts: Some(now.clone() + 120),
-                interval: Some(self.interval.as_ref().to_string()),
+                interval: Some(self.interval.clone()),
                 fidelity: Some(fidelity.clone() as u32),
             };
             // index 可用于调试或区分不同 asset_id
@@ -371,7 +371,7 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
                         market: instrument.asset_id.clone(),
                         start_ts: Some(start_ts),
                         end_ts: Some(end_ts),
-                        interval: Some(self.interval.as_ref().to_string()),
+                        interval: Some(self.interval.clone()),
                         fidelity: Some(fidelity.clone() as u32),
                     };
                     self.query_history(query_param, instrument).await;
@@ -399,7 +399,7 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
                 market: instrument.asset_id.to_string(),
                 start_ts: Some(start_ts),
                 end_ts: Some(end_ts),
-                interval: Some(self.interval.as_ref().to_string()),
+                interval: Some(self.interval.clone()),
                 fidelity: Some(fidelity.clone() as u32),
             };
             // index 可用于调试或区分不同 asset_id
@@ -469,7 +469,7 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
                             market: instrument.asset_id.to_string(),
                             start_ts: Some(start_ts),
                             end_ts: Some(end_ts - 1),
-                            interval: Some(self.interval.as_ref().to_string()),
+                            interval: Some(self.interval.clone()),
                             fidelity: Some(fidelity.clone() as u32),
                         };
                         // index 可用于调试或区分不同 asset_id
@@ -653,7 +653,7 @@ mod tests {
             market: "market_slug".to_string(),
             start_ts: Some(interval.get_now_close_unix_sec_utc() + 10),
             end_ts: Some(interval.get_now_close_unix_sec_utc() + 60 * 10),
-            interval: Some(interval.as_ref().to_string()),
+            interval: Some(interval.clone()),
             fidelity: Some((interval.to_second() / 60) as u32),
         };
         let inst = PolyMarketInstrumentPo::builder()
