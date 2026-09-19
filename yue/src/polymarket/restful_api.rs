@@ -152,21 +152,70 @@ pub async fn query_market_id(id: &str, include_tag: Option<bool>) -> Result<Mark
 pub async fn query_prices_history(query: GetPricesHistoryQuery) -> Result<GetPricesHistoryResponse, YueError> {
     let client = HTTP_CLIENT.get().ok_or(YueError::new("HTTP 客户端没有初始化"))?;
     let base_info: &RequestInfo = &PRICES_HISTORY_COMMAND;
+    let mut current_query = query.clone();
 
-    let query_string = query.to_query_string();
-    let url = format!("{}?{}", base_info.as_ref().as_str(), query_string);
+    let Some(end_ts) = query.end_ts else {
+        let query_string = current_query.to_query_string();
+        let url = format!("{}?{}", base_info.as_ref().as_str(), query_string);
 
-    let req_info = RequestInfo::new_full_url(url, base_info.host.clone(), base_info.has_security, base_info.weight, None, None)
-        .map_err(|e| YueError::new(&format!("构造请求信息失败: {}", e)))?;
+        let req_info = RequestInfo::new_full_url(url, base_info.host.clone(), base_info.has_security, base_info.weight, None, None)
+            .map_err(|e| YueError::new(&format!("构造请求信息失败: {}", e)))?;
 
-    let rb = client.get(req_info.as_ref().as_str());
-    let mut resp = execute_public_json_request::<GetPricesHistoryResponse>(&req_info, rb).await?;
+        let rb = client.get(req_info.as_ref().as_str());
+        let resp = execute_public_json_request::<GetPricesHistoryResponse>(&req_info, rb).await?;
+        return Ok(resp);
+    };
 
-    if let Some(end_ts) = query.end_ts {
+    let interval_seconds = current_query.interval.as_ref().map(|interval| interval.to_second()).unwrap_or(0);
+    let mut merged_history: Vec<crate::polymarket::restful_models::MarketPriceHistoryPoint> = Vec::new();
+    let mut last_max_t = None;
+
+    loop {
+        let query_string = current_query.to_query_string();
+        let url = format!("{}?{}", base_info.as_ref().as_str(), query_string);
+
+        let req_info = RequestInfo::new_full_url(url, base_info.host.clone(), base_info.has_security, base_info.weight, None, None)
+            .map_err(|e| YueError::new(&format!("构造请求信息失败: {}", e)))?;
+
+        let rb = client.get(req_info.as_ref().as_str());
+        let mut resp = execute_public_json_request::<GetPricesHistoryResponse>(&req_info, rb).await?;
+        if resp.history.is_empty() {
+            break;
+        }
+
         resp.history.retain(|point| point.t <= end_ts);
+        if resp.history.is_empty() {
+            break;
+        }
+
+        let current_max_t = resp.history.iter().map(|point| point.t).max().unwrap_or(0);
+        if let Some(prev_max_t) = last_max_t {
+            if current_max_t <= prev_max_t {
+                break;
+            }
+        }
+
+        for point in resp.history {
+            if !merged_history.iter().any(|old_point| old_point.t == point.t) {
+                merged_history.push(point);
+            }
+        }
+        last_max_t = Some(current_max_t);
+
+        if current_max_t >= end_ts {
+            break;
+        }
+
+        let remaining_window = end_ts.saturating_sub(current_max_t);
+        if interval_seconds == 0 || remaining_window <= interval_seconds {
+            break;
+        }
+
+        current_query.start_ts = Some(current_max_t);
     }
 
-    Ok(resp)
+    merged_history.sort_by_key(|point| point.t);
+    Ok(GetPricesHistoryResponse { history: merged_history })
 }
 
 // 为 SeriesHistoryMarketService 添加可注入的客户端抽象，便于在测试中注入 mock
