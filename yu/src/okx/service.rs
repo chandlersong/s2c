@@ -907,7 +907,7 @@ mod tests {
     use std::sync::{Arc, RwLock};
     use tokio::sync::broadcast;
     use yue::models::HistoryInterval;
-    use yue::okx::models::common::{CandleResponse, InstrumentInfo, OkxListResponse};
+    use yue::okx::models::restful::{CandleResponse, InstrumentInfo, OkxListResponse};
     use yue::okx::models::websocket::{ArgBody, KlinePayload, OkxWebsocketResponse};
     use yue::okx::restful_api::{InstrumentsParam, MockOKXApiTrait, OKxApi};
 

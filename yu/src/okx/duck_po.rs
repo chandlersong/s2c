@@ -4,8 +4,8 @@ use bon::Builder;
 use duckdb::{Row, Rows, appender_params_from_iter};
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
-use yue::okx::models::common::CandleResponse;
-use yue::okx::models::common::InstrumentInfo;
+use yue::okx::models::restful::CandleResponse;
+use yue::okx::models::restful::InstrumentInfo;
 use yue::okx::models::websocket::KlinePayload;
 use yue::tools::get_snow_flake_id_u64;
 

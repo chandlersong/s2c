@@ -32,6 +32,7 @@ pub const OKX_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
 
 pub const PUBLIC_INSTRUMENTS: &str = "/api/v5/public/instruments";
 pub const HISTORY_CANDLES: &str = "/api/v5/market/history-candles";
+pub const OPTION_SUMMARY: &str = "/api/v5/public/opt-summary";
 
 pub const CANDLES: &str = "/api/v5/market/candles";
 pub static PUBLIC_INSTRUMENTS_COMMAND: LazyLock<RequestInfo> =
@@ -39,3 +40,6 @@ pub static PUBLIC_INSTRUMENTS_COMMAND: LazyLock<RequestInfo> =
 
 pub static HISTORY_CANDLES_COMMAND: LazyLock<RequestInfo> =
     LazyLock::new(|| RequestInfo::from_base_path(OKX_BASE.clone(), HISTORY_CANDLES, false, 1, None, None).unwrap());
+
+pub static OPTION_SUMMARY_COMMAND: LazyLock<RequestInfo> =
+    LazyLock::new(|| RequestInfo::from_base_path(OKX_BASE.clone(), OPTION_SUMMARY, false, 1, None, None).unwrap());

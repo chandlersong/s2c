@@ -255,3 +255,109 @@ pub struct InstrumentInfo {
 ///  [字段顺序](https://www.okx.com/docs-v5/zh/#order-book-trading-market-data-get-candlesticks)
 ///
 pub type CandleResponse = OkxListResponse<Vec<String>>;
+
+///
+///       {
+///             "askVol": "3.7207056835937498",
+///             "bidVol": "0",
+///             "delta": "0.8310206676289528",
+///             "deltaBS": "0.9857332101544538",
+///             "fwdPx": "39016.8143629068452065",
+///             "gamma": "-1.1965483553276135",
+///             "gammaBS": "0.000011933182397798109",
+///             "instId": "BTC-USD-220309-33000-C",
+///             "instType": "OPTION",
+///             "lever": "0",
+///             "markVol": "1.5551965233045728",
+///             "realVol": "0",
+///             "volLv": "0",
+///             "theta": "-0.0014131955002093717",
+///             "thetaBS": "-66.03526900575946",
+///             "ts": "1646733631242",
+///             "uly": "BTC-USD",
+///             "vega": "0.000018173851073258973",
+///             "vegaBS": "0.7089307622132419"
+///         }
+#[derive(Deserialize, Debug, Clone, Builder)]
+pub struct OptionSummaryDetail {
+    #[serde(rename = "askVol", with = "crate::tools::string_to_option_decimal")]
+    /// ask 波动率
+    pub ask_vol: Option<Decimal>,
+
+    #[serde(rename = "bidVol", with = "crate::tools::string_to_option_decimal")]
+    /// bid 波动率
+    pub bid_vol: Option<Decimal>,
+
+    #[serde(rename = "delta", with = "crate::tools::string_to_option_decimal")]
+    /// 期权价格对 uly 价格的敏感度
+    pub delta: Option<Decimal>,
+
+    #[serde(rename = "deltaBS", with = "crate::tools::string_to_option_decimal")]
+    /// BS 模式下期权价格对 uly 价格的敏感度
+    pub delta_bs: Option<Decimal>,
+
+    #[serde(rename = "fwdPx", with = "crate::tools::string_to_option_decimal")]
+    /// 远期价格
+    pub fwd_px: Option<Decimal>,
+
+    #[serde(rename = "gamma", with = "crate::tools::string_to_option_decimal")]
+    /// delta 对 uly 价格的敏感度
+    pub gamma: Option<Decimal>,
+
+    #[serde(rename = "gammaBS", with = "crate::tools::string_to_option_decimal")]
+    /// BS 模式下 delta 对 uly 价格的敏感度
+    pub gamma_bs: Option<Decimal>,
+
+    #[serde(rename = "instId")]
+    /// 产品 ID，如 BTC-USD-200103-5500-C
+    pub inst_id: String,
+
+    #[serde(rename = "instType")]
+    /// 产品类型，OPTION：期权
+    pub inst_type: String,
+
+    #[serde(rename = "lever", with = "crate::tools::string_to_option_decimal")]
+    /// 杠杆倍数
+    pub lever: Option<Decimal>,
+
+    #[serde(rename = "markVol", with = "crate::tools::string_to_option_decimal")]
+    /// 标记波动率
+    pub mark_vol: Option<Decimal>,
+
+    #[serde(rename = "realVol", with = "crate::tools::string_to_option_decimal")]
+    /// 已实现波动率（目前该字段暂未启用）
+    pub real_vol: Option<Decimal>,
+
+    #[serde(rename = "volLv", with = "crate::tools::string_to_option_decimal")]
+    /// 平价期权的隐含波动率
+    pub vol_lv: Option<Decimal>,
+
+    #[serde(rename = "theta", with = "crate::tools::string_to_option_decimal")]
+    /// 期权价格对剩余期限的敏感度
+    pub theta: Option<Decimal>,
+
+    #[serde(rename = "thetaBS", with = "crate::tools::string_to_option_decimal")]
+    /// BS 模式下期权价格对剩余期限的敏感度
+    pub theta_bs: Option<Decimal>,
+
+    #[serde(rename = "ts", with = "crate::tools::string_to_option_u64")]
+    /// 数据更新时间，Unix 时间戳的毫秒数，如 1597026383085
+    pub ts: Option<u64>,
+
+    #[serde(rename = "uly")]
+    /// 标的指数
+    pub uly: Option<String>,
+
+    #[serde(rename = "vega", with = "crate::tools::string_to_option_decimal")]
+    /// 期权价格对隐含波动率的敏感度
+    pub vega: Option<Decimal>,
+
+    #[serde(rename = "vegaBS", with = "crate::tools::string_to_option_decimal")]
+    /// BS 模式下期权价格对隐含波动率的敏感度
+    pub vega_bs: Option<Decimal>,
+}
+
+///
+/// [获取期权定价](https://www.okx.com/docs-v5/zh/#public-data-rest-api-get-option-market-data)
+/// GET /api/v5/public/opt-summary
+pub type OptionSummaryResponse = OkxListResponse<Vec<OptionSummaryDetail>>;

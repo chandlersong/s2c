@@ -1,8 +1,8 @@
 use crate::errors::YueError;
 use crate::http_client::{ToRequestBuilder, execute_public_json_request, get_http_client};
 use crate::models::RequestInfo;
-use crate::okx::models::common::{CandleResponse, InstrumentInfo, OkxListResponse};
-use crate::okx::restful_constants::{HISTORY_CANDLES_COMMAND, PUBLIC_INSTRUMENTS_COMMAND};
+use crate::okx::models::restful::{CandleResponse, InstrumentInfo, OkxListResponse, OptionSummaryResponse};
+use crate::okx::restful_constants::{HISTORY_CANDLES_COMMAND, OPTION_SUMMARY_COMMAND, PUBLIC_INSTRUMENTS_COMMAND};
 use async_trait::async_trait;
 use bon::Builder;
 use reqwest::RequestBuilder;
@@ -13,6 +13,8 @@ use std::sync::{Arc, OnceLock};
 pub trait OKXApiTrait: Send + Sync {
     async fn list_instruments(&self, params: InstrumentsParam) -> Result<OkxListResponse<InstrumentInfo>, YueError>;
     async fn query_history_candle(&self, params: HistoryParams) -> Result<CandleResponse, YueError>;
+
+    async fn option_summary(&self, params: OptionSummaryParam) -> Result<OptionSummaryResponse, YueError>;
 }
 
 pub struct OKXApiImpl;
@@ -28,6 +30,10 @@ impl OKXApiTrait for OKXApiImpl {
     }
     async fn query_history_candle(&self, params: HistoryParams) -> Result<CandleResponse, YueError> {
         execute_public_json_request::<CandleResponse>(&HISTORY_CANDLES_COMMAND, params.to_request_builder(&HISTORY_CANDLES_COMMAND)).await
+    }
+
+    async fn option_summary(&self, params: OptionSummaryParam) -> Result<OptionSummaryResponse, YueError> {
+        execute_public_json_request::<OptionSummaryResponse>(&OPTION_SUMMARY_COMMAND, params.to_request_builder(&OPTION_SUMMARY_COMMAND)).await
     }
 }
 #[derive(Clone, Builder)]
@@ -111,6 +117,42 @@ impl ToRequestBuilder for InstrumentsParam {
         }
         if let Some(inst_id) = self.inst_id.as_ref() {
             params.push(("instId", inst_id.clone()));
+        }
+        res.query(&params)
+    }
+}
+
+#[derive(Clone, Builder)]
+pub struct OptionSummaryParam {
+    inst_family: String,
+
+    exp_time: Option<String>, //格式为"YYMMDD"，如 "200527"
+}
+
+impl OptionSummaryParam {
+    pub fn btc() -> Self {
+        Self {
+            inst_family: "BTC-USD".to_string(),
+            exp_time: None,
+        }
+    }
+
+    pub fn eth() -> Self {
+        Self {
+            inst_family: "ETH-USD".to_string(),
+            exp_time: None,
+        }
+    }
+}
+
+impl ToRequestBuilder for OptionSummaryParam {
+    fn to_request_builder(&self, request_info: &RequestInfo) -> RequestBuilder {
+        let client = get_http_client();
+        let res = client.get(request_info.as_ref().as_str());
+        let mut params = vec![];
+        params.push(("instFamily", self.inst_family.clone()));
+        if let Some(exp_time) = self.exp_time.as_ref() {
+            params.push(("expTime", exp_time.clone()));
         }
         res.query(&params)
     }
