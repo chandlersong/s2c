@@ -351,33 +351,6 @@ impl SeriesHistoryMarketServiceTrait for SeriesHistoryMarketServiceImpl {
             // index 可用于调试或区分不同 asset_id
             self.query_history(query_param, instrument).await;
         }
-
-        // 关于close的instrument的一些需求。
-        // 1. 我不想每次启动，都去刷新全部instrument。
-        // 2. 理论上，只有初始化的时候被调用，因为其他应该在程序的进程中，就补全。
-        // 正常来说，
-        // 实际情况,不填写结束，倒是能够全部查出来。好神奇。
-        //
-        for instrument in self.close_instruments.read().await.iter() {
-            let max_timestamp = max_timestamp_dictionary.get(&instrument.id);
-            match max_timestamp {
-                Some(ts) => {
-                    debug!("{} max timestamp is {}, skip initial", instrument.asset_slug, unix_2_readable(ts))
-                }
-                None => {
-                    let start_ts = (self.interval.get_close_unix_ms(instrument.start_ms) + self.interval.to_milliseconds()).saturating_sub(1000);
-                    let end_ts = instrument.end_ms.saturating_sub(1000);
-                    let query_param = GetPricesHistoryQuery {
-                        market: instrument.asset_id.clone(),
-                        start_ts: Some(start_ts),
-                        end_ts: Some(end_ts),
-                        interval: Some(self.interval.clone()),
-                        fidelity: Some(fidelity.clone() as u32),
-                    };
-                    self.query_history(query_param, instrument).await;
-                }
-            }
-        }
         info!("finish to initial polymarket history data");
         Ok(())
     }

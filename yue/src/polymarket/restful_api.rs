@@ -166,7 +166,7 @@ pub async fn query_prices_history(query: GetPricesHistoryQuery) -> Result<GetPri
         return Ok(resp);
     };
 
-    let interval_seconds = current_query.interval.as_ref().map(|interval| interval.to_second()).unwrap_or(0);
+    let interval_seconds = current_query.interval.clone().unwrap().to_second();
     let mut merged_history: Vec<crate::polymarket::restful_models::MarketPriceHistoryPoint> = Vec::new();
     let mut last_max_t = None;
 
