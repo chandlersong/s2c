@@ -951,7 +951,8 @@ impl OptionService {
         for btc_summary in summary_btc.data.iter() {
             let inst_info = id_identify_dict.get(&btc_summary.inst_id);
             if inst_info.is_none() {
-                info!("{} 没有被存入数据库", btc_summary.inst_id);
+                info!("{} 没有被存入数据库,跳过更新option summary", btc_summary.inst_id);
+                continue;
             }
             let po = OkxOptionSummaryPo::from_detail(inst_info.unwrap().id, acquire_ts, btc_summary);
             repo.insert_history(po.clone()).await?;
@@ -962,7 +963,8 @@ impl OptionService {
         for eth_summary in summary_eth.data.iter() {
             let inst_info = id_identify_dict.get(&eth_summary.inst_id);
             if inst_info.is_none() {
-                info!("{} 没有被存入数据库", eth_summary.inst_id);
+                info!("{} 没有被存入数据库,跳过更新option summary", eth_summary.inst_id);
+                continue;
             }
             let po = OkxOptionSummaryPo::from_detail(inst_info.unwrap().id, acquire_ts, eth_summary);
             repo.insert_history(po.clone()).await?;
