@@ -30,6 +30,8 @@ pub async fn initial_grpc_client_tables(option_pool: Option<PgPool>) -> Result<(
 
 pub(crate) static POLYMARKET_PRICE_BATCH_INSERT: OnceLock<PostgresqlBatchInsert<LocalPolyMarketHistoryPo>> = OnceLock::new();
 pub(crate) static OKX_KLINE_BATCH_INSERT: OnceLock<PostgresqlBatchInsert<crate::sync::client::po::okx::LocalOkxKlinePo>> = OnceLock::new();
+pub(crate) static OKX_OPTION_SUMMARY_BATCH_INSERT: OnceLock<PostgresqlBatchInsert<crate::sync::client::po::okx::LocalOkxOptionSummaryPo>> =
+    OnceLock::new();
 
 pub fn get_polymarket_price_batch_insert() -> PostgresqlBatchInsert<LocalPolyMarketHistoryPo> {
     POLYMARKET_PRICE_BATCH_INSERT
@@ -50,6 +52,19 @@ pub fn get_okx_kline_batch_insert() -> PostgresqlBatchInsert<crate::sync::client
             let pool = get_sync_client_pg_pool_sync().expect("get_sync_client_pg_pool failed");
             let batch_insert = block_on(PostgresqlBatchInsertImpl::<crate::sync::client::po::okx::LocalOkxKlinePo>::new(
                 ClientsTables::OkxPriceHistory.table_name(),
+                pool,
+            ));
+            batch_insert
+        })
+        .clone()
+}
+
+pub fn get_okx_option_summary_batch_insert() -> PostgresqlBatchInsert<crate::sync::client::po::okx::LocalOkxOptionSummaryPo> {
+    OKX_OPTION_SUMMARY_BATCH_INSERT
+        .get_or_init(|| {
+            let pool = get_sync_client_pg_pool_sync().expect("get_sync_client_pg_pool failed");
+            let batch_insert = block_on(PostgresqlBatchInsertImpl::<crate::sync::client::po::okx::LocalOkxOptionSummaryPo>::new(
+                ClientsTables::OkxOptionSummary.table_name(),
                 pool,
             ));
             batch_insert

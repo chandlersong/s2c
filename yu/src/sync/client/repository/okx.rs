@@ -20,6 +20,9 @@ pub trait ClientOkxRepositoryTrait {
     //返回server id+数据库中timestamp
     async fn list_instrument_timestamps(&self) -> Result<HashMap<u64, u64>, YuError>;
 
+    // 返回 server id -> latest acquire_ts (ms) 在 okx_option_summary 表中
+    async fn list_option_summary_timestamps(&self) -> Result<HashMap<u64, u64>, YuError>;
+
     /// Insert a new okx instrument into okx_instruments table.
     async fn create_instruments(&self, po: LocalOkxInstrumentPo) -> Result<(), YuError>;
 }
@@ -53,6 +56,18 @@ impl ClientOkxRepositoryTrait for ClientOkxRepositoryImpl {
         "#;
         let rows: Vec<(i64, i64)> = sqlx::query_as(sql).fetch_all(&self.pg_pool).await?;
 
+        let map: HashMap<u64, u64> = rows.into_iter().map(|(k, v)| (k as u64, v as u64)).collect();
+        Ok(map)
+    }
+
+    async fn list_option_summary_timestamps(&self) -> Result<HashMap<u64, u64>, YuError> {
+        let sql = r#"
+            SELECT pi.server_id::bigint AS server_id, (EXTRACT(EPOCH FROM max(oac.acquire_ts)) * 1000)::bigint AS max_ts
+            FROM okx_instruments pi
+            JOIN okx_option_summary oac ON oac.instrument_id = pi.id
+            GROUP BY pi.server_id
+        "#;
+        let rows: Vec<(i64, i64)> = sqlx::query_as(sql).fetch_all(&self.pg_pool).await?;
         let map: HashMap<u64, u64> = rows.into_iter().map(|(k, v)| (k as u64, v as u64)).collect();
         Ok(map)
     }

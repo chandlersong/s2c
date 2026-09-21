@@ -154,7 +154,11 @@ async fn initial_data(
     let diff_from_server = client_service.align_local_instrument(inst_list).await?;
     info!("align_local_instrument done.");
     info!("需要同步polymarket的instrument个数{}", diff_from_server.polymarket_diff.len());
-    info!("需要同步polymarket的oxk option个数{}", diff_from_server.okx_option_diff.len());
+    info!("需要同步polymarket的oxk option个数{}", diff_from_server.okx_option_kline_diff.len());
+    info!(
+        "需要同步polymarket的oxk option summary个数{}",
+        diff_from_server.okx_option_summary_diff.len()
+    );
     info!("开始同步polymarket历史数据到本地数据库");
     let one_hour_ms = HistoryInterval::OneHour.to_milliseconds();
     for (inst_id, (start_ms, end_ms)) in diff_from_server.polymarket_diff {
@@ -174,7 +178,7 @@ async fn initial_data(
         forward_server_stream(stream, local_db_tx.clone()).await?;
     }
     info!("开始同步okx历史数据到本地数据库");
-    for (inst_id, (start_ms, end_ms)) in diff_from_server.okx_option_diff {
+    for (inst_id, (start_ms, end_ms)) in diff_from_server.okx_option_kline_diff {
         //FUTURE: 因为这里时candle begin。所以要减去一个周期，以后重构的时候，通过instrument把数据的周期也传过来。然后在这里做减去周期的操作
 
         if (end_ms - start_ms) < one_hour_ms {
@@ -192,6 +196,25 @@ async fn initial_data(
             .into_inner();
         forward_server_stream(stream, local_db_tx.clone()).await?;
     }
+
+    // 同步 OKX option summary 历史
+    for (inst_id, (start_ms, end_ms)) in diff_from_server.okx_option_summary_diff {
+        // 如果没有新增或本地与服务器相同，则跳过
+        if end_ms <= start_ms {
+            continue;
+        }
+        let stream = server
+            .sync_history(Request::new(SyncRequest {
+                inst_id,
+                start_ms: start_ms + 1,
+                end_ms,
+                instrument_type: InstrumentType::OkxOptionSummary as i32,
+            }))
+            .await?
+            .into_inner();
+        forward_server_stream(stream, local_db_tx.clone()).await?;
+    }
+
     info!("async_sync_server done. 历史数据异步写入，可能过会儿更新");
     Ok(())
 }

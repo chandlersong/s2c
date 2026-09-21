@@ -5,6 +5,7 @@ pub enum ClientsTables {
     PolymarketPriceHistory,
     PolyMarketInstruments,
     OkxPriceHistory,
+    OkxOptionSummary,
     OkxInstruments,
 }
 
@@ -14,6 +15,7 @@ impl PostgresqlTableTrait for ClientsTables {
             ClientsTables::PolymarketPriceHistory => "polymarket_price_history",
             ClientsTables::PolyMarketInstruments => "polymarket_instruments",
             ClientsTables::OkxPriceHistory => "okx_kline_history",
+            ClientsTables::OkxOptionSummary => "okx_option_summary",
             ClientsTables::OkxInstruments => "okx_instruments",
         }
     }
@@ -23,6 +25,7 @@ impl PostgresqlTableTrait for ClientsTables {
             ClientsTables::PolymarketPriceHistory => CREATE_POLYMARKET_PRICE_HISTORY_TABLE,
             ClientsTables::PolyMarketInstruments => CREATE_POLYMARKET_INSTRUMENTS_TABLE,
             ClientsTables::OkxPriceHistory => CREATE_OKX_KLINE_HISTORY_TABLE,
+            ClientsTables::OkxOptionSummary => CREATE_OKX_OPTION_SUMMARY_TABLE,
             ClientsTables::OkxInstruments => CREATE_OKX_INSTRUMENTS_TABLE,
         }
     }
@@ -80,6 +83,47 @@ ALTER TABLE okx_kline_history SET (
 );
 SELECT add_compression_policy('okx_kline_history', INTERVAL '30 days');
 "#;
+
+pub const CREATE_OKX_OPTION_SUMMARY_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS okx_option_summary (
+    id BIGINT,
+    instrument_id BIGINT,
+    inst_identify VARCHAR,
+    inst_type VARCHAR,
+    uly VARCHAR,
+    acquire_ts TIMESTAMPTZ,
+    server_ts TIMESTAMPTZ,
+    ask_vol DOUBLE PRECISION,
+    bid_vol DOUBLE PRECISION,
+    delta DOUBLE PRECISION,
+    delta_bs DOUBLE PRECISION,
+    fwd_px DOUBLE PRECISION,
+    gamma DOUBLE PRECISION,
+    gamma_bs DOUBLE PRECISION,
+    lever DOUBLE PRECISION,
+    mark_vol DOUBLE PRECISION,
+    real_vol DOUBLE PRECISION,
+    vol_lv DOUBLE PRECISION,
+    theta DOUBLE PRECISION,
+    theta_bs DOUBLE PRECISION,
+    vega DOUBLE PRECISION,
+    vega_bs DOUBLE PRECISION,
+    batch_timestamp TIMESTAMPTZ
+);
+ALTER TABLE okx_option_summary
+  ADD CONSTRAINT okx_option_summary_pkey PRIMARY KEY (instrument_id, acquire_ts);
+SELECT create_hypertable(
+  'okx_option_summary',
+  'acquire_ts',
+  if_not_exists => TRUE
+);
+ALTER TABLE okx_option_summary SET (
+  timescaledb.enable_columnstore,
+  timescaledb.orderby = 'acquire_ts DESC',
+  timescaledb.segmentby = 'instrument_id'
+);
+SELECT add_compression_policy('okx_option_summary', INTERVAL '30 days');
+"#;
 pub const CREATE_POLYMARKET_INSTRUMENTS_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS polymarket_instruments (
         id BIGINT PRIMARY KEY,
@@ -125,5 +169,6 @@ pub(crate) const ALL_CLIENT_TABLES: &[ClientsTables] = &[
     ClientsTables::PolymarketPriceHistory,
     ClientsTables::PolyMarketInstruments,
     ClientsTables::OkxPriceHistory,
+    ClientsTables::OkxOptionSummary,
     ClientsTables::OkxInstruments,
 ];

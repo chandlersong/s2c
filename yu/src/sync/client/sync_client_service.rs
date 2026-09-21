@@ -1,9 +1,12 @@
 use crate::errors::YuError;
+use crate::okx::duck_po::OkxOptionSummaryPo;
+use crate::okx::duckdb_consts::OkxTables;
 use crate::postgresql_db::get_sync_client_pg_pool_sync;
 use crate::postgresql_db_tables::PostgresqlBatchInsert;
 use crate::sync::client::database::get_okx_kline_batch_insert;
+use crate::sync::client::database::get_okx_option_summary_batch_insert;
 use crate::sync::client::database::get_polymarket_price_batch_insert;
-use crate::sync::client::po::okx::{LocalOkxInstrumentPo, LocalOkxKlinePo};
+use crate::sync::client::po::okx::{LocalOkxInstrumentPo, LocalOkxKlinePo, LocalOkxOptionSummaryPo};
 use crate::sync::client::po::polymarket::{LocalPolyMarketHistoryPo, LocalPolyMarketInstrumentPo};
 use crate::sync::client::repository::okx::{ClientOkxRepository, ClientOkxRepositoryImpl};
 use crate::sync::client::repository::polymarket::{ClientPolyMarketRepository, ClientPolyMarketRepositoryImpl};
@@ -117,7 +120,8 @@ impl Default for SyncClientService {
 // key: server_id, value: (start_ms, end_ms)
 pub struct InstrumentsDiff {
     pub polymarket_diff: HashMap<u64, (u64, u64)>,
-    pub okx_option_diff: HashMap<u64, (u64, u64)>,
+    pub okx_option_kline_diff: HashMap<u64, (u64, u64)>,
+    pub okx_option_summary_diff: HashMap<u64, (u64, u64)>,
 }
 
 impl SyncClientService {
@@ -151,10 +155,10 @@ impl SyncClientService {
 
         let mut polymarket_diff: HashMap<u64, (u64, u64)> = HashMap::new();
         let mut okx_option_diff: HashMap<u64, (u64, u64)> = HashMap::new();
-
+        let mut okx_option_summary_diff: HashMap<u64, (u64, u64)> = HashMap::new();
         let local_pm_history_latest = self.pm_repository.list_instrument_timestamps().await?;
         let local_okx_history_latest = self.okx_repository.list_instrument_timestamps().await?;
-
+        let local_okx_option_summary_latest = self.okx_repository.list_option_summary_timestamps().await?;
         // server_inst.instruments: map<string, PolymarketAssertInfo>
         for (_, inst) in server_inst.instruments.into_iter() {
             if let Some(payload) = inst.payload {
@@ -207,6 +211,8 @@ impl SyncClientService {
                         } else {
                             let local_ts = *local_okx_history_latest.get(&server_id).unwrap_or(&0u64);
                             okx_option_diff.insert(server_id, (local_ts, now));
+                            let local_option_ts = *local_okx_option_summary_latest.get(&server_id).unwrap_or(&0u64);
+                            okx_option_summary_diff.insert(server_id, (local_option_ts, now));
                         }
 
                         // we don't add okx entries to the polymarket return map (res) because it expects u64 keys
@@ -253,7 +259,8 @@ impl SyncClientService {
         }
         Ok(InstrumentsDiff {
             polymarket_diff,
-            okx_option_diff,
+            okx_option_kline_diff: okx_option_diff,
+            okx_option_summary_diff,
         })
     }
 
@@ -273,6 +280,7 @@ impl SyncClientService {
         let server_id_map = self.pm_instrument_dict.clone();
         let okx_server_map = self.okx_instrument_dict.clone();
         let do_okx_batch_insert = okx_batch_insert.unwrap_or_else(|| get_okx_kline_batch_insert());
+        let do_okx_option_batch_insert = get_okx_option_summary_batch_insert();
 
         tokio::spawn(async move {
             loop {
@@ -311,8 +319,20 @@ impl SyncClientService {
                                     }
                                 }
                             }
-                            Payload::OptionSummaryHistory(_) => {
-                                // Option summary sync is not persisted by the client path yet.
+                            Payload::OptionSummaryHistory(summary_list) => {
+                                let batch_timestamp = summary_list.timestamp;
+                                for s in summary_list.summary_list.into_iter() {
+                                    match okx_server_map.read().await.get(&s.inst_id) {
+                                        None => {
+                                            error!("okx option summary inst_id {} not found in local mapping, skipping", s.inst_id);
+                                        }
+                                        Some(inst_po) => {
+                                            let local_id = inst_po.id;
+                                            let po = LocalOkxOptionSummaryPo::from_okx_summary(s, local_id, batch_timestamp);
+                                            do_okx_option_batch_insert.insert_data(po).await;
+                                        }
+                                    }
+                                }
                             }
                             }
                         }
