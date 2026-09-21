@@ -360,4 +360,4 @@ pub struct OptionSummaryDetail {
 ///
 /// [获取期权定价](https://www.okx.com/docs-v5/zh/#public-data-rest-api-get-option-market-data)
 /// GET /api/v5/public/opt-summary
-pub type OptionSummaryResponse = OkxListResponse<Vec<OptionSummaryDetail>>;
+pub type OptionSummaryResponse = OkxListResponse<OptionSummaryDetail>;

@@ -2,7 +2,7 @@ use crate::cron_job;
 use crate::errors::YuError;
 use crate::okx::duckdb_tables::initial_okx_tables;
 use crate::okx::service::OptionService;
-use log::{error, info};
+use log::{debug, error, info};
 use std::sync::Arc;
 
 pub async fn start_okx_option_service() -> Result<Arc<OptionService>, YuError> {
@@ -19,12 +19,24 @@ pub async fn start_okx_option_service() -> Result<Arc<OptionService>, YuError> {
     let _ = cron_job!("0 18 */6 * * *", move |_uuid, _locked| {
         let each_sync = check_history_job.clone();
         Box::pin(async move {
-            //TODO: 正常后，改成debug level
-            info!("start check okx history data");
+            debug!("start check okx history data");
             if let Err(e) = each_sync.check_history_data().await {
                 error!("Error when check okx history data: {}", e);
             };
-            info!("finish check okx history data");
+            debug!("finish check okx history data");
+        })
+    });
+
+    let refresh_option_summary_job = service.clone();
+    let _ = cron_job!("30 0 * * * *", move |_uuid, _locked| {
+        let each_sync = refresh_option_summary_job.clone();
+        Box::pin(async move {
+            //TODO: 正常后，改成debug level
+            debug!("start refresh okx option summary");
+            if let Err(e) = each_sync.query_option_summary().await {
+                error!("Error when check okx option summary: {}", e);
+            };
+            info!("finish check okx option summary");
         })
     });
     Ok(service)

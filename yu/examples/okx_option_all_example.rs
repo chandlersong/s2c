@@ -35,6 +35,9 @@ async fn main() -> Result<(), YuError> {
     tokio::spawn(async move {
         let _ = sync_inst_service.initial_candle(0, None).await;
     });
+    if let Err(e) = service.query_option_summary().await {
+        info!("sync instrument error: {}", e);
+    }
 
     sleep(Duration::from_mins(10)).await;
     Ok(())

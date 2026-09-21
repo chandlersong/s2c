@@ -4,9 +4,12 @@ use crate::data_integrity::check::{DuckDBBinarySearchDataImpl, binary_search_gap
 use crate::data_integrity::models::ValidationGap;
 use crate::duck_db_tables::DuckDbTableTrait;
 use crate::errors::YuError;
-use crate::okx::duck_po::{InstrumentPo, OkxKlinePo};
+use crate::okx::duck_po::{InstrumentPo, OkxKlinePo, OptionSummaryPo};
 use crate::okx::duckdb_consts::OkxTables;
-use crate::okx::duckdb_repository::{OkxInstrumentRepository, OkxKlineRepository, get_default_kline_repo, get_instrument_repo};
+use crate::okx::duckdb_repository::{
+    OkxInstrumentRepository, OkxKlineRepository, OkxOptionSummaryRepository, get_default_kline_repo, get_default_option_summary_repo,
+    get_instrument_repo,
+};
 use crate::okx::okx_consts::InstrumentType;
 use async_trait::async_trait;
 use futures::stream::StreamExt;
@@ -34,6 +37,7 @@ pub trait CommonIOServiceTrait {
     fn get_kline_repo(&self) -> OkxKlineRepository;
     fn get_instrument_repo(&self) -> OkxInstrumentRepository;
     fn get_okx_api(&self) -> OKxApi;
+    fn get_option_summary_repo(&self) -> OkxOptionSummaryRepository;
     async fn fetch_history(
         &self,
         inst_identify: &str,
@@ -49,8 +53,13 @@ pub trait CommonIOServiceTrait {
 
 pub type CommonIOService = Arc<dyn CommonIOServiceTrait + Send + Sync>;
 
-fn create_common_io_service(instrument_repo: OkxInstrumentRepository, kline_repo: OkxKlineRepository, okx_api: OKxApi) -> CommonIOService {
-    Arc::new(CommonIOServiceImpl::new(instrument_repo, kline_repo, okx_api))
+fn create_common_io_service(
+    instrument_repo: OkxInstrumentRepository,
+    kline_repo: OkxKlineRepository,
+    option_summary_repo: OkxOptionSummaryRepository,
+    okx_api: OKxApi,
+) -> CommonIOService {
+    Arc::new(CommonIOServiceImpl::new(instrument_repo, kline_repo, option_summary_repo, okx_api))
 }
 ///
 /// 因为按照OKX的数据结构。所有的交易标的都是instrument的结构。
@@ -62,6 +71,7 @@ fn create_common_io_service(instrument_repo: OkxInstrumentRepository, kline_repo
 struct CommonIOServiceImpl {
     instrument_repo: OkxInstrumentRepository,
     kline_repo: OkxKlineRepository,
+    option_summary_repo: OkxOptionSummaryRepository,
     okx_api: OKxApi,
 }
 
@@ -70,16 +80,23 @@ impl Default for CommonIOServiceImpl {
         Self {
             instrument_repo: get_instrument_repo(None),
             kline_repo: get_default_kline_repo(None),
+            option_summary_repo: get_default_option_summary_repo(None),
             okx_api: default_okx_api(),
         }
     }
 }
 
 impl CommonIOServiceImpl {
-    pub fn new(instrument_repo: OkxInstrumentRepository, kline_repo: OkxKlineRepository, okx_api: OKxApi) -> Self {
+    pub fn new(
+        instrument_repo: OkxInstrumentRepository,
+        kline_repo: OkxKlineRepository,
+        option_summary_repo: OkxOptionSummaryRepository,
+        okx_api: OKxApi,
+    ) -> Self {
         Self {
             instrument_repo,
             kline_repo,
+            option_summary_repo,
             okx_api,
         }
     }
@@ -96,6 +113,10 @@ impl CommonIOServiceTrait for CommonIOServiceImpl {
 
     fn get_okx_api(&self) -> OKxApi {
         self.okx_api.clone()
+    }
+
+    fn get_option_summary_repo(&self) -> OkxOptionSummaryRepository {
+        self.option_summary_repo.clone()
     }
 
     async fn fetch_history(
@@ -426,7 +447,7 @@ pub struct OptionService {
 
 impl Default for OptionService {
     fn default() -> Self {
-        Self::new(None, None, None, None, None)
+        Self::new(None, None, None, None, None, None)
     }
 }
 
@@ -434,6 +455,7 @@ impl OptionService {
     pub fn new(
         instrument_repo: Option<OkxInstrumentRepository>,
         kline_repo: Option<OkxKlineRepository>,
+        option_summary_repo: Option<OkxOptionSummaryRepository>,
         api: Option<OKxApi>,
         interval: Option<HistoryInterval>,
         refresh_corn: Option<String>,
@@ -444,6 +466,7 @@ impl OptionService {
             common_io: create_common_io_service(
                 instrument_repo.unwrap_or_else(|| get_instrument_repo(None)),
                 kline_repo.unwrap_or_else(|| get_default_kline_repo(None)),
+                option_summary_repo.unwrap_or_else(|| get_default_option_summary_repo(None)),
                 api.unwrap_or_else(|| default_okx_api()),
             ),
             interval: interval.unwrap_or(HistoryInterval::OneHour),
@@ -891,15 +914,44 @@ impl OptionService {
         Ok(())
     }
 
-    async fn query_option_summary(&self) -> Result<(), YuError> {
+    ///
+    /// 这里要做的事一个转换。
+    /// 1.查询转换。
+    ///
+    pub async fn query_option_summary(&self) -> Result<(), YuError> {
         let btc_query_param = OptionSummaryParam::btc();
         let eth_query_param = OptionSummaryParam::eth();
-
+        let id_identify_dict = self
+            .live_instruments
+            .read()
+            .map_err(|_| YuError::new("failed to acquire live_instruments read lock"))?
+            .clone()
+            .into_iter()
+            .map(|inst| (inst.inst_identify.clone(), inst))
+            .collect::<HashMap<String, InstrumentPo>>();
         let api = self.common_io.get_okx_api();
 
         let summary_btc = api.option_summary(btc_query_param).await?;
-        let summary_eth = api.option_summary(eth_query_param).await?;
+        let acquire_ts = self.interval.get_now_close_unix_ms_utc();
+        let repo = self.common_io.get_option_summary_repo();
+        for btc_summary in summary_btc.data.iter() {
+            let inst_info = id_identify_dict.get(&btc_summary.inst_id);
+            if inst_info.is_none() {
+                info!("{} 没有被存入数据库", btc_summary.inst_id);
+            }
+            let po = OptionSummaryPo::from_detail(inst_info.unwrap().id, acquire_ts, btc_summary);
+            repo.insert_history(po).await?;
+        }
 
+        let summary_eth = api.option_summary(eth_query_param).await?;
+        for eth_summary in summary_eth.data.iter() {
+            let inst_info = id_identify_dict.get(&eth_summary.inst_id);
+            if inst_info.is_none() {
+                info!("{} 没有被存入数据库", eth_summary.inst_id);
+            }
+            let po = OptionSummaryPo::from_detail(inst_info.unwrap().id, acquire_ts, eth_summary);
+            repo.insert_history(po).await?;
+        }
         Ok(())
     }
 }

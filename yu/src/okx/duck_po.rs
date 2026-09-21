@@ -4,7 +4,7 @@ use bon::Builder;
 use duckdb::{Row, Rows, appender_params_from_iter};
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
-use yue::okx::models::restful::{CandleResponse, InstrumentInfo, OptionSummaryDetail, OptionSummaryResponse};
+use yue::okx::models::restful::{CandleResponse, InstrumentInfo, OptionSummaryDetail};
 use yue::okx::models::websocket::KlinePayload;
 use yue::tools::get_snow_flake_id_u64;
 
@@ -111,22 +111,13 @@ pub struct OptionSummaryPo {
     pub vega_bs: Option<f64>,
 }
 impl OptionSummaryPo {
-    pub fn from_response(inst_id: u64, acquire_ts: u64, response: OptionSummaryResponse) -> Vec<Self> {
-        response
-            .data
-            .into_iter()
-            .flatten()
-            .map(|detail| Self::from_detail(inst_id, acquire_ts, detail))
-            .collect()
-    }
-
-    pub fn from_detail(inst_id: u64, acquire_ts: u64, detail: OptionSummaryDetail) -> Self {
+    pub fn from_detail(inst_id: u64, acquire_ts: u64, detail: &OptionSummaryDetail) -> Self {
         Self {
             id: get_snow_flake_id_u64(),
             inst_id,
-            inst_identify: detail.inst_id,
-            inst_type: detail.inst_type,
-            uly: detail.uly,
+            inst_identify: detail.inst_id.clone(),
+            inst_type: detail.inst_type.clone(),
+            uly: detail.uly.clone(),
             acquire_ts,
             server_ts: detail.ts.unwrap_or_default(),
             ask_vol: detail.ask_vol.and_then(|d| d.to_f64()),
