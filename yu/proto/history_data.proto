@@ -2,12 +2,12 @@ syntax = "proto3";
 package grpc_sync;
 
 
-enum Exchange {
+enum InstrumentType {
   EXCHANGE_UNSPECIFIED = 0;
   POLYMARKET = 1;
-  OKX = 2;
+  OKX_KLINE = 2;
+  OKX_OPTION_SUMMARY = 3;
 }
-
 
 message PolymarketInstrument{
   uint64 server_id = 1;
@@ -74,6 +74,7 @@ message ServerMessage {
   oneof payload {
     PolyMarketHistoryList polymarket_history = 1;     // polymarket
     OkxKlineList okx_kline_history = 2;     // okx kline
+    OptionSummaryList option_summary_history = 3; // okx option summary
   }
 }
 // 空消息
@@ -84,7 +85,7 @@ message SyncRequest {
   uint64 inst_id = 1;   // 资产ID
   uint64 start_ms = 2;  // 起始时间戳，server推送该时间之后的所有数据
   uint64 end_ms = 3;    // 结束时间戳，server推送该时间之前的所有数据
-  Exchange exchange = 4; // 交易所类型
+  InstrumentType instrument_type = 4; // 交易品类类型
 }
 
 // 订阅最新消息请求
@@ -120,5 +121,35 @@ message OkxKline {
 
 message OkxKlineList {
   repeated OkxKline kline_list = 1;
+  uint64 timestamp = 2;
+}
+
+message OptionSummary {
+  uint64 id = 1;
+  uint64 inst_id = 2;
+  string inst_identify = 3;
+  string inst_type = 4;
+  string uly = 5;
+  uint64 acquire_ts = 6;
+  uint64 server_ts = 7;
+  optional double ask_vol = 8;
+  optional double bid_vol = 9;
+  optional double delta = 10;
+  optional double delta_bs = 11;
+  optional double fwd_px = 12;
+  optional double gamma = 13;
+  optional double gamma_bs = 14;
+  optional double lever = 15;
+  optional double mark_vol = 16;
+  optional double real_vol = 17;
+  optional double vol_lv = 18;
+  optional double theta = 19;
+  optional double theta_bs = 20;
+  optional double vega = 21;
+  optional double vega_bs = 22;
+}
+
+message OptionSummaryList {
+  repeated OptionSummary summary_list = 1;
   uint64 timestamp = 2;
 }

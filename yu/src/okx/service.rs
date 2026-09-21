@@ -672,6 +672,11 @@ impl OptionService {
         kline_repo.find_kline_between(inst_id, start_ms, end_ms).await
     }
 
+    pub async fn find_option_summary_between(&self, inst_id: u64, start_ms: u64, end_ms: u64) -> Result<Vec<OptionSummaryPo>, YuError> {
+        let option_summary_repo = self.common_io.get_option_summary_repo();
+        option_summary_repo.find_summary_between(inst_id, start_ms, end_ms).await
+    }
+
     pub async fn refresh_instruments(
         common_io: CommonIOService,
         share_instruments: Arc<RwLock<Vec<InstrumentPo>>>,

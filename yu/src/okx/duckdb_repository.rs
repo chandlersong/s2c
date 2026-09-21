@@ -353,7 +353,7 @@ impl OkxOptionSummaryRepositoryTrait for OkxOptionSummaryPoRepositoryImpl {
     async fn find_summary_between(&self, inst_id: u64, start_ts: u64, end_ts: u64) -> Result<Vec<OptionSummaryPo>, YuError> {
         let conn = self.provider.acquire()?;
         let mut stmt = conn.prepare(
-            "SELECT id, inst_id, inst_identify, inst_type, uly, acquire_ts, server_ts, ask_vol, bid_vol, delta, delta_bs, fwd_px, gamma, gamma_bs, lever, mark_vol, real_vol, vol_lv, theta, theta_bs, vega, vega_bs FROM OKX_OPTION_SUMMARY WHERE inst_id = ? AND server_ts >= ? AND server_ts <= ? ORDER BY server_ts ASC;",
+            "SELECT id, inst_id, inst_identify, inst_type, uly, acquire_ts, server_ts, ask_vol, bid_vol, delta, delta_bs, fwd_px, gamma, gamma_bs, lever, mark_vol, real_vol, vol_lv, theta, theta_bs, vega, vega_bs FROM OKX_OPTION_SUMMARY WHERE inst_id = ? AND acquire_ts >= ? AND acquire_ts <= ? ORDER BY acquire_ts ASC;",
         )?;
         let mut rows = stmt.query([inst_id, start_ts, end_ts])?;
         let mut res: Vec<OptionSummaryPo> = Vec::new();

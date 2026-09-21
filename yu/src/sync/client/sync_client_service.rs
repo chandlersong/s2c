@@ -311,6 +311,9 @@ impl SyncClientService {
                                     }
                                 }
                             }
+                            Payload::OptionSummaryHistory(_) => {
+                                // Option summary sync is not persisted by the client path yet.
+                            }
                             }
                         }
                     }

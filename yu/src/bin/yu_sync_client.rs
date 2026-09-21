@@ -17,7 +17,7 @@ use yu::sync::client::database::initial_grpc_client_tables;
 use yu::sync::client::db_consts::ClientsTables;
 use yu::sync::client::sync_client_service::{GrpcChannelManager, SyncClientService};
 use yu::sync::models::grpc_sync::sync_interface_client::SyncInterfaceClient;
-use yu::sync::models::grpc_sync::{Empty, Exchange, ServerMessage, SubscribeRequest, SyncRequest, instrument};
+use yu::sync::models::grpc_sync::{Empty, InstrumentType, ServerMessage, SubscribeRequest, SyncRequest, instrument};
 use yue::http_client::init_http_client;
 use yue::models::HistoryInterval;
 use yue::tools::get_snow_flake_id_u64;
@@ -167,7 +167,7 @@ async fn initial_data(
                 inst_id,
                 start_ms: start_ms + 1,
                 end_ms,
-                exchange: Exchange::Polymarket.into(),
+                instrument_type: InstrumentType::Polymarket as i32,
             }))
             .await?
             .into_inner();
@@ -186,7 +186,7 @@ async fn initial_data(
                 inst_id,
                 start_ms: start_ms + 1,
                 end_ms,
-                exchange: Exchange::Okx.into(),
+                instrument_type: InstrumentType::OkxKline as i32,
             }))
             .await?
             .into_inner();
@@ -254,7 +254,7 @@ async fn async_sync_server(
                                         inst_id: server_id,
                                         start_ms: start_time,
                                         end_ms: end_time - 1,
-                                        exchange: Exchange::Okx.into(),
+                                        instrument_type: InstrumentType::OkxKline as i32,
                                     }))
                                     .await?
                                     .into_inner();
@@ -286,7 +286,7 @@ async fn async_sync_server(
                                         inst_id: server_id,
                                         start_ms: start_time,
                                         end_ms: end_time - 1,
-                                        exchange: Exchange::Polymarket.into(),
+                                        instrument_type: InstrumentType::Polymarket as i32,
                                     }))
                                     .await?
                                     .into_inner();

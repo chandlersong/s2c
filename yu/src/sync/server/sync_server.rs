@@ -341,11 +341,9 @@ impl SyncInterface for YuSyncServer {
         let end_ms = request.get_ref().end_ms.clone();
         let batch_size = self.batch_size;
 
-        // determine exchange from request (prost generates from_i32)
-        let exchange_opt = crate::sync::models::grpc_sync::Exchange::try_from(request.get_ref().exchange).ok();
-
-        match exchange_opt {
-            Some(crate::sync::models::grpc_sync::Exchange::Polymarket) => {
+        let instrument_type = crate::sync::models::grpc_sync::InstrumentType::try_from(request.get_ref().instrument_type).ok();
+        match instrument_type {
+            Some(crate::sync::models::grpc_sync::InstrumentType::Polymarket) => {
                 let query_service = self.polymarket_history_service.clone();
                 // Spawn a task to query polymarket history and stream results back through tx
                 tokio::spawn(async move {
@@ -393,9 +391,8 @@ impl SyncInterface for YuSyncServer {
                     }
                 });
             }
-            Some(crate::sync::models::grpc_sync::Exchange::Okx) => {
+            Some(crate::sync::models::grpc_sync::InstrumentType::OkxKline) => {
                 let okx_service = self.okx_option_service.clone();
-                // Spawn a task to query okx kline and stream results back through tx
                 tokio::spawn(async move {
                     match okx_service.find_candle_between(inst_id, start_ms, end_ms).await {
                         Ok(kline_vec) => {
@@ -447,8 +444,72 @@ impl SyncInterface for YuSyncServer {
                     }
                 });
             }
+            Some(crate::sync::models::grpc_sync::InstrumentType::OkxOptionSummary) => {
+                let okx_service = self.okx_option_service.clone();
+                tokio::spawn(async move {
+                    match okx_service.find_option_summary_between(inst_id, start_ms, end_ms).await {
+                        Ok(summary_vec) => {
+                            if summary_vec.is_empty() {
+                                let list = crate::sync::models::grpc_sync::OptionSummaryList {
+                                    summary_list: vec![],
+                                    timestamp: unix_time_now_u64_utc(),
+                                };
+                                let msg = ServerMessage {
+                                    payload: Some(server_message::Payload::OptionSummaryHistory(list)),
+                                };
+                                let _ = tx.send(Ok(msg)).await;
+                                return;
+                            }
+
+                            for chunk in summary_vec.chunks(batch_size) {
+                                let mut summaries: Vec<crate::sync::models::grpc_sync::OptionSummary> = Vec::with_capacity(chunk.len());
+                                for item in chunk.iter() {
+                                    summaries.push(crate::sync::models::grpc_sync::OptionSummary {
+                                        id: item.id,
+                                        inst_id: item.inst_id,
+                                        inst_identify: item.inst_identify.clone(),
+                                        inst_type: item.inst_type.clone(),
+                                        uly: item.uly.clone().unwrap_or_default(),
+                                        acquire_ts: item.acquire_ts,
+                                        server_ts: item.server_ts,
+                                        ask_vol: item.ask_vol,
+                                        bid_vol: item.bid_vol,
+                                        delta: item.delta,
+                                        delta_bs: item.delta_bs,
+                                        fwd_px: item.fwd_px,
+                                        gamma: item.gamma,
+                                        gamma_bs: item.gamma_bs,
+                                        lever: item.lever,
+                                        mark_vol: item.mark_vol,
+                                        real_vol: item.real_vol,
+                                        vol_lv: item.vol_lv,
+                                        theta: item.theta,
+                                        theta_bs: item.theta_bs,
+                                        vega: item.vega,
+                                        vega_bs: item.vega_bs,
+                                    });
+                                }
+                                let list = crate::sync::models::grpc_sync::OptionSummaryList {
+                                    summary_list: summaries,
+                                    timestamp: unix_time_now_u64_utc(),
+                                };
+                                let msg = ServerMessage {
+                                    payload: Some(server_message::Payload::OptionSummaryHistory(list)),
+                                };
+                                if tx.send(Ok(msg)).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let status = Status::internal(format!("query okx option summary error: {:?}", e));
+                            let _ = tx.send(Err(status)).await;
+                        }
+                    }
+                });
+            }
             _ => {
-                return Err(Status::invalid_argument("unsupported or unspecified exchange"));
+                return Err(Status::invalid_argument("unsupported or unspecified instrument type"));
             }
         }
 
