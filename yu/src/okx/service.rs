@@ -24,7 +24,7 @@ use tokio::sync::Mutex;
 use tokio::sync::broadcast;
 use yue::models::HistoryInterval;
 use yue::okx::models::websocket::{ArgBody, OkxWebsocketResponse};
-use yue::okx::restful_api::{HistoryParams, InstrumentsParam, OKxApi, default_okx_api};
+use yue::okx::restful_api::{HistoryParams, InstrumentsParam, OKxApi, OptionSummaryParam, default_okx_api};
 use yue::okx::websocket_channel::{CommandRequest, OXK_BUSINESS_WEBSOCKET};
 use yue::tools::get_snow_flake_id_string;
 
@@ -888,6 +888,18 @@ impl OptionService {
                 }
             }
         }
+        Ok(())
+    }
+
+    async fn query_option_summary(&self) -> Result<(), YuError> {
+        let btc_query_param = OptionSummaryParam::btc();
+        let eth_query_param = OptionSummaryParam::eth();
+
+        let api = self.common_io.get_okx_api();
+
+        let summary_btc = api.option_summary(btc_query_param).await?;
+        let summary_eth = api.option_summary(eth_query_param).await?;
+
         Ok(())
     }
 }

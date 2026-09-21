@@ -4,8 +4,7 @@ use bon::Builder;
 use duckdb::{Row, Rows, appender_params_from_iter};
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
-use yue::okx::models::restful::CandleResponse;
-use yue::okx::models::restful::InstrumentInfo;
+use yue::okx::models::restful::{CandleResponse, InstrumentInfo, OptionSummaryDetail, OptionSummaryResponse};
 use yue::okx::models::websocket::KlinePayload;
 use yue::tools::get_snow_flake_id_u64;
 
@@ -81,6 +80,154 @@ impl DuckDBPO for OkxKlinePo {
             &self.vol_ccy_quote as &dyn duckdb::ToSql,
             &self.confirm as &dyn duckdb::ToSql,
         ])
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
+pub struct OptionSummaryPo {
+    pub id: u64,
+    pub inst_id: u64,
+    pub inst_identify: String,
+    pub inst_type: String,
+    pub uly: Option<String>,
+    // 获取的时间
+    pub acquire_ts: u64,
+    //从元数据读取的时间
+    pub server_ts: u64,
+    pub ask_vol: Option<f64>,
+    pub bid_vol: Option<f64>,
+    pub delta: Option<f64>,
+    pub delta_bs: Option<f64>,
+    pub fwd_px: Option<f64>,
+    pub gamma: Option<f64>,
+    pub gamma_bs: Option<f64>,
+    pub lever: Option<f64>,
+    pub mark_vol: Option<f64>,
+    pub real_vol: Option<f64>,
+    pub vol_lv: Option<f64>,
+    pub theta: Option<f64>,
+    pub theta_bs: Option<f64>,
+    pub vega: Option<f64>,
+    pub vega_bs: Option<f64>,
+}
+impl OptionSummaryPo {
+    pub fn from_response(inst_id: u64, acquire_ts: u64, response: OptionSummaryResponse) -> Vec<Self> {
+        response
+            .data
+            .into_iter()
+            .flatten()
+            .map(|detail| Self::from_detail(inst_id, acquire_ts, detail))
+            .collect()
+    }
+
+    pub fn from_detail(inst_id: u64, acquire_ts: u64, detail: OptionSummaryDetail) -> Self {
+        Self {
+            id: get_snow_flake_id_u64(),
+            inst_id,
+            inst_identify: detail.inst_id,
+            inst_type: detail.inst_type,
+            uly: detail.uly,
+            acquire_ts,
+            server_ts: detail.ts.unwrap_or_default(),
+            ask_vol: detail.ask_vol.and_then(|d| d.to_f64()),
+            bid_vol: detail.bid_vol.and_then(|d| d.to_f64()),
+            delta: detail.delta.and_then(|d| d.to_f64()),
+            delta_bs: detail.delta_bs.and_then(|d| d.to_f64()),
+            fwd_px: detail.fwd_px.and_then(|d| d.to_f64()),
+            gamma: detail.gamma.and_then(|d| d.to_f64()),
+            gamma_bs: detail.gamma_bs.and_then(|d| d.to_f64()),
+            lever: detail.lever.and_then(|d| d.to_f64()),
+            mark_vol: detail.mark_vol.and_then(|d| d.to_f64()),
+            real_vol: detail.real_vol.and_then(|d| d.to_f64()),
+            vol_lv: detail.vol_lv.and_then(|d| d.to_f64()),
+            theta: detail.theta.and_then(|d| d.to_f64()),
+            theta_bs: detail.theta_bs.and_then(|d| d.to_f64()),
+            vega: detail.vega.and_then(|d| d.to_f64()),
+            vega_bs: detail.vega_bs.and_then(|d| d.to_f64()),
+        }
+    }
+}
+
+impl DuckDBPO for OptionSummaryPo {
+    fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>> {
+        appender_params_from_iter(vec![
+            &self.id as &dyn duckdb::ToSql,
+            &self.inst_id as &dyn duckdb::ToSql,
+            &self.inst_identify as &dyn duckdb::ToSql,
+            &self.inst_type as &dyn duckdb::ToSql,
+            &self.uly as &dyn duckdb::ToSql,
+            &self.acquire_ts as &dyn duckdb::ToSql,
+            &self.server_ts as &dyn duckdb::ToSql,
+            &self.ask_vol as &dyn duckdb::ToSql,
+            &self.bid_vol as &dyn duckdb::ToSql,
+            &self.delta as &dyn duckdb::ToSql,
+            &self.delta_bs as &dyn duckdb::ToSql,
+            &self.fwd_px as &dyn duckdb::ToSql,
+            &self.gamma as &dyn duckdb::ToSql,
+            &self.gamma_bs as &dyn duckdb::ToSql,
+            &self.lever as &dyn duckdb::ToSql,
+            &self.mark_vol as &dyn duckdb::ToSql,
+            &self.real_vol as &dyn duckdb::ToSql,
+            &self.vol_lv as &dyn duckdb::ToSql,
+            &self.theta as &dyn duckdb::ToSql,
+            &self.theta_bs as &dyn duckdb::ToSql,
+            &self.vega as &dyn duckdb::ToSql,
+            &self.vega_bs as &dyn duckdb::ToSql,
+        ])
+    }
+}
+
+impl<'a> TryFrom<&'a Row<'a>> for OptionSummaryPo {
+    type Error = YuError;
+
+    fn try_from(row: &Row) -> Result<Self, Self::Error> {
+        let id: u64 = row.get(0)?;
+        let inst_id: u64 = row.get(1)?;
+        let inst_identify: String = row.get(2)?;
+        let inst_type: String = row.get(3)?;
+        let uly: Option<String> = row.get(4)?;
+        let acquire_ts: u64 = row.get(5)?;
+        let server_ts: u64 = row.get(6)?;
+        let ask_vol: Option<f64> = row.get(7)?;
+        let bid_vol: Option<f64> = row.get(8)?;
+        let delta: Option<f64> = row.get(9)?;
+        let delta_bs: Option<f64> = row.get(10)?;
+        let fwd_px: Option<f64> = row.get(11)?;
+        let gamma: Option<f64> = row.get(12)?;
+        let gamma_bs: Option<f64> = row.get(13)?;
+        let lever: Option<f64> = row.get(14)?;
+        let mark_vol: Option<f64> = row.get(15)?;
+        let real_vol: Option<f64> = row.get(16)?;
+        let vol_lv: Option<f64> = row.get(17)?;
+        let theta: Option<f64> = row.get(18)?;
+        let theta_bs: Option<f64> = row.get(19)?;
+        let vega: Option<f64> = row.get(20)?;
+        let vega_bs: Option<f64> = row.get(21)?;
+
+        Ok(OptionSummaryPo {
+            id,
+            inst_id,
+            inst_identify,
+            inst_type,
+            uly,
+            acquire_ts,
+            server_ts,
+            ask_vol,
+            bid_vol,
+            delta,
+            delta_bs,
+            fwd_px,
+            gamma,
+            gamma_bs,
+            lever,
+            mark_vol,
+            real_vol,
+            vol_lv,
+            theta,
+            theta_bs,
+            vega,
+            vega_bs,
+        })
     }
 }
 

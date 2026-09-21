@@ -1,8 +1,8 @@
 use crate::duck_db::DuckDBDSProvider;
 use crate::duck_db_tables::DuckTableTableChannel;
 use crate::errors::YuError;
-use crate::okx::duck_po::{InstrumentPo, OkxKlinePo};
-use crate::okx::duckdb_tables::get_okx_kline_table;
+use crate::okx::duck_po::{InstrumentPo, OkxKlinePo, OptionSummaryPo};
+use crate::okx::duckdb_tables::{get_okx_kline_table, get_okx_option_summary_table};
 use crate::okx::okx_consts::InstrumentType;
 use async_trait::async_trait;
 use li::tools::time::unix_time_now_u64_utc;
@@ -43,8 +43,23 @@ pub trait OkxKlineRepositoryTrait {
     fn get_db_provider(&self) -> DuckDBDSProvider;
 }
 
+#[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
+#[async_trait]
+pub trait OkxOptionSummaryRepositoryTrait {
+    async fn insert_history(&self, po: OptionSummaryPo) -> Result<(), YuError>;
+
+    async fn batch_insert(&self, po_vec: Vec<OptionSummaryPo>) -> Result<(), YuError>;
+
+    async fn find_summary_between(&self, inst_id: u64, start_ts: u64, end_ts: u64) -> Result<Vec<OptionSummaryPo>, YuError>;
+
+    async fn latest_summary_by_inst_id(&self, inst_id: u64) -> Result<Option<OptionSummaryPo>, YuError>;
+
+    fn get_db_provider(&self) -> DuckDBDSProvider;
+}
+
 pub type OkxInstrumentRepository = Arc<dyn OkxInstrumentRepositoryTrait + Send + Sync>;
 pub type OkxKlineRepository = Arc<dyn OkxKlineRepositoryTrait + Send + Sync>;
+pub type OkxOptionSummaryRepository = Arc<dyn OkxOptionSummaryRepositoryTrait + Send + Sync>;
 
 pub fn get_instrument_repo(provider: Option<DuckDBDSProvider>) -> OkxInstrumentRepository {
     let real_provider = provider.unwrap_or_default();
@@ -56,6 +71,14 @@ pub fn get_default_kline_repo(provider: Option<DuckDBDSProvider>) -> OkxKlineRep
     Arc::new(OkxKlinePoRepositoryImpl {
         provider: real_provider,
         channel: get_okx_kline_table(),
+    })
+}
+
+pub fn get_default_option_summary_repo(provider: Option<DuckDBDSProvider>) -> OkxOptionSummaryRepository {
+    let real_provider = provider.unwrap_or_default();
+    Arc::new(OkxOptionSummaryPoRepositoryImpl {
+        provider: real_provider,
+        channel: get_okx_option_summary_table(),
     })
 }
 
@@ -277,6 +300,172 @@ impl OkxKlineRepositoryTrait for OkxKlinePoRepositoryImpl {
             });
         }
         Ok(res)
+    }
+
+    fn get_db_provider(&self) -> DuckDBDSProvider {
+        self.provider.clone()
+    }
+}
+
+pub struct OkxOptionSummaryPoRepositoryImpl {
+    provider: DuckDBDSProvider,
+    channel: DuckTableTableChannel<OptionSummaryPo>,
+}
+
+impl Default for OkxOptionSummaryPoRepositoryImpl {
+    fn default() -> Self {
+        Self {
+            provider: Default::default(),
+            channel: get_okx_option_summary_table(),
+        }
+    }
+}
+
+#[async_trait]
+impl OkxOptionSummaryRepositoryTrait for OkxOptionSummaryPoRepositoryImpl {
+    async fn insert_history(&self, po: OptionSummaryPo) -> Result<(), YuError> {
+        let (tx, rx) = oneshot::channel();
+        let command = QueryCommand::Insert(InsertPayload::new(po, tx));
+        self.channel
+            .send(command)
+            .await
+            .map_err(|e| YuError::new(&format!("Failed to send command: {}", e)))?;
+        match rx.await {
+            Ok(_) => Ok(()),
+            Err(e) => Err(YuError::new(&format!("Failed to receive response: {}", e))),
+        }
+    }
+
+    async fn batch_insert(&self, po_vec: Vec<OptionSummaryPo>) -> Result<(), YuError> {
+        let (tx, rx) = oneshot::channel();
+        let command = QueryCommand::BatchInsert(BatchInsertPayload::new(po_vec, tx));
+        self.channel
+            .send(command)
+            .await
+            .map_err(|e| YuError::new(&format!("Failed to send command: {}", e)))?;
+        match rx.await {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(e)) => Err(YuError::new(&format!("Failed to receive command: {}", e))),
+            Err(e) => Err(YuError::new(&format!("Failed to receive command: {}", e))),
+        }
+    }
+
+    async fn find_summary_between(&self, inst_id: u64, start_ts: u64, end_ts: u64) -> Result<Vec<OptionSummaryPo>, YuError> {
+        let conn = self.provider.acquire()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, inst_id, inst_identify, inst_type, uly, acquire_ts, server_ts, ask_vol, bid_vol, delta, delta_bs, fwd_px, gamma, gamma_bs, lever, mark_vol, real_vol, vol_lv, theta, theta_bs, vega, vega_bs FROM OKX_OPTION_SUMMARY WHERE inst_id = ? AND server_ts >= ? AND server_ts <= ? ORDER BY server_ts ASC;",
+        )?;
+        let mut rows = stmt.query([inst_id, start_ts, end_ts])?;
+        let mut res: Vec<OptionSummaryPo> = Vec::new();
+        while let Some(row) = rows.next()? {
+            let id: u64 = row.get(0)?;
+            let inst_id_db: u64 = row.get(1)?;
+            let inst_identify: String = row.get(2)?;
+            let inst_type: String = row.get(3)?;
+            let uly: Option<String> = row.get(4)?;
+            let acquire_ts: u64 = row.get(5)?;
+            let server_ts: u64 = row.get(6)?;
+            let ask_vol: Option<f64> = row.get(7)?;
+            let bid_vol: Option<f64> = row.get(8)?;
+            let delta: Option<f64> = row.get(9)?;
+            let delta_bs: Option<f64> = row.get(10)?;
+            let fwd_px: Option<f64> = row.get(11)?;
+            let gamma: Option<f64> = row.get(12)?;
+            let gamma_bs: Option<f64> = row.get(13)?;
+            let lever: Option<f64> = row.get(14)?;
+            let mark_vol: Option<f64> = row.get(15)?;
+            let real_vol: Option<f64> = row.get(16)?;
+            let vol_lv: Option<f64> = row.get(17)?;
+            let theta: Option<f64> = row.get(18)?;
+            let theta_bs: Option<f64> = row.get(19)?;
+            let vega: Option<f64> = row.get(20)?;
+            let vega_bs: Option<f64> = row.get(21)?;
+
+            res.push(OptionSummaryPo {
+                id,
+                inst_id: inst_id_db,
+                inst_identify,
+                inst_type,
+                uly,
+                acquire_ts,
+                server_ts,
+                ask_vol,
+                bid_vol,
+                delta,
+                delta_bs,
+                fwd_px,
+                gamma,
+                gamma_bs,
+                lever,
+                mark_vol,
+                real_vol,
+                vol_lv,
+                theta,
+                theta_bs,
+                vega,
+                vega_bs,
+            });
+        }
+        Ok(res)
+    }
+
+    async fn latest_summary_by_inst_id(&self, inst_id: u64) -> Result<Option<OptionSummaryPo>, YuError> {
+        let conn = self.provider.acquire()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, inst_id, inst_identify, inst_type, uly, acquire_ts, server_ts, ask_vol, bid_vol, delta, delta_bs, fwd_px, gamma, gamma_bs, lever, mark_vol, real_vol, vol_lv, theta, theta_bs, vega, vega_bs FROM OKX_OPTION_SUMMARY WHERE inst_id = ? ORDER BY server_ts DESC LIMIT 1;",
+        )?;
+        let mut rows = stmt.query([inst_id])?;
+        if let Some(row) = rows.next()? {
+            let id: u64 = row.get(0)?;
+            let inst_id_db: u64 = row.get(1)?;
+            let inst_identify: String = row.get(2)?;
+            let inst_type: String = row.get(3)?;
+            let uly: Option<String> = row.get(4)?;
+            let acquire_ts: u64 = row.get(5)?;
+            let server_ts: u64 = row.get(6)?;
+            let ask_vol: Option<f64> = row.get(7)?;
+            let bid_vol: Option<f64> = row.get(8)?;
+            let delta: Option<f64> = row.get(9)?;
+            let delta_bs: Option<f64> = row.get(10)?;
+            let fwd_px: Option<f64> = row.get(11)?;
+            let gamma: Option<f64> = row.get(12)?;
+            let gamma_bs: Option<f64> = row.get(13)?;
+            let lever: Option<f64> = row.get(14)?;
+            let mark_vol: Option<f64> = row.get(15)?;
+            let real_vol: Option<f64> = row.get(16)?;
+            let vol_lv: Option<f64> = row.get(17)?;
+            let theta: Option<f64> = row.get(18)?;
+            let theta_bs: Option<f64> = row.get(19)?;
+            let vega: Option<f64> = row.get(20)?;
+            let vega_bs: Option<f64> = row.get(21)?;
+
+            Ok(Some(OptionSummaryPo {
+                id,
+                inst_id: inst_id_db,
+                inst_identify,
+                inst_type,
+                uly,
+                acquire_ts,
+                server_ts,
+                ask_vol,
+                bid_vol,
+                delta,
+                delta_bs,
+                fwd_px,
+                gamma,
+                gamma_bs,
+                lever,
+                mark_vol,
+                real_vol,
+                vol_lv,
+                theta,
+                theta_bs,
+                vega,
+                vega_bs,
+            }))
+        } else {
+            Ok(None)
+        }
     }
 
     fn get_db_provider(&self) -> DuckDBDSProvider {

@@ -4,6 +4,7 @@ use crate::duck_db_tables::DuckDbTableTrait;
 pub enum OkxTables {
     Kline,
     Instruments,
+    OptionSummary,
 }
 
 impl DuckDbTableTrait for OkxTables {
@@ -11,6 +12,7 @@ impl DuckDbTableTrait for OkxTables {
         match self {
             OkxTables::Kline => String::from("OKX_KLINE"),
             OkxTables::Instruments => String::from("OKX_INSTRUMENTS"),
+            OkxTables::OptionSummary => String::from("OKX_OPTION_SUMMARY"),
         }
     }
 
@@ -18,6 +20,7 @@ impl DuckDbTableTrait for OkxTables {
         match self {
             OkxTables::Kline => String::from(OKX_KLINE),
             OkxTables::Instruments => String::from(CREATE_OKX_INSTRUMENTS_TABLE),
+            OkxTables::OptionSummary => String::from(CREATE_OKX_OPTION_SUMMARY_TABLE),
         }
     }
 
@@ -63,4 +66,32 @@ CREATE TABLE IF NOT EXISTS OKX_KLINE (
 CREATE UNIQUE INDEX IF NOT EXISTS IDX_CREATE_OKX_KLINE_MAIN ON OKX_KLINE(inst_id, timestamp);
 "#;
 
-pub(crate) const ALL_OKX_TABLES: &[OkxTables] = &[OkxTables::Kline, OkxTables::Instruments];
+pub const CREATE_OKX_OPTION_SUMMARY_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS OKX_OPTION_SUMMARY (
+        id BIGINT PRIMARY KEY,
+        inst_id BIGINT,
+        inst_identify VARCHAR,
+        inst_type VARCHAR,
+        uly VARCHAR,
+        acquire_ts BIGINT,
+        server_ts BIGINT,
+        ask_vol DOUBLE,
+        bid_vol DOUBLE,
+        delta DOUBLE,
+        delta_bs DOUBLE,
+        fwd_px DOUBLE,
+        gamma DOUBLE,
+        gamma_bs DOUBLE,
+        lever DOUBLE,
+        mark_vol DOUBLE,
+        real_vol DOUBLE,
+        vol_lv DOUBLE,
+        theta DOUBLE,
+        theta_bs DOUBLE,
+        vega DOUBLE,
+        vega_bs DOUBLE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS IDX_CREATE_OKX_OPTION_SUMMARY_MAIN ON OKX_OPTION_SUMMARY(inst_id, server_ts);
+"#;
+
+pub(crate) const ALL_OKX_TABLES: &[OkxTables] = &[OkxTables::Kline, OkxTables::Instruments, OkxTables::OptionSummary];
