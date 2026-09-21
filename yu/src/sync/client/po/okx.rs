@@ -310,6 +310,14 @@ impl CopyInsertable for LocalOkxOptionSummaryPo {
         };
         let acquire = acquire_dt.to_rfc3339();
 
+        let server_secs = (self.server_ts / 1000) as i64;
+        let server_nanos = ((self.server_ts % 1000) * 1_000_000) as u32;
+        let server_dt = match chrono::Utc.timestamp_opt(server_secs, server_nanos) {
+            LocalResult::Single(dt) => dt,
+            _ => chrono::Utc.timestamp_opt(0, 0).single().unwrap(),
+        };
+        let server = server_dt.to_rfc3339();
+
         let batch_secs = (self.batch_timestamp / 1000) as i64;
         let batch_nanos = ((self.batch_timestamp % 1000) * 1_000_000) as u32;
         let batch_dt = match chrono::Utc.timestamp_opt(batch_secs, batch_nanos) {
@@ -326,7 +334,7 @@ impl CopyInsertable for LocalOkxOptionSummaryPo {
             self.inst_type,
             self.uly.clone().unwrap_or_default(),
             acquire,
-            self.server_ts,
+            server,
             self.ask_vol.map_or(String::from(""), |v| v.to_string()),
             self.bid_vol.map_or(String::from(""), |v| v.to_string()),
             self.delta.map_or(String::from(""), |v| v.to_string()),
