@@ -1,6 +1,6 @@
 use crate::duck_db::DuckDBDSProvider;
 use crate::errors::YuError;
-use crate::okx::duck_po::OkxKlinePo;
+use crate::okx::duck_po::{OkxKlinePo, OkxOptionSummaryPo};
 use crate::okx::service::OptionService;
 use crate::polymarket::po::PolyMarketHistoryPo;
 use crate::polymarket::service::SeriesHistoryMarketService;
@@ -104,7 +104,16 @@ impl YuSyncServer {
 
         let polymarket_history_receiver = polymarket_history_service.subscribe_history_broadcast();
         let okx_option_kline_receiver = okx_option_service.subscribe_kline().await;
-        Self::start_broadcast_history(command_rx, polymarket_history_receiver, okx_option_kline_receiver, 500, 1000).await?;
+        let okx_option_summary_receiver = okx_option_service.subscribe_option_summary().await;
+        Self::start_broadcast_history(
+            command_rx,
+            polymarket_history_receiver,
+            okx_option_kline_receiver,
+            okx_option_summary_receiver,
+            500,
+            1000,
+        )
+        .await?;
         Ok(Self {
             polymarket_history_service,
             okx_option_service,
@@ -136,6 +145,7 @@ impl YuSyncServer {
         mut command_rx: mpsc::Receiver<SyncInternalCommand>,
         mut polymarket_history_receiver: broadcast::Receiver<PolyMarketHistoryPo>,
         mut okx_option_kline_receiver: broadcast::Receiver<OkxKlinePo>,
+        mut okx_option_summary_receiver: broadcast::Receiver<OkxOptionSummaryPo>,
         max_cache_size: usize,
         max_loop_mill_seconds: usize,
     ) -> Result<(), YuError> {
@@ -192,6 +202,59 @@ impl YuSyncServer {
                             }
                             Err(e) => {
                                 error!("okx kline broadcast receiver error: {:?}", e);
+                                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                            }
+                        }
+                    }
+                    recv_summary = okx_option_summary_receiver.recv() => {
+                        match recv_summary {
+                            Ok(po) => {
+                                trace!("Received okx option summary broadcast inst_id: {} server_ts: {}", po.inst_id, po.server_ts);
+                                let summary = crate::sync::models::grpc_sync::OptionSummary {
+                                    id: po.id,
+                                    inst_id: po.inst_id,
+                                    inst_identify: po.inst_identify,
+                                    inst_type: po.inst_type,
+                                    uly: po.uly.unwrap_or_default(),
+                                    acquire_ts: po.acquire_ts,
+                                    server_ts: po.server_ts,
+                                    ask_vol: po.ask_vol,
+                                    bid_vol: po.bid_vol,
+                                    delta: po.delta,
+                                    delta_bs: po.delta_bs,
+                                    fwd_px: po.fwd_px,
+                                    gamma: po.gamma,
+                                    gamma_bs: po.gamma_bs,
+                                    lever: po.lever,
+                                    mark_vol: po.mark_vol,
+                                    real_vol: po.real_vol,
+                                    vol_lv: po.vol_lv,
+                                    theta: po.theta,
+                                    theta_bs: po.theta_bs,
+                                    vega: po.vega,
+                                    vega_bs: po.vega_bs,
+                                };
+                                // 使用单独缓存，便于和 kline / polymarket 分支并行汇总发送
+                                let mut merged = Vec::new();
+                                merged.push(summary);
+                                let list = crate::sync::models::grpc_sync::OptionSummaryList {
+                                    summary_list: merged,
+                                    timestamp: unix_time_now_u64_utc(),
+                                };
+                                let msg = ServerMessage {
+                                    payload: Some(server_message::Payload::OptionSummaryHistory(list)),
+                                };
+                                for (id, tx) in history_tx_map.iter_mut() {
+                                    if tx.is_closed() {
+                                        continue;
+                                    }
+                                    if let Err(e) = tx.send(Ok(msg.clone())).await {
+                                        error!("Failed to send okx option summary to subscriber {}: {:?}", id, e);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                error!("okx option summary broadcast receiver error: {:?}", e);
                                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                             }
                         }
@@ -550,9 +613,10 @@ mod tests {
         let (command_tx, command_rx) = mpsc::channel::<SyncInternalCommand>(100);
         let (poly_tx, poly_rx) = broadcast::channel::<PolyMarketHistoryPo>(16);
         let (_okx_tx, okx_rx) = broadcast::channel::<OkxKlinePo>(16);
+        let (_okx_option_tx, okx_option_rx) = broadcast::channel::<OkxOptionSummaryPo>(16);
 
         // spawn the broadcaster
-        let _ = YuSyncServer::start_broadcast_history(command_rx, poly_rx, okx_rx, 3, 10_000)
+        let _ = YuSyncServer::start_broadcast_history(command_rx, poly_rx, okx_rx, okx_option_rx, 3, 10_000)
             .await
             .unwrap();
 
@@ -592,9 +656,12 @@ mod tests {
         let (command_tx, command_rx) = mpsc::channel::<SyncInternalCommand>(100);
         let (poly_tx, poly_rx) = broadcast::channel::<PolyMarketHistoryPo>(16);
         let (_okx_tx, okx_rx) = broadcast::channel::<OkxKlinePo>(16);
+        let (_okx_option_tx, okx_option_rx) = broadcast::channel::<OkxOptionSummaryPo>(16);
 
         // use small time threshold (ms)
-        let _ = YuSyncServer::start_broadcast_history(command_rx, poly_rx, okx_rx, 10, 800).await.unwrap();
+        let _ = YuSyncServer::start_broadcast_history(command_rx, poly_rx, okx_rx, okx_option_rx, 10, 800)
+            .await
+            .unwrap();
 
         let (client_tx, mut client_rx) = mpsc::channel::<Result<ServerMessage, Status>>(16);
         let payload = SubscribePayload { id: 2u64, tx: client_tx };
@@ -629,8 +696,9 @@ mod tests {
         let (command_tx, command_rx) = mpsc::channel::<SyncInternalCommand>(100);
         let (poly_tx, poly_rx) = broadcast::channel::<PolyMarketHistoryPo>(16);
         let (_okx_tx, okx_rx) = broadcast::channel::<OkxKlinePo>(16);
+        let (_okx_option_tx, okx_option_rx) = broadcast::channel::<OkxOptionSummaryPo>(16);
 
-        let _ = YuSyncServer::start_broadcast_history(command_rx, poly_rx, okx_rx, 1, 10_000)
+        let _ = YuSyncServer::start_broadcast_history(command_rx, poly_rx, okx_rx, okx_option_rx, 1, 10_000)
             .await
             .unwrap();
 
@@ -675,8 +743,9 @@ mod tests {
         let (command_tx, command_rx) = mpsc::channel::<SyncInternalCommand>(100);
         let (poly_tx, poly_rx) = broadcast::channel::<PolyMarketHistoryPo>(16);
         let (_okx_tx, okx_rx) = broadcast::channel::<OkxKlinePo>(16);
+        let (_okx_option_tx, okx_option_rx) = broadcast::channel::<OkxOptionSummaryPo>(16);
 
-        let _ = YuSyncServer::start_broadcast_history(command_rx, poly_rx, okx_rx, 1, 10_000)
+        let _ = YuSyncServer::start_broadcast_history(command_rx, poly_rx, okx_rx, okx_option_rx, 1, 10_000)
             .await
             .unwrap();
 

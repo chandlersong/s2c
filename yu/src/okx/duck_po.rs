@@ -84,7 +84,7 @@ impl DuckDBPO for OkxKlinePo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Builder)]
-pub struct OptionSummaryPo {
+pub struct OkxOptionSummaryPo {
     pub id: u64,
     pub inst_id: u64,
     pub inst_identify: String,
@@ -110,7 +110,7 @@ pub struct OptionSummaryPo {
     pub vega: Option<f64>,
     pub vega_bs: Option<f64>,
 }
-impl OptionSummaryPo {
+impl OkxOptionSummaryPo {
     pub fn from_detail(inst_id: u64, acquire_ts: u64, detail: &OptionSummaryDetail) -> Self {
         Self {
             id: get_snow_flake_id_u64(),
@@ -139,7 +139,7 @@ impl OptionSummaryPo {
     }
 }
 
-impl DuckDBPO for OptionSummaryPo {
+impl DuckDBPO for OkxOptionSummaryPo {
     fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>> {
         appender_params_from_iter(vec![
             &self.id as &dyn duckdb::ToSql,
@@ -168,7 +168,7 @@ impl DuckDBPO for OptionSummaryPo {
     }
 }
 
-impl<'a> TryFrom<&'a Row<'a>> for OptionSummaryPo {
+impl<'a> TryFrom<&'a Row<'a>> for OkxOptionSummaryPo {
     type Error = YuError;
 
     fn try_from(row: &Row) -> Result<Self, Self::Error> {
@@ -195,7 +195,7 @@ impl<'a> TryFrom<&'a Row<'a>> for OptionSummaryPo {
         let vega: Option<f64> = row.get(20)?;
         let vega_bs: Option<f64> = row.get(21)?;
 
-        Ok(OptionSummaryPo {
+        Ok(OkxOptionSummaryPo {
             id,
             inst_id,
             inst_identify,

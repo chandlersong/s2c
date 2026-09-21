@@ -4,7 +4,7 @@ use crate::data_integrity::check::{DuckDBBinarySearchDataImpl, binary_search_gap
 use crate::data_integrity::models::ValidationGap;
 use crate::duck_db_tables::DuckDbTableTrait;
 use crate::errors::YuError;
-use crate::okx::duck_po::{InstrumentPo, OkxKlinePo, OptionSummaryPo};
+use crate::okx::duck_po::{InstrumentPo, OkxKlinePo, OkxOptionSummaryPo};
 use crate::okx::duckdb_consts::OkxTables;
 use crate::okx::duckdb_repository::{
     OkxInstrumentRepository, OkxKlineRepository, OkxOptionSummaryRepository, get_default_kline_repo, get_default_option_summary_repo,
@@ -443,6 +443,7 @@ pub struct OptionService {
     interval: HistoryInterval,
     refresh_corn: String,
     kline_broadcast_sender: broadcast::Sender<OkxKlinePo>,
+    option_summary_broadcast_sender: broadcast::Sender<OkxOptionSummaryPo>,
 }
 
 impl Default for OptionService {
@@ -461,6 +462,7 @@ impl OptionService {
         refresh_corn: Option<String>,
     ) -> Self {
         let (kline_broadcast_sender, _kline_broadcast_receiver) = broadcast::channel(1000);
+        let (option_summary_broadcast_sender, _option_summary_broadcast_receiver) = broadcast::channel(1000);
         Self {
             live_instruments: Arc::new(RwLock::new(vec![])),
             common_io: create_common_io_service(
@@ -470,6 +472,7 @@ impl OptionService {
                 api.unwrap_or_else(|| default_okx_api()),
             ),
             interval: interval.unwrap_or(HistoryInterval::OneHour),
+            option_summary_broadcast_sender,
             refresh_corn: refresh_corn.unwrap_or("18 18 * * * *".to_string()),
             kline_broadcast_sender,
         }
@@ -478,12 +481,14 @@ impl OptionService {
     #[cfg(test)]
     fn new_with_mock(inst_ids: Arc<RwLock<Vec<InstrumentPo>>>, common_io: CommonIOService, interval: HistoryInterval) -> Self {
         let (kline_broadcast_sender, _kline_broadcast_receiver) = broadcast::channel(1000);
+        let (option_summary_broadcast_sender, _option_summary_broadcast_receiver) = broadcast::channel(1000);
         Self {
             live_instruments: inst_ids,
             common_io,
             interval,
             refresh_corn: "18 * * * * *".to_string(),
             kline_broadcast_sender,
+            option_summary_broadcast_sender,
         }
     }
 
@@ -502,6 +507,10 @@ impl OptionService {
 
     pub async fn subscribe_kline(&self) -> broadcast::Receiver<OkxKlinePo> {
         self.kline_broadcast_sender.subscribe()
+    }
+
+    pub async fn subscribe_option_summary(&self) -> broadcast::Receiver<OkxOptionSummaryPo> {
+        self.option_summary_broadcast_sender.subscribe()
     }
 
     pub async fn initial_instruments(&self) -> Result<Vec<InstrumentPo>, YuError> {
@@ -672,7 +681,7 @@ impl OptionService {
         kline_repo.find_kline_between(inst_id, start_ms, end_ms).await
     }
 
-    pub async fn find_option_summary_between(&self, inst_id: u64, start_ms: u64, end_ms: u64) -> Result<Vec<OptionSummaryPo>, YuError> {
+    pub async fn find_option_summary_between(&self, inst_id: u64, start_ms: u64, end_ms: u64) -> Result<Vec<OkxOptionSummaryPo>, YuError> {
         let option_summary_repo = self.common_io.get_option_summary_repo();
         option_summary_repo.find_summary_between(inst_id, start_ms, end_ms).await
     }
@@ -944,8 +953,9 @@ impl OptionService {
             if inst_info.is_none() {
                 info!("{} 没有被存入数据库", btc_summary.inst_id);
             }
-            let po = OptionSummaryPo::from_detail(inst_info.unwrap().id, acquire_ts, btc_summary);
-            repo.insert_history(po).await?;
+            let po = OkxOptionSummaryPo::from_detail(inst_info.unwrap().id, acquire_ts, btc_summary);
+            repo.insert_history(po.clone()).await?;
+            self.broadcast_okx_option_summary(po).await?;
         }
 
         let summary_eth = api.option_summary(eth_query_param).await?;
@@ -954,9 +964,20 @@ impl OptionService {
             if inst_info.is_none() {
                 info!("{} 没有被存入数据库", eth_summary.inst_id);
             }
-            let po = OptionSummaryPo::from_detail(inst_info.unwrap().id, acquire_ts, eth_summary);
-            repo.insert_history(po).await?;
+            let po = OkxOptionSummaryPo::from_detail(inst_info.unwrap().id, acquire_ts, eth_summary);
+            repo.insert_history(po.clone()).await?;
+            self.broadcast_okx_option_summary(po).await?;
         }
+        Ok(())
+    }
+
+    async fn broadcast_okx_option_summary(&self, po: OkxOptionSummaryPo) -> Result<(), YuError> {
+        if self.option_summary_broadcast_sender.receiver_count() != 0 {
+            if let Err(e) = self.option_summary_broadcast_sender.send(po) {
+                error!("Failed to broadcast okx option summary: {:?}", e);
+            }
+        }
+
         Ok(())
     }
 }

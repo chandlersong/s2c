@@ -1,7 +1,7 @@
 use crate::duck_db::DuckDBDSProvider;
 use crate::duck_db_tables::DuckTableTableChannel;
 use crate::errors::YuError;
-use crate::okx::duck_po::{InstrumentPo, OkxKlinePo, OptionSummaryPo};
+use crate::okx::duck_po::{InstrumentPo, OkxKlinePo, OkxOptionSummaryPo};
 use crate::okx::duckdb_tables::{get_okx_kline_table, get_okx_option_summary_table};
 use crate::okx::okx_consts::InstrumentType;
 use async_trait::async_trait;
@@ -46,13 +46,13 @@ pub trait OkxKlineRepositoryTrait {
 #[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
 #[async_trait]
 pub trait OkxOptionSummaryRepositoryTrait {
-    async fn insert_history(&self, po: OptionSummaryPo) -> Result<(), YuError>;
+    async fn insert_history(&self, po: OkxOptionSummaryPo) -> Result<(), YuError>;
 
-    async fn batch_insert(&self, po_vec: Vec<OptionSummaryPo>) -> Result<(), YuError>;
+    async fn batch_insert(&self, po_vec: Vec<OkxOptionSummaryPo>) -> Result<(), YuError>;
 
-    async fn find_summary_between(&self, inst_id: u64, start_ts: u64, end_ts: u64) -> Result<Vec<OptionSummaryPo>, YuError>;
+    async fn find_summary_between(&self, inst_id: u64, start_ts: u64, end_ts: u64) -> Result<Vec<OkxOptionSummaryPo>, YuError>;
 
-    async fn latest_summary_by_inst_id(&self, inst_id: u64) -> Result<Option<OptionSummaryPo>, YuError>;
+    async fn latest_summary_by_inst_id(&self, inst_id: u64) -> Result<Option<OkxOptionSummaryPo>, YuError>;
 
     fn get_db_provider(&self) -> DuckDBDSProvider;
 }
@@ -309,7 +309,7 @@ impl OkxKlineRepositoryTrait for OkxKlinePoRepositoryImpl {
 
 pub struct OkxOptionSummaryPoRepositoryImpl {
     provider: DuckDBDSProvider,
-    channel: DuckTableTableChannel<OptionSummaryPo>,
+    channel: DuckTableTableChannel<OkxOptionSummaryPo>,
 }
 
 impl Default for OkxOptionSummaryPoRepositoryImpl {
@@ -323,7 +323,7 @@ impl Default for OkxOptionSummaryPoRepositoryImpl {
 
 #[async_trait]
 impl OkxOptionSummaryRepositoryTrait for OkxOptionSummaryPoRepositoryImpl {
-    async fn insert_history(&self, po: OptionSummaryPo) -> Result<(), YuError> {
+    async fn insert_history(&self, po: OkxOptionSummaryPo) -> Result<(), YuError> {
         let (tx, rx) = oneshot::channel();
         let command = QueryCommand::Insert(InsertPayload::new(po, tx));
         self.channel
@@ -336,7 +336,7 @@ impl OkxOptionSummaryRepositoryTrait for OkxOptionSummaryPoRepositoryImpl {
         }
     }
 
-    async fn batch_insert(&self, po_vec: Vec<OptionSummaryPo>) -> Result<(), YuError> {
+    async fn batch_insert(&self, po_vec: Vec<OkxOptionSummaryPo>) -> Result<(), YuError> {
         let (tx, rx) = oneshot::channel();
         let command = QueryCommand::BatchInsert(BatchInsertPayload::new(po_vec, tx));
         self.channel
@@ -350,13 +350,13 @@ impl OkxOptionSummaryRepositoryTrait for OkxOptionSummaryPoRepositoryImpl {
         }
     }
 
-    async fn find_summary_between(&self, inst_id: u64, start_ts: u64, end_ts: u64) -> Result<Vec<OptionSummaryPo>, YuError> {
+    async fn find_summary_between(&self, inst_id: u64, start_ts: u64, end_ts: u64) -> Result<Vec<OkxOptionSummaryPo>, YuError> {
         let conn = self.provider.acquire()?;
         let mut stmt = conn.prepare(
             "SELECT id, inst_id, inst_identify, inst_type, uly, acquire_ts, server_ts, ask_vol, bid_vol, delta, delta_bs, fwd_px, gamma, gamma_bs, lever, mark_vol, real_vol, vol_lv, theta, theta_bs, vega, vega_bs FROM OKX_OPTION_SUMMARY WHERE inst_id = ? AND acquire_ts >= ? AND acquire_ts <= ? ORDER BY acquire_ts ASC;",
         )?;
         let mut rows = stmt.query([inst_id, start_ts, end_ts])?;
-        let mut res: Vec<OptionSummaryPo> = Vec::new();
+        let mut res: Vec<OkxOptionSummaryPo> = Vec::new();
         while let Some(row) = rows.next()? {
             let id: u64 = row.get(0)?;
             let inst_id_db: u64 = row.get(1)?;
@@ -381,7 +381,7 @@ impl OkxOptionSummaryRepositoryTrait for OkxOptionSummaryPoRepositoryImpl {
             let vega: Option<f64> = row.get(20)?;
             let vega_bs: Option<f64> = row.get(21)?;
 
-            res.push(OptionSummaryPo {
+            res.push(OkxOptionSummaryPo {
                 id,
                 inst_id: inst_id_db,
                 inst_identify,
@@ -409,7 +409,7 @@ impl OkxOptionSummaryRepositoryTrait for OkxOptionSummaryPoRepositoryImpl {
         Ok(res)
     }
 
-    async fn latest_summary_by_inst_id(&self, inst_id: u64) -> Result<Option<OptionSummaryPo>, YuError> {
+    async fn latest_summary_by_inst_id(&self, inst_id: u64) -> Result<Option<OkxOptionSummaryPo>, YuError> {
         let conn = self.provider.acquire()?;
         let mut stmt = conn.prepare(
             "SELECT id, inst_id, inst_identify, inst_type, uly, acquire_ts, server_ts, ask_vol, bid_vol, delta, delta_bs, fwd_px, gamma, gamma_bs, lever, mark_vol, real_vol, vol_lv, theta, theta_bs, vega, vega_bs FROM OKX_OPTION_SUMMARY WHERE inst_id = ? ORDER BY server_ts DESC LIMIT 1;",
@@ -439,7 +439,7 @@ impl OkxOptionSummaryRepositoryTrait for OkxOptionSummaryPoRepositoryImpl {
             let vega: Option<f64> = row.get(20)?;
             let vega_bs: Option<f64> = row.get(21)?;
 
-            Ok(Some(OptionSummaryPo {
+            Ok(Some(OkxOptionSummaryPo {
                 id,
                 inst_id: inst_id_db,
                 inst_identify,

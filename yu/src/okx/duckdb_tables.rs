@@ -1,7 +1,7 @@
 use crate::duck_db::DuckDBDSProvider;
 use crate::duck_db_tables::{DuckDBOneTable, DuckDbTableTrait, DuckTableTableChannel};
 use crate::errors::YuError;
-use crate::okx::duck_po::{OkxKlinePo, OptionSummaryPo};
+use crate::okx::duck_po::{OkxKlinePo, OkxOptionSummaryPo};
 use crate::okx::duckdb_consts::{ALL_OKX_TABLES, OkxTables};
 use log::info;
 use std::sync::OnceLock;
@@ -25,7 +25,7 @@ pub fn initial_okx_tables(provider: Option<DuckDBDSProvider>) -> Result<(), YuEr
 }
 
 pub(crate) static OKX_KLINE: OnceLock<DuckTableTableChannel<OkxKlinePo>> = OnceLock::new();
-pub(crate) static OKX_OPTION_SUMMARY: OnceLock<DuckTableTableChannel<OptionSummaryPo>> = OnceLock::new();
+pub(crate) static OKX_OPTION_SUMMARY: OnceLock<DuckTableTableChannel<OkxOptionSummaryPo>> = OnceLock::new();
 
 pub fn get_okx_kline_table() -> DuckTableTableChannel<OkxKlinePo> {
     OKX_KLINE
@@ -33,8 +33,8 @@ pub fn get_okx_kline_table() -> DuckTableTableChannel<OkxKlinePo> {
         .clone()
 }
 
-pub fn get_okx_option_summary_table() -> DuckTableTableChannel<OptionSummaryPo> {
+pub fn get_okx_option_summary_table() -> DuckTableTableChannel<OkxOptionSummaryPo> {
     OKX_OPTION_SUMMARY
-        .get_or_init(|| DuckDBOneTable::<OptionSummaryPo, OkxTables>::start_new(OkxTables::OptionSummary, None))
+        .get_or_init(|| DuckDBOneTable::<OkxOptionSummaryPo, OkxTables>::start_new(OkxTables::OptionSummary, None))
         .clone()
 }
