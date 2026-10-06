@@ -4,7 +4,6 @@ use crate::postgresql_db_tables::PostgresqlBatchInsert;
 use crate::sync::client::database::get_okx_kline_batch_insert;
 use crate::sync::client::database::get_okx_option_summary_batch_insert;
 use crate::sync::client::database::get_polymarket_price_batch_insert;
-use crate::sync::client::po::binance::{LocalBinanceKlinePo, LocalBinanceTradePo};
 use crate::sync::client::po::okx::{LocalOkxInstrumentPo, LocalOkxKlinePo, LocalOkxOptionSummaryPo};
 use crate::sync::client::po::polymarket::{LocalPolyMarketHistoryPo, LocalPolyMarketInstrumentPo};
 use crate::sync::client::repository::binance::{ClientBinanceRepository, ClientBinanceRepositoryImpl};
@@ -102,7 +101,6 @@ impl GrpcChannelManager {
 pub struct SyncClientService {
     pm_repository: ClientPolyMarketRepository,
     okx_repository: ClientOkxRepository,
-    binance_repository: ClientBinanceRepository,
     pm_instrument_dict: Arc<RwLock<HashMap<u64, LocalPolyMarketInstrumentPo>>>,
     okx_instrument_dict: Arc<RwLock<HashMap<u64, LocalOkxInstrumentPo>>>,
 }
@@ -112,7 +110,6 @@ impl Default for SyncClientService {
         Self {
             pm_repository: ClientPolyMarketRepositoryImpl::from_pool(get_sync_client_pg_pool_sync().expect("get_sync_client_pg_pool_sync failed")),
             okx_repository: ClientOkxRepositoryImpl::from_pool(get_sync_client_pg_pool_sync().expect("get_sync_client_pg_pool_sync failed")),
-            binance_repository: ClientBinanceRepositoryImpl::from_pool(get_sync_client_pg_pool_sync().expect("get_sync_client_pg_pool_sync failed")),
             pm_instrument_dict: Arc::new(Default::default()),
             okx_instrument_dict: Arc::new(Default::default()),
         }

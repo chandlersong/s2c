@@ -6,9 +6,10 @@ use crate::polymarket::po::PolyMarketHistoryPo;
 use crate::polymarket::service::SeriesHistoryMarketService;
 use crate::sync::models::grpc_sync::sync_interface_server::SyncInterface;
 use crate::sync::models::grpc_sync::{
-    Empty, InstrumentList, OkxKline, PolyMarketHistory, PolyMarketHistoryList, PolymarketInstrument, ServerMessage, SubscribeRequest, SyncRequest,
-    server_message,
+    Empty, Instrument, InstrumentList, OkxKline, PolyMarketHistory, PolyMarketHistoryList, PolymarketInstrument, ServerMessage, SubscribeRequest,
+    SyncRequest, server_message,
 };
+use async_trait::async_trait;
 use li::tools::time::unix_time_now_u64_utc;
 use log::{error, info, trace};
 use std::collections::HashMap;
@@ -17,7 +18,16 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 use tonic::{Request, Response, Status};
 use yue::query_message::DataSourceProviderTrait;
-// for decoding prost-encoded payloads into PolyMarketHistory
+
+//
+#[async_trait]
+pub trait SyncInstrumentServiceTrait {
+    async fn list_instruments(&self) -> Result<HashMap<String, Instrument>, YuError>;
+
+    fn error_log(&self) -> String;
+}
+
+pub type SyncInstrumentService = Arc<dyn SyncInstrumentServiceTrait + Send + Sync>;
 
 ///
 /// 获取最新的asset id
@@ -93,12 +103,16 @@ pub struct YuSyncServer {
     okx_option_service: Arc<OptionService>,
     batch_size: usize,
     command_channel: mpsc::Sender<SyncInternalCommand>,
+
+    //TODO: 简化扩展
+    instruments_services: Vec<SyncInstrumentService>,
 }
 
 impl YuSyncServer {
     pub async fn create_and_start(
         polymarket_history_service: SeriesHistoryMarketService,
         okx_option_service: Arc<OptionService>,
+        instruments_services: Vec<SyncInstrumentService>,
     ) -> Result<Self, YuError> {
         let (command_channel, command_rx) = mpsc::channel::<SyncInternalCommand>(100);
 
@@ -119,6 +133,8 @@ impl YuSyncServer {
             okx_option_service,
             batch_size: 500,
             command_channel,
+
+            instruments_services,
         })
     }
 
@@ -350,48 +366,21 @@ impl YuSyncServer {
 #[tonic::async_trait]
 impl SyncInterface for YuSyncServer {
     async fn list_instrument(&self, _request: Request<Empty>) -> Result<Response<InstrumentList>, Status> {
-        let polymarket_instruments = self.polymarket_history_service.list_instruments().await;
-        let okx_option_instruments = self.okx_option_service.list_instruments().await;
-        let mut instruments_map: HashMap<String, crate::sync::models::grpc_sync::Instrument> = HashMap::new();
-
-        match polymarket_instruments {
-            Ok(list) => {
-                for inst in list {
-                    // 直接把 PolyMarketInstrumentPo 转换为 proto，latest_timestamp 暂时置为 0
-                    let asset_id = inst.asset_id.clone();
-                    let poly = PolymarketInstrument::from(inst);
-
-                    let instrument = crate::sync::models::grpc_sync::Instrument {
-                        payload: Some(crate::sync::models::grpc_sync::instrument::Payload::Polymarket(poly)),
-                    };
-                    instruments_map.insert(asset_id, instrument);
+        let mut instruments_map: HashMap<String, Instrument> = HashMap::new();
+        for svc in &self.instruments_services {
+            match svc.list_instruments().await {
+                Ok(instruments) => {
+                    instruments_map.extend(instruments);
+                }
+                Err(error) => {
+                    error!("{:?}:{:?}", svc.error_log(), error);
                 }
             }
-            Err(e) => {
-                error!("list_instruments error: {:?}", e);
-                return Err(Status::internal(format!("list polymarket instruments error: {:?}", e)));
-            }
-        };
-
-        match okx_option_instruments {
-            Ok(okx_list) => {
-                for inst in okx_list {
-                    let key = inst.inst_identify.clone();
-                    let okx = crate::sync::models::grpc_sync::OkxInstrument::from(inst);
-                    let instrument = crate::sync::models::grpc_sync::Instrument {
-                        payload: Some(crate::sync::models::grpc_sync::instrument::Payload::Okx(okx)),
-                    };
-                    instruments_map.insert(key, instrument);
-                }
-            }
-            Err(e) => {
-                error!("list_okx_instruments error: {:?}", e);
-                return Err(Status::internal(format!("list okx option instruments error: {:?}", e)));
-            }
-        };
+        }
 
         Ok(Response::new(InstrumentList {
             instruments: instruments_map,
+            server_timestamp: unix_time_now_u64_utc(),
         }))
     }
 

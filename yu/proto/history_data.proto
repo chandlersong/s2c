@@ -7,7 +7,8 @@ enum InstrumentType {
   POLYMARKET = 1;
   OKX_KLINE = 2;
   OKX_OPTION_SUMMARY = 3;
-  BINANCE_INSTRUMENT = 4;
+  BINANCE_SPOT = 4;
+  BINANCE_TRADE = 5;
 }
 
 message PolymarketInstrument{
@@ -66,15 +67,27 @@ message Instrument {
 
 message InstrumentList{
   map<string, Instrument> instruments = 1;
+  uint64 server_timestamp = 2;  //服务器的时间戳
 }
+/**
+服务器端和客户端同步的服务
+这里要提供3个服务
+1. 获取服务器里面的所有资产的列表
+2. client提供asset id和timestamp。然后server把timestamp之后的所有数据推送给client。stream里面推送，PolyMarketHistoryList
+3. 推送信息给client端最新的消息。 PolyMarketHistoryList
 
-// 服务器端和客户端同步的服务
-// 这里要提供3个服务
-// 1. 获取服务器里面的所有资产的最新时间戳。返回AssetTimestamp
-// 2. client提供asset id和timestamp。然后server把timestamp之后的所有数据推送给client。stream里面推送，PolyMarketHistoryList
-// 3. 推送信息给client端最新的消息。 PolyMarketHistoryList
+# 同步
+
+##  同步Instrument
+这里应该是单纯的Instrument信息。不包含关于其他的。因为在实际过程中，一个Instrument可能会包含很多信息。比如Okx的option包含了kline和summary
+
+##  SyncHistory
+同步历史消息。时间范围应该在于，本地时间到最新时间上个时间的返回时间戳server_timestamp
+
+*/
 service SyncInterface {
-  // 1. 获取服务器里面的所有资产的最新时间戳
+
+  // 1. 获取服务器里面的所有资产列表
   rpc ListInstrument(Empty) returns (InstrumentList) {}
 
   // 2. client提供asset id和timestamp，server把timestamp之后的所有数据推送给client

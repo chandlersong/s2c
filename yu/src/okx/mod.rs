@@ -6,3 +6,4 @@ pub mod service;
 pub mod duckdb_repository;
 pub mod okx_consts;
 pub mod sync_job;
+pub mod sync_server;
