@@ -3,12 +3,42 @@ use duckdb::appender_params_from_iter;
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display};
+use yue::binance::bn_models::common::SymbolInfoTrait;
 use yue::binance::bn_models::common::{PortfolioSpotOrderData, PortfolioSwapOrderData, SpotOrderData, SwapOrderData};
 use yue::binance::bn_models::spot_restful::BinanceKline;
-use yue::binance::bn_models::spot_websocket_stream::{SpotKlineData, TradeStreamPayload};
+use yue::binance::bn_models::spot_websocket_stream::{KlineStreamPayload, SpotKlineData, TradeStreamPayload};
 use yue::binance::bn_models::swap_restful::FundingRate;
 use yue::binance::bn_models::swap_websocket_stream::SwapWebsocketKlineData;
-use yue::tools::{get_snow_flake_id_u64, SnowyFlakeWrapper};
+use yue::tools::{SnowyFlakeWrapper, get_snow_flake_id_u64};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinanceInstrument {
+    pub id: i64,
+    pub symbol: String,
+    pub status: String,
+    pub base_asset: String,
+    pub quote_asset: String,
+    pub quote_asset_precision: i32,
+    pub order_types: Vec<String>,
+    pub symbol_type: String,
+    pub on_board_time: Option<u64>,
+}
+
+impl<T: SymbolInfoTrait> From<&T> for BinanceInstrument {
+    fn from(symbol: &T) -> Self {
+        Self {
+            id: get_snow_flake_id_u64() as i64,
+            symbol: symbol.symbol().to_string(),
+            status: symbol.status().to_string(),
+            base_asset: symbol.base_asset().to_string(),
+            quote_asset: symbol.quote_asset().to_string(),
+            quote_asset_precision: symbol.quote_precision(),
+            order_types: symbol.order_types().clone(),
+            symbol_type: symbol.symbol_type().to_string(),
+            on_board_time: symbol.get_on_board_time(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpotStreamTradeRecordPo {
@@ -100,6 +130,12 @@ impl From<SpotKlineData> for KlinePo {
             first_trade_id: Some(value.first_trade_id),
             last_trade_id: Some(value.last_trade_id),
         }
+    }
+}
+
+impl From<KlineStreamPayload> for KlinePo {
+    fn from(payload: KlineStreamPayload) -> Self {
+        Self::from(payload.kline)
     }
 }
 
@@ -473,5 +509,142 @@ impl DuckDBPO for FundingRatePo {
             &self.funding_time as &dyn duckdb::ToSql,
             &self.mark_price as &dyn duckdb::ToSql,
         ])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use yue::binance::bn_models::spot_restful::ExchangeSymbol;
+    use yue::binance::bn_models::swap_restful::SwapExchangeSymbol;
+
+    #[test]
+    fn spot_exchange_symbol_converts_to_binance_instrument() {
+        let symbol = ExchangeSymbol {
+            symbol: "BTCUSDT".to_string(),
+            status: "TRADING".to_string(),
+            base_asset: "BTC".to_string(),
+            base_asset_precision: 8,
+            quote_asset: "USDT".to_string(),
+            quote_precision: 8,
+            quote_asset_precision: 8,
+            base_commission_precision: 8,
+            quote_commission_precision: 8,
+            order_types: vec!["LIMIT".to_string()],
+            iceberg_allowed: false,
+            oco_allowed: false,
+            quote_order_qty_market_allowed: true,
+            allow_trailing_stop: false,
+            cancel_replace_allowed: true,
+            is_spot_trading_allowed: true,
+            is_margin_trading_allowed: true,
+            filters: Vec::new(),
+            permissions: vec!["SPOT".to_string()],
+            default_self_trade_prevention_mode: "NONE".to_string(),
+            allowed_self_trade_prevention_modes: vec!["NONE".to_string()],
+        };
+
+        let instrument = BinanceInstrument::from(&symbol);
+
+        assert_eq!(instrument.symbol, "BTCUSDT");
+        assert_eq!(instrument.symbol_type, "spot");
+        assert_eq!(instrument.quote_asset_precision, 8);
+        assert_eq!(instrument.on_board_time, None);
+    }
+
+    #[test]
+    fn swap_exchange_symbol_converts_to_binance_instrument() {
+        let symbol = SwapExchangeSymbol {
+            symbol: "BTCUSDT".to_string(),
+            pair: "BTCUSDT".to_string(),
+            contract_type: "PERPETUAL".to_string(),
+            delivery_date: Some(0),
+            onboard_date: Some(1_600_000_000_000),
+            status: "TRADING".to_string(),
+            maint_margin_percent: None,
+            required_margin_percent: None,
+            base_asset: "BTC".to_string(),
+            quote_asset: "USDT".to_string(),
+            margin_asset: "USDT".to_string(),
+            price_precision: 2,
+            quantity_precision: 3,
+            base_asset_precision: 8,
+            quote_precision: 8,
+            underlying_type: None,
+            underlying_sub_type: None,
+            settle_plan: None,
+            trigger_protect: None,
+            filters: Vec::new(),
+            order_types: vec!["LIMIT".to_string()],
+            time_in_force: None,
+            liquidation_fee: None,
+            market_take_bound: None,
+            max_move_order_limit: None,
+            price_scale: None,
+        };
+
+        let instrument = BinanceInstrument::from(&symbol);
+
+        assert_eq!(instrument.symbol, "BTCUSDT");
+        assert_eq!(instrument.symbol_type, "PERPETUAL");
+        assert_eq!(instrument.on_board_time, Some(1_600_000_000_000));
+    }
+
+    #[test]
+    fn kline_stream_payload_converts_to_kline_po() {
+        let payload = KlineStreamPayload {
+            event: "kline".to_string(),
+            event_time: 1_700_000_000_000,
+            symbol: "BTCUSDT".to_string(),
+            kline: SpotKlineData {
+                start_time: 1_700_000_000_000,
+                close_time: 1_700_000_299_999,
+                symbol: "BTCUSDT".to_string(),
+                interval: "5m".to_string(),
+                first_trade_id: 10,
+                last_trade_id: 20,
+                open: 100.into(),
+                close: 105.into(),
+                high: 110.into(),
+                low: 95.into(),
+                volume: 12.into(),
+                trade_count: 11,
+                is_closed: true,
+                quote_volume: 1_200.into(),
+                taker_buy_base_volume: 7.into(),
+                taker_buy_quote_volume: 700.into(),
+                ignore: String::new(),
+            },
+        };
+
+        let po = KlinePo::from(payload);
+
+        assert_eq!(po.symbol, "BTCUSDT");
+        assert_eq!(po.candle_begin_time, 1_700_000_000_000);
+        assert_eq!(po.close_time, 1_700_000_299_999);
+        assert_eq!(po.interval, INTERVAL_5M);
+        assert_eq!(po.first_trade_id, Some(10));
+        assert_eq!(po.last_trade_id, Some(20));
+    }
+
+    #[test]
+    fn trade_stream_payload_preserves_event_fields() {
+        let payload = TradeStreamPayload {
+            event: "trade".to_string(),
+            event_time: 1_700_000_000_000,
+            symbol: "BTCUSDT".to_string(),
+            trade_id: 10,
+            price: 100.into(),
+            qty: 2.into(),
+            trade_time: 1_700_000_000_001,
+            is_buyer_maker: true,
+            ignore: false,
+        };
+
+        let po = SpotStreamTradeRecordPo::from(payload);
+
+        assert_eq!(po.event_time, 1_700_000_000_000);
+        assert_eq!(po.trade_time, Some(1_700_000_000_001));
+        assert_eq!(po.is_buyer_maker, Some(true));
     }
 }

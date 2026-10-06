@@ -42,7 +42,7 @@ impl MessageHandlerTrait<BinanceSpotWebSocketStreamWrapper> for SpotKlineSaver {
                 if payload.kline.is_closed {
                     if let Err(e) = self
                         .db
-                        .send(QueryCommand::Insert(InsertPayload::new_no_replay(KlinePo::from(payload.kline.clone()))))
+                        .send(QueryCommand::Insert(InsertPayload::new_no_replay(KlinePo::from(payload.clone()))))
                         .await
                     {
                         error!("Error save spot kline: {}", e);

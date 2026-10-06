@@ -9,6 +9,7 @@ pub static QUERY_LATEST_FUNDING_RATE_SQL: &str = "select symbol,max(funding_time
 
 #[derive(Clone)]
 pub enum BinanceTables {
+    Instrument,
     SpotKline,
     SwapKline,
     SwapFundingRate,
@@ -20,6 +21,7 @@ pub enum BinanceTables {
 impl DuckDbTableTrait for BinanceTables {
     fn table_name(&self) -> String {
         match self {
+            BinanceTables::Instrument => String::from("bn_instruments"),
             BinanceTables::SpotKline => String::from("bn_spot_kline"),
             BinanceTables::SwapKline => String::from("bn_swap_kline"),
             BinanceTables::SwapFundingRate => String::from("bn_swap_funding_rate"),
@@ -31,6 +33,7 @@ impl DuckDbTableTrait for BinanceTables {
 
     fn create_table_statement(&self) -> String {
         match self {
+            BinanceTables::Instrument => String::from(CREATE_BINANCE_INSTRUMENTS_TABLE),
             BinanceTables::SpotKline => String::from(CREATE_SPOT_KLINE_TABLE),
             BinanceTables::SwapKline => String::from(CREATE_SWAP_KLINE_TABLE),
             BinanceTables::SwapFundingRate => String::from(CREATE_FUNDING_RATE_TABLE),
@@ -49,6 +52,22 @@ impl DuckDbTableTrait for BinanceTables {
         }
     }
 }
+
+pub const CREATE_BINANCE_INSTRUMENTS_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS bn_instruments (
+    id                      BIGINT,
+    symbol                  VARCHAR NOT NULL,
+    status                  VARCHAR NOT NULL,
+    base_asset              VARCHAR NOT NULL,
+    quote_asset             VARCHAR NOT NULL,
+    quote_asset_precision   INTEGER NOT NULL,
+    order_types             VARCHAR[] NOT NULL,
+    symbol_type             VARCHAR NOT NULL,
+    on_board_time           BIGINT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bn_instruments_symbol_type
+    ON bn_instruments(symbol, symbol_type);
+"#;
 
 // 直接为三张表生成格式化建表SQL（不带索引），字段对齐、注释清晰
 pub const CREATE_SPOT_KLINE_TABLE: &str = r#"
@@ -158,6 +177,7 @@ const BN_SPOT_TRADE_TABLE: &str = r#"
 
 // 原生方式：维护一个静态数组，便于遍历所有表类型
 pub(crate) const ALL_BINANCE_TABLES: &[BinanceTables] = &[
+    BinanceTables::Instrument,
     BinanceTables::SpotKline,
     BinanceTables::SwapKline,
     BinanceTables::SwapFundingRate,
@@ -202,3 +222,21 @@ CREATE TABLE IF NOT EXISTS bn_order_events_swap (
 );
 CREATE INDEX IF NOT EXISTS idx_order_events_swap_symbol_time ON bn_order_events_swap (symbol, event_time DESC)
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn binance_instrument_table_ddl_executes() {
+        let conn = duckdb::Connection::open_in_memory().unwrap();
+        for statement in CREATE_BINANCE_INSTRUMENTS_TABLE.split(';').map(str::trim).filter(|sql| !sql.is_empty()) {
+            conn.execute(statement, []).unwrap();
+        }
+
+        let column_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM pragma_table_info('bn_instruments')", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(column_count, 9);
+    }
+}

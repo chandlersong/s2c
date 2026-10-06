@@ -1,20 +1,20 @@
 use crate::errors::YuError;
-use crate::okx::duck_po::OkxOptionSummaryPo;
-use crate::okx::duckdb_consts::OkxTables;
 use crate::postgresql_db::get_sync_client_pg_pool_sync;
 use crate::postgresql_db_tables::PostgresqlBatchInsert;
 use crate::sync::client::database::get_okx_kline_batch_insert;
 use crate::sync::client::database::get_okx_option_summary_batch_insert;
 use crate::sync::client::database::get_polymarket_price_batch_insert;
+use crate::sync::client::po::binance::{LocalBinanceKlinePo, LocalBinanceTradePo};
 use crate::sync::client::po::okx::{LocalOkxInstrumentPo, LocalOkxKlinePo, LocalOkxOptionSummaryPo};
 use crate::sync::client::po::polymarket::{LocalPolyMarketHistoryPo, LocalPolyMarketInstrumentPo};
+use crate::sync::client::repository::binance::{ClientBinanceRepository, ClientBinanceRepositoryImpl};
 use crate::sync::client::repository::okx::{ClientOkxRepository, ClientOkxRepositoryImpl};
 use crate::sync::client::repository::polymarket::{ClientPolyMarketRepository, ClientPolyMarketRepositoryImpl};
 use crate::sync::models::grpc_sync::server_message::Payload;
 use crate::sync::models::grpc_sync::{InstrumentList, ServerMessage, instrument};
 use governor::Jitter;
 use li::tools::time::unix_time_now_u64_utc;
-use log::{error, info};
+use log::{debug, error, info};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -102,6 +102,7 @@ impl GrpcChannelManager {
 pub struct SyncClientService {
     pm_repository: ClientPolyMarketRepository,
     okx_repository: ClientOkxRepository,
+    binance_repository: ClientBinanceRepository,
     pm_instrument_dict: Arc<RwLock<HashMap<u64, LocalPolyMarketInstrumentPo>>>,
     okx_instrument_dict: Arc<RwLock<HashMap<u64, LocalOkxInstrumentPo>>>,
 }
@@ -111,6 +112,7 @@ impl Default for SyncClientService {
         Self {
             pm_repository: ClientPolyMarketRepositoryImpl::from_pool(get_sync_client_pg_pool_sync().expect("get_sync_client_pg_pool_sync failed")),
             okx_repository: ClientOkxRepositoryImpl::from_pool(get_sync_client_pg_pool_sync().expect("get_sync_client_pg_pool_sync failed")),
+            binance_repository: ClientBinanceRepositoryImpl::from_pool(get_sync_client_pg_pool_sync().expect("get_sync_client_pg_pool_sync failed")),
             pm_instrument_dict: Arc::new(Default::default()),
             okx_instrument_dict: Arc::new(Default::default()),
         }
@@ -122,6 +124,14 @@ pub struct InstrumentsDiff {
     pub polymarket_diff: HashMap<u64, (u64, u64)>,
     pub okx_option_kline_diff: HashMap<u64, (u64, u64)>,
     pub okx_option_summary_diff: HashMap<u64, (u64, u64)>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BinanceTradeSyncRange {
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub start_trade_id: u64,
+    pub end_trade_id: u64,
 }
 
 impl SyncClientService {
@@ -244,6 +254,9 @@ impl SyncClientService {
                             polymarket_diff.insert(inst_id, (local_ts, now));
                         }
                     }
+                    instrument::Payload::Binance(_) => {
+                        //TODO: implement it
+                    }
                 }
             }
         }
@@ -333,6 +346,12 @@ impl SyncClientService {
                                         }
                                     }
                                 }
+                            }
+                            Payload::BinanceKlineHistory(_) => {
+                               debug!("receive BinanceKlineHistory")
+                            }
+                            Payload::BinanceTradeHistory(_) => {
+                              debug!("receive BinanceTradeHistory")
                             }
                             }
                         }

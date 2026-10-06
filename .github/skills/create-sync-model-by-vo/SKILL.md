@@ -27,9 +27,11 @@ description: 根据用户指定的 VO，在 s2c 中创建完整的服务端/客�
 - 遵循 Cargo 依赖方向 `yu -> yue -> li`，禁止反向依赖。服务端/客户端数据库编排、PO、repository 和 protobuf 接线通常位于 `yu/`。
 - 从指定 VO 及其生产/消费调用点确定字段类型、Decimal/浮点策略、nullable、时间单位、主键/业务键、关联对象和生命周期。
 - 分别检查服务端与客户端的 PO、schema、表注册/初始化、repository 和 writer，再检查 protobuf 与两端同步转换；不能只查一侧。
+- 若一个统一模型由多个上游形态产生（例如现货/合约共用 instrument 模型），检查每种来源的 trait/转换实现和生产入口，保留区分数据所需的类型字段；不能只验证单一来源的映射。
 - repository 参考 `yu/src/okx/duckdb_repository.rs` 的 `OkxOptionSummaryRepositoryTrait`、实现、构造入口及对应查询/插入操作。客户端 repository 依照客户端本地存储模式实现对应 trait/实现/构造器，不能把服务端 repository 当作客户端 repository。
 - 区分业务 VO、网络 protobuf、服务端 PO 和客户端 PO，按数据流显式转换，不默认让不同职责的模型直接复用。
 - 确认任务涉及历史记录、实时事件还是二者。若相邻同步类型已实现两条路径，按请求接入对应路径；不擅自增加采集来源、定时任务或完整性修复。
+- 沿运行入口追踪完整接线：protobuf 枚举/`oneof` → 服务端请求或订阅分发 → 服务端查询/发送 → 客户端请求或订阅 → 客户端消息分发 → ID/关联映射 → repository/writer 落库。检查实际运行入口和初始化是否覆盖新表，不能以新增消息类型、字段或 repository 壳子代替可运行链路。
 - 用户指定的数据库、表名、文件位置和同步范围优先；影响协议/API/schema 的重要选项不明确时先询问。
 
 ## 实施流程
@@ -41,15 +43,15 @@ description: 根据用户指定的 VO，在 s2c 中创建完整的服务端/客�
 3. **创建/补齐服务端表和 repository。** 检查 DDL、表枚举/注册和初始化入口；按同步实际需要实现常规 repository 操作，例如插入/批量插入、范围查询、最新时间查询。沿用 Option Summary repository 的 trait、实现和构造入口模式，不无差别生成 CRUD。
 4. **创建 protobuf 定义。** 定义传输消息并接入需要的 `oneof`、`ServerMessage`、枚举或请求。遵守 protobuf 兼容性：不可复用已占用字段号，不随意删除或改号已发布字段。
 5. **创建/补齐客户端 PO 和映射。** 实现 protobuf → 客户端 PO 转换；明确远端 ID 如何关联客户端本地 instrument ID 和本地 PO 主键。
-6. **创建/补齐客户端表和 repository。** 更新 PostgreSQL DDL、表枚举/注册、`ALL_CLIENT_TABLES` 或对应初始化入口；按客户端 repository 既有模式实现同步所需操作，并接入 batch writer/consumer。
-7. **接通端到端同步。** 服务端 repository 查询结果映射为 protobuf，客户端消息映射为 PO 并持久化。按用户请求或邻近数据类型的现有模式接入历史同步和/或实时订阅。
-8. **添加针对性测试并验证。** 覆盖 VO→服务端 PO→protobuf→客户端 PO 的字段、nullable、ID、时间精度，以及关键 repository/schema/writer 行为。运行最小相关格式化、编译和测试；不声称未执行的验证已通过。
+6. **创建/补齐客户端表和 repository。** 更新 PostgreSQL DDL、表枚举/注册、`ALL_CLIENT_TABLES` 或对应初始化入口；逐列核对 DDL、客户端 PO。只是添加查询类方法，不添加insert类方法。
+7. **添加针对性测试并验证。** 覆盖 VO→服务端 PO→protobuf→客户端 PO 的字段、nullable、ID、时间精度，以及多种上游形态、关键 repository/schema/writer 行为。检查实际 DDL 与 SQL 的列、约束、冲突目标一致；运行最小相关格式化、编译和测试；不声称未执行的验证已通过。
 
 ## 持久化与同步约定
 
 - 数据库错误沿用对应 crate 错误类型并传播；不吞错、不伪造成功、不把查询失败转为空结果。
 - SQL 值使用绑定参数；表名等 SQL 标识符必须来自静态受控定义。
 - 冲突目标基于明确业务唯一键，随机 ID 不能替代业务键。服务端 ID、客户端本地 ID 和关联外键不可混用。
+- 客户端 schema、PO 与 repository 必须对同一列达成一致：若表使用本地 instrument 外键（如 `inst_id`），写入前完成业务键到本地 ID 的解析；不要在 SQL 中引用 DDL 未定义的列，也不要使用 DDL 未声明的唯一键作为冲突目标。
 - 范围查询声明开闭区间并稳定排序；批量 writer 沿用仓库的批次/背压机制，并保证列顺序、NULL 编码、flush 和失败处理符合现有语义。
 - `Option<T>` 保持 nullable，不得无依据转成零值、空字符串或其他默认值。
 - 确认秒/毫秒/纳秒和时区；protobuf、PO 与 SQL 列之间保留规定时间精度，尤其是 `TIMESTAMPTZ`。

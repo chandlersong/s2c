@@ -16,6 +16,7 @@ use yu::postgresql_db::{PostgresqlTableTrait, get_sync_client_pg_pool};
 use yu::sync::client::database::initial_grpc_client_tables;
 use yu::sync::client::db_consts::ClientsTables;
 use yu::sync::client::sync_client_service::{GrpcChannelManager, SyncClientService};
+use yu::sync::models::grpc_sync::instrument::Payload;
 use yu::sync::models::grpc_sync::sync_interface_client::SyncInterfaceClient;
 use yu::sync::models::grpc_sync::{Empty, InstrumentType, ServerMessage, SubscribeRequest, SyncRequest, instrument};
 use yue::http_client::init_http_client;
@@ -321,6 +322,7 @@ async fn async_sync_server(
                         }
                     }
                 }
+                Payload::Binance(_) => {}
             }
         }
     }

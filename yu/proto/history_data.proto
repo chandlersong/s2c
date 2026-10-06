@@ -7,6 +7,7 @@ enum InstrumentType {
   POLYMARKET = 1;
   OKX_KLINE = 2;
   OKX_OPTION_SUMMARY = 3;
+  BINANCE_INSTRUMENT = 4;
 }
 
 message PolymarketInstrument{
@@ -43,10 +44,23 @@ message OkxInstrument{
   string inst_category = 16;
 }
 
+message BinanceInstrument {
+  uint64 server_id = 1;
+  string symbol = 2;
+  string status = 3;
+  string base_asset = 4;
+  string quote_asset = 5;
+  int32 quote_asset_precision = 6;
+  repeated string order_types = 7;
+  string symbol_type = 8;
+  optional uint64 on_board_time = 9;
+}
+
 message Instrument {
   oneof payload {
     PolymarketInstrument polymarket = 1;     // polymarket资产
     OkxInstrument okx = 2;     // okx资产
+    BinanceInstrument binance = 3;
   }
 }
 
@@ -75,6 +89,8 @@ message ServerMessage {
     PolyMarketHistoryList polymarket_history = 1;     // polymarket
     OkxKlineList okx_kline_history = 2;     // okx kline
     OptionSummaryList option_summary_history = 3; // okx option summary
+    BinanceKlineList binance_kline_history = 4;
+    BinanceTradeList binance_trade_history = 5;
   }
 }
 // 空消息
@@ -151,5 +167,46 @@ message OptionSummary {
 
 message OptionSummaryList {
   repeated OptionSummary summary_list = 1;
+  uint64 timestamp = 2;
+}
+
+message BinanceKline {
+  uint64 id = 1;
+  string symbol = 2;
+  uint64 candle_begin_time = 3;
+  double open = 4;
+  double high = 5;
+  double low = 6;
+  double close = 7;
+  double volume = 8;
+  double quote_volume = 9;
+  uint64 number_of_trades = 10;
+  double taker_buy_base_asset_volume = 11;
+  double taker_buy_quote_asset_volume = 12;
+  uint64 close_time = 13;
+  uint32 interval = 14;
+  optional int64 first_trade_id = 15;
+  optional int64 last_trade_id = 16;
+}
+
+message BinanceKlineList {
+  repeated BinanceKline kline_list = 1;
+  uint64 timestamp = 2;
+}
+
+message BinanceTrade {
+  uint64 id = 1;
+  int64 event_time = 2;
+  string symbol = 3;
+  int64 trade_id = 4;
+  double price = 5;
+  double qty = 6;
+  optional int64 trade_time = 7;
+  optional bool is_buyer_maker = 8;
+  int64 created_at = 9;
+}
+
+message BinanceTradeList {
+  repeated BinanceTrade trade_list = 1;
   uint64 timestamp = 2;
 }

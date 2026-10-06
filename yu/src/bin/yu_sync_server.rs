@@ -2,6 +2,7 @@ use li::tools::logs::{parse_level, setup_logger};
 use log::{LevelFilter, error, info};
 use std::collections::HashMap;
 use tonic::transport::Server;
+use yu::binance::jobs::initial_tables as initial_binance_tables;
 use yu::config::get_config;
 use yu::errors::YuError;
 use yu::okx::sync_job::start_okx_option_service;
@@ -33,7 +34,11 @@ async fn main() -> Result<(), YuError> {
     }
     let mut special_log = HashMap::new();
     if let Err(e) = initial_polymarket_tables(None) {
-        error!("Error initial tables: {}", e);
+        error!("Error polymarket initial tables: {}", e);
+        return Err(e);
+    }
+    if let Err(e) = initial_binance_tables(None) {
+        error!("Error okx initial tables: {}", e);
         return Err(e);
     }
     let log_in_config = app_config.log_level.as_deref();
