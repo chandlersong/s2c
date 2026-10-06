@@ -121,9 +121,17 @@ pub fn unix_time_now_u64_utc_seconds() -> UnixTimeStamp {
     now.timestamp() as u64
 }
 
+pub fn format_timestamp_millis(timestamp: i64) -> String {
+    DateTime::from_timestamp_millis(timestamp)
+        .expect("timestamp in milliseconds must be representable")
+        .to_rfc3339()
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::tools::time::{get_next_utc_day_begin, get_next_utc_hour_begin, get_prev_utc_hour_end, instant_to_datetime, unix_2_readable};
+    use crate::tools::time::{
+        format_timestamp_millis, get_next_utc_day_begin, get_next_utc_hour_begin, get_prev_utc_hour_end, instant_to_datetime, unix_2_readable,
+    };
     use chrono::{Datelike, TimeZone, Timelike, Utc};
     use tokio::time::Instant;
 
@@ -173,5 +181,20 @@ mod tests {
     fn test_unix_2_time() {
         let expected = format!("{}", unix_2_readable(&1737093025292));
         assert_eq!("2025-01-17 05:50:25.292 UTC", expected);
+    }
+
+    #[test]
+    fn test_format_timestamp_millis_formats_utc_timestamp() {
+        assert_eq!(format_timestamp_millis(1_700_000_000_000), "2023-11-14T22:13:20+00:00");
+    }
+
+    #[test]
+    fn test_format_timestamp_millis_preserves_millisecond_precision() {
+        assert_eq!(format_timestamp_millis(1_700_000_000_123), "2023-11-14T22:13:20.123+00:00");
+    }
+
+    #[test]
+    fn test_format_timestamp_millis_formats_pre_epoch_timestamp() {
+        assert_eq!(format_timestamp_millis(-1), "1969-12-31T23:59:59.999+00:00");
     }
 }
