@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tonic::transport::Server;
 use yu::binance::bn_dashboard::BinanceDashboard;
 use yu::binance::jobs::initial_tables as initial_binance_tables;
+use yu::binance::sync_job::start_sync_job;
 use yu::binance::sync_server::BinanceSyncInstrumentService;
 use yu::config::get_config;
 use yu::errors::YuError;
@@ -55,8 +56,7 @@ async fn main() -> Result<(), YuError> {
 
     let polymarket_history_service = start_polymarket_sync_series_job().await?;
     let okx_option_service = start_okx_option_service().await?;
-    let binance_dashboard = Arc::new(BinanceDashboard::new(app_config.get_data_retention_hours(), None));
-    binance_dashboard.execute().await?;
+    let binance_dashboard = start_sync_job().await?;
 
     let polymarket_instrument_service = PolyMarketSyncInstrumentService::new(polymarket_history_service.clone());
     let okx_instrument_service = OkxSyncInstrumentService::new(okx_option_service.clone());
