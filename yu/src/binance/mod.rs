@@ -6,5 +6,6 @@ pub mod db_consts;
 pub mod history;
 pub mod jobs;
 pub mod models;
+pub mod sync_server;
 pub mod trading_service;
 pub mod websocket_service;

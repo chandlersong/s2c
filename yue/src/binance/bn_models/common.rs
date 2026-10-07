@@ -176,3 +176,37 @@ pub struct SymbolInfo {
     /// 上线时间，单位毫秒时间戳，spot取不到，所以为None，swap有值
     pub on_board_time: Option<u64>,
 }
+
+impl SymbolInfoTrait for SymbolInfo {
+    fn symbol(&self) -> &str {
+        &self.symbol
+    }
+
+    fn status(&self) -> &str {
+        &self.status
+    }
+
+    fn base_asset(&self) -> &str {
+        &self.base_asset
+    }
+
+    fn quote_asset(&self) -> &str {
+        &self.quote_asset
+    }
+
+    fn order_types(&self) -> &Vec<String> {
+        &self.order_types
+    }
+
+    fn quote_precision(&self) -> i32 {
+        self.quote_asset_precision
+    }
+
+    fn symbol_type(&self) -> &str {
+        &self.symbol_type
+    }
+
+    fn get_on_board_time(&self) -> Option<u64> {
+        self.on_board_time
+    }
+}
