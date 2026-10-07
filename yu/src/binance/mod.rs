@@ -3,6 +3,7 @@ pub mod bn_dashboard;
 pub mod bn_data_integrity;
 pub mod bn_mcp;
 pub mod db_consts;
+pub mod duckdb_repository;
 pub mod history;
 pub mod jobs;
 pub mod models;

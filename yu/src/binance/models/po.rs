@@ -9,6 +9,7 @@ use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_models::spot_websocket_stream::{KlineStreamPayload, SpotKlineData, TradeStreamPayload};
 use yue::binance::bn_models::swap_restful::FundingRate;
 use yue::binance::bn_models::swap_websocket_stream::SwapWebsocketKlineData;
+use yue::models::InstrumentType;
 use yue::tools::{SnowyFlakeWrapper, get_snow_flake_id_u64};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,7 +21,7 @@ pub struct BinanceInstrument {
     pub quote_asset: String,
     pub quote_asset_precision: i32,
     pub order_types: Vec<String>,
-    pub symbol_type: String,
+    pub symbol_type: InstrumentType,
     pub on_board_time: Option<u64>,
 }
 
@@ -34,7 +35,7 @@ impl<T: SymbolInfoTrait> From<&T> for BinanceInstrument {
             quote_asset: symbol.quote_asset().to_string(),
             quote_asset_precision: symbol.quote_precision(),
             order_types: symbol.order_types().clone(),
-            symbol_type: symbol.symbol_type().to_string(),
+            symbol_type: InstrumentType::from_symbol_type(symbol.symbol_type()).expect("unsupported Binance symbol type"),
             on_board_time: symbol.get_on_board_time(),
         }
     }
@@ -547,7 +548,7 @@ mod tests {
         let instrument = BinanceInstrument::from(&symbol);
 
         assert_eq!(instrument.symbol, "BTCUSDT");
-        assert_eq!(instrument.symbol_type, "spot");
+        assert!(matches!(instrument.symbol_type, InstrumentType::Spot));
         assert_eq!(instrument.quote_asset_precision, 8);
         assert_eq!(instrument.on_board_time, None);
     }
@@ -586,7 +587,7 @@ mod tests {
         let instrument = BinanceInstrument::from(&symbol);
 
         assert_eq!(instrument.symbol, "BTCUSDT");
-        assert_eq!(instrument.symbol_type, "PERPETUAL");
+        assert!(matches!(instrument.symbol_type, InstrumentType::Swap));
         assert_eq!(instrument.on_board_time, Some(1_600_000_000_000));
     }
 

@@ -10,7 +10,6 @@ use crate::okx::duckdb_repository::{
     OkxInstrumentRepository, OkxKlineRepository, OkxOptionSummaryRepository, get_default_kline_repo, get_default_option_summary_repo,
     get_instrument_repo,
 };
-use crate::okx::okx_consts::InstrumentType;
 use async_trait::async_trait;
 use futures::stream::StreamExt;
 use governor::Jitter;
@@ -25,7 +24,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::sync::broadcast;
-use yue::models::HistoryInterval;
+use yue::models::{HistoryInterval, InstrumentType};
 use yue::okx::models::websocket::{ArgBody, OkxWebsocketResponse};
 use yue::okx::restful_api::{HistoryParams, InstrumentsParam, OKxApi, OptionSummaryParam, default_okx_api};
 use yue::okx::websocket_channel::{CommandRequest, OXK_BUSINESS_WEBSOCKET};
@@ -992,13 +991,12 @@ mod tests {
     use crate::okx::duckdb_repository::OkxInstrumentRepository;
     use crate::okx::duckdb_repository::{MockOkxInstrumentRepositoryTrait, MockOkxKlineRepositoryTrait, OkxKlineRepository};
     use crate::okx::duckdb_tables::initial_okx_tables;
-    use crate::okx::okx_consts::InstrumentType;
     use crate::test_utils::create_memory_db_provider;
     use li::websocket::connection::MessageHandlerTrait;
     use std::collections::HashMap;
     use std::sync::{Arc, RwLock};
     use tokio::sync::broadcast;
-    use yue::models::HistoryInterval;
+    use yue::models::{HistoryInterval, InstrumentType};
     use yue::okx::models::restful::{CandleResponse, InstrumentInfo, OkxListResponse};
     use yue::okx::models::websocket::{ArgBody, KlinePayload, OkxWebsocketResponse};
     use yue::okx::restful_api::{InstrumentsParam, MockOKXApiTrait, OKxApi};

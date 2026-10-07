@@ -3,12 +3,12 @@ use crate::duck_db_tables::DuckTableTableChannel;
 use crate::errors::YuError;
 use crate::okx::duck_po::{InstrumentPo, OkxKlinePo, OkxOptionSummaryPo};
 use crate::okx::duckdb_tables::{get_okx_kline_table, get_okx_option_summary_table};
-use crate::okx::okx_consts::InstrumentType;
 use async_trait::async_trait;
 use li::tools::time::unix_time_now_u64_utc;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::oneshot;
+use yue::models::InstrumentType;
 use yue::query_message::{BatchInsertPayload, DataSourceProviderTrait, InsertPayload, QueryCommand};
 use yue::tools::get_snow_flake_id_u64;
 

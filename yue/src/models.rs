@@ -19,6 +19,52 @@ use url::Url;
 
 ///
 /// PLAN：去除交易所之类的类的定义，因为发现这样没有办法统一
+///
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum InstrumentType {
+    Option,
+    Spot,
+    Swap,
+}
+
+impl InstrumentType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Spot => "SPOT",
+            Self::Swap => "SWAP",
+            Self::Option => "OPTION",
+        }
+    }
+
+    pub fn from_symbol_type(value: &str) -> Option<Self> {
+        match value.to_ascii_uppercase().as_str() {
+            "SPOT" => Some(Self::Spot),
+            "SWAP" | "PERPETUAL" => Some(Self::Swap),
+            "OPTION" => Some(Self::Option),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod instrument_type_tests {
+    use super::InstrumentType;
+
+    #[test]
+    fn parses_symbol_type_aliases_case_insensitively() {
+        assert!(matches!(InstrumentType::from_symbol_type("spot"), Some(InstrumentType::Spot)));
+        assert!(matches!(InstrumentType::from_symbol_type("PERPETUAL"), Some(InstrumentType::Swap)));
+        assert!(matches!(InstrumentType::from_symbol_type("option"), Some(InstrumentType::Option)));
+        assert!(InstrumentType::from_symbol_type("unknown").is_none());
+    }
+}
+
+impl std::fmt::Display for InstrumentType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
 
 //不太确定哪个好，就先用这个用于高精度计算
 pub type Decimal = rust_decimal::Decimal;

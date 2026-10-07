@@ -33,7 +33,7 @@ pub mod grpc_sync {
                 quote_asset: value.quote_asset,
                 quote_asset_precision: value.quote_asset_precision,
                 order_types: value.order_types,
-                symbol_type: value.symbol_type,
+                symbol_type: value.symbol_type.to_string(),
                 on_board_time: value.on_board_time,
             }
         }
@@ -108,6 +108,7 @@ mod tests {
     use super::grpc_sync::{BinanceKline, BinanceTrade};
     use crate::binance::models::po::{BinanceInstrument as BinanceInstrumentPo, KlinePo, SpotStreamTradeRecordPo};
     use crate::sync::client::po::binance::{LocalBinanceKlinePo, LocalBinanceTradePo};
+    use yue::models::InstrumentType;
 
     #[test]
     fn binance_instrument_server_to_proto_preserves_fields() {
@@ -119,7 +120,7 @@ mod tests {
             quote_asset: "USDT".to_string(),
             quote_asset_precision: 8,
             order_types: vec!["LIMIT".to_string()],
-            symbol_type: "PERPETUAL".to_string(),
+            symbol_type: InstrumentType::Swap,
             on_board_time: Some(1_600_000_000_000),
         };
 
@@ -132,7 +133,7 @@ mod tests {
         assert_eq!(proto.quote_asset, "USDT");
         assert_eq!(proto.quote_asset_precision, 8);
         assert_eq!(proto.order_types, vec!["LIMIT"]);
-        assert_eq!(proto.symbol_type, "PERPETUAL");
+        assert_eq!(proto.symbol_type, "SWAP");
         assert_eq!(proto.on_board_time, Some(1_600_000_000_000));
     }
 
