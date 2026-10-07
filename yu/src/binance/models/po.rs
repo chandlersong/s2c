@@ -3,6 +3,7 @@ use duckdb::appender_params_from_iter;
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display};
+use std::string::ToString;
 use yue::binance::bn_models::common::SymbolInfoTrait;
 use yue::binance::bn_models::common::{PortfolioSpotOrderData, PortfolioSwapOrderData, SpotOrderData, SwapOrderData};
 use yue::binance::bn_models::spot_restful::BinanceKline;
@@ -11,6 +12,10 @@ use yue::binance::bn_models::swap_restful::FundingRate;
 use yue::binance::bn_models::swap_websocket_stream::SwapWebsocketKlineData;
 use yue::models::InstrumentType;
 use yue::tools::{SnowyFlakeWrapper, get_snow_flake_id_u64};
+
+pub const SWAP_TEXT: &str = "PERPETUAL";
+
+pub const TRADIFI_PERPETUAL_TEXT: &str = "TRADIFI_PERPETUAL";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BinanceInstrument {

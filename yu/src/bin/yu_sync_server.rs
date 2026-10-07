@@ -1,9 +1,7 @@
 use li::tools::logs::{parse_level, setup_logger};
 use log::{LevelFilter, error, info};
 use std::collections::HashMap;
-use std::sync::Arc;
 use tonic::transport::Server;
-use yu::binance::bn_dashboard::BinanceDashboard;
 use yu::binance::jobs::initial_tables as initial_binance_tables;
 use yu::binance::sync_job::start_sync_job;
 use yu::binance::sync_server::BinanceSyncInstrumentService;
@@ -54,13 +52,15 @@ async fn main() -> Result<(), YuError> {
     special_log.insert("li".to_string(), parse_level(log_in_config));
     setup_logger(Some(LevelFilter::Warn), special_log)?;
 
-    let polymarket_history_service = start_polymarket_sync_series_job().await?;
-    let okx_option_service = start_okx_option_service().await?;
     let binance_dashboard = start_sync_job().await?;
-
-    let polymarket_instrument_service = PolyMarketSyncInstrumentService::new(polymarket_history_service.clone());
-    let okx_instrument_service = OkxSyncInstrumentService::new(okx_option_service.clone());
     let binance_instrument_service = BinanceSyncInstrumentService::new(binance_dashboard);
+
+    let polymarket_history_service = start_polymarket_sync_series_job().await?;
+    let polymarket_instrument_service = PolyMarketSyncInstrumentService::new(polymarket_history_service.clone());
+
+    let okx_option_service = start_okx_option_service().await?;
+    let okx_instrument_service = OkxSyncInstrumentService::new(okx_option_service.clone());
+
     let instrument_services = vec![polymarket_instrument_service, okx_instrument_service, binance_instrument_service];
 
     let server = YuSyncServer::create_and_start(polymarket_history_service, okx_option_service, instrument_services).await?;

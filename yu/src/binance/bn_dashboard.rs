@@ -1,7 +1,7 @@
 use crate::binance::bn_consts::BN_SYMBOL_STATUS_TRADING;
 use crate::binance::duckdb_repository::{BNInstrumentRepository, get_instrument_repo};
 use crate::binance::jobs::initial_tables;
-use crate::binance::models::po::BinanceInstrument;
+use crate::binance::models::po::{BinanceInstrument, SWAP_TEXT, TRADIFI_PERPETUAL_TEXT};
 use crate::duck_db::DuckDBDSProvider;
 use crate::errors::YuError;
 use li::errors::LiError;
@@ -184,15 +184,23 @@ impl BinanceDashboard {
                 let spot_all = get_trading_spot_symbols(spot).await;
                 let swap_res = get_trading_swap_symbols(swap, None).await;
 
+                let swap_text = SWAP_TEXT.to_string();
+                let tradifi_perpetual = TRADIFI_PERPETUAL_TEXT.to_string();
                 let res = match self.refresh_all_symbol(spot_all, swap_res) {
                     Ok((spot_symbols, swap_symbols)) => {
                         let trading_spot_symbols: Vec<SymbolInfo> =
                             spot_symbols.iter().filter(|s| s.status == BN_SYMBOL_STATUS_TRADING).cloned().collect();
-                        let trading_swap_symbols: Vec<SymbolInfo> =
-                            swap_symbols.iter().filter(|s| s.status == BN_SYMBOL_STATUS_TRADING).cloned().collect();
+                        let trading_swap_symbols: Vec<SymbolInfo> = swap_symbols
+                            .iter()
+                            .filter(|s| s.status == BN_SYMBOL_STATUS_TRADING && (s.symbol_type == swap_text || s.symbol_type == tradifi_perpetual))
+                            .cloned()
+                            .collect();
 
-                        if let Err(e) = self.refresh_instrument_in_db(&trading_spot_symbols).await {
+                        if let Err(e) = self.refresh_instrument_in_db(&trading_spot_symbols, InstrumentType::Spot).await {
                             error!("Error persist trading spot symbols: {:?}", e);
+                        }
+                        if let Err(e) = self.refresh_instrument_in_db(&trading_swap_symbols, InstrumentType::Swap).await {
+                            error!("Error persist trading swap symbols: {:?}", e);
                         }
 
                         BinanceDashboardSnapShot::new(trading_spot_symbols, trading_swap_symbols)
@@ -214,12 +222,17 @@ impl BinanceDashboard {
     ///  - 如果不存在，则转换成po，存入数据库
     ///  - 如果存在，则跳过，在map中删除该条symbol
     /// 3. 把symbol中剩余的数据，标注为非交易
-    pub async fn refresh_instrument_in_db(&self, spots: &Vec<SymbolInfo>) -> Result<(), YuError> {
-        let mut existing_symbols = self.instrument_repo.get_map_of_symbol_id(InstrumentType::Spot).await?;
+    pub async fn refresh_instrument_in_db(&self, symbols: &Vec<SymbolInfo>, inst_type: InstrumentType) -> Result<(), YuError> {
+        let mut existing_symbols = self.instrument_repo.get_map_of_symbol_id(inst_type).await?;
 
-        for spot in spots {
-            if existing_symbols.remove(&spot.symbol).is_none() {
-                self.instrument_repo.insert_instrument(BinanceInstrument::from(spot)).await?;
+        for symbol in symbols {
+            if existing_symbols.remove(&symbol.symbol).is_none() {
+                if let Err(e) = self.instrument_repo.insert_instrument(BinanceInstrument::from(symbol)).await {
+                    error!(
+                        "error adding instrument to symbol {} type is {}: {:?}",
+                        symbol.symbol, symbol.symbol_type, e
+                    );
+                }
             }
         }
 
@@ -291,11 +304,14 @@ mod tests {
         dashboard.instrument_repo.insert_instrument(missing.clone()).await.unwrap();
 
         dashboard
-            .refresh_instrument_in_db(&vec![
-                symbol("BTCUSDT", BN_SYMBOL_STATUS_TRADING),
-                symbol("SOLUSDT", BN_SYMBOL_STATUS_TRADING),
-                symbol("XRPUSDT", BN_SYMBOL_STATUS_TRADING),
-            ])
+            .refresh_instrument_in_db(
+                &vec![
+                    symbol("BTCUSDT", BN_SYMBOL_STATUS_TRADING),
+                    symbol("SOLUSDT", BN_SYMBOL_STATUS_TRADING),
+                    symbol("XRPUSDT", BN_SYMBOL_STATUS_TRADING),
+                ],
+                InstrumentType::Spot,
+            )
             .await
             .unwrap();
 

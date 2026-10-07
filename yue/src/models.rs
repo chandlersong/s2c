@@ -26,6 +26,7 @@ pub enum InstrumentType {
     Option,
     Spot,
     Swap,
+    TradifiPerpetual,
 }
 
 impl InstrumentType {
@@ -34,6 +35,7 @@ impl InstrumentType {
             Self::Spot => "SPOT",
             Self::Swap => "SWAP",
             Self::Option => "OPTION",
+            InstrumentType::TradifiPerpetual => "TRADIFI_PERPETUAL",
         }
     }
 
@@ -42,6 +44,7 @@ impl InstrumentType {
             "SPOT" => Some(Self::Spot),
             "SWAP" | "PERPETUAL" => Some(Self::Swap),
             "OPTION" => Some(Self::Option),
+            "TRADIFI_PERPETUAL" => Some(Self::TradifiPerpetual),
             _ => None,
         }
     }
