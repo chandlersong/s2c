@@ -1,3 +1,4 @@
+use crate::binance::bn_consts::BN_SYMBOL_STATUS_NOT_TRADING;
 use crate::binance::models::po::BinanceInstrument;
 use crate::duck_db::DuckDBDSProvider;
 use crate::errors::YuError;
@@ -36,6 +37,7 @@ pub trait BNInstrumentRepositoryTrait {
     /// 根据instrument中的symbol进行更新
     ///
     async fn update_instrument(&self, instrument: BinanceInstrument) -> Result<(), YuError>;
+    async fn mark_instruments_not_trading(&self, instrument_ids: Vec<u64>) -> Result<(), YuError>;
 }
 
 pub type BNInstrumentRepository = Arc<dyn BNInstrumentRepositoryTrait + Send + Sync>;
@@ -165,11 +167,30 @@ impl BNInstrumentRepositoryTrait for BNInstrumentRepositoryImpl {
         )?;
         Ok(())
     }
+
+    async fn mark_instruments_not_trading(&self, instrument_ids: Vec<u64>) -> Result<(), YuError> {
+        if instrument_ids.is_empty() {
+            return Ok(());
+        }
+
+        let conn = self.provider.acquire()?;
+        let placeholders = vec!["?"; instrument_ids.len()].join(", ");
+        let sql = format!(
+            "UPDATE bn_instruments SET status = ? \
+             WHERE id IN ({placeholders}) AND UPPER(symbol_type) = 'SPOT';"
+        );
+        let mut params = Vec::with_capacity(instrument_ids.len() + 1);
+        params.push(duckdb::types::Value::Text(BN_SYMBOL_STATUS_NOT_TRADING.to_string()));
+        params.extend(instrument_ids.into_iter().map(|id| duckdb::types::Value::BigInt(id as i64)));
+        conn.execute(&sql, duckdb::params_from_iter(params.iter()))?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::binance::bn_consts::{BN_SYMBOL_STATUS_BREAK, BN_SYMBOL_STATUS_TRADING};
     use crate::binance::db_consts::CREATE_BINANCE_INSTRUMENTS_TABLE;
     use crate::test_utils::create_memory_db_provider;
 
@@ -189,7 +210,7 @@ mod tests {
         let instrument = BinanceInstrument {
             id: 42,
             symbol: "BTCUSDT".to_string(),
-            status: "TRADING".to_string(),
+            status: BN_SYMBOL_STATUS_TRADING.to_string(),
             base_asset: "BTC".to_string(),
             quote_asset: "USDT".to_string(),
             quote_asset_precision: 8,
@@ -208,7 +229,7 @@ mod tests {
         assert_eq!(repo.get_map_of_symbol_id(InstrumentType::Spot).await.unwrap().get("BTCUSDT"), Some(&42));
 
         let updated = BinanceInstrument {
-            status: "BREAK".to_string(),
+            status: BN_SYMBOL_STATUS_BREAK.to_string(),
             ..instrument.clone()
         };
         repo.update_instrument(updated.clone()).await.unwrap();
@@ -216,5 +237,50 @@ mod tests {
         let fetched = repo.get_instrument_by_type(InstrumentType::Spot).await.unwrap();
         assert_eq!(fetched.len(), 1);
         assert_eq!(fetched[0].status, updated.status);
+    }
+
+    #[tokio::test]
+    async fn marks_multiple_spot_instruments_not_trading_in_one_call() {
+        let provider = create_memory_db_provider();
+        let conn = provider.acquire().unwrap();
+        conn.execute(CREATE_BINANCE_INSTRUMENTS_TABLE.split(';').next().unwrap(), []).unwrap();
+        conn.execute(
+            "CREATE UNIQUE INDEX idx_bn_instruments_symbol_type ON bn_instruments(symbol, symbol_type);",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        let repo = get_instrument_repo(Some(provider));
+        for (id, symbol, symbol_type) in [
+            (1, "BTCUSDT", InstrumentType::Spot),
+            (2, "ETHUSDT", InstrumentType::Spot),
+            (3, "BTCUSDT", InstrumentType::Swap),
+        ] {
+            repo.insert_instrument(BinanceInstrument {
+                id,
+                symbol: symbol.to_string(),
+                status: BN_SYMBOL_STATUS_TRADING.to_string(),
+                base_asset: "BTC".to_string(),
+                quote_asset: "USDT".to_string(),
+                quote_asset_precision: 8,
+                order_types: vec!["LIMIT".to_string()],
+                symbol_type,
+                on_board_time: None,
+            })
+            .await
+            .unwrap();
+        }
+
+        repo.mark_instruments_not_trading(vec![1, 2]).await.unwrap();
+
+        let spot_instruments = repo.get_instrument_by_type(InstrumentType::Spot).await.unwrap();
+        assert!(
+            spot_instruments
+                .iter()
+                .all(|instrument| instrument.status == BN_SYMBOL_STATUS_NOT_TRADING)
+        );
+        let swap_instruments = repo.get_instrument_by_type(InstrumentType::Swap).await.unwrap();
+        assert_eq!(swap_instruments[0].status, BN_SYMBOL_STATUS_TRADING);
     }
 }

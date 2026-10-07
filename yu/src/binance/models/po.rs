@@ -516,6 +516,7 @@ impl DuckDBPO for FundingRatePo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::binance::bn_consts::BN_SYMBOL_STATUS_TRADING;
     use yue::binance::bn_models::spot_restful::ExchangeSymbol;
     use yue::binance::bn_models::swap_restful::SwapExchangeSymbol;
 
@@ -523,7 +524,7 @@ mod tests {
     fn spot_exchange_symbol_converts_to_binance_instrument() {
         let symbol = ExchangeSymbol {
             symbol: "BTCUSDT".to_string(),
-            status: "TRADING".to_string(),
+            status: BN_SYMBOL_STATUS_TRADING.to_string(),
             base_asset: "BTC".to_string(),
             base_asset_precision: 8,
             quote_asset: "USDT".to_string(),
@@ -561,7 +562,7 @@ mod tests {
             contract_type: "PERPETUAL".to_string(),
             delivery_date: Some(0),
             onboard_date: Some(1_600_000_000_000),
-            status: "TRADING".to_string(),
+            status: BN_SYMBOL_STATUS_TRADING.to_string(),
             maint_margin_percent: None,
             required_margin_percent: None,
             base_asset: "BTC".to_string(),

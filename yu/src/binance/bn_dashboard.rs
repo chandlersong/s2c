@@ -1,5 +1,11 @@
+use crate::binance::bn_consts::BN_SYMBOL_STATUS_TRADING;
+use crate::binance::duckdb_repository::{BNInstrumentRepository, get_instrument_repo};
+use crate::binance::jobs::initial_tables;
+use crate::binance::models::po::BinanceInstrument;
+use crate::duck_db::DuckDBDSProvider;
+use crate::errors::YuError;
 use li::errors::LiError;
-use li::tools::time::{unix_time_now_u64_utc, UnixTimeStamp};
+use li::tools::time::{UnixTimeStamp, unix_time_now_u64_utc};
 use log::{error, info};
 use serde::de::DeserializeOwned;
 use std::fs;
@@ -11,12 +17,13 @@ use yue::binance::bn_models::common::SymbolInfo;
 use yue::binance::bn_models::spot_restful::ExchangeInfo;
 use yue::binance::bn_models::swap_restful::SwapExchangeInfo;
 use yue::binance::bn_restful_commands::{
-    execute_json_request, BINANCE_SPOT_BASE, BINANCE_SWAP_BASE, SPOT_EXCHANGE_COMMAND, SPOT_RATE_PER_MINUTE, SWAP_EXCHANGE_COMMAND,
+    BINANCE_SPOT_BASE, BINANCE_SWAP_BASE, SPOT_EXCHANGE_COMMAND, SPOT_RATE_PER_MINUTE, SWAP_EXCHANGE_COMMAND, execute_json_request,
 };
 use yue::binance::restful_func::{get_trading_spot_symbols, get_trading_swap_symbols};
 use yue::errors::YueError;
 use yue::http_client::get_http_client;
 use yue::models::HistoryInterval;
+use yue::models::InstrumentType;
 
 #[derive(Clone)]
 pub struct BinanceDashboardSnapShot {
@@ -48,15 +55,17 @@ pub struct BinanceDashboard {
     swap_symbols: Arc<RwLock<Vec<SymbolInfo>>>,
     data_retention_hours: u64,
     debug_mood: bool,
+    instrument_repo: BNInstrumentRepository,
 }
 
 impl BinanceDashboard {
-    pub fn new(data_retention_hours: u64) -> Self {
+    pub fn new(data_retention_hours: u64, provider: Option<DuckDBDSProvider>) -> Self {
         BinanceDashboard {
             spot_symbols: Arc::new(RwLock::new(vec![])),
             swap_symbols: Arc::new(RwLock::new(vec![])),
             data_retention_hours,
             debug_mood: false,
+            instrument_repo: get_instrument_repo(provider),
         }
     }
 
@@ -67,22 +76,34 @@ impl BinanceDashboard {
     /// 1. 各个的exchange info的update。从本地直接读取文件。
     ///
     #[deprecated]
-    pub fn debug_mode(data_retention_hours: u64) -> Self {
-        BinanceDashboard {
+    pub fn debug_mode(data_retention_hours: u64, instrument_repo: Option<BNInstrumentRepository>) -> Result<Self, YuError> {
+        let inst_repo = match instrument_repo {
+            None => {
+                let provider = Some(DuckDBDSProvider::memory_db());
+                initial_tables(provider.clone())?;
+                get_instrument_repo(provider)
+            }
+            Some(repo) => repo,
+        };
+        Ok(BinanceDashboard {
             spot_symbols: Arc::new(RwLock::new(vec![])),
             swap_symbols: Arc::new(RwLock::new(vec![])),
             data_retention_hours,
             debug_mood: true,
-        }
+            instrument_repo: inst_repo,
+        })
     }
 
-    pub fn new_with_data(spot_symbol: Vec<SymbolInfo>, swap_symbol: Vec<SymbolInfo>, data_retention_hours: u64) -> Self {
-        BinanceDashboard {
+    pub fn new_with_data(spot_symbol: Vec<SymbolInfo>, swap_symbol: Vec<SymbolInfo>, data_retention_hours: u64) -> Result<Self, YuError> {
+        let provider = Some(DuckDBDSProvider::memory_db());
+        initial_tables(provider.clone())?;
+        Ok(BinanceDashboard {
             spot_symbols: Arc::new(RwLock::new(spot_symbol)),
             swap_symbols: Arc::new(RwLock::new(swap_symbol)),
             data_retention_hours,
             debug_mood: false,
-        }
+            instrument_repo: get_instrument_repo(provider),
+        })
     }
 
     async fn query_spot_exchange_info() -> Result<ExchangeInfo, YueError> {
@@ -165,8 +186,15 @@ impl BinanceDashboard {
 
                 let res = match self.refresh_all_symbol(spot_all, swap_res) {
                     Ok((spot_symbols, swap_symbols)) => {
-                        let trading_spot_symbols: Vec<SymbolInfo> = spot_symbols.iter().filter(|s| s.status == "TRADING").cloned().collect();
-                        let trading_swap_symbols: Vec<SymbolInfo> = swap_symbols.iter().filter(|s| s.status == "TRADING").cloned().collect();
+                        let trading_spot_symbols: Vec<SymbolInfo> =
+                            spot_symbols.iter().filter(|s| s.status == BN_SYMBOL_STATUS_TRADING).cloned().collect();
+                        let trading_swap_symbols: Vec<SymbolInfo> =
+                            swap_symbols.iter().filter(|s| s.status == BN_SYMBOL_STATUS_TRADING).cloned().collect();
+
+                        if let Err(e) = self.refresh_instrument_in_db(&trading_spot_symbols).await {
+                            error!("Error persist trading spot symbols: {:?}", e);
+                        }
+
                         BinanceDashboardSnapShot::new(trading_spot_symbols, trading_swap_symbols)
                     }
                     Err(e) => return Err(LiError::CustomError(format!("刷新交易符号失败: {}", e))),
@@ -177,6 +205,27 @@ impl BinanceDashboard {
             (Err(e), _) => Err(LiError::CustomError(format!("获取现货交易所信息失败: {}", e))),
             (_, Err(e)) => Err(LiError::CustomError(format!("获取永续交易所信息失败: {}", e))),
         }
+    }
+
+    ///
+    /// # 步骤
+    /// 1. 从数据库中，获取symbol和id的hashmap，后续称之symbols。
+    /// 2. loop stops。判断symbol是否在存在于symbols.
+    ///  - 如果不存在，则转换成po，存入数据库
+    ///  - 如果存在，则跳过，在map中删除该条symbol
+    /// 3. 把symbol中剩余的数据，标注为非交易
+    pub async fn refresh_instrument_in_db(&self, spots: &Vec<SymbolInfo>) -> Result<(), YuError> {
+        let mut existing_symbols = self.instrument_repo.get_map_of_symbol_id(InstrumentType::Spot).await?;
+
+        for spot in spots {
+            if existing_symbols.remove(&spot.symbol).is_none() {
+                self.instrument_repo.insert_instrument(BinanceInstrument::from(spot)).await?;
+            }
+        }
+
+        self.instrument_repo
+            .mark_instruments_not_trading(existing_symbols.into_values().collect())
+            .await
     }
 
     pub fn spot_all_symbols(&self) -> Arc<RwLock<Vec<SymbolInfo>>> {
@@ -212,5 +261,61 @@ impl BinanceDashboard {
         let aligned = interval_to_use.get_close_unix_ms(earliest);
 
         Some(aligned)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::binance::bn_consts::{BN_SYMBOL_STATUS_BREAK, BN_SYMBOL_STATUS_NOT_TRADING};
+
+    fn symbol(symbol: &str, status: &str) -> SymbolInfo {
+        SymbolInfo {
+            symbol: symbol.to_string(),
+            status: status.to_string(),
+            base_asset: symbol.trim_end_matches("USDT").to_string(),
+            quote_asset: "USDT".to_string(),
+            quote_asset_precision: 8,
+            order_types: vec!["LIMIT".to_string()],
+            symbol_type: "spot".to_string(),
+            on_board_time: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_instrument_in_db_inserts_new_and_marks_missing_symbols_not_trading() {
+        let dashboard = BinanceDashboard::new_with_data(Vec::new(), Vec::new(), 24).unwrap();
+        let old_active = BinanceInstrument::from(&symbol("BTCUSDT", BN_SYMBOL_STATUS_BREAK));
+        let missing = BinanceInstrument::from(&symbol("ETHUSDT", BN_SYMBOL_STATUS_TRADING));
+        dashboard.instrument_repo.insert_instrument(old_active.clone()).await.unwrap();
+        dashboard.instrument_repo.insert_instrument(missing.clone()).await.unwrap();
+
+        dashboard
+            .refresh_instrument_in_db(&vec![
+                symbol("BTCUSDT", BN_SYMBOL_STATUS_TRADING),
+                symbol("SOLUSDT", BN_SYMBOL_STATUS_TRADING),
+                symbol("XRPUSDT", BN_SYMBOL_STATUS_TRADING),
+            ])
+            .await
+            .unwrap();
+
+        let instruments = dashboard.instrument_repo.get_instrument_by_type(InstrumentType::Spot).await.unwrap();
+        assert_eq!(instruments.len(), 4);
+        let btc = instruments.iter().find(|instrument| instrument.symbol == "BTCUSDT").unwrap();
+        assert_eq!(btc.id, old_active.id);
+        assert_eq!(btc.status, BN_SYMBOL_STATUS_BREAK);
+        assert!(
+            instruments
+                .iter()
+                .any(|instrument| instrument.symbol == "SOLUSDT" && instrument.status == BN_SYMBOL_STATUS_TRADING)
+        );
+        assert!(
+            instruments
+                .iter()
+                .any(|instrument| instrument.symbol == "XRPUSDT" && instrument.status == BN_SYMBOL_STATUS_TRADING)
+        );
+        let eth = instruments.iter().find(|instrument| instrument.symbol == "ETHUSDT").unwrap();
+        assert_eq!(eth.id, missing.id);
+        assert_eq!(eth.status, BN_SYMBOL_STATUS_NOT_TRADING);
     }
 }

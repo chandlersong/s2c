@@ -45,7 +45,7 @@ pub struct DuckDBDSProvider {
     pool: Pool<DuckdbConnectionManager>,
 }
 
-impl std::fmt::Debug for DuckDBDSProvider {
+impl Debug for DuckDBDSProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // pool doesn't implement Debug in a useful way here; print a lightweight summary
         let info = format!("Pool(addr={:p})", &self.pool);
@@ -83,6 +83,12 @@ impl DataSourceProviderTrait for DuckDBDSProvider {
 impl DuckDBDSProvider {
     pub fn new(pool: Pool<DuckdbConnectionManager>) -> Self {
         DuckDBDSProvider { pool }
+    }
+
+    pub fn memory_db() -> Self {
+        let manager = DuckdbConnectionManager::memory().unwrap();
+        let pool = Pool::builder().max_size(4).build(manager).unwrap();
+        DuckDBDSProvider::new(pool)
     }
 }
 

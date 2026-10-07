@@ -1,0 +1,3 @@
+pub const BN_SYMBOL_STATUS_TRADING: &str = "TRADING";
+pub const BN_SYMBOL_STATUS_BREAK: &str = "BREAK";
+pub const BN_SYMBOL_STATUS_NOT_TRADING: &str = "NOT_TRADING";

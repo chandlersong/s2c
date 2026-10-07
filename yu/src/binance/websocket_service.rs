@@ -301,6 +301,7 @@ impl KlineSubscribeService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::binance::bn_consts::BN_SYMBOL_STATUS_TRADING;
     use yue::binance::bn_models::common::SymbolInfo;
 
     /// 单元测试：测试 `compose_kline_url` 对空输入的返回值。
@@ -322,7 +323,7 @@ mod tests {
             quote_asset: "USDT".to_string(),
             quote_asset_precision: 0,
             order_types: vec![],
-            status: "TRADING".to_string(),
+            status: BN_SYMBOL_STATUS_TRADING.to_string(),
             base_asset: "".to_string(),
             symbol_type: "".to_string(),
         }];
@@ -341,7 +342,7 @@ mod tests {
                 quote_asset: "USDT".to_string(),
                 quote_asset_precision: 0,
                 order_types: vec![],
-                status: "TRADING".to_string(),
+                status: BN_SYMBOL_STATUS_TRADING.to_string(),
                 base_asset: "".to_string(),
                 symbol_type: "".to_string(),
             },
@@ -351,7 +352,7 @@ mod tests {
                 quote_asset: "USDT".to_string(),
                 quote_asset_precision: 0,
                 order_types: vec![],
-                status: "TRADING".to_string(),
+                status: BN_SYMBOL_STATUS_TRADING.to_string(),
                 base_asset: "".to_string(),
                 symbol_type: "".to_string(),
             },

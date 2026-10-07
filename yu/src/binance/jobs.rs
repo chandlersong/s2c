@@ -29,7 +29,7 @@ use yue::query_message::DataSourceProviderTrait;
 ///
 pub async fn start_bn_jobs() -> Result<(), YuError> {
     let config = get_config();
-    let dash_board = Arc::new(BinanceDashboard::new(config.get_data_retention_hours()));
+    let dash_board = Arc::new(BinanceDashboard::new(config.get_data_retention_hours(), None));
     let snapshot = dash_board.execute().await?;
     let (dash_board_watch, _) = watch::channel(snapshot);
     let dash_board_refresh = dash_board.clone();
@@ -154,7 +154,7 @@ pub async fn start_monitor_account() -> Result<(), YuError> {
 
             (normal, portfolio)
         })
-        .unwrap_or_default();
+        .unwrap();
 
     // 示例：打印各组数量（可按需替换为后续逻辑）
     info!(

@@ -56,6 +56,7 @@ impl SyncInstrumentServiceTrait for BinanceSyncInstrumentService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::binance::bn_consts::BN_SYMBOL_STATUS_TRADING;
     use crate::sync::models::grpc_sync::instrument::Payload;
     use yue::binance::bn_models::common::SymbolInfo;
 
@@ -63,7 +64,7 @@ mod tests {
     async fn spot_and_swap_symbols_with_same_name_are_listed_separately() {
         let spot_symbol = SymbolInfo {
             symbol: "BTCUSDT".to_string(),
-            status: "TRADING".to_string(),
+            status: BN_SYMBOL_STATUS_TRADING.to_string(),
             base_asset: "BTC".to_string(),
             quote_asset: "USDT".to_string(),
             quote_asset_precision: 8,
@@ -76,7 +77,8 @@ mod tests {
             on_board_time: Some(1_600_000_000_000),
             ..spot_symbol.clone()
         };
-        let dashboard = Arc::new(BinanceDashboard::new_with_data(vec![spot_symbol], vec![swap_symbol], 24));
+        let dashboard_raw = BinanceDashboard::new_with_data(vec![spot_symbol], vec![swap_symbol], 24).unwrap();
+        let dashboard = Arc::new(dashboard_raw);
         let service = BinanceSyncInstrumentService::new(dashboard);
 
         let instruments = service.list_instruments().await.unwrap();

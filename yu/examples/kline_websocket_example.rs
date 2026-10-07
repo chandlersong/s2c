@@ -22,7 +22,7 @@ async fn main() -> Result<(), YuError> {
 
     let proxy = app_config.proxy_url.clone();
     #[allow(deprecated)]
-    let dash_board = Arc::new(BinanceDashboard::debug_mode(app_config.get_data_retention_hours()));
+    let dash_board = Arc::new(BinanceDashboard::debug_mode(app_config.get_data_retention_hours(), None)?);
     let snapshot = dash_board.execute().await?;
     let (dash_board_watch, _) = watch::channel(snapshot);
     let swap_kline_table = get_swap_kline_table();

@@ -1,4 +1,5 @@
 pub mod bn_backend_service;
+pub mod bn_consts;
 pub mod bn_dashboard;
 pub mod bn_data_integrity;
 pub mod bn_mcp;

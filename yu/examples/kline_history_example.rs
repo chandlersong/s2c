@@ -33,7 +33,7 @@ async fn main() -> Result<(), YuError> {
     }
     //初始化数据
     #[allow(deprecated)]
-    let dash_board = BinanceDashboard::debug_mode(app_config.get_data_retention_hours());
+    let dash_board = BinanceDashboard::debug_mode(app_config.get_data_retention_hours(), None)?;
     dash_board.execute().await?;
     let spot_all = dash_board.spot_all_symbols();
     let swap_all = dash_board.swap_all_symbols();

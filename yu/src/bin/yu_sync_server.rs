@@ -55,7 +55,7 @@ async fn main() -> Result<(), YuError> {
 
     let polymarket_history_service = start_polymarket_sync_series_job().await?;
     let okx_option_service = start_okx_option_service().await?;
-    let binance_dashboard = Arc::new(BinanceDashboard::new(app_config.get_data_retention_hours()));
+    let binance_dashboard = Arc::new(BinanceDashboard::new(app_config.get_data_retention_hours(), None));
     binance_dashboard.execute().await?;
 
     let polymarket_instrument_service = PolyMarketSyncInstrumentService::new(polymarket_history_service.clone());

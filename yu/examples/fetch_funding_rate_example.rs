@@ -31,7 +31,7 @@ async fn main() -> Result<(), YuError> {
         warn!("币安表创建失败,{}", _e);
     }
     #[allow(deprecated)]
-    let dash_board = BinanceDashboard::debug_mode(app_config.get_data_retention_hours());
+    let dash_board = BinanceDashboard::debug_mode(app_config.get_data_retention_hours(), None)?;
     let snapshot = dash_board.execute().await?;
     let (dash_board_watch, _) = watch::channel(snapshot);
     let swap_all = dash_board.swap_all_symbols();
