@@ -206,7 +206,7 @@ pub struct LocalOkxOptionSummaryPo {
 }
 
 impl LocalOkxOptionSummaryPo {
-    pub fn from_okx_summary(s: crate::sync::models::grpc_sync::OptionSummary, local_inst_id: u64, batch_timestamp: u64) -> Self {
+    pub fn from_okx_summary(s: crate::sync::models::grpc_sync::OkxOptionSummary, local_inst_id: u64, batch_timestamp: u64) -> Self {
         LocalOkxOptionSummaryPo {
             id: get_snow_flake_id_u64(),
             instrument_id: local_inst_id,

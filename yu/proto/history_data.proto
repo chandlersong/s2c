@@ -101,7 +101,7 @@ message ServerMessage {
   oneof payload {
     PolyMarketHistoryList polymarket_history = 1;     // polymarket
     OkxKlineList okx_kline_history = 2;     // okx kline
-    OptionSummaryList option_summary_history = 3; // okx option summary
+    OkxOptionSummaryList option_summary_history = 3; // okx option summary
     BinanceKlineList binance_kline_history = 4;
     BinanceTradeList binance_trade_history = 5;
   }
@@ -153,7 +153,7 @@ message OkxKlineList {
   uint64 timestamp = 2;
 }
 
-message OptionSummary {
+message OkxOptionSummary {
   uint64 id = 1;
   uint64 inst_id = 2;
   string inst_identify = 3;
@@ -178,8 +178,8 @@ message OptionSummary {
   optional double vega_bs = 22;
 }
 
-message OptionSummaryList {
-  repeated OptionSummary summary_list = 1;
+message OkxOptionSummaryList {
+  repeated OkxOptionSummary summary_list = 1;
   uint64 timestamp = 2;
 }
 

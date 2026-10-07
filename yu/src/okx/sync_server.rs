@@ -1,7 +1,6 @@
 use crate::errors::YuError;
 use crate::okx::service::OptionService;
-use crate::polymarket::service::SeriesHistoryMarketService;
-use crate::sync::models::grpc_sync::{Instrument, PolymarketInstrument};
+use crate::sync::models::grpc_sync::Instrument;
 use crate::sync::server::sync_server::{SyncInstrumentService, SyncInstrumentServiceTrait};
 use async_trait::async_trait;
 use log::error;

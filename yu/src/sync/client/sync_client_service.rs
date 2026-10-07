@@ -6,7 +6,6 @@ use crate::sync::client::database::get_okx_option_summary_batch_insert;
 use crate::sync::client::database::get_polymarket_price_batch_insert;
 use crate::sync::client::po::okx::{LocalOkxInstrumentPo, LocalOkxKlinePo, LocalOkxOptionSummaryPo};
 use crate::sync::client::po::polymarket::{LocalPolyMarketHistoryPo, LocalPolyMarketInstrumentPo};
-use crate::sync::client::repository::binance::{ClientBinanceRepository, ClientBinanceRepositoryImpl};
 use crate::sync::client::repository::okx::{ClientOkxRepository, ClientOkxRepositoryImpl};
 use crate::sync::client::repository::polymarket::{ClientPolyMarketRepository, ClientPolyMarketRepositoryImpl};
 use crate::sync::models::grpc_sync::server_message::Payload;

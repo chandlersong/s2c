@@ -6,8 +6,8 @@ use crate::polymarket::po::PolyMarketHistoryPo;
 use crate::polymarket::service::SeriesHistoryMarketService;
 use crate::sync::models::grpc_sync::sync_interface_server::SyncInterface;
 use crate::sync::models::grpc_sync::{
-    Empty, Instrument, InstrumentList, OkxKline, PolyMarketHistory, PolyMarketHistoryList, PolymarketInstrument, ServerMessage, SubscribeRequest,
-    SyncRequest, server_message,
+    Empty, Instrument, InstrumentList, OkxKline, PolyMarketHistory, PolyMarketHistoryList, ServerMessage, SubscribeRequest, SyncRequest,
+    server_message,
 };
 use async_trait::async_trait;
 use li::tools::time::unix_time_now_u64_utc;
@@ -226,7 +226,7 @@ impl YuSyncServer {
                         match recv_summary {
                             Ok(po) => {
                                 trace!("Received okx option summary broadcast inst_id: {} server_ts: {}", po.inst_id, po.server_ts);
-                                let summary = crate::sync::models::grpc_sync::OptionSummary {
+                                let summary = crate::sync::models::grpc_sync::OkxOptionSummary {
                                     id: po.id,
                                     inst_id: po.inst_id,
                                     inst_identify: po.inst_identify,
@@ -253,7 +253,7 @@ impl YuSyncServer {
                                 // 使用单独缓存，便于和 kline / polymarket 分支并行汇总发送
                                 let mut merged = Vec::new();
                                 merged.push(summary);
-                                let list = crate::sync::models::grpc_sync::OptionSummaryList {
+                                let list = crate::sync::models::grpc_sync::OkxOptionSummaryList {
                                     summary_list: merged,
                                     timestamp: unix_time_now_u64_utc(),
                                 };
@@ -502,7 +502,7 @@ impl SyncInterface for YuSyncServer {
                     match okx_service.find_option_summary_between(inst_id, start_ms, end_ms).await {
                         Ok(summary_vec) => {
                             if summary_vec.is_empty() {
-                                let list = crate::sync::models::grpc_sync::OptionSummaryList {
+                                let list = crate::sync::models::grpc_sync::OkxOptionSummaryList {
                                     summary_list: vec![],
                                     timestamp: unix_time_now_u64_utc(),
                                 };
@@ -514,9 +514,9 @@ impl SyncInterface for YuSyncServer {
                             }
 
                             for chunk in summary_vec.chunks(batch_size) {
-                                let mut summaries: Vec<crate::sync::models::grpc_sync::OptionSummary> = Vec::with_capacity(chunk.len());
+                                let mut summaries: Vec<crate::sync::models::grpc_sync::OkxOptionSummary> = Vec::with_capacity(chunk.len());
                                 for item in chunk.iter() {
-                                    summaries.push(crate::sync::models::grpc_sync::OptionSummary {
+                                    summaries.push(crate::sync::models::grpc_sync::OkxOptionSummary {
                                         id: item.id,
                                         inst_id: item.inst_id,
                                         inst_identify: item.inst_identify.clone(),
@@ -541,7 +541,7 @@ impl SyncInterface for YuSyncServer {
                                         vega_bs: item.vega_bs,
                                     });
                                 }
-                                let list = crate::sync::models::grpc_sync::OptionSummaryList {
+                                let list = crate::sync::models::grpc_sync::OkxOptionSummaryList {
                                     summary_list: summaries,
                                     timestamp: unix_time_now_u64_utc(),
                                 };
