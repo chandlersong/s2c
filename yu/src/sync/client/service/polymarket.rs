@@ -122,7 +122,8 @@ impl ClientExchangeServiceTrait for PolymarketClientExchangeService {
         let start_timestamp = if latest_timestamp == 0 { instrument.start_ms } else { latest_timestamp };
         let end_timestamp = unix_time_now_u64_utc();
         self.backfill_history(instrument.server_id, local_instrument.id, start_timestamp, end_timestamp)
-            .await
+            .await?;
+        Ok(())
     }
 }
 

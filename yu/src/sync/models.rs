@@ -4,6 +4,17 @@ pub mod grpc_sync {
 
     tonic::include_proto!("grpc_sync");
 
+    impl ExchangeType {
+        pub fn readable_name(self) -> &'static str {
+            match self {
+                Self::Polymarket => "Polymarket",
+                Self::Okx => "OKX",
+                Self::Binance => "Binance",
+                ExchangeType::ExchangeUnspecified => "ExchangeUnspecified",
+            }
+        }
+    }
+
     impl From<PolyMarketInstrumentPo> for PolymarketInstrument {
         fn from(value: PolyMarketInstrumentPo) -> Self {
             PolymarketInstrument {
@@ -105,10 +116,17 @@ pub mod grpc_sync {
 
 #[cfg(test)]
 mod tests {
-    use super::grpc_sync::{BinanceKline, BinanceTrade};
+    use super::grpc_sync::{BinanceKline, BinanceTrade, ExchangeType};
     use crate::binance::models::po::{BinanceInstrument as BinanceInstrumentPo, KlinePo, SpotStreamTradeRecordPo};
     use crate::sync::client::po::binance::{LocalBinanceKlinePo, LocalBinanceTradePo};
     use yue::models::InstrumentType;
+
+    #[test]
+    fn exchange_type_has_readable_name() {
+        assert_eq!(ExchangeType::Polymarket.readable_name(), "Polymarket");
+        assert_eq!(ExchangeType::Okx.readable_name(), "OKX");
+        assert_eq!(ExchangeType::Binance.readable_name(), "Binance");
+    }
 
     #[test]
     fn binance_instrument_server_to_proto_preserves_fields() {

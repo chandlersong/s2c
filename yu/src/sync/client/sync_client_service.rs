@@ -116,113 +116,17 @@ impl SyncClientService {
         let mut polymarket_diff: HashMap<u64, (u64, u64)> = HashMap::new();
         let mut okx_option_diff: HashMap<u64, (u64, u64)> = HashMap::new();
         let mut okx_option_summary_diff: HashMap<u64, (u64, u64)> = HashMap::new();
-        let local_pm_history_latest = self.pm_repository.list_instrument_timestamps().await?;
-        let local_okx_history_latest = self.okx_repository.list_instrument_timestamps().await?;
-        let local_okx_option_summary_latest = self.okx_repository.list_option_summary_timestamps().await?;
+
         // server_inst.instruments: map<string, PolymarketAssertInfo>
         for (_, inst) in server_inst.instruments.into_iter() {
-            let exchange = ExchangeType::try_from(inst.exchange).map_err(|_| YuError::new("unknown exchange type"))?;
-            let exchange = self.exchange_services.get(&exchange).unwrap();
-
-            if let Some(payload) = inst.payload {
-                match payload {
-                    instrument::Payload::Okx(okx_inst) => {
-                        // handle okx: insert if missing into local okx_instruments table
-                        let server_id = okx_inst.server_id.clone();
-                        if !okx_local_inst.contains_key(&server_id) {
-                            let po = LocalOkxInstrumentPo {
-                                id: get_snow_flake_id_u64(),
-                                server_id: okx_inst.server_id,
-                                inst_identify: okx_inst.inst_id.clone(),
-                                inst_type: okx_inst.inst_type.clone(),
-                                inst_family: if okx_inst.inst_family.is_empty() {
-                                    None
-                                } else {
-                                    Some(okx_inst.inst_family.clone())
-                                },
-                                base_ccy: okx_inst.base_ccy.clone(),
-                                quote_ccy: if okx_inst.quote_ccy.is_empty() {
-                                    None
-                                } else {
-                                    Some(okx_inst.quote_ccy.clone())
-                                },
-                                settle_ccy: if okx_inst.settle_ccy.is_empty() {
-                                    None
-                                } else {
-                                    Some(okx_inst.settle_ccy.clone())
-                                },
-                                list_time: Some(okx_inst.list_time),
-                                exp_time: Some(okx_inst.exp_time),
-                                tick_sz: Some(okx_inst.tick_sz),
-                                lot_sz: Some(okx_inst.lot_sz),
-                                min_sz: Some(okx_inst.min_sz),
-                                alias: if okx_inst.alias.is_empty() { None } else { Some(okx_inst.alias.clone()) },
-                                state: if okx_inst.state.is_empty() { None } else { Some(okx_inst.state.clone()) },
-                                inst_id_code: if okx_inst.inst_id_code.is_empty() {
-                                    None
-                                } else {
-                                    Some(okx_inst.inst_id_code.clone())
-                                },
-                                inst_category: if okx_inst.inst_category.is_empty() {
-                                    None
-                                } else {
-                                    Some(okx_inst.inst_category.clone())
-                                },
-                            };
-                            self.okx_repository.create_instruments(po).await?;
-                            okx_option_diff.insert(server_id, (okx_inst.list_time, now));
-                        } else {
-                            let local_ts = *local_okx_history_latest.get(&server_id).unwrap_or(&0u64);
-                            okx_option_diff.insert(server_id, (local_ts, now));
-                            let local_option_ts = *local_okx_option_summary_latest.get(&server_id).unwrap_or(&0u64);
-                            okx_option_summary_diff.insert(server_id, (local_option_ts, now));
-                        }
-
-                        // we don't add okx entries to the polymarket return map (res) because it expects u64 keys
-                        continue;
-                    }
-                    instrument::Payload::Polymarket(instrument) => {
-                        let inst_id = instrument.server_id;
-                        if !pm_local_inst.contains_key(&inst_id) {
-                            // insert into local db
-                            let po = LocalPolyMarketInstrumentPo {
-                                id: get_snow_flake_id_u64(),
-                                server_id: instrument.server_id,
-                                series_id: instrument.series_id.clone(),
-                                series_slug: instrument.series_slug.clone(),
-                                event_id: instrument.event_id.clone(),
-                                event_slug: instrument.event_slug.clone(),
-                                market_id: instrument.market_id.clone(),
-                                market_slug: instrument.market_slug.clone(),
-                                assert_id: instrument.asset_id.clone(),
-                                assert_slug: instrument.asset_slug.clone(),
-                                start_ms: instrument.start_ms,
-                                end_ms: instrument.end_ms,
-                            };
-
-                            self.pm_repository.create_instruments(po).await?;
-                            polymarket_diff.insert(inst_id, (instrument.start_ms, now));
-                        } else {
-                            let local_ts = *local_pm_history_latest.get(&inst_id).unwrap_or(&0u64);
-                            polymarket_diff.insert(inst_id, (local_ts, now));
-                        }
-                    }
-                    instrument::Payload::Binance(_) => {
-                        //TODO: implement it
-                    }
-                }
+            let exchange_type = ExchangeType::try_from(inst.exchange).map_err(|_| YuError::new("unknown exchange type"))?;
+            let exchange_name = exchange_type.readable_name();
+            let exchange_service = self.exchange_services.get(&exchange_type).unwrap();
+            if let Err(e) = exchange_service.initial_data(inst).await {
+                error!("error initializing exchange {},error:{}", exchange_name, e);
             }
         }
-        {
-            let inst_map = self.pm_repository.server_id_instrument_dictionary().await?;
-            let mut guard = self.pm_instrument_dict.write().await;
-            *guard = inst_map;
-        }
-        {
-            let inst_map = self.okx_repository.server_id_instrument_dictionary().await?;
-            let mut guard = self.okx_instrument_dict.write().await;
-            *guard = inst_map;
-        }
+
         Ok(InstrumentsDiff {
             polymarket_diff,
             okx_option_kline_diff: okx_option_diff,
