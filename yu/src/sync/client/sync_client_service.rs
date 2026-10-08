@@ -10,132 +10,14 @@ use crate::sync::client::repository::okx::{ClientOkxRepository, ClientOkxReposit
 use crate::sync::client::repository::polymarket::{ClientPolyMarketRepository, ClientPolyMarketRepositoryImpl};
 use crate::sync::client::service::polymarket::PolymarketClientExchangeService;
 use crate::sync::models::grpc_sync::server_message::Payload;
-use crate::sync::models::grpc_sync::sync_interface_client::SyncInterfaceClient;
-use crate::sync::models::grpc_sync::{ExchangeType, Instrument, InstrumentList, ServerMessage, SyncRequest, instrument};
+use crate::sync::models::grpc_sync::{ExchangeType, Instrument, InstrumentList, ServerMessage, instrument};
 use async_trait::async_trait;
-use futures::Stream;
-use governor::Jitter;
 use li::tools::time::unix_time_now_u64_utc;
 use log::{debug, error, info};
 use std::collections::HashMap;
-use std::pin::Pin;
-use std::sync::{Arc, OnceLock};
-use std::time::Duration;
-use tokio::sync::{Mutex, Notify, RwLock, mpsc};
-use tonic::{
-    Request, Status,
-    transport::{Channel, Endpoint},
-};
+use std::sync::Arc;
+use tokio::sync::{RwLock, mpsc};
 use yue::tools::get_snow_flake_id_u64;
-
-pub type GrpcServerMessageStream = Pin<Box<dyn Stream<Item = Result<ServerMessage, Status>> + Send + 'static>>;
-
-struct ConnectionHolder {
-    channel: OnceLock<Channel>,
-    reconnect_notify: Notify,   // 通知等待者
-    reconnect_mutex: Mutex<()>, // 防止多个进程同时重连
-}
-
-pub struct GrpcChannelManager {
-    inner: Arc<ConnectionHolder>,
-    server_url: String,
-}
-
-impl GrpcChannelManager {
-    pub fn new(server_url: &str) -> Self {
-        Self {
-            inner: Arc::new(ConnectionHolder {
-                channel: OnceLock::new(),
-                reconnect_notify: Notify::new(),
-                reconnect_mutex: Mutex::new(()),
-            }),
-            server_url: server_url.to_string(),
-        }
-    }
-
-    /// 获取 Channel（会自动初始化或等待）
-    pub async fn get_channel(&self) -> Channel {
-        // 第一次或断开后
-        if let Some(ch) = self.inner.channel.get() {
-            return ch.clone();
-        }
-
-        self.reconnect().await
-    }
-
-    /// 核心：带跨进程锁的重连逻辑
-    pub async fn reconnect(&self) -> Channel {
-        // 先尝试获取跨进程锁（只有一个进程能真正重连）
-        let _guard = match self.inner.reconnect_mutex.try_lock() {
-            Ok(guard) => guard,
-            Err(_) => {
-                // 其他进程等待通知
-                println!("其他进程等待重连完成...");
-                self.inner.reconnect_notify.notified().await;
-                return self.inner.channel.get().unwrap().clone();
-            }
-        };
-
-        // ==================== 真正执行重连的进程 ====================
-        info!("当前进程正在重建 gRPC 连接...");
-        self.connect().await
-    }
-
-    pub async fn connect(&self) -> Channel {
-        loop {
-            match Endpoint::from_shared(self.server_url.clone()) {
-                Ok(endpoint) => match endpoint.connect().await {
-                    Ok(new_channel) => {
-                        let _ = self.inner.channel.set(new_channel.clone());
-                        self.inner.reconnect_notify.notify_waiters(); // 通知所有等待者
-                        info!("连接到远程成功");
-                        return new_channel;
-                    }
-                    Err(e) => {
-                        error!("连接失败: {}, 2秒后重试", e);
-                        let jitter = Jitter::up_to(Duration::from_millis(1000));
-                        let duration = jitter + Duration::from_millis(1500);
-                        tokio::time::sleep(duration).await;
-                    }
-                },
-                Err(e) => {
-                    error!("invalid server url: {}, 2秒后重试", e);
-                    tokio::time::sleep(Duration::from_secs(2)).await;
-                }
-            }
-        }
-    }
-}
-
-#[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
-#[async_trait]
-pub trait GrpcChannelManagerTrait: Send + Sync {
-    async fn get_channel(&self) -> Channel;
-    async fn reconnect(&self) -> Channel;
-    async fn connect(&self) -> Channel;
-    async fn sync_history(&self, request: SyncRequest) -> Result<GrpcServerMessageStream, YuError>;
-}
-
-#[async_trait]
-impl GrpcChannelManagerTrait for GrpcChannelManager {
-    async fn get_channel(&self) -> Channel {
-        GrpcChannelManager::get_channel(self).await
-    }
-
-    async fn reconnect(&self) -> Channel {
-        GrpcChannelManager::reconnect(self).await
-    }
-
-    async fn connect(&self) -> Channel {
-        GrpcChannelManager::connect(self).await
-    }
-
-    async fn sync_history(&self, request: SyncRequest) -> Result<GrpcServerMessageStream, YuError> {
-        let mut client = SyncInterfaceClient::new(self.connect().await);
-        let stream = client.sync_history(Request::new(request)).await?.into_inner();
-        Ok(Box::pin(stream))
-    }
-}
 
 ///
 /// 该方法中的start和finish其实是钩子，因为在实际中，需要冲数据库中更新一些数据
@@ -147,7 +29,7 @@ pub trait ClientExchangeServiceTrait: Send + Sync {
     /// 1. 更新instrument
     /// 2. 更新history到最新
     ///
-    async fn initial_data(&self, instrument: Instrument, manager: Arc<dyn GrpcChannelManagerTrait>) -> Result<(), YuError>;
+    async fn initial_data(&self, instrument: Instrument) -> Result<(), YuError>;
 }
 
 pub type ClientExchangeService = Arc<dyn ClientExchangeServiceTrait>;
@@ -218,7 +100,7 @@ impl SyncClientService {
     ///    3，都存在的话，那么比较local_assets的timestamp和服务器端的timestamp
     ///        - 如果local的timestamp小于server端的timestamp。则加入返回值，key为asset_id,value为local的timestamp
     ///
-    pub async fn initial_data(&self, server_inst: InstrumentList, manager: Arc<dyn GrpcChannelManagerTrait>) -> Result<InstrumentsDiff, YuError> {
+    pub async fn initial_data(&self, server_inst: InstrumentList) -> Result<InstrumentsDiff, YuError> {
         // fetch local instruments and build a lookup by assert_id -> end_ts
         let now = unix_time_now_u64_utc();
         let mut pm_local_inst: HashMap<u64, u64> = HashMap::new();

@@ -1,9 +1,10 @@
 use crate::errors::YuError;
 use crate::postgresql_db_tables::PostgresqlBatchInsert;
 use crate::sync::client::database::get_polymarket_price_batch_insert;
+use crate::sync::client::grpc_manager::{GrpcChannelManager, get_grpc_manager_from_config};
 use crate::sync::client::po::polymarket::{LocalPolyMarketHistoryPo, LocalPolyMarketInstrumentPo};
 use crate::sync::client::repository::polymarket::{ClientPolyMarketRepository, default_client_polymarket_repository};
-use crate::sync::client::sync_client_service::{ClientExchangeService, ClientExchangeServiceTrait, GrpcChannelManagerTrait};
+use crate::sync::client::sync_client_service::{ClientExchangeService, ClientExchangeServiceTrait};
 use crate::sync::models::grpc_sync::{ExchangeType, Instrument, InstrumentType, SyncRequest, instrument, server_message::Payload};
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -14,19 +15,25 @@ use yue::tools::get_snow_flake_id_u64;
 pub struct PolymarketClientExchangeService {
     pm_repo: ClientPolyMarketRepository,
     history_batch_insert: PostgresqlBatchInsert<LocalPolyMarketHistoryPo>,
+    grpc_manager: GrpcChannelManager,
 }
 impl PolymarketClientExchangeService {
-    fn new(pm_repo: ClientPolyMarketRepository, history_batch_insert: PostgresqlBatchInsert<LocalPolyMarketHistoryPo>) -> Self {
+    fn new(
+        pm_repo: ClientPolyMarketRepository,
+        history_batch_insert: PostgresqlBatchInsert<LocalPolyMarketHistoryPo>,
+        grpc_manager: GrpcChannelManager,
+    ) -> Self {
         Self {
             pm_repo,
             history_batch_insert,
+            grpc_manager,
         }
     }
 
     pub fn for_production() -> ClientExchangeService {
         let pm_repo = default_client_polymarket_repository();
         let history_batch_insert = get_polymarket_price_batch_insert();
-        Arc::new(Self::new(pm_repo, history_batch_insert))
+        Arc::new(Self::new(pm_repo, history_batch_insert, get_grpc_manager_from_config()))
     }
 }
 #[async_trait]
@@ -37,7 +44,7 @@ impl ClientExchangeServiceTrait for PolymarketClientExchangeService {
     /// 2. 判断server_id是否存在，如果存在则新建
     /// 3. 查询数据库中的最大时间戳。如果存在，开始时间取该时间戳。否则，就是inst的list_time
     ///
-    async fn initial_data(&self, instrument: Instrument, manager: Arc<dyn GrpcChannelManagerTrait>) -> Result<(), YuError> {
+    async fn initial_data(&self, instrument: Instrument) -> Result<(), YuError> {
         if instrument.exchange != ExchangeType::Polymarket as i32 {
             return Err(YuError::new("instrument exchange is not polymarket"));
         }
@@ -80,7 +87,8 @@ impl ClientExchangeServiceTrait for PolymarketClientExchangeService {
             return Ok(());
         }
 
-        let mut history_stream = manager
+        let mut history_stream = self
+            .grpc_manager
             .sync_history(SyncRequest {
                 inst_id: instrument.server_id,
                 start_ms: start_timestamp.saturating_add(1),
@@ -120,8 +128,8 @@ impl ClientExchangeServiceTrait for PolymarketClientExchangeService {
 mod tests {
     use super::*;
     use crate::postgresql_db_tables::MockPostgresqlBatchInsertTrait;
+    use crate::sync::client::grpc_manager::{GrpcServerMessageStream, MockGrpcChannelManagerTrait};
     use crate::sync::client::repository::polymarket::MockClientPolyMarketRepositoryTrait;
-    use crate::sync::client::sync_client_service::{GrpcServerMessageStream, MockGrpcChannelManagerTrait};
     use crate::sync::models::grpc_sync::{PolyMarketHistory, PolyMarketHistoryList, PolymarketInstrument, ServerMessage};
 
     fn empty_history_stream() -> GrpcServerMessageStream {
@@ -200,14 +208,14 @@ mod tests {
         repo.expect_get_lastest_timestamps_by_server_id()
             .withf(|server_id| *server_id == 42)
             .returning(|_| Ok(0));
-        let service = PolymarketClientExchangeService::new(Arc::new(repo), Arc::new(mock_batch_insert()));
         let mut manager = MockGrpcChannelManagerTrait::new();
         manager
             .expect_sync_history()
             .withf(|request| request.inst_id == 42 && request.start_ms == 101 && request.instrument_type == InstrumentType::PolymarketToken as i32)
             .returning(|_| Ok(empty_history_stream()));
 
-        service.initial_data(polymarket_instrument(42), Arc::new(manager)).await.unwrap();
+        let service = PolymarketClientExchangeService::new(Arc::new(repo), Arc::new(mock_batch_insert()), Arc::new(manager));
+        service.initial_data(polymarket_instrument(42)).await.unwrap();
     }
 
     // 测试目的：验证本地已存在的 Polymarket instrument 不会重复创建。
@@ -223,14 +231,14 @@ mod tests {
         repo.expect_get_lastest_timestamps_by_server_id()
             .withf(|server_id| *server_id == 42)
             .returning(|_| Ok(150));
-        let service = PolymarketClientExchangeService::new(Arc::new(repo), Arc::new(mock_batch_insert()));
         let mut manager = MockGrpcChannelManagerTrait::new();
         manager
             .expect_sync_history()
             .withf(|request| request.inst_id == 42 && request.start_ms == 151 && request.instrument_type == InstrumentType::PolymarketToken as i32)
             .returning(|_| Ok(empty_history_stream()));
+        let service = PolymarketClientExchangeService::new(Arc::new(repo), Arc::new(mock_batch_insert()), Arc::new(manager));
 
-        service.initial_data(polymarket_instrument(42), Arc::new(manager)).await.unwrap();
+        service.initial_data(polymarket_instrument(42)).await.unwrap();
     }
 
     // 测试目的：验证收到的历史数据会映射到本地 instrument ID 后交给 batch insert。
@@ -245,18 +253,6 @@ mod tests {
         repo.expect_get_lastest_timestamps_by_server_id()
             .withf(|server_id| *server_id == 42)
             .returning(|_| Ok(150));
-        let service = PolymarketClientExchangeService::new(
-            Arc::new(repo),
-            Arc::new({
-                let mut batch_insert = mock_batch_insert();
-                batch_insert
-                    .expect_insert_data()
-                    .withf(|po| po.inst_id == 1 && po.timestamp == 175 && po.price == 0.42 && po.batch_timestamp == 180)
-                    .times(1)
-                    .returning(|_| ());
-                batch_insert
-            }),
-        );
         let mut manager = MockGrpcChannelManagerTrait::new();
         manager.expect_sync_history().returning(|_| {
             Ok(Box::pin(futures::stream::iter(vec![Ok(ServerMessage {
@@ -270,8 +266,21 @@ mod tests {
                 })),
             })])) as GrpcServerMessageStream)
         });
+        let service = PolymarketClientExchangeService::new(
+            Arc::new(repo),
+            Arc::new({
+                let mut batch_insert = mock_batch_insert();
+                batch_insert
+                    .expect_insert_data()
+                    .withf(|po| po.inst_id == 1 && po.timestamp == 175 && po.price == 0.42 && po.batch_timestamp == 180)
+                    .times(1)
+                    .returning(|_| ());
+                batch_insert
+            }),
+            Arc::new(manager),
+        );
 
-        service.initial_data(polymarket_instrument(42), Arc::new(manager)).await.unwrap();
+        service.initial_data(polymarket_instrument(42)).await.unwrap();
     }
 
     // 测试目的：确保服务拒绝非 Polymarket 交易所的 instrument。
@@ -280,16 +289,15 @@ mod tests {
     #[tokio::test]
     async fn rejects_non_polymarket_instrument() {
         let repo = MockClientPolyMarketRepositoryTrait::new();
-        let service = PolymarketClientExchangeService::new(Arc::new(repo), Arc::new(mock_batch_insert()));
+        let service = PolymarketClientExchangeService::new(
+            Arc::new(repo),
+            Arc::new(mock_batch_insert()),
+            Arc::new(MockGrpcChannelManagerTrait::new()),
+        );
         let mut instrument = polymarket_instrument(42);
         instrument.exchange = ExchangeType::Okx as i32;
 
-        assert!(
-            service
-                .initial_data(instrument, Arc::new(MockGrpcChannelManagerTrait::new()))
-                .await
-                .is_err()
-        );
+        assert!(service.initial_data(instrument).await.is_err());
     }
 
     // 测试目的：确保 Polymarket 交易所标记不能搭配缺失的 payload。
@@ -298,15 +306,14 @@ mod tests {
     #[tokio::test]
     async fn rejects_non_polymarket_payload() {
         let repo = MockClientPolyMarketRepositoryTrait::new();
-        let service = PolymarketClientExchangeService::new(Arc::new(repo), Arc::new(mock_batch_insert()));
+        let service = PolymarketClientExchangeService::new(
+            Arc::new(repo),
+            Arc::new(mock_batch_insert()),
+            Arc::new(MockGrpcChannelManagerTrait::new()),
+        );
         let mut instrument = polymarket_instrument(42);
         instrument.payload = None;
 
-        assert!(
-            service
-                .initial_data(instrument, Arc::new(MockGrpcChannelManagerTrait::new()))
-                .await
-                .is_err()
-        );
+        assert!(service.initial_data(instrument).await.is_err());
     }
 }

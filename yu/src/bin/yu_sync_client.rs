@@ -15,7 +15,8 @@ use yu::errors::YuError;
 use yu::postgresql_db::{PostgresqlTableTrait, get_sync_client_pg_pool};
 use yu::sync::client::database::initial_grpc_client_tables;
 use yu::sync::client::db_consts::ClientsTables;
-use yu::sync::client::sync_client_service::{GrpcChannelManager, SyncClientService};
+use yu::sync::client::grpc_manager::{GrpcChannelManager, get_grpc_manager_from_config};
+use yu::sync::client::sync_client_service::SyncClientService;
 use yu::sync::models::grpc_sync::instrument::Payload;
 use yu::sync::models::grpc_sync::sync_interface_client::SyncInterfaceClient;
 use yu::sync::models::grpc_sync::{Empty, InstrumentType, ServerMessage, SubscribeRequest, SyncRequest, instrument};
@@ -43,19 +44,8 @@ async fn main() -> Result<(), YuError> {
     initial_grpc_client_tables(None).await?;
 
     let client_service = Arc::new(SyncClientService::default());
-
-    let sync_client_config = match &app_config.sync_client {
-        None => {
-            error!("No sync client config provide provided");
-            return Err(YuError::new("sync_client 配置未找到，请在配置文件中添加 sync_client 配置"));
-        }
-        Some(config) => config,
-    };
-    // //FUTURE:改成https
-    let server_url = format!("http://{}:{}", sync_client_config.server_host, sync_client_config.server_port);
-    info!("连接到远程服务器:{}", server_url);
     // // 连接到 gRPC 服务（根据需要修改地址）-
-    let connection_manager = Arc::new(GrpcChannelManager::new(server_url.as_ref()));
+    let connection_manager = get_grpc_manager_from_config();
 
     info!("已连接到 gRPC 服务端");
     //
@@ -122,7 +112,7 @@ async fn forward_server_stream(mut stream: tonic::Streaming<ServerMessage>, loca
     Ok(())
 }
 
-async fn subscribe(local_db_tx: Sender<ServerMessage>, manager: Arc<GrpcChannelManager>) -> Result<(), YuError> {
+async fn subscribe(local_db_tx: Sender<ServerMessage>, manager: GrpcChannelManager) -> Result<(), YuError> {
     loop {
         let connection = manager.connect().await;
         let mut server = SyncInterfaceClient::new(connection);
@@ -146,13 +136,13 @@ async fn subscribe(local_db_tx: Sender<ServerMessage>, manager: Arc<GrpcChannelM
 async fn initial_data(
     client_service: Arc<SyncClientService>,
     local_db_tx: Sender<ServerMessage>,
-    manager: Arc<GrpcChannelManager>,
+    manager: GrpcChannelManager,
 ) -> Result<(), YuError> {
     let mut server = SyncInterfaceClient::new(manager.connect().await);
     let resp = server.list_instrument(Request::new(Empty {})).await?;
     let inst_list = resp.into_inner();
     info!("获取instrument列表个数.{}", inst_list.instruments.len());
-    let diff_from_server = client_service.initial_data(inst_list, manager.clone()).await?;
+    let diff_from_server = client_service.initial_data(inst_list).await?;
     info!("align_local_instrument done.");
     info!("需要同步polymarket的instrument个数{}", diff_from_server.polymarket_diff.len());
     info!("需要同步polymarket的oxk option个数{}", diff_from_server.okx_option_kline_diff.len());
@@ -227,14 +217,14 @@ async fn initial_data(
 async fn async_sync_server(
     client_service: Arc<SyncClientService>,
     local_db_tx: Sender<ServerMessage>,
-    manager: Arc<GrpcChannelManager>,
+    manager: GrpcChannelManager,
 ) -> Result<(), YuError> {
     let mut server = SyncInterfaceClient::new(manager.connect().await);
     let resp = server.list_instrument(Request::new(Empty {})).await?;
     let inst_list = resp.into_inner();
     let pg_pool = get_sync_client_pg_pool().await?;
     //就是把新的instrument同步到本地数据库。不做初始化相关工作。
-    let _ = client_service.initial_data(inst_list.clone(), manager.clone()).await?;
+    let _ = client_service.initial_data(inst_list.clone()).await?;
     let okx_binary_search_ds = SyncClientBinarySearchDataImpl::new(
         pg_pool.clone(),
         ClientsTables::OkxPriceHistory.table_name(),

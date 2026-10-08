@@ -3,6 +3,7 @@
 ///
 pub mod database;
 pub mod db_consts;
+pub mod grpc_manager;
 pub mod po;
 pub mod repository;
 pub mod service;
