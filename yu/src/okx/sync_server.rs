@@ -1,6 +1,6 @@
 use crate::errors::YuError;
 use crate::okx::service::OptionService;
-use crate::sync::models::grpc_sync::Instrument;
+use crate::sync::models::grpc_sync::{ExchangeType, Instrument};
 use crate::sync::server::sync_server::{SyncInstrumentService, SyncInstrumentServiceTrait};
 use async_trait::async_trait;
 use log::error;
@@ -29,6 +29,7 @@ impl SyncInstrumentServiceTrait for OkxSyncInstrumentService {
                     let key = inst.inst_identify.clone();
                     let okx = crate::sync::models::grpc_sync::OkxInstrument::from(inst);
                     let instrument = Instrument {
+                        exchange: ExchangeType::Okx as i32,
                         payload: Some(crate::sync::models::grpc_sync::instrument::Payload::Okx(okx)),
                     };
                     instruments_map.insert(key, instrument);

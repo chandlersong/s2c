@@ -1,7 +1,7 @@
 use crate::binance::bn_dashboard::BinanceDashboard;
 use crate::binance::models::po::BinanceInstrument as BinanceInstrumentPo;
 use crate::errors::YuError;
-use crate::sync::models::grpc_sync::{Instrument, instrument::Payload};
+use crate::sync::models::grpc_sync::{ExchangeType, Instrument, instrument::Payload};
 use crate::sync::server::sync_server::{SyncInstrumentService, SyncInstrumentServiceTrait};
 use async_trait::async_trait;
 use log::error;
@@ -35,6 +35,7 @@ impl SyncInstrumentServiceTrait for BinanceSyncInstrumentService {
                 let key = format!("{market}:{}", instrument_po.symbol);
                 let proto = crate::sync::models::grpc_sync::BinanceInstrument::from(instrument_po);
                 let instrument = Instrument {
+                    exchange: ExchangeType::Binance as i32,
                     payload: Some(Payload::Binance(proto)),
                 };
 

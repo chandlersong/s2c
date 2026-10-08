@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 /// 主要是为了高效率的批量写入
 ///
 
+#[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
 #[async_trait]
 pub trait PostgresqlBatchInsertTrait<P: CopyInsertable>: Send + Sync {
     async fn insert_data(&self, data: P);

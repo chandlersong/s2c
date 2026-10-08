@@ -201,7 +201,7 @@ impl YuSyncServer {
                             Ok(po) => {
                                 trace!("Received okx kline broadcast inst_id: {} ts: {}", po.inst_id, po.ts);
                                 // 转成 proto 并缓存，按批次发送（与 polymarket 行为一致）
-                                let k = crate::sync::models::grpc_sync::OkxKline {
+                                let k =OkxKline {
                                     id: po.id,
                                     inst_id: po.inst_id,
                                     ts: po.ts,
@@ -395,7 +395,7 @@ impl SyncInterface for YuSyncServer {
 
         let instrument_type = crate::sync::models::grpc_sync::InstrumentType::try_from(request.get_ref().instrument_type).ok();
         match instrument_type {
-            Some(crate::sync::models::grpc_sync::InstrumentType::Polymarket) => {
+            Some(crate::sync::models::grpc_sync::InstrumentType::PolymarketToken) => {
                 let query_service = self.polymarket_history_service.clone();
                 // Spawn a task to query polymarket history and stream results back through tx
                 tokio::spawn(async move {
@@ -461,9 +461,9 @@ impl SyncInterface for YuSyncServer {
                             }
 
                             for chunk in kline_vec.chunks(batch_size) {
-                                let mut klines: Vec<crate::sync::models::grpc_sync::OkxKline> = Vec::with_capacity(chunk.len());
+                                let mut klines: Vec<OkxKline> = Vec::with_capacity(chunk.len());
                                 for k in chunk.iter() {
-                                    klines.push(crate::sync::models::grpc_sync::OkxKline {
+                                    klines.push(OkxKline {
                                         id: k.id,
                                         inst_id: k.inst_id,
                                         ts: k.ts,

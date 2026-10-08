@@ -1,4 +1,5 @@
 use crate::errors::YuError;
+use crate::postgresql_db::get_sync_client_pg_pool_sync;
 use crate::sync::client::po::polymarket::LocalPolyMarketInstrumentPo;
 use async_trait::async_trait;
 use sqlx::PgPool;
@@ -23,9 +24,23 @@ pub trait ClientPolyMarketRepositoryTrait {
     }
     /// Insert a new asset info into polymarket_assert_info table.
     async fn create_instruments(&self, po: LocalPolyMarketInstrumentPo) -> Result<(), YuError>;
+
+    async fn find_instrument_by_server_id(&self, server_id: u64) -> Result<Option<LocalPolyMarketInstrumentPo>, YuError>;
+
+    //通过server id 返回数据库中最最新的timestamp
+    async fn get_lastest_timestamps_by_server_id(&self, server_id: u64) -> Result<u64, YuError>;
 }
 
 pub type ClientPolyMarketRepository = Arc<dyn ClientPolyMarketRepositoryTrait + Send + Sync>;
+
+pub fn default_client_polymarket_repository() -> ClientPolyMarketRepository {
+    match get_sync_client_pg_pool_sync() {
+        Ok(pool) => ClientPolyMarketRepositoryImpl::from_pool(pool),
+        Err(e) => {
+            panic!("initial pg pool fail,{}", e)
+        }
+    }
+}
 
 pub struct ClientPolyMarketRepositoryImpl {
     pg_pool: PgPool,
@@ -81,5 +96,33 @@ impl ClientPolyMarketRepositoryTrait for ClientPolyMarketRepositoryImpl {
             .await?;
 
         Ok(())
+    }
+
+    async fn find_instrument_by_server_id(&self, server_id: u64) -> Result<Option<LocalPolyMarketInstrumentPo>, YuError> {
+        Ok(
+            sqlx::query_as::<_, LocalPolyMarketInstrumentPo>("SELECT * FROM polymarket_instruments WHERE server_id = $1")
+                .bind(server_id as i64)
+                .fetch_optional(&self.pg_pool)
+                .await?,
+        )
+    }
+
+    async fn get_lastest_timestamps_by_server_id(&self, server_id: u64) -> Result<u64, YuError> {
+        let timestamp: Option<i64> = sqlx::query_scalar(
+            r#"
+            SELECT (EXTRACT(EPOCH FROM MAX(pph.timestamp)) * 1000)::bigint
+            FROM polymarket_instruments pi
+            LEFT JOIN polymarket_price_history pph ON pph.instrument_id = pi.id
+            WHERE pi.server_id = $1
+            "#,
+        )
+        .bind(server_id as i64)
+        .fetch_one(&self.pg_pool)
+        .await?;
+
+        match timestamp {
+            Some(timestamp) => u64::try_from(timestamp).map_err(|_| YuError::new("negative Polymarket history timestamp")),
+            None => Ok(0),
+        }
     }
 }

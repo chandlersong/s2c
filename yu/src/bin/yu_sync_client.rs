@@ -152,7 +152,7 @@ async fn initial_data(
     let resp = server.list_instrument(Request::new(Empty {})).await?;
     let inst_list = resp.into_inner();
     info!("获取instrument列表个数.{}", inst_list.instruments.len());
-    let diff_from_server = client_service.align_local_instrument(inst_list).await?;
+    let diff_from_server = client_service.initial_data(inst_list, manager.clone()).await?;
     info!("align_local_instrument done.");
     info!("需要同步polymarket的instrument个数{}", diff_from_server.polymarket_diff.len());
     info!("需要同步polymarket的oxk option个数{}", diff_from_server.okx_option_kline_diff.len());
@@ -172,7 +172,7 @@ async fn initial_data(
                 inst_id,
                 start_ms: start_ms + 1,
                 end_ms,
-                instrument_type: InstrumentType::Polymarket as i32,
+                instrument_type: InstrumentType::PolymarketToken as i32,
             }))
             .await?
             .into_inner();
@@ -234,7 +234,7 @@ async fn async_sync_server(
     let inst_list = resp.into_inner();
     let pg_pool = get_sync_client_pg_pool().await?;
     //就是把新的instrument同步到本地数据库。不做初始化相关工作。
-    let _ = client_service.align_local_instrument(inst_list.clone()).await?;
+    let _ = client_service.initial_data(inst_list.clone(), manager.clone()).await?;
     let okx_binary_search_ds = SyncClientBinarySearchDataImpl::new(
         pg_pool.clone(),
         ClientsTables::OkxPriceHistory.table_name(),
@@ -290,7 +290,7 @@ async fn async_sync_server(
                         }
                     }
                 }
-                instrument::Payload::Polymarket(polymarket_inst) => {
+                Payload::Polymarket(polymarket_inst) => {
                     let start = interval.get_close_unix_ms(polymarket_inst.start_ms) + interval.to_milliseconds();
                     let server_id = polymarket_inst.server_id.clone();
                     let gaps: Vec<ValidationGap> =
@@ -310,7 +310,7 @@ async fn async_sync_server(
                                         inst_id: server_id,
                                         start_ms: start_time,
                                         end_ms: end_time - 1,
-                                        instrument_type: InstrumentType::Polymarket as i32,
+                                        instrument_type: InstrumentType::PolymarketToken as i32,
                                     }))
                                     .await?
                                     .into_inner();

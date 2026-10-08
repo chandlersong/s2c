@@ -1,6 +1,6 @@
 use crate::errors::YuError;
 use crate::polymarket::service::SeriesHistoryMarketService;
-use crate::sync::models::grpc_sync::{Instrument, PolymarketInstrument};
+use crate::sync::models::grpc_sync::{ExchangeType, Instrument, PolymarketInstrument};
 use crate::sync::server::sync_server::{SyncInstrumentService, SyncInstrumentServiceTrait};
 use async_trait::async_trait;
 use log::error;
@@ -31,6 +31,7 @@ impl SyncInstrumentServiceTrait for PolyMarketSyncInstrumentService {
                     let poly = PolymarketInstrument::from(inst);
 
                     let instrument = Instrument {
+                        exchange: ExchangeType::Polymarket as i32,
                         payload: Some(crate::sync::models::grpc_sync::instrument::Payload::Polymarket(poly)),
                     };
                     instruments_map.insert(asset_id, instrument);

@@ -8,17 +8,27 @@ use crate::sync::client::po::okx::{LocalOkxInstrumentPo, LocalOkxKlinePo, LocalO
 use crate::sync::client::po::polymarket::{LocalPolyMarketHistoryPo, LocalPolyMarketInstrumentPo};
 use crate::sync::client::repository::okx::{ClientOkxRepository, ClientOkxRepositoryImpl};
 use crate::sync::client::repository::polymarket::{ClientPolyMarketRepository, ClientPolyMarketRepositoryImpl};
+use crate::sync::client::service::polymarket::PolymarketClientExchangeService;
 use crate::sync::models::grpc_sync::server_message::Payload;
-use crate::sync::models::grpc_sync::{InstrumentList, ServerMessage, instrument};
+use crate::sync::models::grpc_sync::sync_interface_client::SyncInterfaceClient;
+use crate::sync::models::grpc_sync::{ExchangeType, Instrument, InstrumentList, ServerMessage, SyncRequest, instrument};
+use async_trait::async_trait;
+use futures::Stream;
 use governor::Jitter;
 use li::tools::time::unix_time_now_u64_utc;
 use log::{debug, error, info};
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::{Mutex, Notify, RwLock, mpsc};
-use tonic::transport::{Channel, Endpoint};
+use tonic::{
+    Request, Status,
+    transport::{Channel, Endpoint},
+};
 use yue::tools::get_snow_flake_id_u64;
+
+pub type GrpcServerMessageStream = Pin<Box<dyn Stream<Item = Result<ServerMessage, Status>> + Send + 'static>>;
 
 struct ConnectionHolder {
     channel: OnceLock<Channel>,
@@ -97,20 +107,82 @@ impl GrpcChannelManager {
     }
 }
 
+#[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
+#[async_trait]
+pub trait GrpcChannelManagerTrait: Send + Sync {
+    async fn get_channel(&self) -> Channel;
+    async fn reconnect(&self) -> Channel;
+    async fn connect(&self) -> Channel;
+    async fn sync_history(&self, request: SyncRequest) -> Result<GrpcServerMessageStream, YuError>;
+}
+
+#[async_trait]
+impl GrpcChannelManagerTrait for GrpcChannelManager {
+    async fn get_channel(&self) -> Channel {
+        GrpcChannelManager::get_channel(self).await
+    }
+
+    async fn reconnect(&self) -> Channel {
+        GrpcChannelManager::reconnect(self).await
+    }
+
+    async fn connect(&self) -> Channel {
+        GrpcChannelManager::connect(self).await
+    }
+
+    async fn sync_history(&self, request: SyncRequest) -> Result<GrpcServerMessageStream, YuError> {
+        let mut client = SyncInterfaceClient::new(self.connect().await);
+        let stream = client.sync_history(Request::new(request)).await?.into_inner();
+        Ok(Box::pin(stream))
+    }
+}
+
+///
+/// 该方法中的start和finish其实是钩子，因为在实际中，需要冲数据库中更新一些数据
+///
+#[async_trait]
+pub trait ClientExchangeServiceTrait: Send + Sync {
+    ///
+    /// 初始化数据。包括两件事情
+    /// 1. 更新instrument
+    /// 2. 更新history到最新
+    ///
+    async fn initial_data(&self, instrument: Instrument, manager: Arc<dyn GrpcChannelManagerTrait>) -> Result<(), YuError>;
+}
+
+pub type ClientExchangeService = Arc<dyn ClientExchangeServiceTrait>;
+
+///
+/// # 同步Instrument：
+/// 同步Instrument本质是两个需求。
+/// 1. 同步Instrument对象。
+/// 2. 补全Instrument相应的history的数据。
+/// 同时，方便处理。
+/// Exchange和Instrument之间，原则上是1:n，实际设计的时候是1:1
+/// Instrument和history之间，是1:n
+///
+/// 所以这里分成了多层分别是这里的SyncClientService，ClientExchangeService
+/// 设计中，ClientHistoryService应该每个自己去实现的。而另外两个是可以处理的。
+///
 pub struct SyncClientService {
     pm_repository: ClientPolyMarketRepository,
     okx_repository: ClientOkxRepository,
     pm_instrument_dict: Arc<RwLock<HashMap<u64, LocalPolyMarketInstrumentPo>>>,
     okx_instrument_dict: Arc<RwLock<HashMap<u64, LocalOkxInstrumentPo>>>,
+
+    exchange_services: HashMap<ExchangeType, ClientExchangeService>,
 }
 
 impl Default for SyncClientService {
     fn default() -> Self {
+        let mut exchange_services = HashMap::new();
+        exchange_services.insert(ExchangeType::Polymarket, PolymarketClientExchangeService::for_production());
         Self {
             pm_repository: ClientPolyMarketRepositoryImpl::from_pool(get_sync_client_pg_pool_sync().expect("get_sync_client_pg_pool_sync failed")),
             okx_repository: ClientOkxRepositoryImpl::from_pool(get_sync_client_pg_pool_sync().expect("get_sync_client_pg_pool_sync failed")),
             pm_instrument_dict: Arc::new(Default::default()),
             okx_instrument_dict: Arc::new(Default::default()),
+            exchange_services,
         }
     }
 }
@@ -146,7 +218,7 @@ impl SyncClientService {
     ///    3，都存在的话，那么比较local_assets的timestamp和服务器端的timestamp
     ///        - 如果local的timestamp小于server端的timestamp。则加入返回值，key为asset_id,value为local的timestamp
     ///
-    pub async fn align_local_instrument(&self, server_inst: InstrumentList) -> Result<InstrumentsDiff, YuError> {
+    pub async fn initial_data(&self, server_inst: InstrumentList, manager: Arc<dyn GrpcChannelManagerTrait>) -> Result<InstrumentsDiff, YuError> {
         // fetch local instruments and build a lookup by assert_id -> end_ts
         let now = unix_time_now_u64_utc();
         let mut pm_local_inst: HashMap<u64, u64> = HashMap::new();
@@ -167,6 +239,9 @@ impl SyncClientService {
         let local_okx_option_summary_latest = self.okx_repository.list_option_summary_timestamps().await?;
         // server_inst.instruments: map<string, PolymarketAssertInfo>
         for (_, inst) in server_inst.instruments.into_iter() {
+            let exchange = ExchangeType::try_from(inst.exchange).map_err(|_| YuError::new("unknown exchange type"))?;
+            let exchange = self.exchange_services.get(&exchange).unwrap();
+
             if let Some(payload) = inst.payload {
                 match payload {
                     instrument::Payload::Okx(okx_inst) => {

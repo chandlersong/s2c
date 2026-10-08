@@ -1,10 +1,17 @@
 syntax = "proto3";
 package grpc_sync;
 
-
-enum InstrumentType {
+enum ExchangeType{
   EXCHANGE_UNSPECIFIED = 0;
   POLYMARKET = 1;
+  OKX = 2;
+  BINANCE = 3;
+}
+
+
+enum InstrumentType {
+  Instrument_UNSPECIFIED = 0;
+  POLYMARKET_TOKEN = 1;
   OKX_KLINE = 2;
   OKX_OPTION_SUMMARY = 3;
   BINANCE_SPOT = 4;
@@ -63,6 +70,7 @@ message Instrument {
     OkxInstrument okx = 2;     // okx资产
     BinanceInstrument binance = 3;
   }
+  ExchangeType exchange = 4;
 }
 
 message InstrumentList{
