@@ -35,6 +35,44 @@ impl PolymarketClientExchangeService {
         let history_batch_insert = get_polymarket_price_batch_insert();
         Arc::new(Self::new(pm_repo, history_batch_insert, get_grpc_manager_from_config()))
     }
+
+    async fn backfill_history(&self, server_inst_id: u64, local_inst_id: u64, start_timestamp: u64, end_timestamp: u64) -> Result<(), YuError> {
+        if start_timestamp >= end_timestamp {
+            return Ok(());
+        }
+
+        let mut history_stream = self
+            .grpc_manager
+            .sync_history(SyncRequest {
+                inst_id: server_inst_id,
+                start_ms: start_timestamp.saturating_add(1),
+                end_ms: end_timestamp,
+                instrument_type: InstrumentType::PolymarketToken as i32,
+            })
+            .await?;
+
+        while let Some(message) = history_stream.next().await {
+            let message = message?;
+            match message.payload {
+                Some(Payload::PolymarketHistory(history_list)) => {
+                    let batch_timestamp = history_list.timestamp;
+                    for history in history_list.history_list {
+                        if history.inst_id != server_inst_id {
+                            return Err(YuError::new("received Polymarket history for unexpected instrument"));
+                        }
+
+                        self.history_batch_insert
+                            .insert_data(LocalPolyMarketHistoryPo::from_polymarket_history(history, local_inst_id, batch_timestamp))
+                            .await;
+                    }
+                }
+                Some(_) => return Err(YuError::new("received non-Polymarket history payload")),
+                None => return Err(YuError::new("received empty history payload")),
+            }
+        }
+
+        Ok(())
+    }
 }
 #[async_trait]
 impl ClientExchangeServiceTrait for PolymarketClientExchangeService {
@@ -83,44 +121,8 @@ impl ClientExchangeServiceTrait for PolymarketClientExchangeService {
         let latest_timestamp = self.pm_repo.get_lastest_timestamps_by_server_id(instrument.server_id).await?;
         let start_timestamp = if latest_timestamp == 0 { instrument.start_ms } else { latest_timestamp };
         let end_timestamp = unix_time_now_u64_utc();
-        if start_timestamp >= end_timestamp {
-            return Ok(());
-        }
-
-        let mut history_stream = self
-            .grpc_manager
-            .sync_history(SyncRequest {
-                inst_id: instrument.server_id,
-                start_ms: start_timestamp.saturating_add(1),
-                end_ms: end_timestamp,
-                instrument_type: InstrumentType::PolymarketToken as i32,
-            })
-            .await?;
-        while let Some(message) = history_stream.next().await {
-            let message = message?;
-            match message.payload {
-                Some(Payload::PolymarketHistory(history_list)) => {
-                    let batch_timestamp = history_list.timestamp;
-                    for history in history_list.history_list {
-                        if history.inst_id != instrument.server_id {
-                            return Err(YuError::new("received Polymarket history for unexpected instrument"));
-                        }
-
-                        self.history_batch_insert
-                            .insert_data(LocalPolyMarketHistoryPo::from_polymarket_history(
-                                history,
-                                local_instrument.id,
-                                batch_timestamp,
-                            ))
-                            .await;
-                    }
-                }
-                Some(_) => return Err(YuError::new("received non-Polymarket history payload")),
-                None => return Err(YuError::new("received empty history payload")),
-            }
-        }
-
-        Ok(())
+        self.backfill_history(instrument.server_id, local_instrument.id, start_timestamp, end_timestamp)
+            .await
     }
 }
 
@@ -241,46 +243,45 @@ mod tests {
         service.initial_data(polymarket_instrument(42)).await.unwrap();
     }
 
-    // 测试目的：验证收到的历史数据会映射到本地 instrument ID 后交给 batch insert。
-    // 测试步骤：提供本地 instrument ID 与一条服务端历史记录，并校验插入参数。
-    // 预期结果：batch insert 恰好收到一条记录，包含本地 ID、历史时间、价格和批次时间。
+    // 测试目的：独立验证历史同步结果会映射到本地 instrument ID 后交给 batch insert。
+    // 测试步骤：直接调用 backfill_history，提供一条服务端历史记录，并检查同步请求和插入参数。
+    // 预期结果：请求时间范围为 (start_timestamp, end_timestamp]，且 batch insert 收到映射后的记录。
     #[tokio::test]
-    async fn inserts_received_history_using_local_instrument_id() {
-        let mut repo = MockClientPolyMarketRepositoryTrait::new();
-        repo.expect_find_instrument_by_server_id()
-            .withf(|server_id| *server_id == 42)
-            .returning(|_| Ok(Some(local_instrument(42))));
-        repo.expect_get_lastest_timestamps_by_server_id()
-            .withf(|server_id| *server_id == 42)
-            .returning(|_| Ok(150));
+    async fn backfill_history_inserts_received_history_using_local_instrument_id() {
         let mut manager = MockGrpcChannelManagerTrait::new();
-        manager.expect_sync_history().returning(|_| {
-            Ok(Box::pin(futures::stream::iter(vec![Ok(ServerMessage {
-                payload: Some(Payload::PolymarketHistory(PolyMarketHistoryList {
-                    history_list: vec![PolyMarketHistory {
-                        inst_id: 42,
-                        timestamp: 175,
-                        price: 0.42,
-                    }],
-                    timestamp: 180,
-                })),
-            })])) as GrpcServerMessageStream)
-        });
+        manager
+            .expect_sync_history()
+            .withf(|request| {
+                request.inst_id == 42
+                    && request.start_ms == 151
+                    && request.end_ms == 200
+                    && request.instrument_type == InstrumentType::PolymarketToken as i32
+            })
+            .returning(|_| {
+                Ok(Box::pin(futures::stream::iter(vec![Ok(ServerMessage {
+                    payload: Some(Payload::PolymarketHistory(PolyMarketHistoryList {
+                        history_list: vec![PolyMarketHistory {
+                            inst_id: 42,
+                            timestamp: 175,
+                            price: 0.42,
+                        }],
+                        timestamp: 180,
+                    })),
+                })])) as GrpcServerMessageStream)
+            });
+        let mut batch_insert = mock_batch_insert();
+        batch_insert
+            .expect_insert_data()
+            .withf(|po| po.inst_id == 1 && po.timestamp == 175 && po.price == 0.42 && po.batch_timestamp == 180)
+            .times(1)
+            .returning(|_| ());
         let service = PolymarketClientExchangeService::new(
-            Arc::new(repo),
-            Arc::new({
-                let mut batch_insert = mock_batch_insert();
-                batch_insert
-                    .expect_insert_data()
-                    .withf(|po| po.inst_id == 1 && po.timestamp == 175 && po.price == 0.42 && po.batch_timestamp == 180)
-                    .times(1)
-                    .returning(|_| ());
-                batch_insert
-            }),
+            Arc::new(MockClientPolyMarketRepositoryTrait::new()),
+            Arc::new(batch_insert),
             Arc::new(manager),
         );
 
-        service.initial_data(polymarket_instrument(42)).await.unwrap();
+        service.backfill_history(42, 1, 150, 200).await.unwrap();
     }
 
     // 测试目的：确保服务拒绝非 Polymarket 交易所的 instrument。
