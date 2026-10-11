@@ -8,7 +8,7 @@ use crate::sync::client::sync_client_service::{ClientExchangeService, ClientExch
 use crate::sync::models::grpc_sync::{ExchangeType, Instrument, InstrumentType, SyncRequest, instrument, server_message::Payload};
 use async_trait::async_trait;
 use futures::StreamExt;
-use li::tools::time::unix_time_now_u64_utc;
+use li::tools::time::UnixTimeStamp;
 use std::sync::Arc;
 use yue::tools::get_snow_flake_id_u64;
 
@@ -82,7 +82,7 @@ impl ClientExchangeServiceTrait for PolymarketClientExchangeService {
     /// 2. 判断server_id是否存在，如果存在则新建
     /// 3. 查询数据库中的最大时间戳。如果存在，开始时间取该时间戳。否则，就是inst的list_time
     ///
-    async fn initial_data(&self, instrument: Instrument) -> Result<(), YuError> {
+    async fn initial_data(&self, instrument: Instrument, end_ms: UnixTimeStamp) -> Result<(), YuError> {
         if instrument.exchange != ExchangeType::Polymarket as i32 {
             return Err(YuError::new("instrument exchange is not polymarket"));
         }
@@ -120,7 +120,7 @@ impl ClientExchangeServiceTrait for PolymarketClientExchangeService {
 
         let latest_timestamp = self.pm_repo.get_lastest_timestamps_by_server_id(instrument.server_id).await?;
         let start_timestamp = if latest_timestamp == 0 { instrument.start_ms } else { latest_timestamp };
-        let end_timestamp = unix_time_now_u64_utc();
+        let end_timestamp = end_ms;
         self.backfill_history(instrument.server_id, local_instrument.id, start_timestamp, end_timestamp)
             .await?;
         Ok(())
@@ -134,6 +134,7 @@ mod tests {
     use crate::sync::client::grpc_manager::{GrpcServerMessageStream, MockGrpcChannelManagerTrait};
     use crate::sync::client::repository::polymarket::MockClientPolyMarketRepositoryTrait;
     use crate::sync::models::grpc_sync::{PolyMarketHistory, PolyMarketHistoryList, PolymarketInstrument, ServerMessage};
+    use li::tools::time::unix_time_now_u64_utc;
 
     fn empty_history_stream() -> GrpcServerMessageStream {
         Box::pin(futures::stream::empty())
@@ -185,6 +186,7 @@ mod tests {
     // 预期结果：初始化成功，且按预期的 server_id、起始时间和 instrument 类型发起历史同步。
     #[tokio::test]
     async fn creates_missing_polymarket_instrument() {
+        let now = unix_time_now_u64_utc();
         let mut repo = MockClientPolyMarketRepositoryTrait::new();
         repo.expect_find_instrument_by_server_id()
             .withf(|server_id| *server_id == 42)
@@ -218,7 +220,7 @@ mod tests {
             .returning(|_| Ok(empty_history_stream()));
 
         let service = PolymarketClientExchangeService::new(Arc::new(repo), Arc::new(mock_batch_insert()), Arc::new(manager));
-        service.initial_data(polymarket_instrument(42)).await.unwrap();
+        service.initial_data(polymarket_instrument(42), now).await.unwrap();
     }
 
     // 测试目的：验证本地已存在的 Polymarket instrument 不会重复创建。
@@ -226,6 +228,7 @@ mod tests {
     // 预期结果：初始化成功，不调用创建操作，并以本地最新时间戳 + 1 作为同步起点。
     #[tokio::test]
     async fn does_not_recreate_existing_instrument() {
+        let now = unix_time_now_u64_utc();
         let mut repo = MockClientPolyMarketRepositoryTrait::new();
         repo.expect_find_instrument_by_server_id()
             .withf(|server_id| *server_id == 42)
@@ -241,7 +244,7 @@ mod tests {
             .returning(|_| Ok(empty_history_stream()));
         let service = PolymarketClientExchangeService::new(Arc::new(repo), Arc::new(mock_batch_insert()), Arc::new(manager));
 
-        service.initial_data(polymarket_instrument(42)).await.unwrap();
+        service.initial_data(polymarket_instrument(42), now).await.unwrap();
     }
 
     // 测试目的：独立验证历史同步结果会映射到本地 instrument ID 后交给 batch insert。
@@ -290,6 +293,7 @@ mod tests {
     // 预期结果：返回错误，且无需访问仓库或发起历史同步。
     #[tokio::test]
     async fn rejects_non_polymarket_instrument() {
+        let now = unix_time_now_u64_utc();
         let repo = MockClientPolyMarketRepositoryTrait::new();
         let service = PolymarketClientExchangeService::new(
             Arc::new(repo),
@@ -299,7 +303,7 @@ mod tests {
         let mut instrument = polymarket_instrument(42);
         instrument.exchange = ExchangeType::Okx as i32;
 
-        assert!(service.initial_data(instrument).await.is_err());
+        assert!(service.initial_data(instrument, now).await.is_err());
     }
 
     // 测试目的：确保 Polymarket 交易所标记不能搭配缺失的 payload。
@@ -307,6 +311,7 @@ mod tests {
     // 预期结果：返回错误，不继续执行 instrument 创建或历史同步。
     #[tokio::test]
     async fn rejects_non_polymarket_payload() {
+        let now = unix_time_now_u64_utc();
         let repo = MockClientPolyMarketRepositoryTrait::new();
         let service = PolymarketClientExchangeService::new(
             Arc::new(repo),
@@ -316,6 +321,6 @@ mod tests {
         let mut instrument = polymarket_instrument(42);
         instrument.payload = None;
 
-        assert!(service.initial_data(instrument).await.is_err());
+        assert!(service.initial_data(instrument, now).await.is_err());
     }
 }

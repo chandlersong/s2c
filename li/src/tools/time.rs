@@ -109,6 +109,9 @@ pub fn unix_seconds_2_readable(unix_timestamp_seconds: &u64) -> DateTime<Utc> {
     unix_2_readable(&(unix_timestamp_seconds * 1000))
 }
 
+///
+/// Unix timestamp.默认到毫秒
+///
 pub type UnixTimeStamp = u64;
 
 pub fn unix_time_now_u64_utc() -> UnixTimeStamp {

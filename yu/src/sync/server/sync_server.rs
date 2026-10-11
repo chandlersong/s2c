@@ -100,7 +100,6 @@ struct SubscribePayload {
 
 pub struct YuSyncServer {
     polymarket_history_service: SeriesHistoryMarketService,
-    okx_option_service: Arc<OptionService>,
     batch_size: usize,
     command_channel: mpsc::Sender<SyncInternalCommand>,
 
@@ -111,26 +110,24 @@ pub struct YuSyncServer {
 impl YuSyncServer {
     pub async fn create_and_start(
         polymarket_history_service: SeriesHistoryMarketService,
-        okx_option_service: Arc<OptionService>,
         instruments_services: Vec<SyncInstrumentService>,
     ) -> Result<Self, YuError> {
         let (command_channel, command_rx) = mpsc::channel::<SyncInternalCommand>(100);
 
-        let polymarket_history_receiver = polymarket_history_service.subscribe_history_broadcast();
-        let okx_option_kline_receiver = okx_option_service.subscribe_kline().await;
-        let okx_option_summary_receiver = okx_option_service.subscribe_option_summary().await;
-        Self::start_broadcast_history(
-            command_rx,
-            polymarket_history_receiver,
-            okx_option_kline_receiver,
-            okx_option_summary_receiver,
-            500,
-            1000,
-        )
-        .await?;
+        // let polymarket_history_receiver = polymarket_history_service.subscribe_history_broadcast();
+        // let okx_option_kline_receiver = okx_option_service.subscribe_kline().await;
+        // let okx_option_summary_receiver = okx_option_service.subscribe_option_summary().await;
+        // Self::start_broadcast_history(
+        //     command_rx,
+        //     polymarket_history_receiver,
+        //     okx_option_kline_receiver,
+        //     okx_option_summary_receiver,
+        //     500,
+        //     1000,
+        // )
+        // .await?;
         Ok(Self {
             polymarket_history_service,
-            okx_option_service,
             batch_size: 500,
             command_channel,
 
@@ -444,121 +441,121 @@ impl SyncInterface for YuSyncServer {
                 });
             }
             Some(crate::sync::models::grpc_sync::InstrumentType::OkxKline) => {
-                let okx_service = self.okx_option_service.clone();
-                tokio::spawn(async move {
-                    match okx_service.find_candle_between(inst_id, start_ms, end_ms).await {
-                        Ok(kline_vec) => {
-                            if kline_vec.is_empty() {
-                                let list = crate::sync::models::grpc_sync::OkxKlineList {
-                                    kline_list: vec![],
-                                    timestamp: unix_time_now_u64_utc(),
-                                };
-                                let msg = ServerMessage {
-                                    payload: Some(server_message::Payload::OkxKlineHistory(list)),
-                                };
-                                let _ = tx.send(Ok(msg)).await;
-                                return;
-                            }
-
-                            for chunk in kline_vec.chunks(batch_size) {
-                                let mut klines: Vec<OkxKline> = Vec::with_capacity(chunk.len());
-                                for k in chunk.iter() {
-                                    klines.push(OkxKline {
-                                        id: k.id,
-                                        inst_id: k.inst_id,
-                                        ts: k.ts,
-                                        open: k.open,
-                                        high: k.high,
-                                        low: k.low,
-                                        close: k.close,
-                                        vol: k.vol,
-                                        vol_ccy: k.vol_ccy,
-                                        vol_ccy_quote: k.vol_ccy_quote,
-                                        confirm: k.confirm as u32,
-                                    });
-                                }
-                                let list = crate::sync::models::grpc_sync::OkxKlineList {
-                                    kline_list: klines,
-                                    timestamp: unix_time_now_u64_utc(),
-                                };
-                                let msg = ServerMessage {
-                                    payload: Some(server_message::Payload::OkxKlineHistory(list)),
-                                };
-                                if tx.send(Ok(msg)).await.is_err() {
-                                    break;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            let status = Status::internal(format!("query okx kline error: {:?}", e));
-                            let _ = tx.send(Err(status)).await;
-                        }
-                    }
-                });
+                // let okx_service = self.okx_option_service.clone();
+                // tokio::spawn(async move {
+                //     match okx_service.find_candle_between(inst_id, start_ms, end_ms).await {
+                //         Ok(kline_vec) => {
+                //             if kline_vec.is_empty() {
+                //                 let list = crate::sync::models::grpc_sync::OkxKlineList {
+                //                     kline_list: vec![],
+                //                     timestamp: unix_time_now_u64_utc(),
+                //                 };
+                //                 let msg = ServerMessage {
+                //                     payload: Some(server_message::Payload::OkxKlineHistory(list)),
+                //                 };
+                //                 let _ = tx.send(Ok(msg)).await;
+                //                 return;
+                //             }
+                //
+                //             for chunk in kline_vec.chunks(batch_size) {
+                //                 let mut klines: Vec<OkxKline> = Vec::with_capacity(chunk.len());
+                //                 for k in chunk.iter() {
+                //                     klines.push(OkxKline {
+                //                         id: k.id,
+                //                         inst_id: k.inst_id,
+                //                         ts: k.ts,
+                //                         open: k.open,
+                //                         high: k.high,
+                //                         low: k.low,
+                //                         close: k.close,
+                //                         vol: k.vol,
+                //                         vol_ccy: k.vol_ccy,
+                //                         vol_ccy_quote: k.vol_ccy_quote,
+                //                         confirm: k.confirm as u32,
+                //                     });
+                //                 }
+                //                 let list = crate::sync::models::grpc_sync::OkxKlineList {
+                //                     kline_list: klines,
+                //                     timestamp: unix_time_now_u64_utc(),
+                //                 };
+                //                 let msg = ServerMessage {
+                //                     payload: Some(server_message::Payload::OkxKlineHistory(list)),
+                //                 };
+                //                 if tx.send(Ok(msg)).await.is_err() {
+                //                     break;
+                //                 }
+                //             }
+                //         }
+                //         Err(e) => {
+                //             let status = Status::internal(format!("query okx kline error: {:?}", e));
+                //             let _ = tx.send(Err(status)).await;
+                //         }
+                //     }
+                // });
             }
             Some(crate::sync::models::grpc_sync::InstrumentType::OkxOptionSummary) => {
-                let okx_service = self.okx_option_service.clone();
-                tokio::spawn(async move {
-                    match okx_service.find_option_summary_between(inst_id, start_ms, end_ms).await {
-                        Ok(summary_vec) => {
-                            if summary_vec.is_empty() {
-                                let list = crate::sync::models::grpc_sync::OkxOptionSummaryList {
-                                    summary_list: vec![],
-                                    timestamp: unix_time_now_u64_utc(),
-                                };
-                                let msg = ServerMessage {
-                                    payload: Some(server_message::Payload::OptionSummaryHistory(list)),
-                                };
-                                let _ = tx.send(Ok(msg)).await;
-                                return;
-                            }
-
-                            for chunk in summary_vec.chunks(batch_size) {
-                                let mut summaries: Vec<crate::sync::models::grpc_sync::OkxOptionSummary> = Vec::with_capacity(chunk.len());
-                                for item in chunk.iter() {
-                                    summaries.push(crate::sync::models::grpc_sync::OkxOptionSummary {
-                                        id: item.id,
-                                        inst_id: item.inst_id,
-                                        inst_identify: item.inst_identify.clone(),
-                                        inst_type: item.inst_type.clone(),
-                                        uly: item.uly.clone().unwrap_or_default(),
-                                        acquire_ts: item.acquire_ts,
-                                        server_ts: item.server_ts,
-                                        ask_vol: item.ask_vol,
-                                        bid_vol: item.bid_vol,
-                                        delta: item.delta,
-                                        delta_bs: item.delta_bs,
-                                        fwd_px: item.fwd_px,
-                                        gamma: item.gamma,
-                                        gamma_bs: item.gamma_bs,
-                                        lever: item.lever,
-                                        mark_vol: item.mark_vol,
-                                        real_vol: item.real_vol,
-                                        vol_lv: item.vol_lv,
-                                        theta: item.theta,
-                                        theta_bs: item.theta_bs,
-                                        vega: item.vega,
-                                        vega_bs: item.vega_bs,
-                                    });
-                                }
-                                let list = crate::sync::models::grpc_sync::OkxOptionSummaryList {
-                                    summary_list: summaries,
-                                    timestamp: unix_time_now_u64_utc(),
-                                };
-                                let msg = ServerMessage {
-                                    payload: Some(server_message::Payload::OptionSummaryHistory(list)),
-                                };
-                                if tx.send(Ok(msg)).await.is_err() {
-                                    break;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            let status = Status::internal(format!("query okx option summary error: {:?}", e));
-                            let _ = tx.send(Err(status)).await;
-                        }
-                    }
-                });
+                // let okx_service = self.okx_option_service.clone();
+                // tokio::spawn(async move {
+                //     match okx_service.find_option_summary_between(inst_id, start_ms, end_ms).await {
+                //         Ok(summary_vec) => {
+                //             if summary_vec.is_empty() {
+                //                 let list = crate::sync::models::grpc_sync::OkxOptionSummaryList {
+                //                     summary_list: vec![],
+                //                     timestamp: unix_time_now_u64_utc(),
+                //                 };
+                //                 let msg = ServerMessage {
+                //                     payload: Some(server_message::Payload::OptionSummaryHistory(list)),
+                //                 };
+                //                 let _ = tx.send(Ok(msg)).await;
+                //                 return;
+                //             }
+                //
+                //             for chunk in summary_vec.chunks(batch_size) {
+                //                 let mut summaries: Vec<crate::sync::models::grpc_sync::OkxOptionSummary> = Vec::with_capacity(chunk.len());
+                //                 for item in chunk.iter() {
+                //                     summaries.push(crate::sync::models::grpc_sync::OkxOptionSummary {
+                //                         id: item.id,
+                //                         inst_id: item.inst_id,
+                //                         inst_identify: item.inst_identify.clone(),
+                //                         inst_type: item.inst_type.clone(),
+                //                         uly: item.uly.clone().unwrap_or_default(),
+                //                         acquire_ts: item.acquire_ts,
+                //                         server_ts: item.server_ts,
+                //                         ask_vol: item.ask_vol,
+                //                         bid_vol: item.bid_vol,
+                //                         delta: item.delta,
+                //                         delta_bs: item.delta_bs,
+                //                         fwd_px: item.fwd_px,
+                //                         gamma: item.gamma,
+                //                         gamma_bs: item.gamma_bs,
+                //                         lever: item.lever,
+                //                         mark_vol: item.mark_vol,
+                //                         real_vol: item.real_vol,
+                //                         vol_lv: item.vol_lv,
+                //                         theta: item.theta,
+                //                         theta_bs: item.theta_bs,
+                //                         vega: item.vega,
+                //                         vega_bs: item.vega_bs,
+                //                     });
+                //                 }
+                //                 let list = crate::sync::models::grpc_sync::OkxOptionSummaryList {
+                //                     summary_list: summaries,
+                //                     timestamp: unix_time_now_u64_utc(),
+                //                 };
+                //                 let msg = ServerMessage {
+                //                     payload: Some(server_message::Payload::OptionSummaryHistory(list)),
+                //                 };
+                //                 if tx.send(Ok(msg)).await.is_err() {
+                //                     break;
+                //                 }
+                //             }
+                //         }
+                //         Err(e) => {
+                //             let status = Status::internal(format!("query okx option summary error: {:?}", e));
+                //             let _ = tx.send(Err(status)).await;
+                //         }
+                //     }
+                // });
             }
             _ => {
                 return Err(Status::invalid_argument("unsupported or unspecified instrument type"));

@@ -6,6 +6,18 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 ///
+/// # 关于组织结构的规划
+/// 原则上，现在有3个服务。
+/// 1. sync server
+/// 2. sync client
+/// 3. datacenter
+/// 现在想着还是几个中间混用。并且遵循以下规则。
+///
+/// 1. sync server/sync client/datacenter为前缀的配置。应该是纯技术的。
+/// 2. 具体交易所。单独来设计。
+///
+/// 这样想的主要目的，还是因为这里主要是数据订阅。其实订阅的东西，本质差不多。所以可以共用
+///
 /// FUTURE:
 /// 1. 加入让log能够保存文件
 /// 2. log能够写成不同的文件地址
@@ -42,11 +54,41 @@ pub struct AccountConfig {
     pub account_type: AccountType,
 }
 
+#[derive(Deserialize, Debug, Clone)]
+pub struct OkxConfig {
+    pub enable: Option<bool>,
+}
+
+impl OkxConfig {
+    pub fn enable(&self) -> bool {
+        self.enable.unwrap_or(false)
+    }
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct PolyMarketConfig {
+    pub enable: Option<bool>,
+    pub series_ids: Option<Vec<String>>,
+}
+
+impl PolyMarketConfig {
+    pub fn enable(&self) -> bool {
+        self.enable.unwrap_or(false)
+    }
+}
+
 // Binance 配置结构体
 #[derive(Deserialize, Debug, Clone)]
 pub struct BinanceConfig {
     pub accounts: Option<Vec<AccountConfig>>,
     pub spot_stream: Option<SpotWebSocketStreamConfig>,
+    pub enable: Option<bool>,
+}
+
+impl BinanceConfig {
+    pub fn enable(&self) -> bool {
+        self.enable.unwrap_or(false)
+    }
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -146,7 +188,6 @@ impl SyncClientConfig {
 #[derive(Deserialize, Debug, Clone)]
 pub struct SyncServerConfig {
     pub server_port: Option<u16>,
-    pub series_ids: Option<Vec<String>>,
     pub batch_size: Option<usize>,
 }
 
@@ -170,6 +211,8 @@ pub struct AppConfig {
     #[serde(rename = "logLevel")]
     pub log_level: Option<String>,
     pub binance: Option<BinanceConfig>,
+    pub okx: Option<OkxConfig>,
+    pub polymarket: Option<PolyMarketConfig>,
     pub data_integrity: Option<DataIntegrityConfig>,
     pub sync_client: Option<SyncClientConfig>,
     pub sync_server: Option<SyncServerConfig>,
@@ -429,6 +472,8 @@ logLevel: "info"
             data_retention_hours: Some(3),
             log_level: None,
             binance: None,
+            okx: None,
+            polymarket: None,
             data_integrity: None,
             sync_client: None,
             sync_server: None,
@@ -448,6 +493,8 @@ logLevel: "info"
             data_retention_hours: Some(0),
             log_level: None,
             binance: None,
+            okx: None,
+            polymarket: None,
             data_integrity: None,
             sync_client: None,
             sync_server: None,
@@ -467,6 +514,8 @@ logLevel: "info"
             data_retention_hours: Some(5),
             log_level: None,
             binance: None,
+            okx: None,
+            polymarket: None,
             data_integrity: None,
             sync_client: None,
             sync_server: None,

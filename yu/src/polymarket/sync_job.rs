@@ -1,4 +1,4 @@
-use crate::config::get_config;
+use crate::config::AppConfig;
 use crate::cron_job;
 use crate::errors::YuError;
 use crate::polymarket::service::{SeriesHistoryMarketService, default_series_history_market_service};
@@ -14,15 +14,20 @@ use yue::models::HistoryInterval;
 ///     - History的最新
 ///     - instrument的更新
 ///
-pub async fn start_polymarket_sync_series_job() -> Result<SeriesHistoryMarketService, YuError> {
-    let app_config = get_config();
+pub async fn start_polymarket_sync_series_job(app_config: &AppConfig) -> Result<SeriesHistoryMarketService, YuError> {
     let sync_server_config = app_config.sync_server.clone();
     if sync_server_config.is_none() {
-        return Err(YuError::ConfigError("sync_server_config".to_string()));
+        return Err(YuError::ConfigError("no sync serve configuration".to_string()));
     }
-    let series_ids = sync_server_config.unwrap().series_ids;
+    let polymarket_config = match &app_config.polymarket {
+        None => {
+            return Err(YuError::ConfigError("polymarket not config".to_string()));
+        }
+        Some(c) => c,
+    };
+    let series_ids = polymarket_config.series_ids.clone();
     if series_ids.is_none() {
-        return Err(YuError::ConfigError("series_ids".to_string()));
+        return Err(YuError::ConfigError("no series id configuration".to_string()));
     }
     let service = default_series_history_market_service(series_ids.unwrap(), HistoryInterval::OneHour).await;
     service.sync_instrument().await?;

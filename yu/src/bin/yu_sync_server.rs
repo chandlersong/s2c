@@ -13,7 +13,7 @@ use yu::polymarket::database::initial_polymarket_tables;
 use yu::polymarket::sync_job::start_polymarket_sync_series_job;
 use yu::polymarket::sync_server::PolyMarketSyncInstrumentService;
 use yu::sync::models::grpc_sync::sync_interface_server::SyncInterfaceServer;
-use yu::sync::server::sync_server::YuSyncServer;
+use yu::sync::server::sync_server::{SyncInstrumentService, YuSyncServer};
 use yue::http_client::init_http_client;
 
 #[tokio::main]
@@ -52,18 +52,35 @@ async fn main() -> Result<(), YuError> {
     special_log.insert("li".to_string(), parse_level(log_in_config));
     setup_logger(Some(LevelFilter::Warn), special_log)?;
 
-    let binance_dashboard = start_sync_job().await?;
-    let binance_instrument_service = BinanceSyncInstrumentService::new(binance_dashboard);
+    let mut instrument_services: Vec<SyncInstrumentService> = vec![];
 
-    let polymarket_history_service = start_polymarket_sync_series_job().await?;
-    let polymarket_instrument_service = PolyMarketSyncInstrumentService::new(polymarket_history_service.clone());
+    let binance_config = &app_config.binance;
+    if binance_config.as_ref().is_some_and(|config| config.enable()) {
+        let binance_dashboard = start_sync_job().await?;
+        let binance_instrument_service = BinanceSyncInstrumentService::new(binance_dashboard);
+        instrument_services.push(binance_instrument_service);
+        info!("Started binance sync job");
+    }
 
-    let okx_option_service = start_okx_option_service().await?;
-    let okx_instrument_service = OkxSyncInstrumentService::new(okx_option_service.clone());
+    let polymarket_config = &app_config.polymarket;
+    //TODO: 重构完成后，放入后面的括号中
+    let polymarket_history_service = start_polymarket_sync_series_job(&app_config).await?;
+    if polymarket_config.as_ref().is_some_and(|config| config.enable()) {
+        let polymarket_instrument_service = PolyMarketSyncInstrumentService::new(polymarket_history_service.clone());
+        instrument_services.push(polymarket_instrument_service);
+        info!("Started polymarket sync job");
+    }
 
-    let instrument_services = vec![polymarket_instrument_service, okx_instrument_service, binance_instrument_service];
+    let okx_config = &app_config.okx;
 
-    let server = YuSyncServer::create_and_start(polymarket_history_service, okx_option_service, instrument_services).await?;
+    if okx_config.as_ref().is_some_and(|config| config.enable()) {
+        let okx_option_service = start_okx_option_service().await?;
+        let okx_instrument_service = OkxSyncInstrumentService::new(okx_option_service.clone());
+        instrument_services.push(okx_instrument_service);
+        info!("Started okx sync job");
+    }
+
+    let server = YuSyncServer::create_and_start(polymarket_history_service, instrument_services).await?;
     info!("sync server start at  → {}", addr);
     Server::builder()
         .add_service(SyncInterfaceServer::new(server))

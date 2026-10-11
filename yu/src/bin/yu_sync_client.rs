@@ -44,9 +44,7 @@ async fn main() -> Result<(), YuError> {
     initial_grpc_client_tables(None).await?;
 
     let client_service = Arc::new(SyncClientService::default());
-    // // 连接到 gRPC 服务（根据需要修改地址）-
     let connection_manager = get_grpc_manager_from_config();
-
     info!("已连接到 gRPC 服务端");
     //
     // // 1) 调用 GetLatestTimestamps
@@ -66,12 +64,10 @@ async fn main() -> Result<(), YuError> {
             error!("Error in subscribe: {}", e);
         }
     });
-
-    let sync_server_tx = tx.clone();
     let sync_server_manager = connection_manager.clone();
     let sync_client_service = client_service.clone();
     tokio::spawn(async move {
-        if let Err(e) = initial_data(sync_client_service, sync_server_tx, sync_server_manager).await {
+        if let Err(e) = initial_data(sync_client_service, sync_server_manager).await {
             error!("Error when initial instruments with server: {}", e);
         }
     });
@@ -133,79 +129,14 @@ async fn subscribe(local_db_tx: Sender<ServerMessage>, manager: GrpcChannelManag
 ///
 /// FUTURE:
 /// 1. 可能会有一些已经关闭的instrument。这里也要同步。但是因为这里的问题其实希望client有完整信息，所以就过了吧。
-async fn initial_data(
-    client_service: Arc<SyncClientService>,
-    local_db_tx: Sender<ServerMessage>,
-    manager: GrpcChannelManager,
-) -> Result<(), YuError> {
+async fn initial_data(client_service: Arc<SyncClientService>, manager: GrpcChannelManager) -> Result<(), YuError> {
     let mut server = SyncInterfaceClient::new(manager.connect().await);
     let resp = server.list_instrument(Request::new(Empty {})).await?;
     let inst_list = resp.into_inner();
     info!("获取instrument列表个数.{}", inst_list.instruments.len());
-    let diff_from_server = client_service.initial_data(inst_list).await?;
-    info!("align_local_instrument done.");
-    info!("需要同步polymarket的instrument个数{}", diff_from_server.polymarket_diff.len());
-    info!("需要同步polymarket的oxk option个数{}", diff_from_server.okx_option_kline_diff.len());
-    info!(
-        "需要同步polymarket的oxk option summary个数{}",
-        diff_from_server.okx_option_summary_diff.len()
-    );
-    info!("开始同步polymarket历史数据到本地数据库");
-    let one_hour_ms = HistoryInterval::OneHour.to_milliseconds();
-    for (inst_id, (start_ms, end_ms)) in diff_from_server.polymarket_diff {
-        //FUTURE: 因为这里时candle begin。所以要减去一个周期，以后重构的时候，通过instrument把数据的周期也传过来。然后在这里做减去周期的操作
-        if (end_ms - start_ms) < one_hour_ms {
-            continue;
-        }
-        let stream = server
-            .sync_history(Request::new(SyncRequest {
-                inst_id,
-                start_ms: start_ms + 1,
-                end_ms,
-                instrument_type: InstrumentType::PolymarketToken as i32,
-            }))
-            .await?
-            .into_inner();
-        forward_server_stream(stream, local_db_tx.clone()).await?;
+    if let Err(e) = client_service.initial_data(inst_list).await {
+        error!("error initializing client: {}", e);
     }
-    info!("开始同步okx历史数据到本地数据库");
-    for (inst_id, (start_ms, end_ms)) in diff_from_server.okx_option_kline_diff {
-        //FUTURE: 因为这里时candle begin。所以要减去一个周期，以后重构的时候，通过instrument把数据的周期也传过来。然后在这里做减去周期的操作
-
-        if (end_ms - start_ms) < one_hour_ms {
-            continue;
-        }
-        let end_ms = end_ms - HistoryInterval::OneHour.to_milliseconds();
-        let stream = server
-            .sync_history(Request::new(SyncRequest {
-                inst_id,
-                start_ms: start_ms + 1,
-                end_ms,
-                instrument_type: InstrumentType::OkxKline as i32,
-            }))
-            .await?
-            .into_inner();
-        forward_server_stream(stream, local_db_tx.clone()).await?;
-    }
-
-    // 同步 OKX option summary 历史
-    for (inst_id, (start_ms, end_ms)) in diff_from_server.okx_option_summary_diff {
-        // 如果没有新增或本地与服务器相同，则跳过
-        if end_ms <= start_ms {
-            continue;
-        }
-        let stream = server
-            .sync_history(Request::new(SyncRequest {
-                inst_id,
-                start_ms: start_ms + 1,
-                end_ms,
-                instrument_type: InstrumentType::OkxOptionSummary as i32,
-            }))
-            .await?
-            .into_inner();
-        forward_server_stream(stream, local_db_tx.clone()).await?;
-    }
-
     info!("async_sync_server done. 历史数据异步写入，可能过会儿更新");
     Ok(())
 }
