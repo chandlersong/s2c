@@ -8,6 +8,7 @@ use yu::errors::YuError;
 use yu::sync::client::database::initial_grpc_client_tables;
 use yu::sync::client::grpc_manager::get_grpc_manager_from_config;
 use yu::sync::client::service::polymarket::PolymarketClientExchangeService;
+use yu::sync::models::grpc_sync::instrument::Payload;
 use yu::sync::models::grpc_sync::sync_interface_client::SyncInterfaceClient;
 use yu::sync::models::grpc_sync::{Empty, ExchangeType};
 
@@ -40,12 +41,23 @@ async fn main() -> Result<(), YuError> {
     let inst_list = resp.into_inner();
     info!("获取instrument列表个数.{}", inst_list.instruments.len());
 
-    let Some((instrument_key, instrument)) = inst_list
-        .instruments
-        .into_iter()
-        .find(|(_, instrument)| instrument.exchange == ExchangeType::Polymarket as i32)
-    else {
-        return Err(YuError::new("no Polymarket instrument found in server instrument list"));
+    let inst_id = 641321015250846635;
+    let Some((instrument_key, instrument)) = inst_list.instruments.into_iter().find(|(key, instrument)| {
+        if let Some(payload) = &instrument.payload {
+            match payload {
+                Payload::Polymarket(p) => {
+                    if p.server_id == inst_id {
+                        return true;
+                    }
+                    return false;
+                }
+                Payload::Okx(_) => return false,
+                Payload::Binance(_) => return false,
+            }
+        }
+        return false;
+    }) else {
+        return Err(YuError::new("no Polymarket instrument found with inst_id in server instrument list"));
     };
     info!("使用instrument {} 作为示例", instrument_key);
     polymarket_instrument_service.initial_data(instrument, unix_time_now_u64_utc()).await?;

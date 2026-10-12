@@ -56,6 +56,10 @@ async fn main() -> Result<(), YuError> {
             return Err(e);
         }
     };
+    if let Err(e) = initial_grpc_client_tables(None).await {
+        error!("error starting initial grpc client tables: {}", e);
+        return Err(e);
+    }
 
     let subscribe_server_tx = tx.clone();
     let subscribe_server_connection = connection_manager.clone();
@@ -130,7 +134,8 @@ async fn subscribe(local_db_tx: Sender<ServerMessage>, manager: GrpcChannelManag
 /// FUTURE:
 /// 1. 可能会有一些已经关闭的instrument。这里也要同步。但是因为这里的问题其实希望client有完整信息，所以就过了吧。
 async fn initial_data(client_service: Arc<SyncClientService>, manager: GrpcChannelManager) -> Result<(), YuError> {
-    let mut server = SyncInterfaceClient::new(manager.connect().await);
+    let channel = manager.get_channel().await;
+    let mut server = SyncInterfaceClient::new(channel.clone());
     let resp = server.list_instrument(Request::new(Empty {})).await?;
     let inst_list = resp.into_inner();
     info!("获取instrument列表个数.{}", inst_list.instruments.len());
