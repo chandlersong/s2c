@@ -57,15 +57,15 @@ pub struct SyncClientService {
     exchange_services: HashMap<ExchangeType, ClientExchangeService>,
 }
 
-impl Default for SyncClientService {
-    fn default() -> Self {
+impl SyncClientService {
+    pub fn for_production() -> Result<Self, YuError> {
         let mut exchange_services = HashMap::new();
-        exchange_services.insert(ExchangeType::Polymarket, PolymarketClientExchangeService::for_production());
-        Self {
+        exchange_services.insert(ExchangeType::Polymarket, PolymarketClientExchangeService::for_production()?);
+        Ok(Self {
             pm_instrument_dict: Arc::new(Default::default()),
             okx_instrument_dict: Arc::new(Default::default()),
             exchange_services,
-        }
+        })
     }
 }
 

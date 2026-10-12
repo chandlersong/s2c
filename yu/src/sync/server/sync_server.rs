@@ -1,7 +1,6 @@
 use crate::duck_db::DuckDBDSProvider;
 use crate::errors::YuError;
 use crate::okx::duck_po::{OkxKlinePo, OkxOptionSummaryPo};
-use crate::okx::service::OptionService;
 use crate::polymarket::po::PolyMarketHistoryPo;
 use crate::polymarket::service::SeriesHistoryMarketService;
 use crate::sync::models::grpc_sync::sync_interface_server::SyncInterface;

@@ -11,6 +11,8 @@ use std::sync::Arc;
 pub trait ClientPolyMarketRepositoryTrait {
     async fn list_all_instrument(&self) -> Result<Vec<LocalPolyMarketInstrumentPo>, YuError>;
 
+    async fn get_live_instruments(&self, at_ms: u64) -> Result<Vec<LocalPolyMarketInstrumentPo>, YuError>;
+
     //返回server id+数据库中timestamp
     async fn list_instrument_timestamps(&self) -> Result<HashMap<u64, u64>, YuError>;
 
@@ -57,6 +59,15 @@ impl ClientPolyMarketRepositoryTrait for ClientPolyMarketRepositoryImpl {
     async fn list_all_instrument(&self) -> Result<Vec<LocalPolyMarketInstrumentPo>, YuError> {
         Ok(
             sqlx::query_as::<_, LocalPolyMarketInstrumentPo>(r#"select * from polymarket_instruments"#)
+                .fetch_all(&self.pg_pool)
+                .await?,
+        )
+    }
+
+    async fn get_live_instruments(&self, at_ms: u64) -> Result<Vec<LocalPolyMarketInstrumentPo>, YuError> {
+        Ok(
+            sqlx::query_as::<_, LocalPolyMarketInstrumentPo>("SELECT * FROM polymarket_instruments WHERE end_ms > $1")
+                .bind(i64::try_from(at_ms).map_err(|_| YuError::new("live instrument cutoff exceeds BIGINT range"))?)
                 .fetch_all(&self.pg_pool)
                 .await?,
         )

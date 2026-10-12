@@ -36,7 +36,7 @@ async fn main() -> Result<(), YuError> {
     setup_logger(Some(LevelFilter::Warn), special_log)?;
     initial_grpc_client_tables(None).await?;
 
-    let client_service = Arc::new(SyncClientService::default());
+    let client_service = Arc::new(SyncClientService::for_production()?);
     let connection_manager = get_grpc_manager_from_config();
     info!("已连接到 gRPC 服务端");
     //

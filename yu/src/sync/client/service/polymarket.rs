@@ -1,6 +1,10 @@
+use crate::data_integrity::check::{BinarySearchDS, SyncClientBinarySearchDataImpl, binary_search_gap};
+use crate::data_integrity::models::ValidationGap;
 use crate::errors::YuError;
+use crate::postgresql_db::{PostgresqlTableTrait, get_sync_client_pg_pool_sync};
 use crate::postgresql_db_tables::PostgresqlBatchInsert;
 use crate::sync::client::database::get_polymarket_price_batch_insert;
+use crate::sync::client::db_consts::ClientsTables;
 use crate::sync::client::grpc_manager::{GrpcChannelManager, get_grpc_manager_from_config};
 use crate::sync::client::po::polymarket::{LocalPolyMarketHistoryPo, LocalPolyMarketInstrumentPo};
 use crate::sync::client::repository::polymarket::{ClientPolyMarketRepository, default_client_polymarket_repository};
@@ -9,31 +13,52 @@ use crate::sync::models::grpc_sync::{ExchangeType, Instrument, InstrumentType, S
 use async_trait::async_trait;
 use futures::StreamExt;
 use li::tools::time::UnixTimeStamp;
+use log::{debug, error};
 use std::sync::Arc;
+use yue::models::HistoryInterval;
 use yue::tools::get_snow_flake_id_u64;
 
 pub struct PolymarketClientExchangeService {
     pm_repo: ClientPolyMarketRepository,
     history_batch_insert: PostgresqlBatchInsert<LocalPolyMarketHistoryPo>,
     grpc_manager: GrpcChannelManager,
+    binary_search: BinarySearchDS,
+    interval: HistoryInterval,
 }
 impl PolymarketClientExchangeService {
     fn new(
         pm_repo: ClientPolyMarketRepository,
         history_batch_insert: PostgresqlBatchInsert<LocalPolyMarketHistoryPo>,
         grpc_manager: GrpcChannelManager,
+        binary_search: BinarySearchDS,
+        interval: HistoryInterval,
     ) -> Self {
         Self {
             pm_repo,
             history_batch_insert,
             grpc_manager,
+            binary_search,
+            interval,
         }
     }
 
-    pub fn for_production() -> ClientExchangeService {
+    pub fn for_production() -> Result<ClientExchangeService, YuError> {
         let pm_repo = default_client_polymarket_repository();
         let history_batch_insert = get_polymarket_price_batch_insert();
-        Arc::new(Self::new(pm_repo, history_batch_insert, get_grpc_manager_from_config()))
+        let pg_pool = get_sync_client_pg_pool_sync()?;
+        let pm_binary_search_ds = SyncClientBinarySearchDataImpl::new(
+            pg_pool,
+            ClientsTables::PolymarketPriceHistory.table_name(),
+            ClientsTables::PolyMarketInstruments.table_name(),
+            "timestamp",
+        );
+        Ok(Arc::new(Self::new(
+            pm_repo,
+            history_batch_insert,
+            get_grpc_manager_from_config(),
+            pm_binary_search_ds,
+            HistoryInterval::OneHour,
+        )))
     }
 
     async fn backfill_history(&self, server_inst_id: u64, local_inst_id: u64, start_timestamp: u64, end_timestamp: u64) -> Result<(), YuError> {
@@ -126,14 +151,54 @@ impl ClientExchangeServiceTrait for PolymarketClientExchangeService {
         Ok(())
     }
 
+    ///
+    /// 逻辑过程
+    /// 1. 通过repo，获取还在运行的instrument的结束时间，小于end_ms
+    /// 2. 循环第一步的方法，用二分法找出缺少的代码
+    /// 3. 调用backfill。取补全
+    ///
     async fn reconcile_living_instrument_with_server(&self, end_ms: UnixTimeStamp) -> Result<(), YuError> {
-        todo!()
+        let interval_ms = self.interval.to_milliseconds();
+        let end_timestamp = self.interval.get_close_unix_ms(end_ms).saturating_sub(interval_ms);
+        let instruments = self.pm_repo.get_live_instruments(end_ms).await?;
+
+        for instrument in instruments {
+            let start_timestamp = self.interval.get_close_unix_ms(instrument.start_ms).saturating_add(interval_ms);
+            let gaps = binary_search_gap(
+                &instrument.server_id.to_string(),
+                "SPOT",
+                start_timestamp,
+                end_timestamp,
+                &self.interval,
+                self.binary_search.clone(),
+            )?;
+            debug!("polymarket {} gaps: {}", instrument.server_id, gaps.len());
+            for gap in gaps {
+                match gap {
+                    ValidationGap::MissingData { start_time, end_time, .. } => {
+                        self.backfill_history(
+                            instrument.server_id,
+                            instrument.id,
+                            start_time.saturating_sub(1),
+                            end_time.saturating_sub(interval_ms),
+                        )
+                        .await?;
+                    }
+                    _ => {
+                        error!("unexpected Polymarket validation gap: {:?}", gap);
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data_integrity::check::MockBinarySearchDSTrait;
     use crate::postgresql_db_tables::MockPostgresqlBatchInsertTrait;
     use crate::sync::client::grpc_manager::{GrpcServerMessageStream, MockGrpcChannelManagerTrait};
     use crate::sync::client::repository::polymarket::MockClientPolyMarketRepositoryTrait;
@@ -185,6 +250,16 @@ mod tests {
         MockPostgresqlBatchInsertTrait::new()
     }
 
+    fn mock_binary_search_ds() -> BinarySearchDS {
+        let mut mock = MockBinarySearchDSTrait::new();
+        mock.expect_count_distinct_between().returning(|_, _, _| Ok(0));
+        mock.expect_table_name()
+            .returning(|| ClientsTables::PolymarketPriceHistory.table_name().to_string());
+        mock.expect_symbol_column().returning(|| "server_id".to_string());
+        mock.expect_time_column().returning(|| "timestamp".to_string());
+        Arc::new(mock)
+    }
+
     // 测试目的：验证本地不存在的 Polymarket instrument 会先写入本地，再从起始时间补取历史。
     // 测试步骤：模拟首次查询不到、创建成功、历史时间戳为空，并检查请求从 start_ms + 1 开始。
     // 预期结果：初始化成功，且按预期的 server_id、起始时间和 instrument 类型发起历史同步。
@@ -223,7 +298,13 @@ mod tests {
             .withf(|request| request.inst_id == 42 && request.start_ms == 101 && request.instrument_type == InstrumentType::PolymarketToken as i32)
             .returning(|_| Ok(empty_history_stream()));
 
-        let service = PolymarketClientExchangeService::new(Arc::new(repo), Arc::new(mock_batch_insert()), Arc::new(manager));
+        let service = PolymarketClientExchangeService::new(
+            Arc::new(repo),
+            Arc::new(mock_batch_insert()),
+            Arc::new(manager),
+            mock_binary_search_ds(),
+            HistoryInterval::OneHour,
+        );
         service.initial_data(polymarket_instrument(42), now).await.unwrap();
     }
 
@@ -246,7 +327,13 @@ mod tests {
             .expect_sync_history()
             .withf(|request| request.inst_id == 42 && request.start_ms == 151 && request.instrument_type == InstrumentType::PolymarketToken as i32)
             .returning(|_| Ok(empty_history_stream()));
-        let service = PolymarketClientExchangeService::new(Arc::new(repo), Arc::new(mock_batch_insert()), Arc::new(manager));
+        let service = PolymarketClientExchangeService::new(
+            Arc::new(repo),
+            Arc::new(mock_batch_insert()),
+            Arc::new(manager),
+            mock_binary_search_ds(),
+            HistoryInterval::OneHour,
+        );
 
         service.initial_data(polymarket_instrument(42), now).await.unwrap();
     }
@@ -287,9 +374,79 @@ mod tests {
             Arc::new(MockClientPolyMarketRepositoryTrait::new()),
             Arc::new(batch_insert),
             Arc::new(manager),
+            mock_binary_search_ds(),
+            HistoryInterval::OneHour,
         );
 
         service.backfill_history(42, 1, 150, 200).await.unwrap();
+    }
+
+    // 测试目的：验证定时校对只检查仍在运行的 instrument，并将缺失区间回补到本地 instrument。
+    // 测试步骤：模拟一个仍运行的 instrument 和一个已结束的 instrument，数据源报告运行中的区间全缺失。
+    // 预期结果：只为运行中的 instrument 发起历史请求，且请求范围准确覆盖缺失的小时数据。
+    #[tokio::test]
+    async fn reconciles_gaps_for_living_instruments_only() {
+        let interval = HistoryInterval::OneHour;
+        let interval_ms = interval.to_milliseconds();
+        let end_ms = interval_ms * 6;
+        let mut repo = MockClientPolyMarketRepositoryTrait::new();
+        repo.expect_get_live_instruments()
+            .withf(move |at_ms| *at_ms == end_ms)
+            .returning(move |_| {
+                Ok(vec![LocalPolyMarketInstrumentPo {
+                    end_ms: end_ms + interval_ms,
+                    ..local_instrument(42)
+                }])
+            });
+
+        let mut binary_search = MockBinarySearchDSTrait::new();
+        binary_search
+            .expect_count_distinct_between()
+            .withf(move |server_id, start, end| server_id == "42" && *start == interval_ms && *end == end_ms - interval_ms)
+            .returning(|_, _, _| Ok(0));
+        binary_search.expect_table_name().returning(|| "polymarket_price_history".to_string());
+
+        let mut manager = MockGrpcChannelManagerTrait::new();
+        manager
+            .expect_sync_history()
+            .withf(move |request| {
+                request.inst_id == 42
+                    && request.start_ms == interval_ms
+                    && request.end_ms == end_ms - 2 * interval_ms
+                    && request.instrument_type == InstrumentType::PolymarketToken as i32
+            })
+            .times(1)
+            .returning(|_| Ok(empty_history_stream()));
+        let service = PolymarketClientExchangeService::new(
+            Arc::new(repo),
+            Arc::new(mock_batch_insert()),
+            Arc::new(manager),
+            Arc::new(binary_search),
+            interval,
+        );
+
+        service.reconcile_living_instrument_with_server(end_ms).await.unwrap();
+    }
+
+    // 测试目的：验证仓库没有返回仍在运行的 instrument 时不会执行缺口查询或历史回补。
+    // 测试步骤：mock get_live_instruments 返回空列表。
+    // 预期结果：校对正常结束，不调用二分数据源或 gRPC 历史接口。
+    #[tokio::test]
+    async fn skips_instruments_that_are_not_living() {
+        let end_ms = HistoryInterval::OneHour.to_milliseconds() * 6;
+        let mut repo = MockClientPolyMarketRepositoryTrait::new();
+        repo.expect_get_live_instruments()
+            .withf(move |at_ms| *at_ms == end_ms)
+            .returning(|_| Ok(vec![]));
+        let service = PolymarketClientExchangeService::new(
+            Arc::new(repo),
+            Arc::new(mock_batch_insert()),
+            Arc::new(MockGrpcChannelManagerTrait::new()),
+            mock_binary_search_ds(),
+            HistoryInterval::OneHour,
+        );
+
+        service.reconcile_living_instrument_with_server(end_ms).await.unwrap();
     }
 
     // 测试目的：确保服务拒绝非 Polymarket 交易所的 instrument。
@@ -303,6 +460,8 @@ mod tests {
             Arc::new(repo),
             Arc::new(mock_batch_insert()),
             Arc::new(MockGrpcChannelManagerTrait::new()),
+            mock_binary_search_ds(),
+            HistoryInterval::OneHour,
         );
         let mut instrument = polymarket_instrument(42);
         instrument.exchange = ExchangeType::Okx as i32;
@@ -321,6 +480,8 @@ mod tests {
             Arc::new(repo),
             Arc::new(mock_batch_insert()),
             Arc::new(MockGrpcChannelManagerTrait::new()),
+            mock_binary_search_ds(),
+            HistoryInterval::OneHour,
         );
         let mut instrument = polymarket_instrument(42);
         instrument.payload = None;

@@ -31,7 +31,7 @@ async fn main() -> Result<(), YuError> {
     let _app_config = get_config();
 
     initial_grpc_client_tables(None).await?;
-    let polymarket_instrument_service = PolymarketClientExchangeService::for_production();
+    let polymarket_instrument_service = PolymarketClientExchangeService::for_production()?;
 
     let connection_manager = get_grpc_manager_from_config();
     info!("开始连接到 gRPC 服务端");
@@ -44,23 +44,28 @@ async fn main() -> Result<(), YuError> {
     let inst_id = 641321015250846635;
     let Some((instrument_key, instrument)) = inst_list.instruments.into_iter().find(|(key, instrument)| {
         if let Some(payload) = &instrument.payload {
-            match payload {
+            return match payload {
                 Payload::Polymarket(p) => {
                     if p.server_id == inst_id {
                         return true;
                     }
-                    return false;
+                    false
                 }
-                Payload::Okx(_) => return false,
-                Payload::Binance(_) => return false,
-            }
+                Payload::Okx(_) => false,
+                Payload::Binance(_) => false,
+            };
         }
         return false;
     }) else {
         return Err(YuError::new("no Polymarket instrument found with inst_id in server instrument list"));
     };
     info!("使用instrument {} 作为示例", instrument_key);
-    polymarket_instrument_service.initial_data(instrument, unix_time_now_u64_utc()).await?;
+    info!("开始instrument初始化");
+    let now = unix_time_now_u64_utc();
+    polymarket_instrument_service.initial_data(instrument, now).await?;
+    tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+    info!("和服务器对账");
+    polymarket_instrument_service.reconcile_living_instrument_with_server(now).await?;
     tokio::time::sleep(tokio::time::Duration::from_mins(5)).await;
     Ok(())
 }
