@@ -86,8 +86,12 @@ impl SyncClientService {
         for (_, inst) in server_inst.instruments.into_iter() {
             let exchange_type = ExchangeType::try_from(inst.exchange).map_err(|_| YuError::new("unknown exchange type"))?;
             let exchange_name = exchange_type.readable_name();
-            let exchange_service = self.exchange_services.get(&exchange_type).unwrap();
-            if let Err(e) = exchange_service.initial_data(inst, now).await {
+            let exchange_service = self.exchange_services.get(&exchange_type);
+            if exchange_service.is_none() {
+                error!("{} not found exchange service to handle", exchange_name);
+                continue;
+            }
+            if let Err(e) = exchange_service.unwrap().initial_data(inst, now).await {
                 error!("error initializing exchange {},error:{}", exchange_name, e);
             }
         }
