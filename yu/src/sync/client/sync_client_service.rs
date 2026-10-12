@@ -26,6 +26,11 @@ pub trait ClientExchangeServiceTrait: Send + Sync {
     /// 2. 更新history到最新
     ///
     async fn initial_data(&self, instrument: Instrument, end_ms: UnixTimeStamp) -> Result<(), YuError>;
+
+    ///
+    /// 校对正在运行的instrument的数据
+    ///
+    async fn reconcile_living_instrument_with_server(&self, end_ms: UnixTimeStamp) -> Result<(), YuError>;
 }
 
 pub type ClientExchangeService = Arc<dyn ClientExchangeServiceTrait>;
@@ -93,6 +98,27 @@ impl SyncClientService {
             }
             if let Err(e) = exchange_service.unwrap().initial_data(inst, now).await {
                 error!("error initializing exchange {},error:{}", exchange_name, e);
+            }
+        }
+        Ok(())
+    }
+
+    ///
+    /// 主要是本地数据和远端服务器的处理。
+    /// 1. instrument的列表应该从本地获取。而不是服务器端。因为是本地的服务器。
+    /// 2. 技术支持的前提下，应该是只是校对正在运行的polymarket
+    ///
+    /// # 流程
+    /// 1. 确定结束时间。一般默认取now
+    /// 2. 获取exchange_services，然后调用其reconcile_living_instrument_with_server。
+    /// 3. 如果错误，打印日志，然后跳过。
+    ///
+    pub async fn reconcile_living_instrument_with_server(&self) -> Result<(), YuError> {
+        let now = unix_time_now_u64_utc();
+        for (exchange_type, exchange_service) in &self.exchange_services {
+            let exchange_name = exchange_type.readable_name();
+            if let Err(e) = exchange_service.reconcile_living_instrument_with_server(now).await {
+                error!("error reconciling exchange {},error:{}", exchange_name, e);
             }
         }
         Ok(())

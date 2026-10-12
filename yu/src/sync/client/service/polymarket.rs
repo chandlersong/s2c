@@ -125,6 +125,10 @@ impl ClientExchangeServiceTrait for PolymarketClientExchangeService {
             .await?;
         Ok(())
     }
+
+    async fn reconcile_living_instrument_with_server(&self, end_ms: UnixTimeStamp) -> Result<(), YuError> {
+        todo!()
+    }
 }
 
 #[cfg(test)]
