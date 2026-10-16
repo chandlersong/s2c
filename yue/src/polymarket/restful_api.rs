@@ -237,6 +237,21 @@ impl PolymarketApiTrait for PolymarketClientImpl {
     async fn query_event_id(&self, id: &str, include_chat: Option<bool>, include_template: Option<bool>) -> Result<Event, YueError> {
         query_event_id(id, include_chat, include_template).await
     }
+
+    ///
+    ///
+    /// [data api](https://docs.polymarket.com/api-reference/markets/get-a-tokens-price-history)
+    /// [clob api](https://docs.polymarket.com/api-reference/markets/get-prices-history)
+    /// 本方法是基于clob api的调用。
+    ///
+    /// FUTURE:
+    /// 1. 混合两者之间的调用。clob api和data api各有优劣。
+    ///   - clob api：只有open的market。
+    ///   - data api：如果一些久远的market。那么只有3h和12h数据。
+    /// 这样就需要对这些情况进行区分。下一轮再搞吧。
+    ///
+    ///
+    ///
     async fn query_prices_history(&self, query: GetPricesHistoryQuery) -> Result<GetPricesHistoryResponse, YueError> {
         query_prices_history(query).await
     }

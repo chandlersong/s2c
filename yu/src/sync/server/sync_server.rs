@@ -111,7 +111,7 @@ impl YuSyncServer {
         polymarket_history_service: SeriesHistoryMarketService,
         instruments_services: Vec<SyncInstrumentService>,
     ) -> Result<Self, YuError> {
-        let (command_channel, command_rx) = mpsc::channel::<SyncInternalCommand>(100);
+        let (command_channel, _) = mpsc::channel::<SyncInternalCommand>(100);
 
         // let polymarket_history_receiver = polymarket_history_service.subscribe_history_broadcast();
         // let okx_option_kline_receiver = okx_option_service.subscribe_kline().await;

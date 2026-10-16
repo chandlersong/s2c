@@ -8,9 +8,9 @@ use yu::errors::YuError;
 use yu::sync::client::database::initial_grpc_client_tables;
 use yu::sync::client::grpc_manager::get_grpc_manager_from_config;
 use yu::sync::client::service::polymarket::PolymarketClientExchangeService;
+use yu::sync::models::grpc_sync::Empty;
 use yu::sync::models::grpc_sync::instrument::Payload;
 use yu::sync::models::grpc_sync::sync_interface_client::SyncInterfaceClient;
-use yu::sync::models::grpc_sync::{Empty, ExchangeType};
 
 ///
 /// 这里的主要功能。
@@ -42,7 +42,7 @@ async fn main() -> Result<(), YuError> {
     info!("获取instrument列表个数.{}", inst_list.instruments.len());
 
     let inst_id = 641321015250846635;
-    let Some((instrument_key, instrument)) = inst_list.instruments.into_iter().find(|(key, instrument)| {
+    let Some((instrument_key, instrument)) = inst_list.instruments.into_iter().find(|(_, instrument)| {
         if let Some(payload) = &instrument.payload {
             return match payload {
                 Payload::Polymarket(p) => {
