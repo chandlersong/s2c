@@ -1,7 +1,7 @@
 use crate::errors::YuError;
-use crate::polymarket::service::{SeriesHistoryMarketService, SeriesHistoryMarketServiceTrait};
+use crate::polymarket::service::SeriesHistoryMarketService;
 use crate::sync::models::grpc_sync::{
-    ExchangeType, Instrument, InstrumentType, PolyMarketHistory, PolyMarketHistoryList, PolymarketInstrument, ServerMessage, server_message,
+    ExchangeType, HistoryEntry, Instrument, InstrumentType, PolyMarketHistory, PolymarketInstrument, ServerMessage, history_entry,
 };
 use crate::sync::server::sync_server::{SyncHistoryService, SyncHistoryServiceTrait, SyncInstrumentService, SyncInstrumentServiceTrait};
 use async_trait::async_trait;
@@ -88,33 +88,30 @@ impl SyncHistoryServiceTrait for PolyMarketSyncHistoryService {
         match self.polymarket_history_service.query_instrument_history(inst_id, start_ms, end_ms).await {
             Ok(history_vec) => {
                 if history_vec.is_empty() {
-                    // send an empty list once
-                    let list = PolyMarketHistoryList {
-                        history_list: vec![],
-                        timestamp: unix_time_now_u64_utc(),
-                    };
                     let msg = ServerMessage {
-                        payload: Some(server_message::Payload::PolymarketHistory(list)),
+                        history: vec![],
+                        server_timestamp: unix_time_now_u64_utc(),
                     };
                     let _ = tx.send(Ok(msg)).await;
                     return Ok(());
                 }
 
                 for chunk in history_vec.chunks(batch_size) {
-                    let mut histories: Vec<PolyMarketHistory> = Vec::with_capacity(chunk.len());
+                    let mut histories = Vec::with_capacity(chunk.len());
                     for h in chunk.iter() {
-                        histories.push(PolyMarketHistory {
+                        let rpc_entry = PolyMarketHistory {
                             inst_id: h.instrument_id,
                             timestamp: h.timestamp,
                             price: h.price,
+                        };
+                        histories.push(HistoryEntry {
+                            instrument_type: InstrumentType::PolymarketToken.into(),
+                            payload: Some(history_entry::Payload::PolymarketHistory(rpc_entry)),
                         });
                     }
-                    let list = PolyMarketHistoryList {
-                        history_list: histories,
-                        timestamp: unix_time_now_u64_utc(),
-                    };
                     let msg = ServerMessage {
-                        payload: Some(server_message::Payload::PolymarketHistory(list)),
+                        history: histories,
+                        server_timestamp: unix_time_now_u64_utc(),
                     };
                     if tx.send(Ok(msg)).await.is_err() {
                         // receiver dropped, stop streaming

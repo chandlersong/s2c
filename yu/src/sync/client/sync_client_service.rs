@@ -3,14 +3,13 @@ use crate::postgresql_db_tables::PostgresqlBatchInsert;
 use crate::sync::client::database::get_okx_kline_batch_insert;
 use crate::sync::client::database::get_okx_option_summary_batch_insert;
 use crate::sync::client::database::get_polymarket_price_batch_insert;
-use crate::sync::client::po::okx::{LocalOkxInstrumentPo, LocalOkxKlinePo, LocalOkxOptionSummaryPo};
+use crate::sync::client::po::okx::{LocalOkxInstrumentPo, LocalOkxKlinePo};
 use crate::sync::client::po::polymarket::{LocalPolyMarketHistoryPo, LocalPolyMarketInstrumentPo};
 use crate::sync::client::service::polymarket::PolymarketClientExchangeService;
-use crate::sync::models::grpc_sync::server_message::Payload;
 use crate::sync::models::grpc_sync::{ExchangeType, Instrument, InstrumentList, ServerMessage};
 use async_trait::async_trait;
 use li::tools::time::{UnixTimeStamp, unix_time_now_u64_utc};
-use log::{debug, error};
+use log::error;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
@@ -142,70 +141,7 @@ impl SyncClientService {
         let do_okx_batch_insert = okx_batch_insert.unwrap_or_else(|| get_okx_kline_batch_insert());
         let do_okx_option_batch_insert = get_okx_option_summary_batch_insert();
 
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    Some(server_msg) = rx.recv() => {
-                        if let Some(payload) = server_msg.payload {
-                            match payload {
-                            Payload::PolymarketHistory(history) => {
-                                    let batch_timestamp = history.timestamp;
-                                    for h in history.history_list.into_iter() {
-                                        // map server inst id to local inst id when available
-                                        match server_id_map.read().await.get(&h.inst_id){
-                                            None => {
-                                                error!("server inst_id {} not found in local mapping, skipping", h.inst_id);
-                                            }
-                                            Some(po) => {
-                                                 let local_inst_id = po.id;
-                                                 let po = LocalPolyMarketHistoryPo::from_polymarket_history(h, local_inst_id, batch_timestamp);
-                                                 do_batch_insert.insert_data(po).await;
-                                            }
-                                        }
-                                    }
-                                }
-                            Payload::OkxKlineHistory(kline_list) => {
-                                let batch_timestamp = kline_list.timestamp;
-                                for k in kline_list.kline_list.into_iter() {
-                                    match okx_server_map.read().await.get(&k.inst_id) {
-                                        None => {
-                                            error!("okx inst_id {} not found in local mapping, skipping", k.inst_id);
-                                        }
-                                        Some(inst_po) => {
-                                            let local_id = inst_po.id;
-                                            let po = LocalOkxKlinePo::from_okx_kline(k, local_id, batch_timestamp);
-                                            do_okx_batch_insert.insert_data(po).await;
-                                        }
-                                    }
-                                }
-                            }
-                            Payload::OptionSummaryHistory(summary_list) => {
-                                let batch_timestamp = summary_list.timestamp;
-                                for s in summary_list.summary_list.into_iter() {
-                                    match okx_server_map.read().await.get(&s.inst_id) {
-                                        None => {
-                                            error!("okx option summary inst_id {} not found in local mapping, skipping", s.inst_id);
-                                        }
-                                        Some(inst_po) => {
-                                            let local_id = inst_po.id;
-                                            let po = LocalOkxOptionSummaryPo::from_okx_summary(s, local_id, batch_timestamp);
-                                            do_okx_option_batch_insert.insert_data(po).await;
-                                        }
-                                    }
-                                }
-                            }
-                            Payload::BinanceKlineHistory(_) => {
-                               debug!("receive BinanceKlineHistory")
-                            }
-                            Payload::BinanceTradeHistory(_) => {
-                              debug!("receive BinanceTradeHistory")
-                            }
-                            }
-                        }
-                    }
-                }
-            }
-        });
+        tokio::spawn(async move { loop {} });
 
         Ok(tx)
     }

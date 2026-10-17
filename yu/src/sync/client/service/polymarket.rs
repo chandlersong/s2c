@@ -9,7 +9,7 @@ use crate::sync::client::grpc_manager::{GrpcChannelManager, get_grpc_manager_fro
 use crate::sync::client::po::polymarket::{LocalPolyMarketHistoryPo, LocalPolyMarketInstrumentPo};
 use crate::sync::client::repository::polymarket::{ClientPolyMarketRepository, default_client_polymarket_repository};
 use crate::sync::client::sync_client_service::{ClientExchangeService, ClientExchangeServiceTrait};
-use crate::sync::models::grpc_sync::{ExchangeType, Instrument, InstrumentType, SyncRequest, instrument, server_message::Payload};
+use crate::sync::models::grpc_sync::{ExchangeType, Instrument, InstrumentType, SyncRequest, history_entry::Payload, instrument};
 use async_trait::async_trait;
 use futures::StreamExt;
 use li::tools::time::UnixTimeStamp;
@@ -78,21 +78,22 @@ impl PolymarketClientExchangeService {
 
         while let Some(message) = history_stream.next().await {
             let message = message?;
-            match message.payload {
-                Some(Payload::PolymarketHistory(history_list)) => {
-                    let batch_timestamp = history_list.timestamp;
-                    for history in history_list.history_list {
-                        if history.inst_id != server_inst_id {
-                            return Err(YuError::new("received Polymarket history for unexpected instrument"));
-                        }
-
-                        self.history_batch_insert
-                            .insert_data(LocalPolyMarketHistoryPo::from_polymarket_history(history, local_inst_id, batch_timestamp))
-                            .await;
-                    }
+            let batch_timestamp = message.server_timestamp;
+            for entry in message.history {
+                if entry.instrument_type != InstrumentType::PolymarketToken as i32 {
+                    return Err(YuError::new("received non-Polymarket history payload"));
                 }
-                Some(_) => return Err(YuError::new("received non-Polymarket history payload")),
-                None => return Err(YuError::new("received empty history payload")),
+
+                let Some(Payload::PolymarketHistory(history)) = entry.payload else {
+                    return Err(YuError::new("received non-Polymarket history payload"));
+                };
+                if history.inst_id != server_inst_id {
+                    return Err(YuError::new("received Polymarket history for unexpected instrument"));
+                }
+
+                self.history_batch_insert
+                    .insert_data(LocalPolyMarketHistoryPo::from_polymarket_history(history, local_inst_id, batch_timestamp))
+                    .await;
             }
         }
 
@@ -202,7 +203,7 @@ mod tests {
     use crate::postgresql_db_tables::MockPostgresqlBatchInsertTrait;
     use crate::sync::client::grpc_manager::{GrpcServerMessageStream, MockGrpcChannelManagerTrait};
     use crate::sync::client::repository::polymarket::MockClientPolyMarketRepositoryTrait;
-    use crate::sync::models::grpc_sync::{PolyMarketHistory, PolyMarketHistoryList, PolymarketInstrument, ServerMessage};
+    use crate::sync::models::grpc_sync::{HistoryEntry, PolyMarketHistory, PolymarketInstrument, ServerMessage};
     use li::tools::time::unix_time_now_u64_utc;
 
     fn empty_history_stream() -> GrpcServerMessageStream {
@@ -354,14 +355,15 @@ mod tests {
             })
             .returning(|_| {
                 Ok(Box::pin(futures::stream::iter(vec![Ok(ServerMessage {
-                    payload: Some(Payload::PolymarketHistory(PolyMarketHistoryList {
-                        history_list: vec![PolyMarketHistory {
+                    history: vec![HistoryEntry {
+                        instrument_type: InstrumentType::PolymarketToken as i32,
+                        payload: Some(Payload::PolymarketHistory(PolyMarketHistory {
                             inst_id: 42,
                             timestamp: 175,
                             price: 0.42,
-                        }],
-                        timestamp: 180,
-                    })),
+                        })),
+                    }],
+                    server_timestamp: 180,
                 })])) as GrpcServerMessageStream)
             });
         let mut batch_insert = mock_batch_insert();

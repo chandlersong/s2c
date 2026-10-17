@@ -65,12 +65,13 @@ message BinanceInstrument {
 }
 
 message Instrument {
+  ExchangeType exchange = 1;
   oneof payload {
-    PolymarketInstrument polymarket = 1;     // polymarket资产
-    OkxInstrument okx = 2;     // okx资产
-    BinanceInstrument binance = 3;
+    PolymarketInstrument polymarket = 2;     // polymarket资产
+    OkxInstrument okx = 3;     // okx资产
+    BinanceInstrument binance = 4;
   }
-  ExchangeType exchange = 4;
+
 }
 
 message InstrumentList{
@@ -106,14 +107,22 @@ service SyncInterface {
 }
 
 message ServerMessage {
+  repeated HistoryEntry history = 1;
+  uint64 server_timestamp = 2;  //服务器的时间戳
+}
+
+message HistoryEntry{
+  InstrumentType instrument_type = 1;
   oneof payload {
-    PolyMarketHistoryList polymarket_history = 1;     // polymarket
-    OkxKlineList okx_kline_history = 2;     // okx kline
-    OkxOptionSummaryList option_summary_history = 3; // okx option summary
-    BinanceKlineList binance_kline_history = 4;
-    BinanceTradeList binance_trade_history = 5;
+    PolyMarketHistory polymarket_history = 2;
+    OkxKline okx_kline = 3;
+    OkxOptionSummary okx_option_summary = 4;
+    BinanceKline binance_kline = 5;
+    BinanceTrade binance_trade = 6;
   }
 }
+
+
 // 空消息
 message Empty {}
 
@@ -136,11 +145,6 @@ message PolyMarketHistory {
   double price = 3;
 }
 
-message PolyMarketHistoryList {
-  repeated PolyMarketHistory history_list = 1;
-  uint64 timestamp = 2;
-}
-
 message OkxKline {
   uint64 id = 1;
   uint64 inst_id = 2;
@@ -155,11 +159,6 @@ message OkxKline {
   uint32 confirm = 11;
 }
 
-
-message OkxKlineList {
-  repeated OkxKline kline_list = 1;
-  uint64 timestamp = 2;
-}
 
 message OkxOptionSummary {
   uint64 id = 1;
@@ -186,11 +185,6 @@ message OkxOptionSummary {
   optional double vega_bs = 22;
 }
 
-message OkxOptionSummaryList {
-  repeated OkxOptionSummary summary_list = 1;
-  uint64 timestamp = 2;
-}
-
 message BinanceKline {
   uint64 id = 1;
   string symbol = 2;
@@ -210,11 +204,6 @@ message BinanceKline {
   optional int64 last_trade_id = 16;
 }
 
-message BinanceKlineList {
-  repeated BinanceKline kline_list = 1;
-  uint64 timestamp = 2;
-}
-
 message BinanceTrade {
   uint64 id = 1;
   int64 event_time = 2;
@@ -227,7 +216,3 @@ message BinanceTrade {
   int64 created_at = 9;
 }
 
-message BinanceTradeList {
-  repeated BinanceTrade trade_list = 1;
-  uint64 timestamp = 2;
-}
