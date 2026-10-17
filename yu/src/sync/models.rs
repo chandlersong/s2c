@@ -15,6 +15,19 @@ pub mod grpc_sync {
         }
     }
 
+    impl InstrumentType {
+        pub fn readable_name(self) -> &'static str {
+            match self {
+                Self::PolymarketToken => "Polymarket Token",
+                Self::OkxKline => "OKX Kline",
+                Self::OkxOptionSummary => "OKX Option Summary",
+                Self::BinanceSpot => "Binance Spot",
+                Self::BinanceTrade => "Binance Trade",
+                Self::InstrumentUnspecified => "InstrumentUnspecified",
+            }
+        }
+    }
+
     impl From<PolyMarketInstrumentPo> for PolymarketInstrument {
         fn from(value: PolyMarketInstrumentPo) -> Self {
             PolymarketInstrument {
@@ -116,7 +129,7 @@ pub mod grpc_sync {
 
 #[cfg(test)]
 mod tests {
-    use super::grpc_sync::{BinanceKline, BinanceTrade, ExchangeType};
+    use super::grpc_sync::{BinanceKline, BinanceTrade, ExchangeType, InstrumentType as GrpcInstrumentType};
     use crate::binance::models::po::{BinanceInstrument as BinanceInstrumentPo, KlinePo, SpotStreamTradeRecordPo};
     use crate::sync::client::po::binance::{LocalBinanceKlinePo, LocalBinanceTradePo};
     use yue::models::InstrumentType;
@@ -126,6 +139,16 @@ mod tests {
         assert_eq!(ExchangeType::Polymarket.readable_name(), "Polymarket");
         assert_eq!(ExchangeType::Okx.readable_name(), "OKX");
         assert_eq!(ExchangeType::Binance.readable_name(), "Binance");
+    }
+
+    #[test]
+    fn instrument_type_has_readable_name() {
+        assert_eq!(GrpcInstrumentType::PolymarketToken.readable_name(), "Polymarket Token");
+        assert_eq!(GrpcInstrumentType::OkxKline.readable_name(), "OKX Kline");
+        assert_eq!(GrpcInstrumentType::OkxOptionSummary.readable_name(), "OKX Option Summary");
+        assert_eq!(GrpcInstrumentType::BinanceSpot.readable_name(), "Binance Spot");
+        assert_eq!(GrpcInstrumentType::BinanceTrade.readable_name(), "Binance Trade");
+        assert_eq!(GrpcInstrumentType::InstrumentUnspecified.readable_name(), "InstrumentUnspecified");
     }
 
     #[test]

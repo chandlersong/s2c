@@ -5,7 +5,8 @@ use yu::config::get_config;
 use yu::errors::YuError;
 use yu::polymarket::database::initial_polymarket_tables;
 use yu::polymarket::sync_job::start_polymarket_sync_series_job;
-use yu::polymarket::sync_server::PolyMarketSyncInstrumentService;
+use yu::polymarket::sync_server::{PolyMarketSyncHistoryService, PolyMarketSyncInstrumentService};
+use yu::sync::models::grpc_sync::InstrumentType;
 use yu::sync::models::grpc_sync::instrument::Payload::Polymarket;
 use yue::http_client::init_http_client;
 
@@ -30,7 +31,12 @@ async fn main() -> Result<(), YuError> {
     }
 
     let history_service = start_polymarket_sync_series_job(&app_config).await?;
-    let instrument_service = PolyMarketSyncInstrumentService::new(history_service.clone());
+    let mut polymarket_sync_history_service_map = HashMap::new();
+    polymarket_sync_history_service_map.insert(
+        InstrumentType::PolymarketToken,
+        PolyMarketSyncHistoryService::new(history_service.clone()),
+    );
+    let instrument_service = PolyMarketSyncInstrumentService::new(history_service.clone(), polymarket_sync_history_service_map);
 
     let instruments = instrument_service.list_instruments().await?;
 

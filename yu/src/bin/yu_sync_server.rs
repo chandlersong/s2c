@@ -11,7 +11,8 @@ use yu::okx::sync_job::start_okx_option_service;
 use yu::okx::sync_server::OkxSyncInstrumentService;
 use yu::polymarket::database::initial_polymarket_tables;
 use yu::polymarket::sync_job::start_polymarket_sync_series_job;
-use yu::polymarket::sync_server::PolyMarketSyncInstrumentService;
+use yu::polymarket::sync_server::{PolyMarketSyncHistoryService, PolyMarketSyncInstrumentService};
+use yu::sync::models::grpc_sync::InstrumentType;
 use yu::sync::models::grpc_sync::sync_interface_server::SyncInterfaceServer;
 use yu::sync::server::sync_server::{SyncInstrumentService, YuSyncServer};
 use yue::http_client::init_http_client;
@@ -64,9 +65,17 @@ async fn main() -> Result<(), YuError> {
 
     let polymarket_config = &app_config.polymarket;
     //TODO: 重构完成后，放入后面的括号中
-    let polymarket_history_service = start_polymarket_sync_series_job(&app_config).await?;
+
     if polymarket_config.as_ref().is_some_and(|config| config.enable()) {
-        let polymarket_instrument_service = PolyMarketSyncInstrumentService::new(polymarket_history_service.clone());
+        let polymarket_history_service = start_polymarket_sync_series_job(&app_config).await?;
+        let mut polymarket_sync_history_service_map = HashMap::new();
+        polymarket_sync_history_service_map.insert(
+            InstrumentType::PolymarketToken,
+            PolyMarketSyncHistoryService::new(polymarket_history_service.clone()),
+        );
+
+        let polymarket_instrument_service =
+            PolyMarketSyncInstrumentService::new(polymarket_history_service.clone(), polymarket_sync_history_service_map);
         instrument_services.push(polymarket_instrument_service);
         info!("Started polymarket sync job");
     }
@@ -80,7 +89,7 @@ async fn main() -> Result<(), YuError> {
         info!("Started okx sync job");
     }
 
-    let server = YuSyncServer::create_and_start(polymarket_history_service, instrument_services).await?;
+    let server = YuSyncServer::create_and_start(instrument_services).await?;
     info!("sync server start at  → {}", addr);
     Server::builder()
         .add_service(SyncInterfaceServer::new(server))

@@ -1,8 +1,8 @@
 use crate::binance::bn_dashboard::BinanceDashboard;
 use crate::binance::models::po::BinanceInstrument as BinanceInstrumentPo;
 use crate::errors::YuError;
-use crate::sync::models::grpc_sync::{ExchangeType, Instrument, instrument::Payload};
-use crate::sync::server::sync_server::{SyncInstrumentService, SyncInstrumentServiceTrait};
+use crate::sync::models::grpc_sync::{ExchangeType, Instrument, InstrumentType, instrument::Payload};
+use crate::sync::server::sync_server::{SyncHistoryService, SyncInstrumentService, SyncInstrumentServiceTrait};
 use async_trait::async_trait;
 use log::error;
 use std::collections::HashMap;
@@ -51,6 +51,10 @@ impl SyncInstrumentServiceTrait for BinanceSyncInstrumentService {
 
     fn error_log(&self) -> String {
         "error when list binance instruments".to_string()
+    }
+
+    fn support_history_list(&self) -> Result<HashMap<InstrumentType, SyncHistoryService>, YuError> {
+        todo!()
     }
 }
 

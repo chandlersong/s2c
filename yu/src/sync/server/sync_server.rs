@@ -5,8 +5,8 @@ use crate::polymarket::po::PolyMarketHistoryPo;
 use crate::polymarket::service::SeriesHistoryMarketService;
 use crate::sync::models::grpc_sync::sync_interface_server::SyncInterface;
 use crate::sync::models::grpc_sync::{
-    Empty, Instrument, InstrumentList, OkxKline, PolyMarketHistory, PolyMarketHistoryList, ServerMessage, SubscribeRequest, SyncRequest,
-    server_message,
+    Empty, ExchangeType, Instrument, InstrumentList, InstrumentType, OkxKline, PolyMarketHistory, PolyMarketHistoryList, ServerMessage,
+    SubscribeRequest, SyncRequest, server_message,
 };
 use async_trait::async_trait;
 use li::tools::time::unix_time_now_u64_utc;
@@ -14,19 +14,53 @@ use log::{error, info, trace};
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
+use tokio::sync::mpsc::Sender;
 use tokio::sync::{broadcast, mpsc};
 use tonic::{Request, Response, Status};
 use yue::query_message::DataSourceProviderTrait;
 
-//
+///
+///  这里主要是为了处理在服务器端的查询抽象。主要是3层关系。
+///  - YuSyncServer: 负责整体调度和与外部的接口
+///  - SyncInstrumentServiceTrait: Instrument相关的Trait
+///  - SyncHistoryServiceTrait：负责历史价格信息的Trait
+///
+/// # Instrument和exchange的关系
+/// 我在试图删除交易这一个层级。主要是觉得有点累赘。因为应用下来，在历史数据这一层，更加偏向属性。
+/// 所以在服务器端我就把这个给删除掉了。
+///
+/// # 依赖关系
+/// 1. instrument和history应该是一对多，比如可能有K线，盘口信息等。
+/// 2. 把最后运行的方式，用default，或者写一个for_production这类方法。
+///
+///
+
 #[async_trait]
 pub trait SyncInstrumentServiceTrait {
     async fn list_instruments(&self) -> Result<HashMap<String, Instrument>, YuError>;
 
     fn error_log(&self) -> String;
+
+    fn support_history_list(&self) -> Result<HashMap<InstrumentType, SyncHistoryService>, YuError>;
+}
+
+#[async_trait]
+pub trait SyncHistoryServiceTrait {
+    ///
+    /// 传入数据，并且在这里广播
+    ///
+    async fn query_and_broadcast_history(
+        &self,
+        inst_id: u64,
+        start_ts: u64,
+        end_ts: u64,
+        batch_size: usize,
+        tx: Sender<Result<ServerMessage, Status>>,
+    ) -> Result<(), YuError>;
 }
 
 pub type SyncInstrumentService = Arc<dyn SyncInstrumentServiceTrait + Send + Sync>;
+pub type SyncHistoryService = Arc<dyn SyncHistoryServiceTrait + Send + Sync>;
 
 ///
 /// 获取最新的asset id
@@ -94,23 +128,20 @@ enum SyncInternalCommand {
 
 struct SubscribePayload {
     id: u64,
-    tx: mpsc::Sender<Result<ServerMessage, Status>>,
+    tx: Sender<Result<ServerMessage, Status>>,
 }
 
 pub struct YuSyncServer {
-    polymarket_history_service: SeriesHistoryMarketService,
     batch_size: usize,
-    command_channel: mpsc::Sender<SyncInternalCommand>,
+    command_channel: Sender<SyncInternalCommand>,
 
     //TODO: 简化扩展
     instruments_services: Vec<SyncInstrumentService>,
+    history_services: HashMap<InstrumentType, SyncHistoryService>,
 }
 
 impl YuSyncServer {
-    pub async fn create_and_start(
-        polymarket_history_service: SeriesHistoryMarketService,
-        instruments_services: Vec<SyncInstrumentService>,
-    ) -> Result<Self, YuError> {
+    pub async fn create_and_start(instruments_services: Vec<SyncInstrumentService>) -> Result<Self, YuError> {
         let (command_channel, _) = mpsc::channel::<SyncInternalCommand>(100);
 
         // let polymarket_history_receiver = polymarket_history_service.subscribe_history_broadcast();
@@ -125,12 +156,16 @@ impl YuSyncServer {
         //     1000,
         // )
         // .await?;
+        let mut history_services = HashMap::new();
+        for service in &instruments_services {
+            history_services.extend(service.support_history_list()?)
+        }
+
         Ok(Self {
-            polymarket_history_service,
             batch_size: 500,
             command_channel,
-
             instruments_services,
+            history_services,
         })
     }
 
@@ -168,7 +203,7 @@ impl YuSyncServer {
             // 为 okx kline 增加缓存，行为与 polymarket 缓存一致
             let mut okx_batch_buffer: Vec<OkxKline> = Vec::new();
             let mut last_broadcast_timestamp: u64 = unix_time_now_u64_utc();
-            let mut history_tx_map: HashMap<u64, mpsc::Sender<Result<ServerMessage, Status>>> = HashMap::new();
+            let mut history_tx_map: HashMap<u64, Sender<Result<ServerMessage, Status>>> = HashMap::new();
 
             loop {
                 tokio::select! {
@@ -382,184 +417,44 @@ impl SyncInterface for YuSyncServer {
 
     type SyncHistoryStream = Pin<Box<dyn tokio_stream::Stream<Item = Result<ServerMessage, Status>> + Send + 'static>>;
 
+    ///
+    /// 主要流程
+    /// 1. 通过请求的instrument_type获取对应的history_service
+    /// 2. 开启一个线程，来调用相应的方法
+    ///
     async fn sync_history(&self, request: Request<SyncRequest>) -> Result<Response<Self::SyncHistoryStream>, Status> {
         let (tx, rx) = mpsc::channel::<Result<ServerMessage, Status>>(16);
         let inst_id = request.get_ref().inst_id.clone();
         let start_ms = request.get_ref().start_ms.clone();
         let end_ms = request.get_ref().end_ms.clone();
-        let batch_size = self.batch_size;
+        let batch_size = self.batch_size.clone();
 
-        let instrument_type = crate::sync::models::grpc_sync::InstrumentType::try_from(request.get_ref().instrument_type).ok();
-        match instrument_type {
-            Some(crate::sync::models::grpc_sync::InstrumentType::PolymarketToken) => {
-                let query_service = self.polymarket_history_service.clone();
-                // Spawn a task to query polymarket history and stream results back through tx
-                tokio::spawn(async move {
-                    match query_service.query_instrument_history(inst_id, start_ms, end_ms).await {
-                        Ok(history_vec) => {
-                            if history_vec.is_empty() {
-                                // send an empty list once
-                                let list = PolyMarketHistoryList {
-                                    history_list: vec![],
-                                    timestamp: unix_time_now_u64_utc(),
-                                };
-                                let msg = ServerMessage {
-                                    payload: Some(server_message::Payload::PolymarketHistory(list)),
-                                };
-                                let _ = tx.send(Ok(msg)).await;
-                                return;
-                            }
+        let instrument_type = match InstrumentType::try_from(request.get_ref().instrument_type) {
+            Ok(instrument_type) => instrument_type,
+            Err(_) => {
+                error!("unknown instrument type:{:?}", request.get_ref().instrument_type);
+                return Err(Status::invalid_argument("unknown instrument type"));
+            }
+        };
 
-                            for chunk in history_vec.chunks(batch_size) {
-                                let mut histories: Vec<PolyMarketHistory> = Vec::with_capacity(chunk.len());
-                                for h in chunk.iter() {
-                                    histories.push(PolyMarketHistory {
-                                        inst_id: h.instrument_id,
-                                        timestamp: h.timestamp,
-                                        price: h.price,
-                                    });
-                                }
-                                let list = PolyMarketHistoryList {
-                                    history_list: histories,
-                                    timestamp: unix_time_now_u64_utc(),
-                                };
-                                let msg = ServerMessage {
-                                    payload: Some(server_message::Payload::PolymarketHistory(list)),
-                                };
-                                if tx.send(Ok(msg)).await.is_err() {
-                                    // receiver dropped, stop streaming
-                                    break;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            let status = Status::internal(format!("query history error: {:?}", e));
-                            let _ = tx.send(Err(status)).await;
-                        }
-                    }
-                });
+        let query_service = match self.history_services.get(&instrument_type) {
+            Some(service) => service.clone(),
+            None => {
+                let inst_type_name = instrument_type.readable_name();
+                error!("instrument type not configure service:type is {}", inst_type_name);
+                return Err(Status::not_found("history service is not configured"));
             }
-            Some(crate::sync::models::grpc_sync::InstrumentType::OkxKline) => {
-                // let okx_service = self.okx_option_service.clone();
-                // tokio::spawn(async move {
-                //     match okx_service.find_candle_between(inst_id, start_ms, end_ms).await {
-                //         Ok(kline_vec) => {
-                //             if kline_vec.is_empty() {
-                //                 let list = crate::sync::models::grpc_sync::OkxKlineList {
-                //                     kline_list: vec![],
-                //                     timestamp: unix_time_now_u64_utc(),
-                //                 };
-                //                 let msg = ServerMessage {
-                //                     payload: Some(server_message::Payload::OkxKlineHistory(list)),
-                //                 };
-                //                 let _ = tx.send(Ok(msg)).await;
-                //                 return;
-                //             }
-                //
-                //             for chunk in kline_vec.chunks(batch_size) {
-                //                 let mut klines: Vec<OkxKline> = Vec::with_capacity(chunk.len());
-                //                 for k in chunk.iter() {
-                //                     klines.push(OkxKline {
-                //                         id: k.id,
-                //                         inst_id: k.inst_id,
-                //                         ts: k.ts,
-                //                         open: k.open,
-                //                         high: k.high,
-                //                         low: k.low,
-                //                         close: k.close,
-                //                         vol: k.vol,
-                //                         vol_ccy: k.vol_ccy,
-                //                         vol_ccy_quote: k.vol_ccy_quote,
-                //                         confirm: k.confirm as u32,
-                //                     });
-                //                 }
-                //                 let list = crate::sync::models::grpc_sync::OkxKlineList {
-                //                     kline_list: klines,
-                //                     timestamp: unix_time_now_u64_utc(),
-                //                 };
-                //                 let msg = ServerMessage {
-                //                     payload: Some(server_message::Payload::OkxKlineHistory(list)),
-                //                 };
-                //                 if tx.send(Ok(msg)).await.is_err() {
-                //                     break;
-                //                 }
-                //             }
-                //         }
-                //         Err(e) => {
-                //             let status = Status::internal(format!("query okx kline error: {:?}", e));
-                //             let _ = tx.send(Err(status)).await;
-                //         }
-                //     }
-                // });
+        };
+
+        tokio::spawn(async move {
+            if let Err(e) = query_service.query_and_broadcast_history(inst_id, start_ms, end_ms, batch_size, tx).await {
+                let inst_type_name = instrument_type.readable_name();
+                error!(
+                    "error when query instrument history: inst_type is {}, id is {}, error is {:?}",
+                    inst_type_name, inst_id, e
+                );
             }
-            Some(crate::sync::models::grpc_sync::InstrumentType::OkxOptionSummary) => {
-                // let okx_service = self.okx_option_service.clone();
-                // tokio::spawn(async move {
-                //     match okx_service.find_option_summary_between(inst_id, start_ms, end_ms).await {
-                //         Ok(summary_vec) => {
-                //             if summary_vec.is_empty() {
-                //                 let list = crate::sync::models::grpc_sync::OkxOptionSummaryList {
-                //                     summary_list: vec![],
-                //                     timestamp: unix_time_now_u64_utc(),
-                //                 };
-                //                 let msg = ServerMessage {
-                //                     payload: Some(server_message::Payload::OptionSummaryHistory(list)),
-                //                 };
-                //                 let _ = tx.send(Ok(msg)).await;
-                //                 return;
-                //             }
-                //
-                //             for chunk in summary_vec.chunks(batch_size) {
-                //                 let mut summaries: Vec<crate::sync::models::grpc_sync::OkxOptionSummary> = Vec::with_capacity(chunk.len());
-                //                 for item in chunk.iter() {
-                //                     summaries.push(crate::sync::models::grpc_sync::OkxOptionSummary {
-                //                         id: item.id,
-                //                         inst_id: item.inst_id,
-                //                         inst_identify: item.inst_identify.clone(),
-                //                         inst_type: item.inst_type.clone(),
-                //                         uly: item.uly.clone().unwrap_or_default(),
-                //                         acquire_ts: item.acquire_ts,
-                //                         server_ts: item.server_ts,
-                //                         ask_vol: item.ask_vol,
-                //                         bid_vol: item.bid_vol,
-                //                         delta: item.delta,
-                //                         delta_bs: item.delta_bs,
-                //                         fwd_px: item.fwd_px,
-                //                         gamma: item.gamma,
-                //                         gamma_bs: item.gamma_bs,
-                //                         lever: item.lever,
-                //                         mark_vol: item.mark_vol,
-                //                         real_vol: item.real_vol,
-                //                         vol_lv: item.vol_lv,
-                //                         theta: item.theta,
-                //                         theta_bs: item.theta_bs,
-                //                         vega: item.vega,
-                //                         vega_bs: item.vega_bs,
-                //                     });
-                //                 }
-                //                 let list = crate::sync::models::grpc_sync::OkxOptionSummaryList {
-                //                     summary_list: summaries,
-                //                     timestamp: unix_time_now_u64_utc(),
-                //                 };
-                //                 let msg = ServerMessage {
-                //                     payload: Some(server_message::Payload::OptionSummaryHistory(list)),
-                //                 };
-                //                 if tx.send(Ok(msg)).await.is_err() {
-                //                     break;
-                //                 }
-                //             }
-                //         }
-                //         Err(e) => {
-                //             let status = Status::internal(format!("query okx option summary error: {:?}", e));
-                //             let _ = tx.send(Err(status)).await;
-                //         }
-                //     }
-                // });
-            }
-            _ => {
-                return Err(Status::invalid_argument("unsupported or unspecified instrument type"));
-            }
-        }
+        });
 
         Ok(Response::new(
             Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx)) as Self::SyncHistoryStream
@@ -590,7 +485,111 @@ impl SyncInterface for YuSyncServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use futures::StreamExt;
     use tokio::time::{Duration, timeout};
+
+    struct RecordingHistoryService {
+        calls: std::sync::Mutex<Vec<(u64, u64, u64, usize)>>,
+    }
+
+    #[async_trait]
+    impl SyncHistoryServiceTrait for RecordingHistoryService {
+        async fn query_and_broadcast_history(
+            &self,
+            inst_id: u64,
+            start_ts: u64,
+            end_ts: u64,
+            batch_size: usize,
+            tx: Sender<Result<ServerMessage, Status>>,
+        ) -> Result<(), YuError> {
+            self.calls.lock().unwrap().push((inst_id, start_ts, end_ts, batch_size));
+            tx.send(Ok(ServerMessage { payload: None })).await.expect("send history message");
+            Ok(())
+        }
+    }
+
+    fn test_sync_server(history_services: HashMap<InstrumentType, SyncHistoryService>) -> YuSyncServer {
+        let (command_channel, _) = mpsc::channel(1);
+        YuSyncServer {
+            batch_size: 8,
+            command_channel,
+            instruments_services: Vec::new(),
+            history_services,
+        }
+    }
+
+    #[tokio::test]
+    async fn sync_history_rejects_unknown_instrument_type() {
+        let server = test_sync_server(HashMap::new());
+
+        let result = server
+            .sync_history(Request::new(SyncRequest {
+                inst_id: 1,
+                start_ms: 10,
+                end_ms: 20,
+                instrument_type: 999,
+            }))
+            .await;
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("unknown instrument type should be rejected"),
+        };
+
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn sync_history_returns_not_found_when_service_is_unconfigured() {
+        let server = test_sync_server(HashMap::new());
+
+        let result = server
+            .sync_history(Request::new(SyncRequest {
+                inst_id: 1,
+                start_ms: 10,
+                end_ms: 20,
+                instrument_type: InstrumentType::OkxKline as i32,
+            }))
+            .await;
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("unconfigured history service should be rejected"),
+        };
+
+        assert_eq!(error.code(), tonic::Code::NotFound);
+    }
+
+    #[tokio::test]
+    async fn sync_history_forwards_request_and_streams_service_messages() {
+        let history_service = Arc::new(RecordingHistoryService {
+            calls: std::sync::Mutex::new(Vec::new()),
+        });
+        let mut history_services = HashMap::new();
+        history_services.insert(InstrumentType::BinanceSpot, history_service.clone() as SyncHistoryService);
+        let server = test_sync_server(history_services);
+
+        let response = server
+            .sync_history(Request::new(SyncRequest {
+                inst_id: 42,
+                start_ms: 100,
+                end_ms: 200,
+                instrument_type: InstrumentType::BinanceSpot as i32,
+            }))
+            .await
+            .unwrap();
+        let mut stream = response.into_inner();
+
+        let message = stream.next().await.unwrap().unwrap();
+        assert!(message.payload.is_none());
+        assert!(stream.next().await.is_none());
+        let actual = history_service.calls.lock().unwrap().clone();
+        assert_eq!(actual.len(), 1);
+        let (inst_id, start_ts, end_ts, batch_size) = actual[0];
+        assert_eq!(inst_id, 42);
+        assert_eq!(start_ts, 100);
+        assert_eq!(end_ts, 200);
+        assert_eq!(batch_size, 8);
+    }
 
     // 1) 缓存达到大小时立即发送
     #[tokio::test]
