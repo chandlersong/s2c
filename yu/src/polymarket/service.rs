@@ -5,6 +5,7 @@ use crate::errors::YuError;
 use crate::polymarket::db_consts::PolyMarketTables;
 use crate::polymarket::duckdb_repository::{PolyMarketHistoryRepository, PolyMarketInstrumentRepository, get_history_repo, get_instrument_repo};
 use crate::polymarket::po::{PolyMarketHistoryPo, PolyMarketInstrumentPo};
+use crate::polymarket::sync_server::get_all_instruments;
 use async_trait::async_trait;
 use li::tools::time::{unix_2_readable, unix_time_now_u64_utc_seconds};
 use log::{Level, debug, error, info, trace};
@@ -16,145 +17,10 @@ use yue::polymarket::restful_api::{PolymarketApi, default_polymarket_api};
 use yue::polymarket::restful_models::GetPricesHistoryQuery;
 use yue::tools::get_snow_flake_id_u64;
 
-/**
-把series id下所有的market分成open和close的。
-返回顺序是open，和close
-**/
-async fn split_series_markets_with_client(
-    api: PolymarketApi,
-    series_id: String,
-    existing_instruments: HashMap<String, u64>,
-    inst_repo: PolyMarketInstrumentRepository,
-) -> Result<(Vec<PolyMarketInstrumentPo>, Vec<PolyMarketInstrumentPo>), YuError> {
-    let mut open_markets: Vec<PolyMarketInstrumentPo> = Vec::new();
-    let mut close_markets: Vec<PolyMarketInstrumentPo> = Vec::new();
-    let mut open_asset_markets_map: HashMap<String, PolyMarketInstrumentPo> = HashMap::new();
-    let series = match api.query_series_by_id(&series_id, Some(false)).await {
-        Ok(s) => s,
-        Err(e) => {
-            error!("query_series_by_id error: {:?}", e);
-            return Err(YuError::from(e));
-        }
-    };
-    let series_id_val = series.id;
-    let series_slug = series.slug;
-    let now = unix_time_now_u64_utc_seconds();
-    if let Some(events) = series.events {
-        trace!("split series_slug:{},events num:{}", series_slug, events.len());
-        for event_in_series in events {
-            let event_id = event_in_series.id;
-            let event_slug = event_in_series.slug;
-            match api.query_event_id(&event_id, None, None).await {
-                Ok(event) => {
-                    if let Some(markets) = event.markets {
-                        trace!("event:{},market num:{}", event_slug, markets.len());
-                        for market in markets {
-                            // 看了一下，close的不一定存在start_date,所以以create_date为准。end_date不存在，则以now为准。
-                            let create_date = market.created_at.unwrap_or(now + 1);
-                            let start_data = market.start_date.unwrap_or(create_date);
-                            let end_data = market.end_date.unwrap_or(now - 1);
-                            let inst_slug = market.outcomes.unwrap();
-                            for (idx, inst_id) in market.clob_token_ids.unwrap_or(vec![]).iter().enumerate() {
-                                if open_asset_markets_map.contains_key(inst_id) {
-                                    let open_market_prev = open_asset_markets_map.get(inst_id).unwrap();
-                                    error!(
-                                        "duplicate asset id found,asset_id:{},idx:{},,prev series_slug:{},prev event_slug:{}, perv market slug is {} and series_slug:{},event_slug:{},market slug:{}",
-                                        inst_id,
-                                        idx,
-                                        open_market_prev.series_slug,
-                                        open_market_prev.event_slug,
-                                        open_market_prev.market_slug,
-                                        series_slug,
-                                        event_slug,
-                                        market.slug
-                                    );
-                                    continue;
-                                }
-                                let mut po = PolyMarketInstrumentPo {
-                                    id: get_snow_flake_id_u64(),
-                                    series_id: series_id_val.clone(),
-                                    series_slug: series_slug.clone(),
-                                    event_id: event_id.clone(),
-                                    event_slug: event_slug.clone(),
-                                    market_id: market.id.clone(),
-                                    market_slug: market.slug.clone(),
-                                    asset_id: inst_id.clone(),
-                                    asset_slug: format!("{}_{}", market.slug, inst_slug[idx]),
-                                    start_ms: start_data * 1000,
-                                    end_ms: end_data * 1000,
-                                };
-                                let id_db = existing_instruments.get(inst_id);
-                                match id_db {
-                                    Some(id) => {
-                                        po.id = *id;
-                                    }
-                                    None => {
-                                        inst_repo.insert_instrument(&po).await?;
-                                    }
-                                }
-                                open_asset_markets_map.insert(inst_id.clone(), po.clone());
-                                if now > start_data && now < end_data {
-                                    open_markets.push(po)
-                                } else {
-                                    close_markets.push(po)
-                                }
-                            }
-                        }
-                    } else {
-                        trace!("event:{},no market", event_slug);
-                    }
-                }
-                Err(e) => {
-                    error!("split series event id:{},error:{:?}", event_id, e);
-                }
-            }
-        }
-    } else {
-        trace!("split series_slug:{},no events", series_slug);
-    }
-    info!(
-        "{} has {} open market,{} close market",
-        series_slug,
-        open_markets.len(),
-        close_markets.len()
-    );
-    Ok((open_markets, close_markets))
-}
-
-async fn get_all_instruments(
-    series_ids: &Vec<String>,
-    api: &PolymarketApi,
-    inst_repo: PolyMarketInstrumentRepository,
-) -> Result<(Vec<PolyMarketInstrumentPo>, Vec<PolyMarketInstrumentPo>), YuError> {
-    let mut open_markets: Vec<PolyMarketInstrumentPo> = vec![];
-    let mut close_markets: Vec<PolyMarketInstrumentPo> = vec![];
-
-    // 并发为每个 series id 运行 split_series_markets
-    let mut handles = Vec::with_capacity(series_ids.len());
-    let existing_instruments = inst_repo.get_instrument_dictionary().await?;
-    for id in series_ids {
-        let id_cloned = id.clone();
-        let client_cloned = api.clone();
-        let inst_repo_cloned = inst_repo.clone();
-        let existing_instrument_cloned = existing_instruments.clone();
-        handles.push(tokio::spawn(async move {
-            split_series_markets_with_client(client_cloned, id_cloned, existing_instrument_cloned, inst_repo_cloned).await
-        }));
-    }
-
-    for handle in handles {
-        match handle.await {
-            Ok(Ok((mut open, mut close))) => {
-                open_markets.append(&mut open);
-                close_markets.append(&mut close);
-            }
-            Ok(Err(e)) => error!("split_series error: {:?}", e),
-            Err(e) => error!("task join error: {:?}", e),
-        }
-    }
-    Ok((open_markets, close_markets))
-}
-
+///
+/// 想要把这个拆封。纳入现在的体系。而不是单独去弄了。
+///
+#[deprecated]
 #[cfg_attr(feature = "mockable", mockall::automock)]
 #[async_trait]
 pub trait SeriesHistoryMarketServiceTrait: Send + Sync {

@@ -4,11 +4,13 @@ use std::collections::HashMap;
 use yu::config::get_config;
 use yu::errors::YuError;
 use yu::polymarket::database::initial_polymarket_tables;
+use yu::polymarket::duckdb_repository::get_instrument_repo;
 use yu::polymarket::sync_job::start_polymarket_sync_series_job;
 use yu::polymarket::sync_server::{PolyMarketSyncHistoryService, PolyMarketSyncInstrumentService};
 use yu::sync::models::grpc_sync::InstrumentType;
 use yu::sync::models::grpc_sync::instrument::Payload::Polymarket;
 use yue::http_client::init_http_client;
+use yue::polymarket::restful_api::default_polymarket_api;
 
 #[tokio::main]
 async fn main() -> Result<(), YuError> {
@@ -31,12 +33,16 @@ async fn main() -> Result<(), YuError> {
     }
 
     let history_service = start_polymarket_sync_series_job(&app_config).await?;
-    let mut polymarket_sync_history_service_map = HashMap::new();
-    polymarket_sync_history_service_map.insert(
-        InstrumentType::PolymarketToken,
-        PolyMarketSyncHistoryService::new(history_service.clone()),
-    );
-    let instrument_service = PolyMarketSyncInstrumentService::new(history_service.clone(), polymarket_sync_history_service_map);
+    let polymarket_sync_history_service_map = HashMap::new();
+    // polymarket_sync_history_service_map.insert(
+    //     InstrumentType::PolymarketToken,
+    //     PolyMarketSyncHistoryService::new(history_service.clone()),
+    // );
+    let client = default_polymarket_api();
+    let inst_repo = get_instrument_repo(None);
+    let series_ids = vec!["45".to_string()];
+
+    let instrument_service = PolyMarketSyncInstrumentService::new(series_ids, polymarket_sync_history_service_map, client, inst_repo);
 
     let instruments = instrument_service.list_instruments().await?;
 

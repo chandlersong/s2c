@@ -2,7 +2,11 @@ use crate::config::AppConfig;
 use crate::cron_job;
 use crate::errors::YuError;
 use crate::polymarket::service::{SeriesHistoryMarketService, default_series_history_market_service};
+use crate::polymarket::sync_server::{PolyMarketSyncHistoryService, PolyMarketSyncInstrumentService};
+use crate::sync::models::grpc_sync::InstrumentType;
+use crate::sync::server::sync_server::SyncInstrumentService;
 use log::{error, info};
+use std::collections::HashMap;
 use yue::models::HistoryInterval;
 
 ///
@@ -14,7 +18,7 @@ use yue::models::HistoryInterval;
 ///     - History的最新
 ///     - instrument的更新
 ///
-pub async fn start_polymarket_sync_series_job(app_config: &AppConfig) -> Result<SeriesHistoryMarketService, YuError> {
+pub async fn start_polymarket_sync_series_job(app_config: &AppConfig) -> Result<SyncInstrumentService, YuError> {
     let sync_server_config = app_config.sync_server.clone();
     if sync_server_config.is_none() {
         return Err(YuError::ConfigError("no sync serve configuration".to_string()));
@@ -29,7 +33,7 @@ pub async fn start_polymarket_sync_series_job(app_config: &AppConfig) -> Result<
     if series_ids.is_none() {
         return Err(YuError::ConfigError("no series id configuration".to_string()));
     }
-    let service = default_series_history_market_service(series_ids.unwrap(), HistoryInterval::OneHour).await;
+    let service = default_series_history_market_service(series_ids.clone().unwrap(), HistoryInterval::OneHour).await;
     service.sync_instrument().await?;
     let initial_service = service.clone();
     if let Err(e) = initial_service.initial_history_data().await {
@@ -62,5 +66,21 @@ pub async fn start_polymarket_sync_series_job(app_config: &AppConfig) -> Result<
         })
     });
 
-    Ok(service)
+    let mut polymarket_sync_history_service_map = HashMap::new();
+    polymarket_sync_history_service_map.insert(InstrumentType::PolymarketToken, PolyMarketSyncHistoryService::new(service.clone()));
+    let res = PolyMarketSyncInstrumentService::for_production(series_ids.unwrap(), polymarket_sync_history_service_map);
+
+    let sync_instrument_service = res.clone();
+    let _ = cron_job!("0 8 */6 * * *", move |_uuid, _locked| {
+        let sync_instrument = sync_instrument_service.clone();
+        Box::pin(async move {
+            info!("start to sync polymarket instrument");
+            if let Err(e) = sync_instrument.sync_instrument().await {
+                error!("Error when  sync polymarket instrument: {}", e);
+            }
+            info!("finish sync polymarket instrument");
+        })
+    });
+
+    Ok(res)
 }
