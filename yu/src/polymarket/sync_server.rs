@@ -14,8 +14,7 @@ use li::tools::time::{unix_2_readable, unix_time_now_u64_utc, unix_time_now_u64_
 use log::{Level, debug, error, info, trace};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
-use tokio::sync::mpsc::Sender;
+use tokio::sync::{RwLock, mpsc::Sender};
 use tonic::Status;
 use yue::models::HistoryInterval;
 use yue::polymarket::restful_api::{PolymarketApi, default_polymarket_api};
@@ -269,6 +268,7 @@ pub struct PolyMarketSyncHistoryService {
     history_repo: PolyMarketHistoryRepository,
     interval: HistoryInterval,
     live_instruments: Arc<RwLock<Vec<PolyMarketInstrumentPo>>>,
+    history_tx: Sender<HistoryEntry>,
 }
 
 impl PolyMarketSyncHistoryService {
@@ -277,20 +277,22 @@ impl PolyMarketSyncHistoryService {
         interval: HistoryInterval,
         history_repo: PolyMarketHistoryRepository,
         live_instruments: Arc<RwLock<Vec<PolyMarketInstrumentPo>>>,
+        history_tx: Sender<HistoryEntry>,
     ) -> Self {
         Self {
             client,
             history_repo,
             interval,
             live_instruments,
+            history_tx,
         }
     }
 
-    pub fn for_production(live_instruments: Arc<RwLock<Vec<PolyMarketInstrumentPo>>>) -> Arc<Self> {
+    pub fn for_production(live_instruments: Arc<RwLock<Vec<PolyMarketInstrumentPo>>>, history_tx: Sender<HistoryEntry>) -> Arc<Self> {
         let client = default_polymarket_api();
         let interval = HistoryInterval::OneHour;
         let history_repo = get_history_repo(None, None);
-        Arc::new(Self::new(client, interval, history_repo, live_instruments))
+        Arc::new(Self::new(client, interval, history_repo, live_instruments, history_tx))
     }
 
     pub async fn fetch_latest_history(&self) -> Result<Vec<PolyMarketHistoryPo>, YuError> {
@@ -310,18 +312,38 @@ impl PolyMarketSyncHistoryService {
                 fidelity: Some(fidelity.clone() as u32),
             };
             // index 可用于调试或区分不同 asset_id
-            let pos = self.query_history(query_param, instrument).await;
+            let pos = self.query_and_insert_history(query_param, instrument).await;
             for h in pos.iter() {
-                self.broadcast_message(h.clone(), &instrument.asset_slug, h.timestamp);
+                self.broadcast_message(h.clone(), &instrument.asset_slug, h.timestamp).await;
             }
             res.extend(pos);
         }
         Ok(res)
     }
 
-    pub fn broadcast_message(&self, entry: PolyMarketHistoryPo, asset_slug: &str, timestamp: u64) {}
+    ///
+    /// 通过history_tx，
+    /// 1. 转换成polymarket的historyEntry
+    /// 2. 通过history_tx来发送
+    ///
+    pub async fn broadcast_message(&self, entry: PolyMarketHistoryPo, asset_slug: &str, timestamp: u64) {
+        let history_entry = HistoryEntry {
+            instrument_type: InstrumentType::PolymarketToken.into(),
+            payload: Some(history_entry::Payload::PolymarketHistory(PolyMarketHistory {
+                inst_id: entry.instrument_id,
+                timestamp,
+                price: entry.price,
+            })),
+        };
+        if let Err(e) = self.history_tx.send(history_entry).await {
+            error!(
+                "failed to broadcast polymarket history, asset_slug:{},timestamp:{},error:{}",
+                asset_slug, timestamp, e
+            );
+        }
+    }
 
-    pub async fn query_history(&self, query_payload: GetPricesHistoryQuery, inst: &PolyMarketInstrumentPo) -> Vec<PolyMarketHistoryPo> {
+    pub async fn query_and_insert_history(&self, query_payload: GetPricesHistoryQuery, inst: &PolyMarketInstrumentPo) -> Vec<PolyMarketHistoryPo> {
         let asset_id = inst.asset_id.clone();
 
         let query_payload_log = query_payload.clone();
@@ -400,7 +422,7 @@ impl PolyMarketSyncHistoryService {
                 &self.interval,
                 binary_search_ds.clone(),
             )?;
-            info!("{} has {} gaps", instrument.asset_slug, gaps.len());
+            debug!("{} has {} gaps", instrument.asset_slug, gaps.len());
             let fidelity = self.interval.to_second() / 60;
             for g in gaps.iter() {
                 match g {
@@ -434,9 +456,9 @@ impl PolyMarketSyncHistoryService {
                             fidelity: Some(fidelity.clone() as u32),
                         };
                         // index 可用于调试或区分不同 asset_id
-                        let pos = self.query_history(query_param, instrument).await;
+                        let pos = self.query_and_insert_history(query_param, instrument).await;
                         for h in pos.iter() {
-                            self.broadcast_message(h.clone(), &instrument.asset_slug, h.timestamp);
+                            self.broadcast_message(h.clone(), &instrument.asset_slug, h.timestamp).await;
                         }
                     }
                     _ => {
@@ -482,7 +504,7 @@ impl PolyMarketSyncHistoryService {
                 fidelity: Some(fidelity.clone() as u32),
             };
             // index 可用于调试或区分不同 asset_id
-            self.query_history(query_param, instrument).await;
+            self.query_and_insert_history(query_param, instrument).await;
         }
         info!("finish to initial polymarket history data");
         Ok(())

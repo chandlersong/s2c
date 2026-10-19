@@ -3,12 +3,12 @@ use crate::cron_job;
 use crate::errors::YuError;
 use crate::polymarket::po::PolyMarketInstrumentPo;
 use crate::polymarket::sync_server::{PolyMarketSyncHistoryService, PolyMarketSyncInstrumentService};
-use crate::sync::models::grpc_sync::InstrumentType;
+use crate::sync::models::grpc_sync::{HistoryEntry, InstrumentType};
 use crate::sync::server::sync_server::{SyncHistoryService, SyncInstrumentService};
 use log::{error, info};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, mpsc};
 
 ///
 /// 按照 series的级别去同步数据
@@ -19,7 +19,10 @@ use tokio::sync::RwLock;
 ///     - History的最新
 ///     - instrument的更新
 ///
-pub async fn start_polymarket_sync_series_job(app_config: &AppConfig) -> Result<SyncInstrumentService, YuError> {
+pub async fn start_polymarket_sync_series_job(
+    app_config: &AppConfig,
+    history_tx: mpsc::Sender<HistoryEntry>,
+) -> Result<SyncInstrumentService, YuError> {
     let sync_server_config = app_config.sync_server.clone();
     if sync_server_config.is_none() {
         return Err(YuError::ConfigError("no sync serve configuration".to_string()));
@@ -36,7 +39,7 @@ pub async fn start_polymarket_sync_series_job(app_config: &AppConfig) -> Result<
     }
 
     let live_instruments: Arc<RwLock<Vec<PolyMarketInstrumentPo>>> = Arc::new(RwLock::new(Vec::new()));
-    let token_history = PolyMarketSyncHistoryService::for_production(live_instruments.clone());
+    let token_history = PolyMarketSyncHistoryService::for_production(live_instruments.clone(), history_tx);
     let initial_service = token_history.clone();
     if let Err(e) = initial_service.initial_history_data().await {
         error!("Error initializing polymarket history data: {:?}", e);

@@ -2,15 +2,15 @@ use li::tools::logs::setup_logger;
 use log::{LevelFilter, error, info};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, mpsc};
 use yu::config::get_config;
 use yu::errors::YuError;
 use yu::polymarket::database::initial_polymarket_tables;
 use yu::polymarket::duckdb_repository::get_instrument_repo;
 use yu::polymarket::po::PolyMarketInstrumentPo;
 use yu::polymarket::sync_server::{PolyMarketSyncHistoryService, PolyMarketSyncInstrumentService};
-use yu::sync::models::grpc_sync::InstrumentType;
 use yu::sync::models::grpc_sync::instrument::Payload::Polymarket;
+use yu::sync::models::grpc_sync::{HistoryEntry, InstrumentType};
 use yu::sync::server::sync_server::{SyncHistoryService, SyncInstrumentServiceTrait};
 use yue::http_client::init_http_client;
 use yue::polymarket::restful_api::default_polymarket_api;
@@ -35,7 +35,14 @@ async fn main() -> Result<(), YuError> {
         error!("error when initial polymarket table:{}", e)
     }
     let live_instruments: Arc<RwLock<Vec<PolyMarketInstrumentPo>>> = Arc::new(RwLock::new(Vec::new()));
-    let token_history = PolyMarketSyncHistoryService::for_production(live_instruments.clone());
+    let (history_tx, history_rx) = mpsc::channel::<HistoryEntry>(10000);
+    let history_receiver = std::thread::spawn(move || {
+        let mut history_rx = history_rx;
+        while let Some(message) = history_rx.blocking_recv() {
+            info!("received history message: {:?}", message);
+        }
+    });
+    let token_history = PolyMarketSyncHistoryService::for_production(live_instruments.clone(), history_tx);
 
     let mut polymarket_sync_history_service_map: HashMap<InstrumentType, SyncHistoryService> = HashMap::new();
     polymarket_sync_history_service_map.insert(InstrumentType::PolymarketToken, token_history.clone());
@@ -52,14 +59,17 @@ async fn main() -> Result<(), YuError> {
             info!("{}: {}", key, poly.asset_slug);
         }
     }
-    if let Err(e) = token_history.initial_history_data().await {
-        error!("error initial history data: {}", e)
-    }
-    if let Err(e) = token_history.check_history_data().await {
-        error!("error checking history_data: {}", e)
-    }
+    // if let Err(e) = token_history.initial_history_data().await {
+    //     error!("error initial history data: {}", e)
+    // }
+    // if let Err(e) = token_history.check_history_data().await {
+    //     error!("error checking history_data: {}", e)
+    // }
     if let Err(e) = token_history.fetch_latest_history().await {
         error!("error fetch latest history: {}", e)
     }
+    drop(instrument_service);
+    drop(token_history);
+    history_receiver.join().map_err(|_| YuError::new("history receiver thread panicked"))?;
     Ok(())
 }

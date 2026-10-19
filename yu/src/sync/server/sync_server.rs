@@ -9,8 +9,8 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
-use tokio::sync::{broadcast, mpsc};
 use tonic::{Request, Response, Status};
 use yue::query_message::DataSourceProviderTrait;
 
@@ -136,21 +136,12 @@ pub struct YuSyncServer {
 }
 
 impl YuSyncServer {
-    pub async fn create_and_start(instruments_services: Vec<SyncInstrumentService>) -> Result<Self, YuError> {
-        let (command_channel, _) = mpsc::channel::<SyncInternalCommand>(100);
-
-        // let polymarket_history_receiver = polymarket_history_service.subscribe_history_broadcast();
-        // let okx_option_kline_receiver = okx_option_service.subscribe_kline().await;
-        // let okx_option_summary_receiver = okx_option_service.subscribe_option_summary().await;
-        // Self::start_broadcast_history(
-        //     command_rx,
-        //     polymarket_history_receiver,
-        //     okx_option_kline_receiver,
-        //     okx_option_summary_receiver,
-        //     500,
-        //     1000,
-        // )
-        // .await?;
+    pub async fn create_and_start(
+        instruments_services: Vec<SyncInstrumentService>,
+        history_rx: mpsc::Receiver<HistoryEntry>,
+    ) -> Result<Self, YuError> {
+        let (command_channel, command_rx) = mpsc::channel::<SyncInternalCommand>(100);
+        Self::start_broadcast_history(command_rx, history_rx, 500, 1000).await?;
         let mut history_services = HashMap::new();
         for service in &instruments_services {
             history_services.extend(service.support_history_list()?)
@@ -185,7 +176,7 @@ impl YuSyncServer {
 
     async fn start_broadcast_history(
         mut command_rx: mpsc::Receiver<SyncInternalCommand>,
-        mut history_rx: broadcast::Receiver<HistoryEntry>,
+        mut history_rx: mpsc::Receiver<HistoryEntry>,
         max_cache_size: usize,
         max_loop_mill_seconds: usize,
     ) -> Result<(), YuError> {
@@ -215,17 +206,13 @@ impl YuSyncServer {
                     }
                     result = history_rx.recv(), if history_channel_open => {
                         match result {
-                            Ok(entry) => {
-                                trace!("Received history broadcast with instrument type: {}", entry.instrument_type);
+                            Some(entry) => {
+                                trace!("Received history entry with instrument type: {}", entry.instrument_type);
                                 history_buffer.push(entry);
                                 history_buffer.len() >= max_cache_size
                             }
-                            Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                                error!("history broadcast receiver lagged; skipped {} entries", skipped);
-                                false
-                            }
-                            Err(broadcast::error::RecvError::Closed) => {
-                                info!("history broadcast channel is closed");
+                            None => {
+                                info!("history channel is closed");
                                 history_channel_open = false;
                                 false
                             }
@@ -498,7 +485,7 @@ mod tests {
     async fn start_broadcast_history_flushes_when_batch_size_is_reached() {
         // 测试准备：启动广播任务，配置批量大小为 2，并建立一个订阅者。
         let (command_tx, command_rx) = mpsc::channel(4);
-        let (history_tx, history_rx) = broadcast::channel(4);
+        let (history_tx, history_rx) = mpsc::channel(4);
         let (client_tx, mut client_rx) = mpsc::channel(4);
         YuSyncServer::start_broadcast_history(command_rx, history_rx, 2, 60_000).await.unwrap();
         command_tx
@@ -508,8 +495,8 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(20)).await;
 
         // 测试步骤：发送两条历史数据，等待客户端收到同一个批次。
-        history_tx.send(test_history_entry(11)).unwrap();
-        history_tx.send(test_history_entry(12)).unwrap();
+        history_tx.send(test_history_entry(11)).await.unwrap();
+        history_tx.send(test_history_entry(12)).await.unwrap();
         let message = timeout(Duration::from_secs(1), client_rx.recv()).await.unwrap().unwrap().unwrap();
 
         // 测试目的：确认缓存达到阈值时立即刷新，且批次保留全部历史条目。
@@ -523,7 +510,7 @@ mod tests {
     async fn start_broadcast_history_flushes_after_interval() {
         // 测试准备：启动广播任务，配置远高于输入数量的批量阈值，并建立一个订阅者。
         let (command_tx, command_rx) = mpsc::channel(4);
-        let (history_tx, history_rx) = broadcast::channel(4);
+        let (history_tx, history_rx) = mpsc::channel(4);
         let (client_tx, mut client_rx) = mpsc::channel(4);
         YuSyncServer::start_broadcast_history(command_rx, history_rx, 10, 30).await.unwrap();
         command_tx
@@ -533,7 +520,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(20)).await;
 
         // 测试步骤：只发送一条未达到批量阈值的历史数据，等待定时刷新。
-        history_tx.send(test_history_entry(21)).unwrap();
+        history_tx.send(test_history_entry(21)).await.unwrap();
         let message = timeout(Duration::from_secs(1), client_rx.recv()).await.unwrap().unwrap().unwrap();
 
         // 测试目的：确认缓存未满时也会按配置时间发送。
@@ -545,7 +532,7 @@ mod tests {
     async fn start_broadcast_history_removes_closed_subscribers() {
         // 测试准备：启动广播任务并注册一个已关闭和一个正常的客户端 channel。
         let (command_tx, command_rx) = mpsc::channel(4);
-        let (history_tx, history_rx) = broadcast::channel(4);
+        let (history_tx, history_rx) = mpsc::channel(4);
         let (closed_client_tx, closed_client_rx) = mpsc::channel(1);
         let (active_client_tx, mut active_client_rx) = mpsc::channel(4);
         YuSyncServer::start_broadcast_history(command_rx, history_rx, 1, 60_000).await.unwrap();
@@ -561,9 +548,9 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(20)).await;
 
         // 测试步骤：触发一次刷新，再发送第二条数据确认广播任务仍正常处理订阅者。
-        history_tx.send(test_history_entry(31)).unwrap();
+        history_tx.send(test_history_entry(31)).await.unwrap();
         let first = timeout(Duration::from_secs(1), active_client_rx.recv()).await.unwrap().unwrap().unwrap();
-        history_tx.send(test_history_entry(32)).unwrap();
+        history_tx.send(test_history_entry(32)).await.unwrap();
         let second = timeout(Duration::from_secs(1), active_client_rx.recv()).await.unwrap().unwrap().unwrap();
 
         // 测试目的：确认关闭的客户端不会阻断其他客户端接收后续广播。
