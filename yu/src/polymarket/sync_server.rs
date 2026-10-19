@@ -1,20 +1,25 @@
+use crate::data_integrity::check::{DuckDBBinarySearchDataImpl, binary_search_gap};
+use crate::data_integrity::models::ValidationGap;
+use crate::duck_db_tables::DuckDbTableTrait;
 use crate::errors::YuError;
-use crate::polymarket::duckdb_repository::{PolyMarketInstrumentRepository, get_history_repo, get_instrument_repo};
-use crate::polymarket::po::PolyMarketInstrumentPo;
-use crate::polymarket::service::SeriesHistoryMarketService;
+use crate::polymarket::db_consts::PolyMarketTables;
+use crate::polymarket::duckdb_repository::{PolyMarketHistoryRepository, PolyMarketInstrumentRepository, get_history_repo, get_instrument_repo};
+use crate::polymarket::po::{PolyMarketHistoryPo, PolyMarketInstrumentPo};
 use crate::sync::models::grpc_sync::{
     ExchangeType, HistoryEntry, Instrument, InstrumentType, PolyMarketHistory, PolymarketInstrument, ServerMessage, history_entry,
 };
 use crate::sync::server::sync_server::{SyncHistoryService, SyncHistoryServiceTrait, SyncInstrumentService, SyncInstrumentServiceTrait};
 use async_trait::async_trait;
-use li::tools::time::{unix_time_now_u64_utc, unix_time_now_u64_utc_seconds};
-use log::{error, info, trace};
+use li::tools::time::{unix_2_readable, unix_time_now_u64_utc, unix_time_now_u64_utc_seconds};
+use log::{Level, debug, error, info, trace};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::sync::mpsc::Sender;
 use tonic::Status;
+use yue::models::HistoryInterval;
 use yue::polymarket::restful_api::{PolymarketApi, default_polymarket_api};
+use yue::polymarket::restful_models::GetPricesHistoryQuery;
 use yue::tools::get_snow_flake_id_u64;
 
 /**
@@ -186,7 +191,11 @@ impl PolyMarketSyncInstrumentService {
         })
     }
 
-    pub fn for_production(series_ids: Vec<String>, support_history_service: HashMap<InstrumentType, SyncHistoryService>) -> Arc<Self> {
+    pub fn for_production(
+        series_ids: Vec<String>,
+        support_history_service: HashMap<InstrumentType, SyncHistoryService>,
+        live_instruments: Arc<RwLock<Vec<PolyMarketInstrumentPo>>>,
+    ) -> Arc<Self> {
         let client = default_polymarket_api();
         let inst_repo = get_instrument_repo(None);
         Arc::new(Self {
@@ -194,7 +203,7 @@ impl PolyMarketSyncInstrumentService {
             client,
             series_ids,
             inst_repo,
-            live_instruments: Arc::new(RwLock::new(Vec::new())),
+            live_instruments,
             close_instruments: Arc::new(RwLock::new(Vec::new())),
         })
     }
@@ -212,7 +221,7 @@ impl PolyMarketSyncInstrumentService {
         Ok(open)
     }
 
-    async fn list_instruments(&self) -> Result<Vec<PolyMarketInstrumentPo>, YuError> {
+    pub async fn list_all_instruments(&self) -> Result<Vec<PolyMarketInstrumentPo>, YuError> {
         let mut res = self.live_instruments.read().await.clone();
         res.extend(self.close_instruments.read().await.clone());
         Ok(res)
@@ -222,7 +231,7 @@ impl PolyMarketSyncInstrumentService {
 #[async_trait]
 impl SyncInstrumentServiceTrait for PolyMarketSyncInstrumentService {
     async fn list_instruments(&self) -> Result<HashMap<String, Instrument>, YuError> {
-        let polymarket_instruments = self.list_instruments().await;
+        let polymarket_instruments = self.list_all_instruments().await;
         let mut instruments_map: HashMap<String, Instrument> = HashMap::new();
         match polymarket_instruments {
             Ok(list) => {
@@ -256,12 +265,227 @@ impl SyncInstrumentServiceTrait for PolyMarketSyncInstrumentService {
 }
 
 pub struct PolyMarketSyncHistoryService {
-    polymarket_history_service: SeriesHistoryMarketService,
+    client: PolymarketApi,
+    history_repo: PolyMarketHistoryRepository,
+    interval: HistoryInterval,
+    live_instruments: Arc<RwLock<Vec<PolyMarketInstrumentPo>>>,
 }
 
 impl PolyMarketSyncHistoryService {
-    pub fn new(polymarket_history_service: SeriesHistoryMarketService) -> SyncHistoryService {
-        Arc::new(Self { polymarket_history_service })
+    pub fn new(
+        client: PolymarketApi,
+        interval: HistoryInterval,
+        history_repo: PolyMarketHistoryRepository,
+        live_instruments: Arc<RwLock<Vec<PolyMarketInstrumentPo>>>,
+    ) -> Self {
+        Self {
+            client,
+            history_repo,
+            interval,
+            live_instruments,
+        }
+    }
+
+    pub fn for_production(live_instruments: Arc<RwLock<Vec<PolyMarketInstrumentPo>>>) -> Arc<Self> {
+        let client = default_polymarket_api();
+        let interval = HistoryInterval::OneHour;
+        let history_repo = get_history_repo(None, None);
+        Arc::new(Self::new(client, interval, history_repo, live_instruments))
+    }
+
+    pub async fn fetch_latest_history(&self) -> Result<Vec<PolyMarketHistoryPo>, YuError> {
+        let now = self.interval.get_now_close_unix_sec_utc();
+        //FUTURE: 这里加的时间不支持变动的interval。以让他offset的时间，能够支持动态的interval。
+        let start_ts = now - self.interval.to_second() + 120; // 获取过去一小时的数据
+        let end_ts = now + 60; // 获取过去一小时的数据
+        let fidelity = self.interval.to_second() / 60;
+        let mut res = vec![];
+
+        for instrument in self.live_instruments.read().await.iter() {
+            let query_param = GetPricesHistoryQuery {
+                market: instrument.asset_id.to_string(),
+                start_ts: Some(start_ts),
+                end_ts: Some(end_ts),
+                interval: Some(self.interval.clone()),
+                fidelity: Some(fidelity.clone() as u32),
+            };
+            // index 可用于调试或区分不同 asset_id
+            let pos = self.query_history(query_param, instrument).await;
+            for h in pos.iter() {
+                self.broadcast_message(h.clone(), &instrument.asset_slug, h.timestamp);
+            }
+            res.extend(pos);
+        }
+        Ok(res)
+    }
+
+    pub fn broadcast_message(&self, entry: PolyMarketHistoryPo, asset_slug: &str, timestamp: u64) {}
+
+    pub async fn query_history(&self, query_payload: GetPricesHistoryQuery, inst: &PolyMarketInstrumentPo) -> Vec<PolyMarketHistoryPo> {
+        let asset_id = inst.asset_id.clone();
+
+        let query_payload_log = query_payload.clone();
+        let query_payload_error_log = query_payload.clone();
+        let end_timestamp = query_payload.end_ts.unwrap_or(unix_time_now_u64_utc_seconds() + 10);
+        let start_timestamp = query_payload.start_ts.unwrap_or(unix_time_now_u64_utc_seconds() - 10);
+        let history = self.client.query_prices_history(query_payload.clone()).await;
+        let mut pre_history_data: HashMap<u64, u64> = HashMap::new();
+        let mut res = vec![];
+        match history {
+            Ok(history) => {
+                for h in history.history {
+                    // only process points not later than end_timestamp
+                    if h.t > end_timestamp || h.t < start_timestamp {
+                        continue;
+                    }
+                    let timestamp = self.interval.get_close_unix_ms(h.t * 1000);
+                    if pre_history_data.contains_key(&timestamp) {
+                        let prev_t = pre_history_data.get(&timestamp).unwrap();
+                        trace!(
+                            "duplicate timestamp found, inst_id is {},prev_t is {},current t is {},\
+                            query info, start:{},end:{},interval:{}",
+                            asset_id,
+                            prev_t,
+                            h.t,
+                            query_payload_log.start_ts.unwrap(),
+                            query_payload_log.end_ts.unwrap(),
+                            query_payload_log.interval.clone().unwrap().as_ref()
+                        );
+                        continue;
+                    }
+                    pre_history_data.insert(timestamp, h.t);
+                    let entry = PolyMarketHistoryPo {
+                        instrument_id: inst.id.clone(),
+                        timestamp,
+                        price: h.p,
+                    };
+                    res.push(entry.clone());
+                    self.history_repo.insert_history(entry.clone()).await.unwrap_or_else(|e| {
+                        error!(
+                            "insert history error,asset_id:{},timestamp:{},price:{},error:{:?}",
+                            asset_id, entry.timestamp, entry.price, e
+                        );
+                    });
+                }
+            }
+            Err(e) => {
+                error!("market:{},query prices history error: {:?}", inst.market_slug, e);
+                error!("query param is: {}", query_payload_error_log)
+            }
+        }
+        res
+    }
+
+    ///
+    /// FUTURE：
+    /// 1. polymarket的数据本来就不完整。所以造成检查的时候，会反复拉取
+    ///
+    pub async fn check_history_data(&self) -> Result<(), YuError> {
+        let binary_search_ds = DuckDBBinarySearchDataImpl::new(
+            self.history_repo.get_db_provider(),
+            PolyMarketTables::PriceHistory.table_name(),
+            "timestamp".to_string(),
+            "instrument_id".to_string(),
+        );
+        let now_ms = self.interval.get_now_close_unix_ms_utc();
+        let interval_ms = self.interval.to_milliseconds();
+        for instrument in self.live_instruments.read().await.iter() {
+            //因为第一个时间点，应该是没有的。所以直接跳过。
+            let inst_start = self.interval.get_close_unix_ms(instrument.start_ms) + interval_ms;
+            let gaps: Vec<ValidationGap> = binary_search_gap(
+                instrument.id.to_string().as_str(),
+                "SPOT",
+                inst_start,
+                now_ms,
+                &self.interval,
+                binary_search_ds.clone(),
+            )?;
+            info!("{} has {} gaps", instrument.asset_slug, gaps.len());
+            let fidelity = self.interval.to_second() / 60;
+            for g in gaps.iter() {
+                match g {
+                    ValidationGap::MissingData {
+                        symbol,
+                        trade_type,
+                        start_time,
+                        end_time,
+                        table,
+                    } => {
+                        if log::log_enabled!(Level::Debug) {
+                            //  FUTURE: 写入到一个csv之类的东西方便跟踪
+                            debug!(
+                                "found gap for instrument_id:{},start_ts:{},end_ts:{},symbol:{},trade_type:{},table:{}",
+                                instrument.asset_slug,
+                                unix_2_readable(start_time),
+                                unix_2_readable(end_time),
+                                symbol,
+                                trade_type,
+                                table
+                            );
+                        }
+
+                        let start_ts = start_time / 1000;
+                        let end_ts = end_time / 1000;
+                        let query_param = GetPricesHistoryQuery {
+                            market: instrument.asset_id.to_string(),
+                            start_ts: Some(start_ts),
+                            end_ts: Some(end_ts - 1),
+                            interval: Some(self.interval.clone()),
+                            fidelity: Some(fidelity.clone() as u32),
+                        };
+                        // index 可用于调试或区分不同 asset_id
+                        let pos = self.query_history(query_param, instrument).await;
+                        for h in pos.iter() {
+                            self.broadcast_message(h.clone(), &instrument.asset_slug, h.timestamp);
+                        }
+                    }
+                    _ => {
+                        error!("no gap found")
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    ///
+    /// 更新规则。
+    ///
+    /// 开始时间：
+    /// 1. 如果polymarket_price_history里面有数据，就从最大值到现在
+    /// 2. 如果没有，就取polymarket_instruments中的start_ms
+    ///
+    pub async fn initial_history_data(&self) -> Result<(), YuError> {
+        let now = self.interval.get_now_close_unix_sec_utc();
+        let fidelity = self.interval.to_second() / 60;
+        info!("start to initial polymarket history data");
+        let max_timestamp_dictionary = self.history_repo.max_timestamp_group_by_inst_id().await?;
+        let gap = self.interval.to_second() - 31;
+        for instrument in self.live_instruments.read().await.iter() {
+            //如果数据从polymarket_price_history来，那么最好+30s。这样防止重复，如果从polymarket_instruments，则往后
+            let start_ts = match max_timestamp_dictionary.get(&instrument.id) {
+                None => {
+                    let res = self.interval.get_close_unix_ms(instrument.start_ms) + self.interval.to_milliseconds();
+                    res.saturating_div(1000).saturating_sub(1)
+                }
+                Some(v) => v.saturating_div(1000).saturating_add(30),
+            };
+            if (start_ts >= now) || ((now - start_ts) < gap) {
+                continue;
+            }
+
+            let query_param = GetPricesHistoryQuery {
+                market: instrument.asset_id.clone(),
+                start_ts: Some(start_ts),
+                end_ts: Some(now.clone() + 120),
+                interval: Some(self.interval.clone()),
+                fidelity: Some(fidelity.clone() as u32),
+            };
+            // index 可用于调试或区分不同 asset_id
+            self.query_history(query_param, instrument).await;
+        }
+        info!("finish to initial polymarket history data");
+        Ok(())
     }
 }
 
@@ -275,7 +499,7 @@ impl SyncHistoryServiceTrait for PolyMarketSyncHistoryService {
         batch_size: usize,
         tx: Sender<Result<ServerMessage, Status>>,
     ) -> Result<(), YuError> {
-        match self.polymarket_history_service.query_instrument_history(inst_id, start_ms, end_ms).await {
+        match self.history_repo.get_history_between(inst_id, start_ms, end_ms).await {
             Ok(history_vec) => {
                 if history_vec.is_empty() {
                     let msg = ServerMessage {

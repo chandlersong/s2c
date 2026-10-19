@@ -1,14 +1,17 @@
 use li::tools::logs::setup_logger;
 use log::{LevelFilter, error, info};
 use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use yu::config::get_config;
 use yu::errors::YuError;
 use yu::polymarket::database::initial_polymarket_tables;
 use yu::polymarket::duckdb_repository::get_instrument_repo;
-use yu::polymarket::sync_job::start_polymarket_sync_series_job;
+use yu::polymarket::po::PolyMarketInstrumentPo;
 use yu::polymarket::sync_server::{PolyMarketSyncHistoryService, PolyMarketSyncInstrumentService};
 use yu::sync::models::grpc_sync::InstrumentType;
 use yu::sync::models::grpc_sync::instrument::Payload::Polymarket;
+use yu::sync::server::sync_server::{SyncHistoryService, SyncInstrumentServiceTrait};
 use yue::http_client::init_http_client;
 use yue::polymarket::restful_api::default_polymarket_api;
 
@@ -31,25 +34,32 @@ async fn main() -> Result<(), YuError> {
     if let Err(e) = initial_polymarket_tables(None) {
         error!("error when initial polymarket table:{}", e)
     }
+    let live_instruments: Arc<RwLock<Vec<PolyMarketInstrumentPo>>> = Arc::new(RwLock::new(Vec::new()));
+    let token_history = PolyMarketSyncHistoryService::for_production(live_instruments.clone());
 
-    let history_service = start_polymarket_sync_series_job(&app_config).await?;
-    let polymarket_sync_history_service_map = HashMap::new();
-    // polymarket_sync_history_service_map.insert(
-    //     InstrumentType::PolymarketToken,
-    //     PolyMarketSyncHistoryService::new(history_service.clone()),
-    // );
-    let client = default_polymarket_api();
-    let inst_repo = get_instrument_repo(None);
+    let mut polymarket_sync_history_service_map: HashMap<InstrumentType, SyncHistoryService> = HashMap::new();
+    polymarket_sync_history_service_map.insert(InstrumentType::PolymarketToken, token_history.clone());
     let series_ids = vec!["45".to_string()];
 
-    let instrument_service = PolyMarketSyncInstrumentService::new(series_ids, polymarket_sync_history_service_map, client, inst_repo);
-
+    let instrument_service = PolyMarketSyncInstrumentService::for_production(series_ids, polymarket_sync_history_service_map, live_instruments);
+    if let Err(e) = instrument_service.sync_instrument().await {
+        error!("error when sync instrument,error is {:?}", e);
+    }
     let instruments = instrument_service.list_instruments().await?;
 
     for (key, inst) in instruments {
         if let Some(Polymarket(poly)) = inst.payload {
             info!("{}: {}", key, poly.asset_slug);
         }
+    }
+    if let Err(e) = token_history.initial_history_data().await {
+        error!("error initial history data: {}", e)
+    }
+    if let Err(e) = token_history.check_history_data().await {
+        error!("error checking history_data: {}", e)
+    }
+    if let Err(e) = token_history.fetch_latest_history().await {
+        error!("error fetch latest history: {}", e)
     }
     Ok(())
 }

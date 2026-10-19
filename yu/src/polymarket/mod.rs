@@ -2,6 +2,5 @@ pub mod database;
 pub mod db_consts;
 pub mod duckdb_repository;
 pub mod po;
-pub mod service;
 pub mod sync_job;
 pub mod sync_server;
