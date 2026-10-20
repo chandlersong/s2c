@@ -1,4 +1,6 @@
 use crate::postgresql_db::CopyInsertable;
+use crate::sync::models::grpc_sync::{HistoryEntry, history_entry::Payload};
+use li::tools::time::unix_time_now_u64_utc;
 use sqlx::Row;
 use yue::tools::get_snow_flake_id_u64;
 
@@ -176,6 +178,14 @@ impl CopyInsertable for LocalOkxKlinePo {
             bts
         )
     }
+
+    fn from_history_entry(history_entry: &HistoryEntry, local_inst_id: u64) -> Self {
+        let Some(Payload::OkxKline(kline)) = history_entry.payload.as_ref() else {
+            panic!("HistoryEntry payload is not an OkxKline");
+        };
+
+        Self::from_okx_kline(kline.clone(), local_inst_id, unix_time_now_u64_utc())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -352,5 +362,13 @@ impl CopyInsertable for LocalOkxOptionSummaryPo {
             self.vega_bs.map_or(String::from(""), |v| v.to_string()),
             bts
         )
+    }
+
+    fn from_history_entry(history_entry: &HistoryEntry, local_inst_id: u64) -> Self {
+        let Some(Payload::OkxOptionSummary(summary)) = history_entry.payload.as_ref() else {
+            panic!("HistoryEntry payload is not an OkxOptionSummary");
+        };
+
+        Self::from_okx_summary(summary.clone(), local_inst_id, unix_time_now_u64_utc())
     }
 }

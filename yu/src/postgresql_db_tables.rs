@@ -1,4 +1,5 @@
 use crate::postgresql_db::CopyInsertable;
+use crate::sync::models::grpc_sync::HistoryEntry;
 use async_trait::async_trait;
 use sqlx_postgres::{PgPool, PgPoolCopyExt};
 use std::sync::Arc;
@@ -11,7 +12,7 @@ use tokio::sync::mpsc;
 #[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
 #[async_trait]
 pub trait PostgresqlBatchInsertTrait<P: CopyInsertable>: Send + Sync {
-    async fn insert_data(&self, data: P);
+    async fn insert_data(&self, history_entry: HistoryEntry, local_inst_id: u64);
 }
 
 pub type PostgresqlBatchInsert<P> = Arc<dyn PostgresqlBatchInsertTrait<P>>;
@@ -107,7 +108,8 @@ impl<P: CopyInsertable> PostgresqlBatchInsertImpl<P> {
 
 #[async_trait]
 impl<P: CopyInsertable> PostgresqlBatchInsertTrait<P> for PostgresqlBatchInsertImpl<P> {
-    async fn insert_data(&self, data: P) {
+    async fn insert_data(&self, history_entry: HistoryEntry, local_inst_id: u64) {
+        let data = P::from_history_entry(&history_entry, local_inst_id);
         if let Err(e) = self.sender.send(data).await {
             log::error!("Failed to send data to batch insert channel: {}", e);
         }

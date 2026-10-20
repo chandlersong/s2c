@@ -1,5 +1,6 @@
 use crate::postgresql_db::CopyInsertable;
-use crate::sync::models::grpc_sync::PolyMarketHistory;
+use crate::sync::models::grpc_sync::{HistoryEntry, PolyMarketHistory, history_entry::Payload};
+use li::tools::time::unix_time_now_u64_utc;
 use sqlx::Row;
 use yue::tools::get_snow_flake_id_u64;
 
@@ -126,5 +127,13 @@ impl CopyInsertable for LocalPolyMarketHistoryPo {
         let bts = bts_dt.to_rfc3339();
 
         format!("{},{},{},{},{}", self.id, self.inst_id, ts, self.price, bts)
+    }
+
+    fn from_history_entry(history_entry: &HistoryEntry, local_inst_id: u64) -> Self {
+        let Some(Payload::PolymarketHistory(history)) = history_entry.payload.as_ref() else {
+            panic!("HistoryEntry payload is not a PolymarketHistory");
+        };
+
+        Self::from_polymarket_history(history.clone(), local_inst_id, unix_time_now_u64_utc())
     }
 }

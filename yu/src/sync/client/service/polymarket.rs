@@ -84,16 +84,14 @@ impl PolymarketClientExchangeService {
                     return Err(YuError::new("received non-Polymarket history payload"));
                 }
 
-                let Some(Payload::PolymarketHistory(history)) = entry.payload else {
+                let Some(Payload::PolymarketHistory(history)) = entry.payload.as_ref() else {
                     return Err(YuError::new("received non-Polymarket history payload"));
                 };
                 if history.inst_id != server_inst_id {
                     return Err(YuError::new("received Polymarket history for unexpected instrument"));
                 }
 
-                self.history_batch_insert
-                    .insert_data(LocalPolyMarketHistoryPo::from_polymarket_history(history, local_inst_id, batch_timestamp))
-                    .await;
+                self.history_batch_insert.insert_data(entry, local_inst_id).await;
             }
         }
 
@@ -369,9 +367,17 @@ mod tests {
         let mut batch_insert = mock_batch_insert();
         batch_insert
             .expect_insert_data()
-            .withf(|po| po.inst_id == 1 && po.timestamp == 175 && po.price == 0.42 && po.batch_timestamp == 180)
+            .withf(|entry, local_inst_id| {
+                *local_inst_id == 1
+                    && entry.instrument_type == InstrumentType::PolymarketToken as i32
+                    && matches!(
+                        entry.payload.as_ref(),
+                        Some(Payload::PolymarketHistory(history))
+                            if history.inst_id == 42 && history.timestamp == 175 && history.price == 0.42
+                    )
+            })
             .times(1)
-            .returning(|_| ());
+            .returning(|_, _| ());
         let service = PolymarketClientExchangeService::new(
             Arc::new(MockClientPolyMarketRepositoryTrait::new()),
             Arc::new(batch_insert),

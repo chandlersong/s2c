@@ -1,5 +1,6 @@
 use crate::config::get_config;
 use crate::errors::YuError;
+use crate::sync::models::grpc_sync::HistoryEntry;
 use futures::executor::block_on;
 use sqlx::PgPool;
 use tokio::sync::OnceCell;
@@ -33,4 +34,6 @@ pub trait PostgresqlTableTrait: Send + Clone + 'static {
 pub trait CopyInsertable: Send + Sync + 'static {
     fn columns() -> &'static str; // 如 "id,username,email,created_at"
     fn to_csv_row(&self) -> String; // 转为 CSV 格式的一行
+
+    fn from_history_entry(history_entry: &HistoryEntry, local_inst_id: u64) -> Self;
 }

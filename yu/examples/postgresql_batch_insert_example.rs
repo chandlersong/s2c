@@ -9,6 +9,7 @@ use yu::postgresql_db::get_sync_client_pg_pool;
 use yu::postgresql_db_tables::PostgresqlBatchInsertImpl;
 use yu::sync::client::database::initial_grpc_client_tables;
 use yu::sync::client::po::polymarket::LocalPolyMarketHistoryPo;
+use yu::sync::models::grpc_sync::{HistoryEntry, InstrumentType, PolyMarketHistory, history_entry::Payload};
 
 #[tokio::main]
 async fn main() -> Result<(), YuError> {
@@ -28,16 +29,19 @@ async fn main() -> Result<(), YuError> {
     // 使用与 LocalPolyMarketHistoryPo 对应的列类型（bigint 而非 timestamptz）
     initial_grpc_client_tables(Some(pg_pool.clone())).await?;
     let batch_insert = PostgresqlBatchInsertImpl::<LocalPolyMarketHistoryPo>::new(table_name, pg_pool.clone()).await;
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
     for i in 0..1000u64 {
-        let item = LocalPolyMarketHistoryPo {
-            id: i + 1,
-            inst_id: 123,
-            timestamp: now,
-            price: 100.0 + ((i % 100) as f64) * 0.123, // 简单变化，避免全相同
-            batch_timestamp: now,
+        let server_inst_id = 123 + i;
+        let local_inst_id = 1000 + i;
+        let entry = HistoryEntry {
+            instrument_type: InstrumentType::PolymarketToken as i32,
+            payload: Some(Payload::PolymarketHistory(PolyMarketHistory {
+                inst_id: server_inst_id,
+                timestamp: now + i,
+                price: 100.0 + ((i % 100) as f64) * 0.123, // 简单变化，避免全相同
+            })),
         };
-        batch_insert.insert_data(item).await;
+        batch_insert.insert_data(entry, local_inst_id).await;
     }
 
     info!("已插入 1000 条记录，等待 10 秒钟...");

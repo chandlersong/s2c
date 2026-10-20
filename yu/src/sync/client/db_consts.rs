@@ -236,7 +236,7 @@ CREATE TABLE IF NOT EXISTS binance_spot_trade_history (
     is_buyer_maker BOOLEAN,
     created_at BIGINT NOT NULL,
     batch_timestamp BIGINT NOT NULL,
-    PRIMARY KEY (trade_id, event_time)
+    PRIMARY KEY (inst_id, trade_id, event_time)
 );
 SELECT create_hypertable(
   'binance_spot_trade_history',

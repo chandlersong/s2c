@@ -1,6 +1,6 @@
 use crate::postgresql_db::CopyInsertable;
-use crate::sync::models::grpc_sync::{BinanceInstrument, BinanceKline, BinanceTrade};
-use li::tools::time::format_timestamp_millis;
+use crate::sync::models::grpc_sync::{BinanceInstrument, BinanceKline, BinanceTrade, HistoryEntry, history_entry::Payload};
+use li::tools::time::{format_timestamp_millis, unix_time_now_u64_utc};
 use sqlx::Row;
 use yue::tools::get_snow_flake_id_u64;
 
@@ -55,6 +55,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for LocalBinanceInstrumentPo {
 #[derive(Clone, Debug)]
 pub struct LocalBinanceKlinePo {
     pub id: u64,
+    pub inst_id: u64,
     pub symbol: String,
     pub candle_begin_time: u64,
     pub open: f64,
@@ -74,9 +75,10 @@ pub struct LocalBinanceKlinePo {
 }
 
 impl LocalBinanceKlinePo {
-    pub fn from_proto(kline: BinanceKline, batch_timestamp: u64) -> Self {
+    pub fn from_proto(kline: BinanceKline, inst_id: u64, batch_timestamp: u64) -> Self {
         Self {
             id: get_snow_flake_id_u64(),
+            inst_id,
             symbol: kline.symbol,
             candle_begin_time: kline.candle_begin_time,
             open: kline.open,
@@ -99,7 +101,7 @@ impl LocalBinanceKlinePo {
 
 impl CopyInsertable for LocalBinanceKlinePo {
     fn columns() -> &'static str {
-        "id,symbol,candle_begin_time,open,high,low,close,volume,quote_volume,number_of_trades,taker_buy_base_asset_volume,taker_buy_quote_asset_volume,close_time,interval,first_trade_id,last_trade_id,batch_timestamp"
+        "id,inst_id,candle_begin_time,open,high,low,close,volume,quote_volume,number_of_trades,taker_buy_base_asset_volume,taker_buy_quote_asset_volume,close_time,interval,first_trade_id,last_trade_id,batch_timestamp"
     }
 
     fn to_csv_row(&self) -> String {
@@ -109,7 +111,7 @@ impl CopyInsertable for LocalBinanceKlinePo {
         format!(
             "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             self.id,
-            self.symbol,
+            self.inst_id,
             candle_begin_time,
             self.open,
             self.high,
@@ -127,12 +129,21 @@ impl CopyInsertable for LocalBinanceKlinePo {
             self.batch_timestamp
         )
     }
+
+    fn from_history_entry(history_entry: &HistoryEntry, local_inst_id: u64) -> Self {
+        let Some(Payload::BinanceKline(kline)) = history_entry.payload.as_ref() else {
+            panic!("HistoryEntry payload is not a BinanceKline");
+        };
+
+        Self::from_proto(kline.clone(), local_inst_id, unix_time_now_u64_utc())
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct LocalBinanceTradePo {
     pub id: u64,
     pub event_time: i64,
+    pub inst_id: u64,
     pub symbol: String,
     pub trade_id: i64,
     pub price: f64,
@@ -144,10 +155,11 @@ pub struct LocalBinanceTradePo {
 }
 
 impl LocalBinanceTradePo {
-    pub fn from_proto(trade: BinanceTrade, batch_timestamp: u64) -> Self {
+    pub fn from_proto(trade: BinanceTrade, inst_id: u64, batch_timestamp: u64) -> Self {
         Self {
             id: get_snow_flake_id_u64(),
             event_time: trade.event_time,
+            inst_id,
             symbol: trade.symbol,
             trade_id: trade.trade_id,
             price: trade.price,
@@ -162,7 +174,7 @@ impl LocalBinanceTradePo {
 
 impl CopyInsertable for LocalBinanceTradePo {
     fn columns() -> &'static str {
-        "id,event_time,symbol,trade_id,price,qty,trade_time,is_buyer_maker,created_at,batch_timestamp"
+        "id,event_time,inst_id,trade_id,price,qty,trade_time,is_buyer_maker,created_at,batch_timestamp"
     }
 
     fn to_csv_row(&self) -> String {
@@ -172,7 +184,7 @@ impl CopyInsertable for LocalBinanceTradePo {
             "{},{},{},{},{},{},{},{},{},{}",
             self.id,
             event_time,
-            self.symbol,
+            self.inst_id,
             self.trade_id,
             self.price,
             self.qty,
@@ -181,6 +193,14 @@ impl CopyInsertable for LocalBinanceTradePo {
             self.created_at,
             self.batch_timestamp
         )
+    }
+
+    fn from_history_entry(history_entry: &HistoryEntry, local_inst_id: u64) -> Self {
+        let Some(Payload::BinanceTrade(trade)) = history_entry.payload.as_ref() else {
+            panic!("HistoryEntry payload is not a BinanceTrade");
+        };
+
+        Self::from_proto(trade.clone(), local_inst_id, unix_time_now_u64_utc())
     }
 }
 
@@ -236,8 +256,9 @@ mod tests {
             last_trade_id: Some(30),
         };
 
-        let po = LocalBinanceKlinePo::from_proto(proto, 1_700_000_300_000);
+        let po = LocalBinanceKlinePo::from_proto(proto, 17, 1_700_000_300_000);
 
+        assert_eq!(po.inst_id, 17);
         assert_eq!(po.symbol, "BTCUSDT");
         assert_eq!(po.candle_begin_time, 1_700_000_000_000);
         assert_eq!(po.first_trade_id, Some(20));
@@ -259,8 +280,9 @@ mod tests {
             created_at: 0,
         };
 
-        let po = LocalBinanceTradePo::from_proto(proto, 1_700_000_000_002);
+        let po = LocalBinanceTradePo::from_proto(proto, 17, 1_700_000_000_002);
 
+        assert_eq!(po.inst_id, 17);
         assert_eq!(po.symbol, "BTCUSDT");
         assert_eq!(po.trade_time, None);
         assert_eq!(po.is_buyer_maker, Some(true));
@@ -287,9 +309,15 @@ mod tests {
             first_trade_id: None,
             last_trade_id: None,
         };
-        let po = LocalBinanceKlinePo::from_proto(proto, 1_700_000_300_000);
+        let po = LocalBinanceKlinePo::from_proto(proto, 17, 1_700_000_300_000);
 
-        assert!(po.to_csv_row().contains("2023-11-14T22:13:20+00:00"));
+        let row = po.to_csv_row();
+        assert!(row.contains("2023-11-14T22:13:20+00:00"));
+        assert_eq!(
+            <LocalBinanceKlinePo as CopyInsertable>::columns().split(',').count(),
+            row.split(',').count()
+        );
+        assert_eq!(row.split(',').nth(1), Some("17"));
     }
 
     #[test]
@@ -305,8 +333,14 @@ mod tests {
             is_buyer_maker: Some(true),
             created_at: 0,
         };
-        let po = LocalBinanceTradePo::from_proto(proto, 1_700_000_000_002);
+        let po = LocalBinanceTradePo::from_proto(proto, 17, 1_700_000_000_002);
 
-        assert!(po.to_csv_row().contains("2023-11-14T22:13:20.001+00:00"));
+        let row = po.to_csv_row();
+        assert!(row.contains("2023-11-14T22:13:20.001+00:00"));
+        assert_eq!(
+            <LocalBinanceTradePo as CopyInsertable>::columns().split(',').count(),
+            row.split(',').count()
+        );
+        assert_eq!(row.split(',').nth(2), Some("17"));
     }
 }

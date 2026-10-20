@@ -200,7 +200,7 @@ mod tests {
         };
 
         let proto = BinanceKline::from(server_po);
-        let client_po = LocalBinanceKlinePo::from_proto(proto, 1_700_000_300_000);
+        let client_po = LocalBinanceKlinePo::from_proto(proto, 7, 1_700_000_300_000);
 
         assert_eq!(client_po.symbol, "BTCUSDT");
         assert_eq!(client_po.candle_begin_time, 1_700_000_000_000);
@@ -222,7 +222,7 @@ mod tests {
         };
 
         let proto = BinanceTrade::from(server_po);
-        let client_po = LocalBinanceTradePo::from_proto(proto, 1_700_000_000_002);
+        let client_po = LocalBinanceTradePo::from_proto(proto, 9, 1_700_000_000_002);
 
         assert_eq!(client_po.trade_id, 42);
         assert_eq!(client_po.trade_time, None);
