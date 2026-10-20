@@ -30,6 +30,11 @@ pub trait ClientExchangeServiceTrait: Send + Sync {
     /// 校对正在运行的instrument的数据
     ///
     async fn reconcile_living_instrument_with_server(&self, end_ms: UnixTimeStamp) -> Result<(), YuError>;
+
+    ///
+    /// 判断对应的server_id是否存在。如果存在，返回该instrument的id。反之，则返回None
+    ///
+    async fn check_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError>;
 }
 
 pub type ClientExchangeService = Arc<dyn ClientExchangeServiceTrait>;

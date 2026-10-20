@@ -49,6 +49,7 @@ async fn main() -> Result<(), YuError> {
             return Err(e);
         }
     };
+
     if let Err(e) = initial_grpc_client_tables(None).await {
         error!("error starting initial grpc client tables: {}", e);
         return Err(e);

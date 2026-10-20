@@ -192,6 +192,14 @@ impl ClientExchangeServiceTrait for PolymarketClientExchangeService {
 
         Ok(())
     }
+
+    async fn check_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError> {
+        Ok(self
+            .pm_repo
+            .find_instrument_by_server_id(server_id)
+            .await?
+            .map(|instrument| instrument.id))
+    }
 }
 
 #[cfg(test)]
@@ -495,5 +503,44 @@ mod tests {
         instrument.payload = None;
 
         assert!(service.initial_data(instrument, now).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn check_server_id_returns_local_instrument_id_when_found() {
+        let mut repo = MockClientPolyMarketRepositoryTrait::new();
+        repo.expect_find_instrument_by_server_id()
+            .withf(|server_id| *server_id == 42)
+            .returning(|_| {
+                Ok(Some(LocalPolyMarketInstrumentPo {
+                    id: 123,
+                    ..local_instrument(42)
+                }))
+            });
+        let service = PolymarketClientExchangeService::new(
+            Arc::new(repo),
+            Arc::new(mock_batch_insert()),
+            Arc::new(MockGrpcChannelManagerTrait::new()),
+            mock_binary_search_ds(),
+            HistoryInterval::OneHour,
+        );
+
+        assert_eq!(service.check_server_id(42).await.unwrap(), Some(123));
+    }
+
+    #[tokio::test]
+    async fn check_server_id_returns_none_when_not_found() {
+        let mut repo = MockClientPolyMarketRepositoryTrait::new();
+        repo.expect_find_instrument_by_server_id()
+            .withf(|server_id| *server_id == 42)
+            .returning(|_| Ok(None));
+        let service = PolymarketClientExchangeService::new(
+            Arc::new(repo),
+            Arc::new(mock_batch_insert()),
+            Arc::new(MockGrpcChannelManagerTrait::new()),
+            mock_binary_search_ds(),
+            HistoryInterval::OneHour,
+        );
+
+        assert_eq!(service.check_server_id(42).await.unwrap(), None);
     }
 }
