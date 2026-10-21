@@ -1,9 +1,11 @@
 pub mod grpc_sync {
     use crate::polymarket::po::PolyMarketInstrumentPo;
     use li::tools::time::unix_time_now_u64_utc;
+    use tokio::sync::mpsc;
 
     tonic::include_proto!("grpc_sync");
 
+    pub type ClientBatchWriter = mpsc::Sender<ServerMessage>;
     impl InstrumentType {
         pub fn readable_name(self) -> &'static str {
             match self {

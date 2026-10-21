@@ -6,14 +6,12 @@ use tokio::sync::{RwLock, mpsc};
 use yu::config::get_config;
 use yu::errors::YuError;
 use yu::polymarket::database::initial_polymarket_tables;
-use yu::polymarket::duckdb_repository::get_instrument_repo;
 use yu::polymarket::po::PolyMarketInstrumentPo;
 use yu::polymarket::sync_server::{PolyMarketSyncHistoryService, PolyMarketSyncInstrumentService};
 use yu::sync::models::grpc_sync::instrument::Payload::Polymarket;
-use yu::sync::models::grpc_sync::{HistoryEntry, HistoryType, InstrumentType};
+use yu::sync::models::grpc_sync::{HistoryEntry, HistoryType};
 use yu::sync::server::sync_server::{SyncHistoryService, SyncInstrumentServiceTrait};
 use yue::http_client::init_http_client;
-use yue::polymarket::restful_api::default_polymarket_api;
 
 #[tokio::main]
 async fn main() -> Result<(), YuError> {

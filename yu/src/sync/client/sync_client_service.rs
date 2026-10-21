@@ -5,11 +5,11 @@ use crate::sync::client::database::{
 };
 use crate::sync::client::grpc_manager::GrpcChannelManager;
 use crate::sync::client::service::polymarket::PolymarketClientExchangeService;
-use crate::sync::models::grpc_sync::{HistoryType, Instrument, InstrumentList, InstrumentType, ServerMessage, SubscribeRequest};
+use crate::sync::models::grpc_sync::{ClientBatchWriter, HistoryType, Instrument, InstrumentList, InstrumentType, ServerMessage, SubscribeRequest};
 use async_trait::async_trait;
 use futures::StreamExt;
 use li::tools::time::{UnixTimeStamp, unix_time_now_u64_utc};
-use log::{error, warn};
+use log::{error, info, warn};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -178,7 +178,7 @@ impl SyncClientService {
     ///     - 可以通过ClientExchangeService来判断是否存在，然后再维护。如果不存在，则可以通过这个来维护
     /// 2. 需要内部判断，根据InstrumentType来维护的batchInsert接口。
     ///
-    pub async fn start_subscribe(&self, grpc_manager: GrpcChannelManager) -> Result<mpsc::Sender<ServerMessage>, YuError> {
+    pub async fn start_subscribe(&self, grpc_manager: GrpcChannelManager) -> Result<ClientBatchWriter, YuError> {
         let client_id = get_snow_flake_id_u64();
         let mut stream = grpc_manager.subscribe_latest(SubscribeRequest { client_id }).await?;
         let (tx, mut rx) = mpsc::channel::<ServerMessage>(10000);
@@ -216,7 +216,10 @@ impl SyncClientService {
                 grpc_manager.reconnect().await;
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                 match grpc_manager.subscribe_latest(SubscribeRequest { client_id }).await {
-                    Ok(new_stream) => stream = new_stream,
+                    Ok(new_stream) => {
+                        info!("subscribe latest success");
+                        stream = new_stream
+                    }
                     Err(e) => {
                         error!("error reconnecting SubscribeLatest stream: {}", e);
                         tokio::time::sleep(std::time::Duration::from_secs(2)).await;

@@ -3,8 +3,7 @@ use log::{LevelFilter, error, info};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::signal;
-use tokio::sync::mpsc::Sender;
-use tokio_stream::StreamExt;
+
 use tonic::Request;
 use yu::config::get_config;
 use yu::cron_job;
@@ -12,10 +11,9 @@ use yu::errors::YuError;
 use yu::sync::client::database::initial_grpc_client_tables;
 use yu::sync::client::grpc_manager::{GrpcChannelManager, get_grpc_manager_from_config};
 use yu::sync::client::sync_client_service::SyncClientService;
+use yu::sync::models::grpc_sync::Empty;
 use yu::sync::models::grpc_sync::sync_interface_client::SyncInterfaceClient;
-use yu::sync::models::grpc_sync::{Empty, ServerMessage, SubscribeRequest};
 use yue::http_client::init_http_client;
-use yue::tools::get_snow_flake_id_u64;
 
 #[tokio::main]
 async fn main() -> Result<(), YuError> {
@@ -46,6 +44,9 @@ async fn main() -> Result<(), YuError> {
     }
     let sync_server_manager = connection_manager.clone();
     let sync_client_service = client_service.clone();
+    // 这里是否要统一，比如initial和reconcile的时候，是否需要这里一致。我想以后再说吧
+    let _ = client_service.start_subscribe(sync_server_manager.clone()).await?;
+
     tokio::spawn(async move {
         if let Err(e) = initial_data(sync_client_service, sync_server_manager).await {
             error!("Error when initial instruments with server: {}", e);
@@ -65,39 +66,6 @@ async fn main() -> Result<(), YuError> {
 
     signal::ctrl_c().await.expect("监听 Ctrl+C 失败");
     Ok(())
-}
-
-async fn forward_server_stream(mut stream: tonic::Streaming<ServerMessage>, local_db_tx: Sender<ServerMessage>) -> Result<(), YuError> {
-    while let Some(item) = stream.next().await {
-        match item {
-            Ok(server_message) => {
-                if let Err(e) = local_db_tx.send(server_message).await {
-                    error!("error sending server message: {}", e);
-                }
-            }
-            Err(e) => {
-                error!("error receiving server message: {}", e);
-            }
-        }
-    }
-
-    Ok(())
-}
-
-async fn subscribe(local_db_tx: Sender<ServerMessage>, manager: GrpcChannelManager) -> Result<(), YuError> {
-    loop {
-        let connection = manager.connect().await;
-        let mut server = SyncInterfaceClient::new(connection);
-        //FUTURE：把这个identify改成配置文件的参数
-        let id = get_snow_flake_id_u64();
-        info!("subscribe_latest called with assigned id: {}", id);
-        let request = SubscribeRequest { client_id: id };
-        let stream = server.subscribe_latest(Request::new(request)).await?.into_inner();
-        if let Err(e) = forward_server_stream(stream, local_db_tx.clone()).await {
-            error!("error forwarding server stream: {}", e);
-            manager.reconnect().await;
-        }
-    }
 }
 
 ///

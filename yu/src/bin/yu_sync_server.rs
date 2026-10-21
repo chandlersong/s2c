@@ -8,13 +8,10 @@ use yu::binance::sync_job::start_sync_job;
 use yu::binance::sync_server::BinanceSyncInstrumentService;
 use yu::config::get_config;
 use yu::errors::YuError;
-use yu::okx::sync_job::start_okx_option_service;
-use yu::okx::sync_server::OkxSyncInstrumentService;
 use yu::polymarket::database::initial_polymarket_tables;
 use yu::polymarket::sync_job::start_polymarket_sync_series_job;
-use yu::polymarket::sync_server::{PolyMarketSyncHistoryService, PolyMarketSyncInstrumentService};
+use yu::sync::models::grpc_sync::HistoryEntry;
 use yu::sync::models::grpc_sync::sync_interface_server::SyncInterfaceServer;
-use yu::sync::models::grpc_sync::{HistoryEntry, InstrumentType};
 use yu::sync::server::sync_server::{SyncInstrumentService, YuSyncServer};
 use yue::http_client::init_http_client;
 
@@ -72,15 +69,6 @@ async fn main() -> Result<(), YuError> {
         let polymarket_instrument_service = start_polymarket_sync_series_job(&app_config, history_tx).await?;
         instrument_services.push(polymarket_instrument_service);
         info!("Started polymarket sync job");
-    }
-
-    let okx_config = &app_config.okx;
-
-    if okx_config.as_ref().is_some_and(|config| config.enable()) {
-        let okx_option_service = start_okx_option_service().await?;
-        let okx_instrument_service = OkxSyncInstrumentService::new(okx_option_service.clone());
-        instrument_services.push(okx_instrument_service);
-        info!("Started okx sync job");
     }
 
     let server = YuSyncServer::create_and_start(instrument_services, history_rx).await?;

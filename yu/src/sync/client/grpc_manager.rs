@@ -140,13 +140,13 @@ impl GrpcChannelManagerTrait for GrpcChannelManagerImpl {
     }
 
     async fn sync_history(&self, request: SyncRequest) -> Result<GrpcServerMessageStream, YuError> {
-        let mut client = SyncInterfaceClient::new(self.connect().await);
+        let mut client = SyncInterfaceClient::new(self.get_channel().await);
         let stream = client.sync_history(Request::new(request)).await?.into_inner();
         Ok(Box::pin(stream))
     }
 
     async fn subscribe_latest(&self, request: SubscribeRequest) -> Result<GrpcServerMessageStream, YuError> {
-        let mut client = SyncInterfaceClient::new(self.connect().await);
+        let mut client = SyncInterfaceClient::new(self.get_channel().await);
         let stream = client.subscribe_latest(Request::new(request)).await?.into_inner();
         Ok(Box::pin(stream))
     }
