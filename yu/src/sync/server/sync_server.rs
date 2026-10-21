@@ -1,7 +1,7 @@
 use crate::duck_db::DuckDBDSProvider;
 use crate::errors::YuError;
 use crate::sync::models::grpc_sync::sync_interface_server::SyncInterface;
-use crate::sync::models::grpc_sync::{Empty, HistoryEntry, Instrument, InstrumentList, InstrumentType, ServerMessage, SubscribeRequest, SyncRequest};
+use crate::sync::models::grpc_sync::{Empty, HistoryEntry, HistoryType, Instrument, InstrumentList, ServerMessage, SubscribeRequest, SyncRequest};
 use async_trait::async_trait;
 use li::tools::time::unix_time_now_u64_utc;
 use log::{error, info, trace};
@@ -36,7 +36,7 @@ pub trait SyncInstrumentServiceTrait {
 
     fn error_log(&self) -> String;
 
-    fn support_history_list(&self) -> Result<HashMap<InstrumentType, SyncHistoryService>, YuError>;
+    fn support_history_list(&self) -> Result<HashMap<HistoryType, SyncHistoryService>, YuError>;
 }
 
 #[async_trait]
@@ -132,7 +132,7 @@ pub struct YuSyncServer {
 
     //TODO: 简化扩展
     instruments_services: Vec<SyncInstrumentService>,
-    history_services: HashMap<InstrumentType, SyncHistoryService>,
+    history_services: HashMap<HistoryType, SyncHistoryService>,
 }
 
 impl YuSyncServer {
@@ -290,10 +290,10 @@ impl SyncInterface for YuSyncServer {
         let end_ms = request.get_ref().end_ms.clone();
         let batch_size = self.batch_size.clone();
 
-        let instrument_type = match InstrumentType::try_from(request.get_ref().instrument_type) {
+        let instrument_type = match HistoryType::try_from(request.get_ref().history_type) {
             Ok(instrument_type) => instrument_type,
             Err(_) => {
-                error!("unknown instrument type:{:?}", request.get_ref().instrument_type);
+                error!("unknown instrument type:{:?}", request.get_ref().history_type);
                 return Err(Status::invalid_argument("unknown instrument type"));
             }
         };
@@ -346,17 +346,18 @@ impl SyncInterface for YuSyncServer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sync::models::grpc_sync::history_entry;
+    use crate::sync::models::grpc_sync::{HistoryType, InstrumentType, history_entry};
     use async_trait::async_trait;
     use futures::StreamExt;
     use tokio::time::{Duration, timeout};
 
     fn test_history_entry(inst_id: u64) -> HistoryEntry {
         HistoryEntry {
-            instrument_type: InstrumentType::PolymarketToken as i32,
+            history_type: InstrumentType::Polymarket as i32,
+            instrument_type: HistoryType::PolymarketToken as i32,
+            inst_id,
             payload: Some(history_entry::Payload::PolymarketHistory(
                 crate::sync::models::grpc_sync::PolyMarketHistory {
-                    inst_id,
                     timestamp: inst_id * 10,
                     price: inst_id as f64,
                 },
@@ -389,7 +390,7 @@ mod tests {
         }
     }
 
-    fn test_sync_server(history_services: HashMap<InstrumentType, SyncHistoryService>) -> YuSyncServer {
+    fn test_sync_server(history_services: HashMap<HistoryType, SyncHistoryService>) -> YuSyncServer {
         let (command_channel, _) = mpsc::channel(1);
         YuSyncServer {
             batch_size: 8,
@@ -410,7 +411,7 @@ mod tests {
                 inst_id: 1,
                 start_ms: 10,
                 end_ms: 20,
-                instrument_type: 999,
+                history_type: 999,
             }))
             .await;
         let error = match result {
@@ -433,7 +434,7 @@ mod tests {
                 inst_id: 1,
                 start_ms: 10,
                 end_ms: 20,
-                instrument_type: InstrumentType::OkxKline as i32,
+                history_type: HistoryType::OkxKline as i32,
             }))
             .await;
         let error = match result {
@@ -452,7 +453,7 @@ mod tests {
             calls: std::sync::Mutex::new(Vec::new()),
         });
         let mut history_services = HashMap::new();
-        history_services.insert(InstrumentType::BinanceSpot, history_service.clone() as SyncHistoryService);
+        history_services.insert(HistoryType::BinanceSpot, history_service.clone() as SyncHistoryService);
         let server = test_sync_server(history_services);
 
         // 测试步骤：请求 Binance Spot 历史数据，并从响应流中读取服务返回的消息。
@@ -461,7 +462,7 @@ mod tests {
                 inst_id: 42,
                 start_ms: 100,
                 end_ms: 200,
-                instrument_type: InstrumentType::BinanceSpot as i32,
+                history_type: HistoryType::BinanceSpot as i32,
             }))
             .await
             .unwrap();
@@ -501,8 +502,8 @@ mod tests {
 
         // 测试目的：确认缓存达到阈值时立即刷新，且批次保留全部历史条目。
         assert_eq!(message.history.len(), 2);
-        assert_eq!(message.history[0].instrument_type, InstrumentType::PolymarketToken as i32);
-        assert_eq!(message.history[1].instrument_type, InstrumentType::PolymarketToken as i32);
+        assert_eq!(message.history[0].instrument_type, HistoryType::PolymarketToken as i32);
+        assert_eq!(message.history[1].instrument_type, HistoryType::PolymarketToken as i32);
         assert_ne!(message.server_timestamp, 0);
     }
 
@@ -525,7 +526,7 @@ mod tests {
 
         // 测试目的：确认缓存未满时也会按配置时间发送。
         assert_eq!(message.history.len(), 1);
-        assert_eq!(message.history[0].instrument_type, InstrumentType::PolymarketToken as i32);
+        assert_eq!(message.history[0].instrument_type, HistoryType::PolymarketToken as i32);
     }
 
     #[tokio::test]

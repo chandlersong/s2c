@@ -56,7 +56,6 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for LocalBinanceInstrumentPo {
 pub struct LocalBinanceKlinePo {
     pub id: u64,
     pub inst_id: u64,
-    pub symbol: String,
     pub candle_begin_time: u64,
     pub open: f64,
     pub high: f64,
@@ -79,7 +78,6 @@ impl LocalBinanceKlinePo {
         Self {
             id: get_snow_flake_id_u64(),
             inst_id,
-            symbol: kline.symbol,
             candle_begin_time: kline.candle_begin_time,
             open: kline.open,
             high: kline.high,
@@ -144,7 +142,6 @@ pub struct LocalBinanceTradePo {
     pub id: u64,
     pub event_time: i64,
     pub inst_id: u64,
-    pub symbol: String,
     pub trade_id: i64,
     pub price: f64,
     pub qty: f64,
@@ -160,7 +157,6 @@ impl LocalBinanceTradePo {
             id: get_snow_flake_id_u64(),
             event_time: trade.event_time,
             inst_id,
-            symbol: trade.symbol,
             trade_id: trade.trade_id,
             price: trade.price,
             qty: trade.qty,
@@ -239,7 +235,6 @@ mod tests {
     fn binance_kline_proto_maps_to_client_po() {
         let proto = BinanceKline {
             id: 10,
-            symbol: "BTCUSDT".to_string(),
             candle_begin_time: 1_700_000_000_000,
             open: 100.25,
             high: 110.5,
@@ -259,7 +254,6 @@ mod tests {
         let po = LocalBinanceKlinePo::from_proto(proto, 17, 1_700_000_300_000);
 
         assert_eq!(po.inst_id, 17);
-        assert_eq!(po.symbol, "BTCUSDT");
         assert_eq!(po.candle_begin_time, 1_700_000_000_000);
         assert_eq!(po.first_trade_id, Some(20));
         assert_eq!(po.last_trade_id, Some(30));
@@ -271,7 +265,6 @@ mod tests {
         let proto = BinanceTrade {
             id: 10,
             event_time: 1_700_000_000_001,
-            symbol: "BTCUSDT".to_string(),
             trade_id: 42,
             price: 100.25,
             qty: 0.5,
@@ -283,7 +276,6 @@ mod tests {
         let po = LocalBinanceTradePo::from_proto(proto, 17, 1_700_000_000_002);
 
         assert_eq!(po.inst_id, 17);
-        assert_eq!(po.symbol, "BTCUSDT");
         assert_eq!(po.trade_time, None);
         assert_eq!(po.is_buyer_maker, Some(true));
         assert_eq!(po.batch_timestamp, 1_700_000_000_002);
@@ -293,7 +285,6 @@ mod tests {
     fn binance_kline_copy_row_formats_candle_time_as_timestamp() {
         let proto = BinanceKline {
             id: 10,
-            symbol: "BTCUSDT".to_string(),
             candle_begin_time: 1_700_000_000_000,
             open: 100.25,
             high: 110.5,
@@ -325,7 +316,6 @@ mod tests {
         let proto = BinanceTrade {
             id: 10,
             event_time: 1_700_000_000_001,
-            symbol: "BTCUSDT".to_string(),
             trade_id: 42,
             price: 100.25,
             qty: 0.5,

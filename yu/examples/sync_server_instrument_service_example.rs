@@ -10,7 +10,7 @@ use yu::polymarket::duckdb_repository::get_instrument_repo;
 use yu::polymarket::po::PolyMarketInstrumentPo;
 use yu::polymarket::sync_server::{PolyMarketSyncHistoryService, PolyMarketSyncInstrumentService};
 use yu::sync::models::grpc_sync::instrument::Payload::Polymarket;
-use yu::sync::models::grpc_sync::{HistoryEntry, InstrumentType};
+use yu::sync::models::grpc_sync::{HistoryEntry, HistoryType, InstrumentType};
 use yu::sync::server::sync_server::{SyncHistoryService, SyncInstrumentServiceTrait};
 use yue::http_client::init_http_client;
 use yue::polymarket::restful_api::default_polymarket_api;
@@ -44,8 +44,8 @@ async fn main() -> Result<(), YuError> {
     });
     let token_history = PolyMarketSyncHistoryService::for_production(live_instruments.clone(), history_tx);
 
-    let mut polymarket_sync_history_service_map: HashMap<InstrumentType, SyncHistoryService> = HashMap::new();
-    polymarket_sync_history_service_map.insert(InstrumentType::PolymarketToken, token_history.clone());
+    let mut polymarket_sync_history_service_map: HashMap<HistoryType, SyncHistoryService> = HashMap::new();
+    polymarket_sync_history_service_map.insert(HistoryType::PolymarketToken, token_history.clone());
     let series_ids = vec!["45".to_string()];
 
     let instrument_service = PolyMarketSyncInstrumentService::for_production(series_ids, polymarket_sync_history_service_map, live_instruments);

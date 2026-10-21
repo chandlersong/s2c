@@ -4,18 +4,18 @@ pub mod grpc_sync {
 
     tonic::include_proto!("grpc_sync");
 
-    impl ExchangeType {
+    impl InstrumentType {
         pub fn readable_name(self) -> &'static str {
             match self {
                 Self::Polymarket => "Polymarket",
                 Self::Okx => "OKX",
                 Self::Binance => "Binance",
-                ExchangeType::ExchangeUnspecified => "ExchangeUnspecified",
+                InstrumentType::ExchangeUnspecified => "ExchangeUnspecified",
             }
         }
     }
 
-    impl InstrumentType {
+    impl HistoryType {
         pub fn readable_name(self) -> &'static str {
             match self {
                 Self::PolymarketToken => "Polymarket Token",
@@ -91,7 +91,6 @@ pub mod grpc_sync {
         fn from(value: crate::binance::models::po::KlinePo) -> Self {
             BinanceKline {
                 id: value.id as u64,
-                symbol: value.symbol,
                 candle_begin_time: value.candle_begin_time,
                 open: value.open,
                 high: value.high,
@@ -115,7 +114,6 @@ pub mod grpc_sync {
             BinanceTrade {
                 id: value.id as u64,
                 event_time: value.event_time,
-                symbol: value.symbol,
                 trade_id: value.trade_id,
                 price: value.price,
                 qty: value.qty,
@@ -129,26 +127,26 @@ pub mod grpc_sync {
 
 #[cfg(test)]
 mod tests {
-    use super::grpc_sync::{BinanceKline, BinanceTrade, ExchangeType, InstrumentType as GrpcInstrumentType};
+    use super::grpc_sync::{BinanceKline, BinanceTrade, HistoryType, InstrumentType as GrpcInstrumentType};
     use crate::binance::models::po::{BinanceInstrument as BinanceInstrumentPo, KlinePo, SpotStreamTradeRecordPo};
     use crate::sync::client::po::binance::{LocalBinanceKlinePo, LocalBinanceTradePo};
     use yue::models::InstrumentType;
 
     #[test]
     fn exchange_type_has_readable_name() {
-        assert_eq!(ExchangeType::Polymarket.readable_name(), "Polymarket");
-        assert_eq!(ExchangeType::Okx.readable_name(), "OKX");
-        assert_eq!(ExchangeType::Binance.readable_name(), "Binance");
+        assert_eq!(GrpcInstrumentType::Polymarket.readable_name(), "Polymarket");
+        assert_eq!(GrpcInstrumentType::Okx.readable_name(), "OKX");
+        assert_eq!(GrpcInstrumentType::Binance.readable_name(), "Binance");
     }
 
     #[test]
     fn instrument_type_has_readable_name() {
-        assert_eq!(GrpcInstrumentType::PolymarketToken.readable_name(), "Polymarket Token");
-        assert_eq!(GrpcInstrumentType::OkxKline.readable_name(), "OKX Kline");
-        assert_eq!(GrpcInstrumentType::OkxOptionSummary.readable_name(), "OKX Option Summary");
-        assert_eq!(GrpcInstrumentType::BinanceSpot.readable_name(), "Binance Spot");
-        assert_eq!(GrpcInstrumentType::BinanceTrade.readable_name(), "Binance Trade");
-        assert_eq!(GrpcInstrumentType::InstrumentUnspecified.readable_name(), "InstrumentUnspecified");
+        assert_eq!(HistoryType::PolymarketToken.readable_name(), "Polymarket Token");
+        assert_eq!(HistoryType::OkxKline.readable_name(), "OKX Kline");
+        assert_eq!(HistoryType::OkxOptionSummary.readable_name(), "OKX Option Summary");
+        assert_eq!(HistoryType::BinanceSpot.readable_name(), "Binance Spot");
+        assert_eq!(HistoryType::BinanceTrade.readable_name(), "Binance Trade");
+        assert_eq!(HistoryType::InstrumentUnspecified.readable_name(), "InstrumentUnspecified");
     }
 
     #[test]
@@ -202,7 +200,6 @@ mod tests {
         let proto = BinanceKline::from(server_po);
         let client_po = LocalBinanceKlinePo::from_proto(proto, 7, 1_700_000_300_000);
 
-        assert_eq!(client_po.symbol, "BTCUSDT");
         assert_eq!(client_po.candle_begin_time, 1_700_000_000_000);
         assert_eq!(client_po.first_trade_id, Some(3));
     }

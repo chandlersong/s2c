@@ -1,18 +1,13 @@
 use crate::errors::YuError;
-use crate::postgresql_db_tables::PostgresqlBatchInsert;
-use crate::sync::client::database::get_okx_kline_batch_insert;
-use crate::sync::client::database::get_okx_option_summary_batch_insert;
-use crate::sync::client::database::get_polymarket_price_batch_insert;
-use crate::sync::client::po::okx::{LocalOkxInstrumentPo, LocalOkxKlinePo};
-use crate::sync::client::po::polymarket::{LocalPolyMarketHistoryPo, LocalPolyMarketInstrumentPo};
+use crate::sync::client::grpc_manager::GrpcChannelManager;
 use crate::sync::client::service::polymarket::PolymarketClientExchangeService;
-use crate::sync::models::grpc_sync::{ExchangeType, Instrument, InstrumentList, ServerMessage};
+use crate::sync::models::grpc_sync::{Instrument, InstrumentList, InstrumentType, ServerMessage};
 use async_trait::async_trait;
 use li::tools::time::{UnixTimeStamp, unix_time_now_u64_utc};
 use log::error;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::mpsc;
 
 ///
 /// 该方法中的start和finish其实是钩子，因为在实际中，需要冲数据库中更新一些数据
@@ -55,21 +50,14 @@ pub type ClientExchangeService = Arc<dyn ClientExchangeServiceTrait>;
 /// 至于History。因为exchange无法配置化。所以单独拎出来，写成一个service就毫无意义了。
 ///
 pub struct SyncClientService {
-    pm_instrument_dict: Arc<RwLock<HashMap<u64, LocalPolyMarketInstrumentPo>>>,
-    okx_instrument_dict: Arc<RwLock<HashMap<u64, LocalOkxInstrumentPo>>>,
-
-    exchange_services: HashMap<ExchangeType, ClientExchangeService>,
+    exchange_services: HashMap<InstrumentType, ClientExchangeService>,
 }
 
 impl SyncClientService {
     pub fn for_production() -> Result<Self, YuError> {
         let mut exchange_services = HashMap::new();
-        exchange_services.insert(ExchangeType::Polymarket, PolymarketClientExchangeService::for_production()?);
-        Ok(Self {
-            pm_instrument_dict: Arc::new(Default::default()),
-            okx_instrument_dict: Arc::new(Default::default()),
-            exchange_services,
-        })
+        exchange_services.insert(InstrumentType::Polymarket, PolymarketClientExchangeService::for_production()?);
+        Ok(Self { exchange_services })
     }
 }
 
@@ -93,7 +81,7 @@ impl SyncClientService {
         // 因为整个流程时间很长，且监听会同时开始。所以要统一结束时间。
         let now = unix_time_now_u64_utc();
         for (_, inst) in server_inst.instruments.into_iter() {
-            let exchange_type = ExchangeType::try_from(inst.exchange).map_err(|_| YuError::new("unknown exchange type"))?;
+            let exchange_type = InstrumentType::try_from(inst.instrument_type).map_err(|_| YuError::new("unknown exchange type"))?;
             let exchange_name = exchange_type.readable_name();
             let exchange_service = self.exchange_services.get(&exchange_type);
             if exchange_service.is_none() {
@@ -129,22 +117,20 @@ impl SyncClientService {
     }
 
     ///
-    /// 监听数据，写入数据库
+    /// # 主要功能
+    /// 通过订阅SyncInterfaceClient的SubscribeLatest，获得最新的历史消息，并且存入数据库。
     ///
-    pub async fn start_batch_insert(
-        &self,
-        polymarket_batch_insert: Option<PostgresqlBatchInsert<LocalPolyMarketHistoryPo>>,
-        okx_batch_insert: Option<PostgresqlBatchInsert<LocalOkxKlinePo>>,
-    ) -> Result<mpsc::Sender<ServerMessage>, YuError> {
+    /// # 基础步骤
+    /// 1. 通过grpc_manager,开始订阅
+    /// 2. 获得stream。发过来的ServerMessage，根据history的instrument_type来选择BatchInsert，然后存入。
+    ///
+    /// # 内部维护和数据说明
+    /// 1. ServerMessage.inst_id为本地Instrument的server_id,需要本地维护内容。
+    ///     - 可以通过ClientExchangeService来判断是否存在，然后再维护。如果不存在，则可以通过这个来维护
+    /// 2. 需要内部判断，根据InstrumentType来维护的batchInsert接口。
+    ///
+    pub async fn start_subscribe(&self, grpc_manager: GrpcChannelManager) -> Result<mpsc::Sender<ServerMessage>, YuError> {
         let (tx, mut rx) = mpsc::channel::<ServerMessage>(10000);
-
-        let do_batch_insert = polymarket_batch_insert.unwrap_or_else(|| get_polymarket_price_batch_insert());
-
-        // build server_id -> LocalPolyMarketInstrumentPo mapping to translate server inst_id to local inst id
-        let server_id_map = self.pm_instrument_dict.clone();
-        let okx_server_map = self.okx_instrument_dict.clone();
-        let do_okx_batch_insert = okx_batch_insert.unwrap_or_else(|| get_okx_kline_batch_insert());
-        let do_okx_option_batch_insert = get_okx_option_summary_batch_insert();
 
         tokio::spawn(async move { loop {} });
 

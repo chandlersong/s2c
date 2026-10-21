@@ -1,7 +1,8 @@
 use crate::binance::bn_dashboard::BinanceDashboard;
 use crate::binance::models::po::BinanceInstrument as BinanceInstrumentPo;
 use crate::errors::YuError;
-use crate::sync::models::grpc_sync::{ExchangeType, Instrument, InstrumentType, instrument::Payload};
+use crate::sync::models::grpc_sync::instrument::Payload;
+use crate::sync::models::grpc_sync::{HistoryType, Instrument, InstrumentType};
 use crate::sync::server::sync_server::{SyncHistoryService, SyncInstrumentService, SyncInstrumentServiceTrait};
 use async_trait::async_trait;
 use log::error;
@@ -35,7 +36,7 @@ impl SyncInstrumentServiceTrait for BinanceSyncInstrumentService {
                 let key = format!("{market}:{}", instrument_po.symbol);
                 let proto = crate::sync::models::grpc_sync::BinanceInstrument::from(instrument_po);
                 let instrument = Instrument {
-                    exchange: ExchangeType::Binance as i32,
+                    instrument_type: InstrumentType::Binance.into(),
                     payload: Some(Payload::Binance(proto)),
                 };
 
@@ -53,7 +54,7 @@ impl SyncInstrumentServiceTrait for BinanceSyncInstrumentService {
         "error when list binance instruments".to_string()
     }
 
-    fn support_history_list(&self) -> Result<HashMap<InstrumentType, SyncHistoryService>, YuError> {
+    fn support_history_list(&self) -> Result<HashMap<HistoryType, SyncHistoryService>, YuError> {
         todo!()
     }
 }

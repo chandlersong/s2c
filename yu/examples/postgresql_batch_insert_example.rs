@@ -9,7 +9,7 @@ use yu::postgresql_db::get_sync_client_pg_pool;
 use yu::postgresql_db_tables::PostgresqlBatchInsertImpl;
 use yu::sync::client::database::initial_grpc_client_tables;
 use yu::sync::client::po::polymarket::LocalPolyMarketHistoryPo;
-use yu::sync::models::grpc_sync::{HistoryEntry, InstrumentType, PolyMarketHistory, history_entry::Payload};
+use yu::sync::models::grpc_sync::{HistoryEntry, HistoryType, InstrumentType, PolyMarketHistory, history_entry::Payload};
 
 #[tokio::main]
 async fn main() -> Result<(), YuError> {
@@ -34,9 +34,10 @@ async fn main() -> Result<(), YuError> {
         let server_inst_id = 123 + i;
         let local_inst_id = 1000 + i;
         let entry = HistoryEntry {
-            instrument_type: InstrumentType::PolymarketToken as i32,
+            history_type: HistoryType::PolymarketToken.into(),
+            instrument_type: InstrumentType::Polymarket.into(),
+            inst_id: server_inst_id,
             payload: Some(Payload::PolymarketHistory(PolyMarketHistory {
-                inst_id: server_inst_id,
                 timestamp: now + i,
                 price: 100.0 + ((i % 100) as f64) * 0.123, // 简单变化，避免全相同
             })),

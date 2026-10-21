@@ -1,6 +1,6 @@
 use crate::errors::YuError;
 use crate::okx::service::OptionService;
-use crate::sync::models::grpc_sync::{ExchangeType, Instrument, InstrumentType};
+use crate::sync::models::grpc_sync::{HistoryType, Instrument, InstrumentType};
 use crate::sync::server::sync_server::{SyncHistoryService, SyncInstrumentService, SyncInstrumentServiceTrait};
 use async_trait::async_trait;
 use log::error;
@@ -29,7 +29,7 @@ impl SyncInstrumentServiceTrait for OkxSyncInstrumentService {
                     let key = inst.inst_identify.clone();
                     let okx = crate::sync::models::grpc_sync::OkxInstrument::from(inst);
                     let instrument = Instrument {
-                        exchange: ExchangeType::Okx as i32,
+                        instrument_type: InstrumentType::Okx.into(),
                         payload: Some(crate::sync::models::grpc_sync::instrument::Payload::Okx(okx)),
                     };
                     instruments_map.insert(key, instrument);
@@ -47,7 +47,7 @@ impl SyncInstrumentServiceTrait for OkxSyncInstrumentService {
         "error when list okx instruments".to_string()
     }
 
-    fn support_history_list(&self) -> Result<HashMap<InstrumentType, SyncHistoryService>, YuError> {
+    fn support_history_list(&self) -> Result<HashMap<HistoryType, SyncHistoryService>, YuError> {
         todo!()
     }
 }

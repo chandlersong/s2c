@@ -9,7 +9,7 @@ use crate::sync::client::grpc_manager::{GrpcChannelManager, get_grpc_manager_fro
 use crate::sync::client::po::polymarket::{LocalPolyMarketHistoryPo, LocalPolyMarketInstrumentPo};
 use crate::sync::client::repository::polymarket::{ClientPolyMarketRepository, default_client_polymarket_repository};
 use crate::sync::client::sync_client_service::{ClientExchangeService, ClientExchangeServiceTrait};
-use crate::sync::models::grpc_sync::{ExchangeType, Instrument, InstrumentType, SyncRequest, history_entry::Payload, instrument};
+use crate::sync::models::grpc_sync::{HistoryType, Instrument, InstrumentType, SyncRequest, history_entry::Payload, instrument};
 use async_trait::async_trait;
 use futures::StreamExt;
 use li::tools::time::UnixTimeStamp;
@@ -72,22 +72,21 @@ impl PolymarketClientExchangeService {
                 inst_id: server_inst_id,
                 start_ms: start_timestamp.saturating_add(1),
                 end_ms: end_timestamp,
-                instrument_type: InstrumentType::PolymarketToken as i32,
+                history_type: HistoryType::PolymarketToken as i32,
             })
             .await?;
 
         while let Some(message) = history_stream.next().await {
             let message = message?;
-            let batch_timestamp = message.server_timestamp;
             for entry in message.history {
-                if entry.instrument_type != InstrumentType::PolymarketToken as i32 {
+                if entry.history_type != HistoryType::PolymarketToken as i32 {
                     return Err(YuError::new("received non-Polymarket history payload"));
                 }
 
-                let Some(Payload::PolymarketHistory(history)) = entry.payload.as_ref() else {
+                let Some(Payload::PolymarketHistory(_)) = entry.payload.as_ref() else {
                     return Err(YuError::new("received non-Polymarket history payload"));
                 };
-                if history.inst_id != server_inst_id {
+                if entry.inst_id != server_inst_id {
                     return Err(YuError::new("received Polymarket history for unexpected instrument"));
                 }
 
@@ -107,7 +106,7 @@ impl ClientExchangeServiceTrait for PolymarketClientExchangeService {
     /// 3. 查询数据库中的最大时间戳。如果存在，开始时间取该时间戳。否则，就是inst的list_time
     ///
     async fn initial_data(&self, instrument: Instrument, end_ms: UnixTimeStamp) -> Result<(), YuError> {
-        if instrument.exchange != ExchangeType::Polymarket as i32 {
+        if instrument.instrument_type != InstrumentType::Polymarket as i32 {
             return Err(YuError::new("instrument exchange is not polymarket"));
         }
 
@@ -209,7 +208,7 @@ mod tests {
     use crate::postgresql_db_tables::MockPostgresqlBatchInsertTrait;
     use crate::sync::client::grpc_manager::{GrpcServerMessageStream, MockGrpcChannelManagerTrait};
     use crate::sync::client::repository::polymarket::MockClientPolyMarketRepositoryTrait;
-    use crate::sync::models::grpc_sync::{HistoryEntry, PolyMarketHistory, PolymarketInstrument, ServerMessage};
+    use crate::sync::models::grpc_sync::{HistoryEntry, HistoryType, InstrumentType, PolyMarketHistory, PolymarketInstrument, ServerMessage};
     use li::tools::time::unix_time_now_u64_utc;
 
     fn empty_history_stream() -> GrpcServerMessageStream {
@@ -218,6 +217,7 @@ mod tests {
 
     fn polymarket_instrument(server_id: u64) -> Instrument {
         Instrument {
+            instrument_type: InstrumentType::Polymarket as i32,
             payload: Some(instrument::Payload::Polymarket(PolymarketInstrument {
                 server_id,
                 series_id: "series-id".to_string(),
@@ -232,7 +232,6 @@ mod tests {
                 end_ms: 200,
                 latest_timestamp: 200,
             })),
-            exchange: ExchangeType::Polymarket as i32,
         }
     }
 
@@ -302,7 +301,7 @@ mod tests {
         let mut manager = MockGrpcChannelManagerTrait::new();
         manager
             .expect_sync_history()
-            .withf(|request| request.inst_id == 42 && request.start_ms == 101 && request.instrument_type == InstrumentType::PolymarketToken as i32)
+            .withf(|request| request.inst_id == 42 && request.start_ms == 101 && request.history_type == HistoryType::PolymarketToken as i32)
             .returning(|_| Ok(empty_history_stream()));
 
         let service = PolymarketClientExchangeService::new(
@@ -332,7 +331,7 @@ mod tests {
         let mut manager = MockGrpcChannelManagerTrait::new();
         manager
             .expect_sync_history()
-            .withf(|request| request.inst_id == 42 && request.start_ms == 151 && request.instrument_type == InstrumentType::PolymarketToken as i32)
+            .withf(|request| request.inst_id == 42 && request.start_ms == 151 && request.history_type == HistoryType::PolymarketToken as i32)
             .returning(|_| Ok(empty_history_stream()));
         let service = PolymarketClientExchangeService::new(
             Arc::new(repo),
@@ -357,17 +356,15 @@ mod tests {
                 request.inst_id == 42
                     && request.start_ms == 151
                     && request.end_ms == 200
-                    && request.instrument_type == InstrumentType::PolymarketToken as i32
+                    && request.history_type == HistoryType::PolymarketToken as i32
             })
             .returning(|_| {
                 Ok(Box::pin(futures::stream::iter(vec![Ok(ServerMessage {
                     history: vec![HistoryEntry {
-                        instrument_type: InstrumentType::PolymarketToken as i32,
-                        payload: Some(Payload::PolymarketHistory(PolyMarketHistory {
-                            inst_id: 42,
-                            timestamp: 175,
-                            price: 0.42,
-                        })),
+                        history_type: HistoryType::PolymarketToken as i32,
+                        instrument_type: InstrumentType::Polymarket as i32,
+                        inst_id: 42,
+                        payload: Some(Payload::PolymarketHistory(PolyMarketHistory { timestamp: 175, price: 0.42 })),
                     }],
                     server_timestamp: 180,
                 })])) as GrpcServerMessageStream)
@@ -377,11 +374,12 @@ mod tests {
             .expect_insert_data()
             .withf(|entry, local_inst_id| {
                 *local_inst_id == 1
-                    && entry.instrument_type == InstrumentType::PolymarketToken as i32
+                    && entry.history_type == HistoryType::PolymarketToken as i32
+                    && entry.inst_id == 42
                     && matches!(
                         entry.payload.as_ref(),
                         Some(Payload::PolymarketHistory(history))
-                            if history.inst_id == 42 && history.timestamp == 175 && history.price == 0.42
+                            if history.timestamp == 175 && history.price == 0.42
                     )
             })
             .times(1)
@@ -429,7 +427,7 @@ mod tests {
                 request.inst_id == 42
                     && request.start_ms == interval_ms
                     && request.end_ms == end_ms - 2 * interval_ms
-                    && request.instrument_type == InstrumentType::PolymarketToken as i32
+                    && request.history_type == HistoryType::PolymarketToken as i32
             })
             .times(1)
             .returning(|_| Ok(empty_history_stream()));
@@ -480,7 +478,7 @@ mod tests {
             HistoryInterval::OneHour,
         );
         let mut instrument = polymarket_instrument(42);
-        instrument.exchange = ExchangeType::Okx as i32;
+        instrument.instrument_type = InstrumentType::Okx as i32;
 
         assert!(service.initial_data(instrument, now).await.is_err());
     }

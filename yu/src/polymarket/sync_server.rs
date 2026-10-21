@@ -6,7 +6,7 @@ use crate::polymarket::db_consts::PolyMarketTables;
 use crate::polymarket::duckdb_repository::{PolyMarketHistoryRepository, PolyMarketInstrumentRepository, get_history_repo, get_instrument_repo};
 use crate::polymarket::po::{PolyMarketHistoryPo, PolyMarketInstrumentPo};
 use crate::sync::models::grpc_sync::{
-    ExchangeType, HistoryEntry, Instrument, InstrumentType, PolyMarketHistory, PolymarketInstrument, ServerMessage, history_entry,
+    HistoryEntry, HistoryType, Instrument, InstrumentType, PolyMarketHistory, PolymarketInstrument, ServerMessage, history_entry,
 };
 use crate::sync::server::sync_server::{SyncHistoryService, SyncHistoryServiceTrait, SyncInstrumentService, SyncInstrumentServiceTrait};
 use async_trait::async_trait;
@@ -165,7 +165,7 @@ pub async fn get_all_instruments(
 /// 1. 订阅主要是以Series为单元，该series下面所有的event和market。
 ///
 pub struct PolyMarketSyncInstrumentService {
-    support_history_service: HashMap<InstrumentType, SyncHistoryService>,
+    support_history_service: HashMap<HistoryType, SyncHistoryService>,
     client: PolymarketApi,
     series_ids: Vec<String>,
     inst_repo: PolyMarketInstrumentRepository,
@@ -176,7 +176,7 @@ pub struct PolyMarketSyncInstrumentService {
 impl PolyMarketSyncInstrumentService {
     pub fn new(
         series_ids: Vec<String>,
-        support_history_service: HashMap<InstrumentType, SyncHistoryService>,
+        support_history_service: HashMap<HistoryType, SyncHistoryService>,
         client: PolymarketApi,
         inst_repo: PolyMarketInstrumentRepository,
     ) -> SyncInstrumentService {
@@ -192,7 +192,7 @@ impl PolyMarketSyncInstrumentService {
 
     pub fn for_production(
         series_ids: Vec<String>,
-        support_history_service: HashMap<InstrumentType, SyncHistoryService>,
+        support_history_service: HashMap<HistoryType, SyncHistoryService>,
         live_instruments: Arc<RwLock<Vec<PolyMarketInstrumentPo>>>,
     ) -> Arc<Self> {
         let client = default_polymarket_api();
@@ -240,7 +240,7 @@ impl SyncInstrumentServiceTrait for PolyMarketSyncInstrumentService {
                     let poly = PolymarketInstrument::from(inst);
 
                     let instrument = Instrument {
-                        exchange: ExchangeType::Polymarket as i32,
+                        instrument_type: InstrumentType::Polymarket as i32,
                         payload: Some(crate::sync::models::grpc_sync::instrument::Payload::Polymarket(poly)),
                     };
                     instruments_map.insert(asset_id, instrument);
@@ -258,7 +258,7 @@ impl SyncInstrumentServiceTrait for PolyMarketSyncInstrumentService {
         "error when list polymarket instruments".to_string()
     }
 
-    fn support_history_list(&self) -> Result<HashMap<InstrumentType, SyncHistoryService>, YuError> {
+    fn support_history_list(&self) -> Result<HashMap<HistoryType, SyncHistoryService>, YuError> {
         Ok(self.support_history_service.clone())
     }
 }
@@ -328,9 +328,10 @@ impl PolyMarketSyncHistoryService {
     ///
     pub async fn broadcast_message(&self, entry: PolyMarketHistoryPo, asset_slug: &str, timestamp: u64) {
         let history_entry = HistoryEntry {
-            instrument_type: InstrumentType::PolymarketToken.into(),
+            history_type: HistoryType::PolymarketToken.into(),
+            instrument_type: InstrumentType::Polymarket.into(),
+            inst_id: entry.instrument_id,
             payload: Some(history_entry::Payload::PolymarketHistory(PolyMarketHistory {
-                inst_id: entry.instrument_id,
                 timestamp,
                 price: entry.price,
             })),
@@ -536,12 +537,13 @@ impl SyncHistoryServiceTrait for PolyMarketSyncHistoryService {
                     let mut histories = Vec::with_capacity(chunk.len());
                     for h in chunk.iter() {
                         let rpc_entry = PolyMarketHistory {
-                            inst_id: h.instrument_id,
                             timestamp: h.timestamp,
                             price: h.price,
                         };
                         histories.push(HistoryEntry {
-                            instrument_type: InstrumentType::PolymarketToken.into(),
+                            history_type: HistoryType::PolymarketToken.into(),
+                            instrument_type: InstrumentType::Polymarket.into(),
+                            inst_id,
                             payload: Some(history_entry::Payload::PolymarketHistory(rpc_entry)),
                         });
                     }

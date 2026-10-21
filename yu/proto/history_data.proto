@@ -1,7 +1,21 @@
 syntax = "proto3";
 package grpc_sync;
 
-enum ExchangeType{
+/*
+
+# 规则
+1. 数据分为Instrument和History两个
+
+
+# 思考过程
+1. 交易所。也就是Exchange暂时定位一个属性来维护。而不是具体的实体。因为在数据处理上面，交易所其实意义不大。Instrument就可以做区分。
+  - 简化流程，你知道instrument的时候，也就知道了exchange。没有必要变成一个实体。
+
+*/
+
+
+
+enum InstrumentType{
   EXCHANGE_UNSPECIFIED = 0;
   POLYMARKET = 1;
   OKX = 2;
@@ -9,7 +23,7 @@ enum ExchangeType{
 }
 
 
-enum InstrumentType {
+enum HistoryType {
   Instrument_UNSPECIFIED = 0;
   POLYMARKET_TOKEN = 1;
   OKX_KLINE = 2;
@@ -65,7 +79,7 @@ message BinanceInstrument {
 }
 
 message Instrument {
-  ExchangeType exchange = 1;
+  InstrumentType instrument_type = 1;
   oneof payload {
     PolymarketInstrument polymarket = 2;     // polymarket资产
     OkxInstrument okx = 3;     // okx资产
@@ -109,16 +123,19 @@ service SyncInterface {
 message ServerMessage {
   repeated HistoryEntry history = 1;
   uint64 server_timestamp = 2;  //服务器的时间戳
+
 }
 
 message HistoryEntry{
-  InstrumentType instrument_type = 1;
+  HistoryType history_type = 1;
+  InstrumentType instrument_type = 2;
+  uint64 inst_id = 3;   // 资产ID
   oneof payload {
-    PolyMarketHistory polymarket_history = 2;
-    OkxKline okx_kline = 3;
-    OkxOptionSummary okx_option_summary = 4;
-    BinanceKline binance_kline = 5;
-    BinanceTrade binance_trade = 6;
+    PolyMarketHistory polymarket_history = 4;
+    OkxKline okx_kline = 5;
+    OkxOptionSummary okx_option_summary = 6;
+    BinanceKline binance_kline = 7;
+    BinanceTrade binance_trade = 8;
   }
 }
 
@@ -131,7 +148,7 @@ message SyncRequest {
   uint64 inst_id = 1;   // 资产ID
   uint64 start_ms = 2;  // 起始时间戳，server推送该时间之后的所有数据
   uint64 end_ms = 3;    // 结束时间戳，server推送该时间之前的所有数据
-  InstrumentType instrument_type = 4; // 交易品类类型
+  HistoryType history_type = 4; // 交易品类类型
 }
 
 // 订阅最新消息请求
@@ -140,14 +157,12 @@ message SubscribeRequest {
 }
 
 message PolyMarketHistory {
-  uint64 inst_id = 1;
   uint64 timestamp = 2;
   double price = 3;
 }
 
 message OkxKline {
   uint64 id = 1;
-  uint64 inst_id = 2;
   uint64 ts = 3;
   double open = 4;
   double high = 5;
@@ -162,7 +177,6 @@ message OkxKline {
 
 message OkxOptionSummary {
   uint64 id = 1;
-  uint64 inst_id = 2;
   string inst_identify = 3;
   string inst_type = 4;
   string uly = 5;
@@ -187,7 +201,6 @@ message OkxOptionSummary {
 
 message BinanceKline {
   uint64 id = 1;
-  string symbol = 2;
   uint64 candle_begin_time = 3;
   double open = 4;
   double high = 5;
@@ -207,7 +220,6 @@ message BinanceKline {
 message BinanceTrade {
   uint64 id = 1;
   int64 event_time = 2;
-  string symbol = 3;
   int64 trade_id = 4;
   double price = 5;
   double qty = 6;

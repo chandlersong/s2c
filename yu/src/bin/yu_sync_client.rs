@@ -39,29 +39,11 @@ async fn main() -> Result<(), YuError> {
     let client_service = Arc::new(SyncClientService::for_production()?);
     let connection_manager = get_grpc_manager_from_config();
     info!("已连接到 gRPC 服务端");
-    //
-    // // 1) 调用 GetLatestTimestamps
-
-    let tx = match client_service.start_batch_insert(None, None).await {
-        Ok(sender) => sender,
-        Err(e) => {
-            error!("error starting batch insert: {}", e);
-            return Err(e);
-        }
-    };
 
     if let Err(e) = initial_grpc_client_tables(None).await {
         error!("error starting initial grpc client tables: {}", e);
         return Err(e);
     }
-
-    let subscribe_server_tx = tx.clone();
-    let subscribe_server_connection = connection_manager.clone();
-    tokio::spawn(async move {
-        if let Err(e) = subscribe(subscribe_server_tx, subscribe_server_connection).await {
-            error!("Error in subscribe: {}", e);
-        }
-    });
     let sync_server_manager = connection_manager.clone();
     let sync_client_service = client_service.clone();
     tokio::spawn(async move {

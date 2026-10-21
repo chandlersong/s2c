@@ -3,7 +3,7 @@ use crate::cron_job;
 use crate::errors::YuError;
 use crate::polymarket::po::PolyMarketInstrumentPo;
 use crate::polymarket::sync_server::{PolyMarketSyncHistoryService, PolyMarketSyncInstrumentService};
-use crate::sync::models::grpc_sync::{HistoryEntry, InstrumentType};
+use crate::sync::models::grpc_sync::{HistoryEntry, HistoryType};
 use crate::sync::server::sync_server::{SyncHistoryService, SyncInstrumentService};
 use log::{error, info};
 use std::collections::HashMap;
@@ -70,9 +70,9 @@ pub async fn start_polymarket_sync_series_job(
         })
     });
 
-    let mut polymarket_sync_history_service_map: HashMap<InstrumentType, SyncHistoryService> = HashMap::new();
+    let mut polymarket_sync_history_service_map: HashMap<HistoryType, SyncHistoryService> = HashMap::new();
 
-    polymarket_sync_history_service_map.insert(InstrumentType::PolymarketToken, token_history);
+    polymarket_sync_history_service_map.insert(HistoryType::PolymarketToken, token_history);
     let res = PolyMarketSyncInstrumentService::for_production(series_ids.unwrap(), polymarket_sync_history_service_map, live_instruments);
     if let Err(e) = res.sync_instrument().await {
         error!("Error when syncing polymarket instrument when start server: {:?}", e);
