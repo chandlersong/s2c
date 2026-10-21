@@ -1,7 +1,7 @@
 use crate::config::get_config;
 use crate::errors::YuError;
 use crate::sync::models::grpc_sync::sync_interface_client::SyncInterfaceClient;
-use crate::sync::models::grpc_sync::{ServerMessage, SyncRequest};
+use crate::sync::models::grpc_sync::{ServerMessage, SubscribeRequest, SyncRequest};
 use async_trait::async_trait;
 use futures::Stream;
 use governor::Jitter;
@@ -43,6 +43,7 @@ pub trait GrpcChannelManagerTrait: Send + Sync {
     async fn reconnect(&self) -> Channel;
     async fn connect(&self) -> Channel;
     async fn sync_history(&self, request: SyncRequest) -> Result<GrpcServerMessageStream, YuError>;
+    async fn subscribe_latest(&self, request: SubscribeRequest) -> Result<GrpcServerMessageStream, YuError>;
 }
 
 pub type GrpcChannelManager = Arc<dyn GrpcChannelManagerTrait + Send + Sync>;
@@ -141,6 +142,12 @@ impl GrpcChannelManagerTrait for GrpcChannelManagerImpl {
     async fn sync_history(&self, request: SyncRequest) -> Result<GrpcServerMessageStream, YuError> {
         let mut client = SyncInterfaceClient::new(self.connect().await);
         let stream = client.sync_history(Request::new(request)).await?.into_inner();
+        Ok(Box::pin(stream))
+    }
+
+    async fn subscribe_latest(&self, request: SubscribeRequest) -> Result<GrpcServerMessageStream, YuError> {
+        let mut client = SyncInterfaceClient::new(self.connect().await);
+        let stream = client.subscribe_latest(Request::new(request)).await?.into_inner();
         Ok(Box::pin(stream))
     }
 }

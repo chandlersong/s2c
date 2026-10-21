@@ -1,13 +1,28 @@
 use crate::errors::YuError;
+use crate::sync::client::database::{
+    get_binance_kline_batch_insert, get_binance_trade_batch_insert, get_okx_kline_batch_insert, get_okx_option_summary_batch_insert,
+    get_polymarket_price_batch_insert,
+};
 use crate::sync::client::grpc_manager::GrpcChannelManager;
 use crate::sync::client::service::polymarket::PolymarketClientExchangeService;
-use crate::sync::models::grpc_sync::{Instrument, InstrumentList, InstrumentType, ServerMessage};
+use crate::sync::models::grpc_sync::{HistoryType, Instrument, InstrumentList, InstrumentType, ServerMessage, SubscribeRequest};
 use async_trait::async_trait;
+use futures::StreamExt;
 use li::tools::time::{UnixTimeStamp, unix_time_now_u64_utc};
-use log::error;
+use log::{error, warn};
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use yue::tools::get_snow_flake_id_u64;
+
+const SUPPORTED_HISTORY_TYPES: [HistoryType; 5] = [
+    HistoryType::PolymarketToken,
+    HistoryType::OkxKline,
+    HistoryType::OkxOptionSummary,
+    HistoryType::BinanceSpot,
+    HistoryType::BinanceTrade,
+];
 
 ///
 /// 该方法中的start和finish其实是钩子，因为在实际中，需要冲数据库中更新一些数据
@@ -34,6 +49,17 @@ pub trait ClientExchangeServiceTrait: Send + Sync {
 
 pub type ClientExchangeService = Arc<dyn ClientExchangeServiceTrait>;
 
+#[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
+#[async_trait]
+pub trait ServerMessageProcessorTrait: Send + Sync {
+    async fn process_server_message(
+        &self,
+        exchange_services: &HashMap<InstrumentType, ClientExchangeService>,
+        local_instrument_ids: &mut HashMap<InstrumentCacheKey, u64>,
+        message: ServerMessage,
+    );
+}
+
 ///
 /// # 同步Instrument：
 /// 同步Instrument本质是两个需求。
@@ -50,14 +76,16 @@ pub type ClientExchangeService = Arc<dyn ClientExchangeServiceTrait>;
 /// 至于History。因为exchange无法配置化。所以单独拎出来，写成一个service就毫无意义了。
 ///
 pub struct SyncClientService {
-    exchange_services: HashMap<InstrumentType, ClientExchangeService>,
+    instrument_services: HashMap<InstrumentType, ClientExchangeService>,
 }
 
 impl SyncClientService {
     pub fn for_production() -> Result<Self, YuError> {
         let mut exchange_services = HashMap::new();
         exchange_services.insert(InstrumentType::Polymarket, PolymarketClientExchangeService::for_production()?);
-        Ok(Self { exchange_services })
+        Ok(Self {
+            instrument_services: exchange_services,
+        })
     }
 }
 
@@ -76,6 +104,27 @@ pub struct BinanceTradeSyncRange {
     pub end_trade_id: u64,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct InstrumentCacheKey {
+    instrument_type: i32,
+    server_id: u64,
+}
+
+impl PartialEq for InstrumentCacheKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.instrument_type == other.instrument_type && self.server_id == other.server_id
+    }
+}
+
+impl Eq for InstrumentCacheKey {}
+
+impl Hash for InstrumentCacheKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.instrument_type.hash(state);
+        self.server_id.hash(state);
+    }
+}
+
 impl SyncClientService {
     pub async fn initial_data(&self, server_inst: InstrumentList) -> Result<(), YuError> {
         // 因为整个流程时间很长，且监听会同时开始。所以要统一结束时间。
@@ -83,7 +132,7 @@ impl SyncClientService {
         for (_, inst) in server_inst.instruments.into_iter() {
             let exchange_type = InstrumentType::try_from(inst.instrument_type).map_err(|_| YuError::new("unknown exchange type"))?;
             let exchange_name = exchange_type.readable_name();
-            let exchange_service = self.exchange_services.get(&exchange_type);
+            let exchange_service = self.instrument_services.get(&exchange_type);
             if exchange_service.is_none() {
                 error!("{} not found exchange service to handle", exchange_name);
                 continue;
@@ -107,7 +156,7 @@ impl SyncClientService {
     ///
     pub async fn reconcile_living_instrument_with_server(&self) -> Result<(), YuError> {
         let now = unix_time_now_u64_utc();
-        for (exchange_type, exchange_service) in &self.exchange_services {
+        for (exchange_type, exchange_service) in &self.instrument_services {
             let exchange_name = exchange_type.readable_name();
             if let Err(e) = exchange_service.reconcile_living_instrument_with_server(now).await {
                 error!("error reconciling exchange {},error:{}", exchange_name, e);
@@ -130,10 +179,138 @@ impl SyncClientService {
     /// 2. 需要内部判断，根据InstrumentType来维护的batchInsert接口。
     ///
     pub async fn start_subscribe(&self, grpc_manager: GrpcChannelManager) -> Result<mpsc::Sender<ServerMessage>, YuError> {
+        let client_id = get_snow_flake_id_u64();
+        let mut stream = grpc_manager.subscribe_latest(SubscribeRequest { client_id }).await?;
         let (tx, mut rx) = mpsc::channel::<ServerMessage>(10000);
 
-        tokio::spawn(async move { loop {} });
+        let exchange_services = self.instrument_services.clone();
+        let processor = ProductionServerMessageProcessor;
+
+        tokio::spawn(async move {
+            let mut local_instrument_ids = HashMap::new();
+            while let Some(message) = rx.recv().await {
+                processor
+                    .process_server_message(&exchange_services, &mut local_instrument_ids, message)
+                    .await;
+            }
+        });
+
+        let stream_tx = tx.clone();
+        tokio::spawn(async move {
+            loop {
+                while let Some(message) = stream.next().await {
+                    match message {
+                        Ok(message) => {
+                            if stream_tx.send(message).await.is_err() {
+                                return;
+                            }
+                        }
+                        Err(e) => {
+                            error!("error receiving SubscribeLatest message: {}", e);
+                            break;
+                        }
+                    }
+                }
+
+                warn!("SubscribeLatest stream ended; reconnecting");
+                grpc_manager.reconnect().await;
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                match grpc_manager.subscribe_latest(SubscribeRequest { client_id }).await {
+                    Ok(new_stream) => stream = new_stream,
+                    Err(e) => {
+                        error!("error reconnecting SubscribeLatest stream: {}", e);
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    }
+                }
+            }
+        });
 
         Ok(tx)
+    }
+}
+
+struct ProductionServerMessageProcessor;
+
+#[async_trait]
+impl ServerMessageProcessorTrait for ProductionServerMessageProcessor {
+    async fn process_server_message(
+        &self,
+        exchange_services: &HashMap<InstrumentType, ClientExchangeService>,
+        local_instrument_ids: &mut HashMap<InstrumentCacheKey, u64>,
+        message: ServerMessage,
+    ) {
+        process_server_message(exchange_services, local_instrument_ids, message).await;
+    }
+}
+
+async fn process_server_message(
+    exchange_services: &HashMap<InstrumentType, ClientExchangeService>,
+    local_instrument_ids: &mut HashMap<InstrumentCacheKey, u64>,
+    message: ServerMessage,
+) {
+    for entry in message.history {
+        let instrument_type = match InstrumentType::try_from(entry.instrument_type) {
+            Ok(instrument_type) => instrument_type,
+            Err(e) => {
+                warn!("ignoring history entry with unknown instrument type {}: {}", entry.instrument_type, e);
+                continue;
+            }
+        };
+        let history_type = match HistoryType::try_from(entry.history_type) {
+            Ok(history_type) => history_type,
+            Err(e) => {
+                warn!("ignoring history entry with unknown history type {}: {}", entry.history_type, e);
+                continue;
+            }
+        };
+        if !SUPPORTED_HISTORY_TYPES.contains(&history_type) {
+            warn!("ignoring unsupported history type {:?} for instrument {}", history_type, entry.inst_id);
+            continue;
+        }
+
+        let Some(exchange_service) = exchange_services.get(&instrument_type) else {
+            warn!("no exchange service for {:?}; ignoring instrument {}", instrument_type, entry.inst_id);
+            continue;
+        };
+        let cache_key = InstrumentCacheKey {
+            instrument_type: entry.instrument_type,
+            server_id: entry.inst_id,
+        };
+        let local_inst_id = match local_instrument_ids.get(&cache_key).copied() {
+            Some(local_inst_id) => local_inst_id,
+            None => match exchange_service.check_server_id(entry.inst_id).await {
+                Ok(Some(local_inst_id)) => {
+                    local_instrument_ids.insert(cache_key, local_inst_id);
+                    local_inst_id
+                }
+                Ok(None) => {
+                    warn!("local instrument not found for server instrument {}", entry.inst_id);
+                    continue;
+                }
+                Err(e) => {
+                    error!("failed to look up local instrument {}: {}", entry.inst_id, e);
+                    continue;
+                }
+            },
+        };
+
+        match history_type {
+            HistoryType::PolymarketToken => {
+                get_polymarket_price_batch_insert().insert_data(entry, local_inst_id).await;
+            }
+            HistoryType::OkxKline => {
+                get_okx_kline_batch_insert().insert_data(entry, local_inst_id).await;
+            }
+            HistoryType::OkxOptionSummary => {
+                get_okx_option_summary_batch_insert().insert_data(entry, local_inst_id).await;
+            }
+            HistoryType::BinanceSpot => {
+                get_binance_kline_batch_insert().insert_data(entry, local_inst_id).await;
+            }
+            HistoryType::BinanceTrade => {
+                get_binance_trade_batch_insert().insert_data(entry, local_inst_id).await;
+            }
+            HistoryType::InstrumentUnspecified => unreachable!("unsupported history type was filtered above"),
+        }
     }
 }
