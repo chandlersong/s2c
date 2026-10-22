@@ -40,10 +40,7 @@ async fn main() -> Result<(), YuError> {
         error!("Error polymarket initial tables: {}", e);
         return Err(e);
     }
-    if let Err(e) = initial_binance_tables(None) {
-        error!("Error okx initial tables: {}", e);
-        return Err(e);
-    }
+
     let log_in_config = app_config.log_level.as_deref();
     special_log.insert("yu_sync_server".to_string(), parse_level(log_in_config));
     special_log.insert("yu".to_string(), parse_level(log_in_config));
@@ -52,14 +49,6 @@ async fn main() -> Result<(), YuError> {
     setup_logger(Some(LevelFilter::Warn), special_log)?;
 
     let mut instrument_services: Vec<SyncInstrumentService> = vec![];
-
-    let binance_config = &app_config.binance;
-    if binance_config.as_ref().is_some_and(|config| config.enable()) {
-        let binance_dashboard = start_sync_job().await?;
-        let binance_instrument_service = BinanceSyncInstrumentService::new(binance_dashboard);
-        instrument_services.push(binance_instrument_service);
-        info!("Started binance sync job");
-    }
 
     let (history_tx, history_rx) = mpsc::channel::<HistoryEntry>(10000);
     let polymarket_config = &app_config.polymarket;

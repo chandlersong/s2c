@@ -57,12 +57,12 @@ async fn main() -> Result<(), YuError> {
             info!("{}: {}", key, poly.asset_slug);
         }
     }
-    // if let Err(e) = token_history.initial_history_data().await {
-    //     error!("error initial history data: {}", e)
-    // }
-    // if let Err(e) = token_history.check_history_data().await {
-    //     error!("error checking history_data: {}", e)
-    // }
+    if let Err(e) = token_history.initial_history_data().await {
+        error!("error initial history data: {}", e)
+    }
+    if let Err(e) = token_history.check_history_data().await {
+        error!("error checking history_data: {}", e)
+    }
     if let Err(e) = token_history.fetch_latest_history().await {
         error!("error fetch latest history: {}", e)
     }
