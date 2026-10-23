@@ -3,11 +3,9 @@ use log::{LevelFilter, error, info};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 use tonic::transport::Server;
-use yu::binance::jobs::initial_tables as initial_binance_tables;
-use yu::binance::sync_job::start_sync_job;
-use yu::binance::sync_server::BinanceSyncInstrumentService;
 use yu::config::get_config;
 use yu::errors::YuError;
+use yu::okx::sync_job::start_okx_sync_server_job;
 use yu::polymarket::database::initial_polymarket_tables;
 use yu::polymarket::sync_job::start_polymarket_sync_series_job;
 use yu::sync::models::grpc_sync::HistoryEntry;
@@ -40,7 +38,6 @@ async fn main() -> Result<(), YuError> {
         error!("Error polymarket initial tables: {}", e);
         return Err(e);
     }
-
     let log_in_config = app_config.log_level.as_deref();
     special_log.insert("yu_sync_server".to_string(), parse_level(log_in_config));
     special_log.insert("yu".to_string(), parse_level(log_in_config));
@@ -49,13 +46,18 @@ async fn main() -> Result<(), YuError> {
     setup_logger(Some(LevelFilter::Warn), special_log)?;
 
     let mut instrument_services: Vec<SyncInstrumentService> = vec![];
-
     let (history_tx, history_rx) = mpsc::channel::<HistoryEntry>(10000);
+    if app_config.okx.as_ref().is_some_and(|config| config.enable()) {
+        let okx_sync_service = start_okx_sync_server_job(&app_config, history_tx.clone()).await?;
+        instrument_services.push(okx_sync_service);
+        info!("Started OKX sync server job");
+    }
+
     let polymarket_config = &app_config.polymarket;
     //TODO: 重构完成后，放入后面的括号中
 
     if polymarket_config.as_ref().is_some_and(|config| config.enable()) {
-        let polymarket_instrument_service = start_polymarket_sync_series_job(&app_config, history_tx).await?;
+        let polymarket_instrument_service = start_polymarket_sync_series_job(&app_config, history_tx.clone()).await?;
         instrument_services.push(polymarket_instrument_service);
         info!("Started polymarket sync job");
     }

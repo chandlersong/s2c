@@ -42,7 +42,7 @@ async fn main() -> Result<(), YuError> {
     info!("获取instrument列表个数.{}", inst_list.instruments.len());
 
     let inst_id = 641321015250846635;
-    let Some((instrument_key, instrument)) = inst_list.instruments.into_iter().find(|(_, instrument)| {
+    let Some(instrument) = inst_list.instruments.into_iter().find(|instrument| {
         if let Some(payload) = &instrument.payload {
             return match payload {
                 Payload::Polymarket(p) => {
@@ -59,7 +59,10 @@ async fn main() -> Result<(), YuError> {
     }) else {
         return Err(YuError::new("no Polymarket instrument found with inst_id in server instrument list"));
     };
-    info!("使用instrument {} 作为示例", instrument_key);
+    info!(
+        "使用instrument {} 作为示例",
+        instrument.payload.as_ref().map_or("None".to_string(), |p| format!("{:?}", p))
+    );
     info!("开始instrument初始化");
     let now = unix_time_now_u64_utc();
     polymarket_instrument_service.initial_data(instrument, now).await?;

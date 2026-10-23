@@ -1,5 +1,6 @@
 use crate::duck_db::DuckDBDSProvider;
 use crate::errors::YuError;
+use crate::polymarket::po::PolyMarketInstrumentPo;
 use crate::sync::models::grpc_sync::sync_interface_server::SyncInterface;
 use crate::sync::models::grpc_sync::{Empty, HistoryEntry, HistoryType, Instrument, InstrumentList, ServerMessage, SubscribeRequest, SyncRequest};
 use async_trait::async_trait;
@@ -32,10 +33,22 @@ use yue::query_message::DataSourceProviderTrait;
 
 #[async_trait]
 pub trait SyncInstrumentServiceTrait {
-    async fn list_instruments(&self) -> Result<HashMap<String, Instrument>, YuError>;
+    ///  获取所有的instrument信息，包括已经停止交易的。
+    async fn list_instruments(&self) -> Result<Vec<Instrument>, YuError>;
 
+    ///  和交易所同步现在的instrument信息。主要为以下两点
+    /// 1. 发现新的instrument，加入到本地数据库
+    /// 2. 发现已经停止交易的instrument，标记为停止交易
+    async fn sync_instrument(&self) -> Result<Vec<Instrument>, YuError>;
+
+    ///
+    /// 在批量操作的时候，方便打log，打印出当前的服务名称
+    ///
     fn error_log(&self) -> String;
 
+    ///
+    /// 列出本服务支持的历史数据类型，以及对应的历史数据服务
+    ///
     fn support_history_list(&self) -> Result<HashMap<HistoryType, SyncHistoryService>, YuError>;
 }
 
@@ -52,6 +65,28 @@ pub trait SyncHistoryServiceTrait {
         batch_size: usize,
         tx: Sender<Result<ServerMessage, Status>>,
     ) -> Result<(), YuError>;
+
+    ///
+    /// 用于检查本地数据与远程数据是否一致，如果不一致，则自动补全数据
+    ///
+    async fn check_history_data(&self) -> Result<(), YuError>;
+
+    ///
+    /// 服务器启动时，比较本地数据和服务器的数据的差异，然后补全差异数据
+    ///
+    async fn initial_history_data(&self) -> Result<(), YuError>;
+
+    ///
+    /// 同步所有的历史数据，主要用于定时任务
+    ///
+    async fn sync_all(&self) -> Result<(), YuError>;
+
+    ///
+    /// FUTURE: 这个功能以后在用吧，现在先默认
+    /// 数据的同步周期，主要方便外部调用的时候，能够把相同的任务来合并，避免多开线程
+    /// 如果为None，就表示不需要同步周期，直接执行
+    ///
+    async fn sync_period(&self) -> Result<Option<String>, YuError>;
 }
 
 pub type SyncInstrumentService = Arc<dyn SyncInstrumentServiceTrait + Send + Sync>;
@@ -258,7 +293,7 @@ impl YuSyncServer {
 #[tonic::async_trait]
 impl SyncInterface for YuSyncServer {
     async fn list_instrument(&self, _request: Request<Empty>) -> Result<Response<InstrumentList>, Status> {
-        let mut instruments_map: HashMap<String, Instrument> = HashMap::new();
+        let mut instruments_map: Vec<Instrument> = Vec::new();
         for svc in &self.instruments_services {
             match svc.list_instruments().await {
                 Ok(instruments) => {
@@ -387,6 +422,22 @@ mod tests {
             .await
             .expect("send history message");
             Ok(())
+        }
+
+        async fn check_history_data(&self) -> Result<(), YuError> {
+            todo!()
+        }
+
+        async fn initial_history_data(&self) -> Result<(), YuError> {
+            todo!()
+        }
+
+        async fn sync_all(&self) -> Result<(), YuError> {
+            todo!()
+        }
+
+        async fn sync_period(&self) -> Result<Option<String>, YuError> {
+            todo!()
         }
     }
 

@@ -207,7 +207,7 @@ impl PolyMarketSyncInstrumentService {
         })
     }
 
-    pub async fn sync_instrument(&self) -> Result<Vec<PolyMarketInstrumentPo>, YuError> {
+    pub async fn update_instruments(&self) -> Result<Vec<PolyMarketInstrumentPo>, YuError> {
         let (open, close) = get_all_instruments(&self.series_ids, &self.client, self.inst_repo.clone()).await?;
         {
             let mut instruments = self.live_instruments.write().await;
@@ -229,21 +229,18 @@ impl PolyMarketSyncInstrumentService {
 
 #[async_trait]
 impl SyncInstrumentServiceTrait for PolyMarketSyncInstrumentService {
-    async fn list_instruments(&self) -> Result<HashMap<String, Instrument>, YuError> {
+    async fn list_instruments(&self) -> Result<Vec<Instrument>, YuError> {
         let polymarket_instruments = self.list_all_instruments().await;
-        let mut instruments_map: HashMap<String, Instrument> = HashMap::new();
+        let mut res: Vec<Instrument> = Vec::new();
         match polymarket_instruments {
             Ok(list) => {
                 for inst in list {
-                    // 直接把 PolyMarketInstrumentPo 转换为 proto，latest_timestamp 暂时置为 0
-                    let asset_id = inst.asset_id.clone();
                     let poly = PolymarketInstrument::from(inst);
-
                     let instrument = Instrument {
                         instrument_type: InstrumentType::Polymarket as i32,
                         payload: Some(crate::sync::models::grpc_sync::instrument::Payload::Polymarket(poly)),
                     };
-                    instruments_map.insert(asset_id, instrument);
+                    res.push(instrument);
                 }
             }
             Err(e) => {
@@ -251,7 +248,20 @@ impl SyncInstrumentServiceTrait for PolyMarketSyncInstrumentService {
                 return Err(Status::internal(format!("list polymarket instruments error: {:?}", e)).into());
             }
         };
-        Ok(instruments_map)
+        Ok(res)
+    }
+
+    async fn sync_instrument(&self) -> Result<Vec<Instrument>, YuError> {
+        let instruments = self.update_instruments().await?;
+        Ok(instruments
+            .into_iter()
+            .map(|instrument| Instrument {
+                instrument_type: InstrumentType::Polymarket as i32,
+                payload: Some(crate::sync::models::grpc_sync::instrument::Payload::Polymarket(
+                    PolymarketInstrument::from(instrument),
+                )),
+            })
+            .collect())
     }
 
     fn error_log(&self) -> String {
@@ -293,32 +303,6 @@ impl PolyMarketSyncHistoryService {
         let interval = HistoryInterval::OneHour;
         let history_repo = get_history_repo(None, None);
         Arc::new(Self::new(client, interval, history_repo, live_instruments, history_tx))
-    }
-
-    pub async fn fetch_latest_history(&self) -> Result<Vec<PolyMarketHistoryPo>, YuError> {
-        let now = self.interval.get_now_close_unix_sec_utc();
-        //FUTURE: 这里加的时间不支持变动的interval。以让他offset的时间，能够支持动态的interval。
-        let start_ts = now - self.interval.to_second() + 120; // 获取过去一小时的数据
-        let end_ts = now + 60; // 获取过去一小时的数据
-        let fidelity = self.interval.to_second() / 60;
-        let mut res = vec![];
-
-        for instrument in self.live_instruments.read().await.iter() {
-            let query_param = GetPricesHistoryQuery {
-                market: instrument.asset_id.to_string(),
-                start_ts: Some(start_ts),
-                end_ts: Some(end_ts),
-                interval: Some(self.interval.clone()),
-                fidelity: Some(fidelity.clone() as u32),
-            };
-            // index 可用于调试或区分不同 asset_id
-            let pos = self.query_and_insert_history(query_param, instrument).await;
-            for h in pos.iter() {
-                self.broadcast_message(h.clone(), &instrument.asset_slug, h.timestamp).await;
-            }
-            res.extend(pos);
-        }
-        Ok(res)
     }
 
     ///
@@ -398,12 +382,67 @@ impl PolyMarketSyncHistoryService {
         }
         res
     }
+}
+
+#[async_trait]
+impl SyncHistoryServiceTrait for PolyMarketSyncHistoryService {
+    async fn query_and_broadcast_history(
+        &self,
+        inst_id: u64,
+        start_ms: u64,
+        end_ms: u64,
+        batch_size: usize,
+        tx: Sender<Result<ServerMessage, Status>>,
+    ) -> Result<(), YuError> {
+        match self.history_repo.get_history_between(inst_id, start_ms, end_ms).await {
+            Ok(history_vec) => {
+                if history_vec.is_empty() {
+                    let msg = ServerMessage {
+                        history: vec![],
+                        server_timestamp: unix_time_now_u64_utc(),
+                    };
+                    let _ = tx.send(Ok(msg)).await;
+                    return Ok(());
+                }
+
+                for chunk in history_vec.chunks(batch_size) {
+                    let mut histories = Vec::with_capacity(chunk.len());
+                    for h in chunk.iter() {
+                        let rpc_entry = PolyMarketHistory {
+                            timestamp: h.timestamp,
+                            price: h.price,
+                        };
+                        histories.push(HistoryEntry {
+                            history_type: HistoryType::PolymarketToken.into(),
+                            instrument_type: InstrumentType::Polymarket.into(),
+                            inst_id,
+                            payload: Some(history_entry::Payload::PolymarketHistory(rpc_entry)),
+                        });
+                    }
+                    let msg = ServerMessage {
+                        history: histories,
+                        server_timestamp: unix_time_now_u64_utc(),
+                    };
+                    if tx.send(Ok(msg)).await.is_err() {
+                        // receiver dropped, stop streaming
+                        break;
+                    }
+                }
+                Ok(())
+            }
+            Err(e) => {
+                let status = Status::internal(format!("query history error: {:?}", e));
+                let _ = tx.send(Err(status.clone())).await;
+                Err(status.into())
+            }
+        }
+    }
 
     ///
     /// FUTURE：
     /// 1. polymarket的数据本来就不完整。所以造成检查的时候，会反复拉取
     ///
-    pub async fn check_history_data(&self) -> Result<(), YuError> {
+    async fn check_history_data(&self) -> Result<(), YuError> {
         let binary_search_ds = DuckDBBinarySearchDataImpl::new(
             self.history_repo.get_db_provider(),
             PolyMarketTables::PriceHistory.table_name(),
@@ -478,7 +517,7 @@ impl PolyMarketSyncHistoryService {
     /// 1. 如果polymarket_price_history里面有数据，就从最大值到现在
     /// 2. 如果没有，就取polymarket_instruments中的start_ms
     ///
-    pub async fn initial_history_data(&self) -> Result<(), YuError> {
+    async fn initial_history_data(&self) -> Result<(), YuError> {
         let now = self.interval.get_now_close_unix_sec_utc();
         let fidelity = self.interval.to_second() / 60;
         info!("start to initial polymarket history data");
@@ -510,59 +549,31 @@ impl PolyMarketSyncHistoryService {
         info!("finish to initial polymarket history data");
         Ok(())
     }
-}
 
-#[async_trait]
-impl SyncHistoryServiceTrait for PolyMarketSyncHistoryService {
-    async fn query_and_broadcast_history(
-        &self,
-        inst_id: u64,
-        start_ms: u64,
-        end_ms: u64,
-        batch_size: usize,
-        tx: Sender<Result<ServerMessage, Status>>,
-    ) -> Result<(), YuError> {
-        match self.history_repo.get_history_between(inst_id, start_ms, end_ms).await {
-            Ok(history_vec) => {
-                if history_vec.is_empty() {
-                    let msg = ServerMessage {
-                        history: vec![],
-                        server_timestamp: unix_time_now_u64_utc(),
-                    };
-                    let _ = tx.send(Ok(msg)).await;
-                    return Ok(());
-                }
-
-                for chunk in history_vec.chunks(batch_size) {
-                    let mut histories = Vec::with_capacity(chunk.len());
-                    for h in chunk.iter() {
-                        let rpc_entry = PolyMarketHistory {
-                            timestamp: h.timestamp,
-                            price: h.price,
-                        };
-                        histories.push(HistoryEntry {
-                            history_type: HistoryType::PolymarketToken.into(),
-                            instrument_type: InstrumentType::Polymarket.into(),
-                            inst_id,
-                            payload: Some(history_entry::Payload::PolymarketHistory(rpc_entry)),
-                        });
-                    }
-                    let msg = ServerMessage {
-                        history: histories,
-                        server_timestamp: unix_time_now_u64_utc(),
-                    };
-                    if tx.send(Ok(msg)).await.is_err() {
-                        // receiver dropped, stop streaming
-                        break;
-                    }
-                }
-                Ok(())
-            }
-            Err(e) => {
-                let status = Status::internal(format!("query history error: {:?}", e));
-                let _ = tx.send(Err(status.clone())).await;
-                Err(status.into())
+    async fn sync_all(&self) -> Result<(), YuError> {
+        let now = self.interval.get_now_close_unix_sec_utc();
+        //FUTURE: 这里加的时间不支持变动的interval。以让他offset的时间，能够支持动态的interval。
+        let start_ts = now - self.interval.to_second() + 120; // 获取过去一小时的数据
+        let end_ts = now + 60; // 获取过去一小时的数据
+        let fidelity = self.interval.to_second() / 60;
+        for instrument in self.live_instruments.read().await.iter() {
+            let query_param = GetPricesHistoryQuery {
+                market: instrument.asset_id.to_string(),
+                start_ts: Some(start_ts),
+                end_ts: Some(end_ts),
+                interval: Some(self.interval.clone()),
+                fidelity: Some(fidelity.clone() as u32),
+            };
+            // index 可用于调试或区分不同 asset_id
+            let pos = self.query_and_insert_history(query_param, instrument).await;
+            for h in pos.iter() {
+                self.broadcast_message(h.clone(), &instrument.asset_slug, h.timestamp).await;
             }
         }
+        Ok(())
+    }
+
+    async fn sync_period(&self) -> Result<Option<String>, YuError> {
+        todo!()
     }
 }

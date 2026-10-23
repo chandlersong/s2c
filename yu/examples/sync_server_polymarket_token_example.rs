@@ -10,7 +10,7 @@ use yu::polymarket::po::PolyMarketInstrumentPo;
 use yu::polymarket::sync_server::{PolyMarketSyncHistoryService, PolyMarketSyncInstrumentService};
 use yu::sync::models::grpc_sync::instrument::Payload::Polymarket;
 use yu::sync::models::grpc_sync::{HistoryEntry, HistoryType};
-use yu::sync::server::sync_server::{SyncHistoryService, SyncInstrumentServiceTrait};
+use yu::sync::server::sync_server::{SyncHistoryService, SyncHistoryServiceTrait, SyncInstrumentServiceTrait};
 use yue::http_client::init_http_client;
 
 #[tokio::main]
@@ -52,9 +52,9 @@ async fn main() -> Result<(), YuError> {
     }
     let instruments = instrument_service.list_instruments().await?;
 
-    for (key, inst) in instruments {
+    for inst in instruments {
         if let Some(Polymarket(poly)) = inst.payload {
-            info!("{}: {}", key, poly.asset_slug);
+            info!("Polymarket Token: {}", poly.asset_slug);
         }
     }
     if let Err(e) = token_history.initial_history_data().await {
@@ -63,7 +63,7 @@ async fn main() -> Result<(), YuError> {
     if let Err(e) = token_history.check_history_data().await {
         error!("error checking history_data: {}", e)
     }
-    if let Err(e) = token_history.fetch_latest_history().await {
+    if let Err(e) = token_history.sync_all().await {
         error!("error fetch latest history: {}", e)
     }
     drop(instrument_service);

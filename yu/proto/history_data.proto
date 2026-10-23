@@ -89,7 +89,7 @@ message Instrument {
 }
 
 message InstrumentList{
-  map<string, Instrument> instruments = 1;
+  repeated Instrument instruments = 1;
   uint64 server_timestamp = 2;  //服务器的时间戳
 }
 /**

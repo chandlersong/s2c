@@ -129,7 +129,7 @@ impl SyncClientService {
     pub async fn initial_data(&self, server_inst: InstrumentList) -> Result<(), YuError> {
         // 因为整个流程时间很长，且监听会同时开始。所以要统一结束时间。
         let now = unix_time_now_u64_utc();
-        for (_, inst) in server_inst.instruments.into_iter() {
+        for inst in server_inst.instruments.into_iter() {
             let exchange_type = InstrumentType::try_from(inst.instrument_type).map_err(|_| YuError::new("unknown exchange type"))?;
             let exchange_name = exchange_type.readable_name();
             let exchange_service = self.instrument_services.get(&exchange_type);

@@ -4,7 +4,7 @@ use crate::errors::YuError;
 use crate::polymarket::po::PolyMarketInstrumentPo;
 use crate::polymarket::sync_server::{PolyMarketSyncHistoryService, PolyMarketSyncInstrumentService};
 use crate::sync::models::grpc_sync::{HistoryEntry, HistoryType};
-use crate::sync::server::sync_server::{SyncHistoryService, SyncInstrumentService};
+use crate::sync::server::sync_server::{SyncHistoryService, SyncHistoryServiceTrait, SyncInstrumentService, SyncInstrumentServiceTrait};
 use log::{error, info};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -51,7 +51,7 @@ pub async fn start_polymarket_sync_series_job(
         Box::pin(async move {
             //TODO: 正常后，改成debug level
             info!("start fetch last hour history from polymarket server");
-            if let Err(e) = each_sync.fetch_latest_history().await {
+            if let Err(e) = each_sync.sync_all().await {
                 error!("Error when async polymarket instruments with server: {}", e);
             }
         })
