@@ -1,5 +1,5 @@
 ---
-name: server-side-sync-sync-entity
+name: server-side-sync-entity
 description: 同步业务对象时，服务器端需要做的工作。主要是History和Instrument的service和repository的实现，以及接线和示例。客户端的处理不在本技能范围内。
 ---
 

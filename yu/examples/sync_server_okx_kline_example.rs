@@ -6,9 +6,11 @@ use tokio::sync::{RwLock, mpsc};
 use yu::config::get_config;
 use yu::errors::YuError;
 use yu::okx::duck_po::InstrumentPo;
-use yu::okx::sync_server::OkxSyncInstrumentService;
+use yu::okx::duckdb_repository::get_default_kline_repo;
+use yu::okx::service::OptionService;
+use yu::okx::sync_server::{OkxSyncHistoryService, OkxSyncInstrumentService, OkxSyncKlineHandler};
 use yu::sync::models::grpc_sync::{HistoryEntry, HistoryType};
-use yu::sync::server::sync_server::{SyncHistoryService, SyncInstrumentServiceTrait};
+use yu::sync::server::sync_server::{SyncHistoryService, SyncHistoryServiceTrait, SyncInstrumentServiceTrait};
 use yue::http_client::init_http_client;
 
 #[tokio::main]
@@ -34,23 +36,36 @@ async fn main() -> Result<(), YuError> {
         }
     });
     let live_instruments = Arc::new(RwLock::new(Vec::<InstrumentPo>::new()));
-    let support_history_service: HashMap<HistoryType, SyncHistoryService> = HashMap::new();
-    let instrument_service = OkxSyncInstrumentService::for_production(support_history_service, live_instruments);
+    let okx_option_service = OptionService::for_production(live_instruments.clone());
+
+    let kline_history_service = OkxSyncHistoryService::for_production(history_tx.clone(), okx_option_service.clone())?;
+
+    let mut support_history_service: HashMap<HistoryType, SyncHistoryService> = HashMap::new();
+    support_history_service.insert(HistoryType::OkxKline, kline_history_service.clone());
+    let instrument_service = OkxSyncInstrumentService::for_production(support_history_service, live_instruments.clone());
     if let Err(e) = instrument_service.sync_instrument().await {
         error!("error when syncing instrument: {}", e);
     }
-    // let history_service = sync_service
-    //     .support_history_list()?
-    //     .remove(&HistoryType::OkxKline)
-    //     .ok_or_else(|| YuError::new("OKX Kline history service is not registered"))?;
-    // history_service.initial_history_data().await?;
-    // history_service.check_history_data().await?;
-    // history_service.sync_all().await?;
 
     let instruments_in_db = instrument_service.list_instruments().await?;
 
     info!("OKX instruments in database num: {}", instruments_in_db.len());
-
+    let handler = Arc::new(OkxSyncKlineHandler::new(
+        get_default_kline_repo(None),
+        history_tx.clone(),
+        live_instruments.clone(),
+    ));
+    if let Err(e) = okx_option_service.start(handler).await {
+        error!("failed to start OKX option listen okx kline: {:?}", e);
+        return Err(YuError::from(e));
+    }
+    if let Err(e) = kline_history_service.initial_history_data().await {
+        error!("failed to initial OKX kline history data: {:?}", e);
+        return Err(e);
+    }
+    if let Err(error) = kline_history_service.check_history_data().await {
+        error!("failed to check OKX kline history: {}", error);
+    }
     drop(instrument_service);
     history_receiver
         .await
