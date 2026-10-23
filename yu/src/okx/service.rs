@@ -20,10 +20,10 @@ use li::websocket::connection::{
 };
 use log::{Level, debug, error, info, trace, warn};
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
-use tokio::sync::broadcast;
+use tokio::sync::{RwLock, broadcast};
 use yue::models::{HistoryInterval, InstrumentType};
 use yue::okx::models::websocket::{ArgBody, OkxWebsocketResponse};
 use yue::okx::restful_api::{HistoryParams, InstrumentsParam, OKxApi, OptionSummaryParam, default_okx_api};
@@ -32,7 +32,7 @@ use yue::tools::get_snow_flake_id_string;
 
 ///
 /// 直接取OKX取数据，并且保存的一些接口
-/// 因为OKX的内部数据基本都是Instrument为基础的结构。所遇你这里就统一处理了。
+/// 因为OKX的内部数据基本都是Instrument为基础的结构。这里统一负调用API，然后保存到本地。
 ///
 #[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
 #[async_trait::async_trait]
@@ -55,18 +55,9 @@ pub trait OkxRemoteServiceTrait {
     async fn sync_instruments(&self, param: InstrumentsParam, inst_type: InstrumentType) -> Result<(), YuError>;
 }
 
-pub type OkxRemoteService = Arc<dyn OkxRemoteServiceTrait + Send + Sync>;
+pub type OkxSyncService = Arc<dyn OkxRemoteServiceTrait + Send + Sync>;
 
-fn create_okx_remote_service(
-    instrument_repo: OkxInstrumentRepository,
-    kline_repo: OkxKlineRepository,
-    option_summary_repo: OkxOptionSummaryRepository,
-    okx_api: OKxApi,
-) -> OkxRemoteService {
-    Arc::new(CommonIOServiceImpl::new(instrument_repo, kline_repo, option_summary_repo, okx_api))
-}
-
-pub fn okx_remote_service_for_production() -> OkxRemoteService {
+pub fn okx_sync_service_for_production() -> OkxSyncService {
     Arc::new(CommonIOServiceImpl::default())
 }
 
@@ -91,22 +82,6 @@ impl Default for CommonIOServiceImpl {
             kline_repo: get_default_kline_repo(None),
             option_summary_repo: get_default_option_summary_repo(None),
             okx_api: default_okx_api(),
-        }
-    }
-}
-
-impl CommonIOServiceImpl {
-    pub fn new(
-        instrument_repo: OkxInstrumentRepository,
-        kline_repo: OkxKlineRepository,
-        option_summary_repo: OkxOptionSummaryRepository,
-        okx_api: OKxApi,
-    ) -> Self {
-        Self {
-            instrument_repo,
-            kline_repo,
-            option_summary_repo,
-            okx_api,
         }
     }
 }
@@ -358,7 +333,7 @@ impl MessageHandlerTrait<OkxWebsocketResponse> for KlineHandler {
                 let inst_identify = payload.arg.inst_id.to_string();
                 // 尝试从内存map读取
                 let mut inst_opt = {
-                    let guard = self.inst_id_identify_map.read().unwrap();
+                    let guard = self.inst_id_identify_map.read().await;
                     guard.get(&inst_identify).cloned()
                 };
 
@@ -366,14 +341,7 @@ impl MessageHandlerTrait<OkxWebsocketResponse> for KlineHandler {
                 if inst_opt.is_none() {
                     match self.instrument_repo.get_instrument_by_identify(&inst_identify).await {
                         Ok(po) => {
-                            match self.inst_id_identify_map.write() {
-                                Ok(mut w) => {
-                                    w.insert(inst_identify.clone(), po.clone());
-                                }
-                                Err(e) => {
-                                    warn!("failed to acquire inst_id_identify_map write lock: {:?}", e);
-                                }
-                            }
+                            self.inst_id_identify_map.write().await.insert(inst_identify.clone(), po.clone());
                             inst_opt = Some(po);
                         }
                         Err(e) => {
@@ -428,110 +396,58 @@ impl MessageHandlerTrait<OkxWebsocketResponse> for KlineHandler {
 ///
 pub struct OptionService {
     live_instruments: Arc<RwLock<Vec<InstrumentPo>>>,
-    common_io: OkxRemoteService,
+    okx_sync: OkxSyncService,
     interval: HistoryInterval,
     refresh_corn: String,
-    kline_broadcast_sender: broadcast::Sender<OkxKlinePo>,
-    option_summary_broadcast_sender: broadcast::Sender<OkxOptionSummaryPo>,
-}
-
-impl Default for OptionService {
-    fn default() -> Self {
-        Self::new(None, None, None, None, None, None)
-    }
 }
 
 impl OptionService {
     pub fn new(
-        instrument_repo: Option<OkxInstrumentRepository>,
-        kline_repo: Option<OkxKlineRepository>,
-        option_summary_repo: Option<OkxOptionSummaryRepository>,
-        api: Option<OKxApi>,
+        okx_sync: OkxSyncService,
+        live_instruments: Arc<RwLock<Vec<InstrumentPo>>>,
         interval: Option<HistoryInterval>,
         refresh_corn: Option<String>,
     ) -> Self {
-        let (kline_broadcast_sender, _kline_broadcast_receiver) = broadcast::channel(1000);
-        let (option_summary_broadcast_sender, _option_summary_broadcast_receiver) = broadcast::channel(1000);
         Self {
-            live_instruments: Arc::new(RwLock::new(vec![])),
-            common_io: create_okx_remote_service(
-                instrument_repo.unwrap_or_else(|| get_instrument_repo(None)),
-                kline_repo.unwrap_or_else(|| get_default_kline_repo(None)),
-                option_summary_repo.unwrap_or_else(|| get_default_option_summary_repo(None)),
-                api.unwrap_or_else(|| default_okx_api()),
-            ),
+            live_instruments,
+            okx_sync,
             interval: interval.unwrap_or(HistoryInterval::OneHour),
-            option_summary_broadcast_sender,
             refresh_corn: refresh_corn.unwrap_or("18 18 * * * *".to_string()),
-            kline_broadcast_sender,
         }
+    }
+
+    pub fn for_production(live_instruments: Arc<RwLock<Vec<InstrumentPo>>>) -> Arc<Self> {
+        let okx_sync = okx_sync_service_for_production();
+        Arc::new(Self::new(okx_sync, live_instruments, None, None))
     }
 
     #[cfg(test)]
-    fn new_with_mock(inst_ids: Arc<RwLock<Vec<InstrumentPo>>>, common_io: OkxRemoteService, interval: HistoryInterval) -> Self {
-        let (kline_broadcast_sender, _kline_broadcast_receiver) = broadcast::channel(1000);
-        let (option_summary_broadcast_sender, _option_summary_broadcast_receiver) = broadcast::channel(1000);
+    fn new_with_mock(inst_ids: Arc<RwLock<Vec<InstrumentPo>>>, sync_service: OkxSyncService, interval: HistoryInterval) -> Self {
         Self {
             live_instruments: inst_ids,
-            common_io,
+            okx_sync: sync_service,
             interval,
             refresh_corn: "18 * * * * *".to_string(),
-            kline_broadcast_sender,
-            option_summary_broadcast_sender,
         }
-    }
-
-    pub fn update_instruments(share_instruments: Arc<RwLock<Vec<InstrumentPo>>>, instruments: Vec<InstrumentPo>) -> Result<(), YuError> {
-        match share_instruments.write() {
-            Ok(mut guard) => {
-                *guard = instruments;
-                Ok(())
-            }
-            Err(e) => {
-                log::error!("failed to acquire instruments write lock: {:?}", e);
-                Err(YuError::CustomError(format!("failed to acquire instruments write lock: {:?}", e)))
-            }
-        }
-    }
-
-    pub async fn subscribe_kline(&self) -> broadcast::Receiver<OkxKlinePo> {
-        self.kline_broadcast_sender.subscribe()
-    }
-
-    pub async fn subscribe_option_summary(&self) -> broadcast::Receiver<OkxOptionSummaryPo> {
-        self.option_summary_broadcast_sender.subscribe()
-    }
-
-    pub async fn initial_instruments(&self) -> Result<Vec<InstrumentPo>, YuError> {
-        let instruments = Self::refresh_instruments(self.common_io.clone(), self.live_instruments.clone()).await?;
-        Ok(instruments)
     }
 
     ///
     /// 开启一个定时任务。定时任务的主要功能是刷新inst_ids。然后更新订阅的kline。
     ///
-    pub async fn start(&self) -> Result<(), YuError> {
+    pub async fn start(&self, handler: ShareMessageHandler<OkxWebsocketResponse>) -> Result<(), YuError> {
         let instruments_share = self.live_instruments.clone();
-        let common_io = self.common_io.clone();
-        let instruments = Self::refresh_instruments(common_io.clone(), instruments_share.clone()).await?;
-        let kline_repo = self.common_io.get_kline_repo();
-        let instrument_repo = self.common_io.get_instrument_repo();
-        let id_identify_dict = instruments
-            .clone()
-            .into_iter()
-            .map(|inst| (inst.inst_identify.clone(), inst))
-            .collect::<HashMap<String, InstrumentPo>>();
 
-        let handler = Arc::new(KlineHandler::new(
-            kline_repo,
-            instrument_repo,
-            id_identify_dict,
-            self.kline_broadcast_sender.clone(),
-        ));
         let app_config = get_config();
         let proxy = app_config.proxy_url.clone();
         let interval = self.interval.clone();
-        let websocket_interface = Self::listen_option_kline(instruments, &interval, proxy.clone(), Some(handler.clone()), None).await?;
+        let websocket_interface = Self::listen_option_kline(
+            instruments_share.read().await.clone(),
+            &interval,
+            proxy.clone(),
+            Some(handler.clone()),
+            None,
+        )
+        .await?;
 
         // shared interface stored across cron_job invocations
         let shared_interface: Arc<Mutex<Arc<WebSocketInterface<OkxWebsocketResponse>>>> = Arc::new(Mutex::new(websocket_interface));
@@ -541,29 +457,20 @@ impl OptionService {
         let handler_for_cron = handler.clone();
         let _ = cron_job!(self.refresh_corn.as_str(), move |_uuid, _locked| {
             let instruments_each = instruments_for_cron.clone();
-            let common_io_each = common_io.clone();
             let interface_each = interface_for_cron.clone();
             let proxy_each = proxy.clone();
             let handler_each = handler_for_cron.clone();
             let interval_each = interval.clone();
             Box::pin(async move {
-                info!("开始刷新okx option");
-                let _ = Self::refresh_instruments(common_io_each.clone(), instruments_each.clone()).await;
-                info!("结束刷新okx option");
-                // after refreshing instruments, exercise websocket: recreate and swap
-                let insts = match instruments_each.read() {
-                    Ok(g) => g.clone(),
-                    Err(e) => {
-                        error!("failed to read instruments for ws exercise in cron: {:?}", e);
+                let instruments = {
+                    let guard = instruments_each.read().await;
+                    if guard.is_empty() {
                         return;
                     }
+                    guard.clone()
                 };
 
-                if insts.is_empty() {
-                    return;
-                };
-
-                match Self::listen_option_kline(insts.clone(), &interval_each, proxy_each, Some(handler_each), None).await {
+                match Self::listen_option_kline(instruments, &interval_each, proxy_each, Some(handler_each), None).await {
                     Ok(new_interface) => {
                         // swap old interface with new one, then try close old
                         let mut guard = interface_each.lock().await;
@@ -650,54 +557,14 @@ impl OptionService {
         Ok(interface)
     }
 
-    pub async fn list_instruments(&self) -> Result<Vec<InstrumentPo>, YuError> {
-        let live_instruments = self
-            .common_io
-            .get_instrument_repo()
-            .get_instrument_by_type_live(InstrumentType::Option)
-            .await;
-        match live_instruments {
-            Ok(instruments) => Ok(instruments),
-            Err(err) => {
-                log::error!("failed to query okx instruments: {:?}", err);
-                Err(err)
-            }
-        }
-    }
-
     pub async fn find_candle_between(&self, inst_id: u64, start_ms: u64, end_ms: u64) -> Result<Vec<OkxKlinePo>, YuError> {
-        let kline_repo = self.common_io.get_kline_repo();
+        let kline_repo = self.okx_sync.get_kline_repo();
         kline_repo.find_kline_between(inst_id, start_ms, end_ms).await
     }
 
     pub async fn find_option_summary_between(&self, inst_id: u64, start_ms: u64, end_ms: u64) -> Result<Vec<OkxOptionSummaryPo>, YuError> {
-        let option_summary_repo = self.common_io.get_option_summary_repo();
+        let option_summary_repo = self.okx_sync.get_option_summary_repo();
         option_summary_repo.find_summary_between(inst_id, start_ms, end_ms).await
-    }
-
-    pub async fn refresh_instruments(
-        common_io: OkxRemoteService,
-        share_instruments: Arc<RwLock<Vec<InstrumentPo>>>,
-    ) -> Result<Vec<InstrumentPo>, YuError> {
-        // call for BTC and ETH
-        common_io
-            .sync_instruments(InstrumentsParam::query_option("BTC-USD"), InstrumentType::Option)
-            .await?;
-        common_io
-            .sync_instruments(InstrumentsParam::query_option("ETH-USD"), InstrumentType::Option)
-            .await?;
-        let live_instruments = common_io.get_instrument_repo().get_instrument_by_type_live(InstrumentType::Option).await;
-        match live_instruments {
-            Ok(instruments) => {
-                // update in-memory inst_ids
-                Self::update_instruments(share_instruments, instruments.clone())?;
-                Ok(instruments)
-            }
-            Err(err) => {
-                log::error!("skip refresh failed to query okx instruments: {:?}", err);
-                Err(err)
-            }
-        }
     }
 
     ///
@@ -718,13 +585,9 @@ impl OptionService {
     pub async fn initial_candle(&self, earliest_timestamp: UnixTimeStamp, max_sync: Option<usize>) -> Result<(), YuError> {
         // 先从 RwLock 中克隆出一份 Vec，避免持有读锁跨 await，确保 Send
 
-        let kline_repo = self.common_io.get_kline_repo();
+        let kline_repo = self.okx_sync.get_kline_repo();
         let max_timestamp_mapping = kline_repo.max_timestamp_group_by_inst_id().await?;
-        let raw_inst_vec = self
-            .live_instruments
-            .read()
-            .map_err(|e| YuError::CustomError(format!("failed to acquire inst_ids read lock: {:?}", e)))?
-            .clone();
+        let raw_inst_vec = self.live_instruments.read().await.clone();
 
         let mut inst_vec: Vec<InstrumentPo> = vec![];
         let min_timestamp = self.interval.get_now_close_unix_ms_utc() - self.interval.to_milliseconds() + 1;
@@ -762,7 +625,7 @@ impl OptionService {
 
         // 并发控制
         let concurrency = max_sync.unwrap_or(10).max(1);
-        let common_io = self.common_io.clone();
+        let okx_sync = self.okx_sync.clone();
         let earliest = earliest_timestamp;
         //因为已经启动监听，那么应该是以开始时间30s为结束
         //因为时间是candle begin time。所以需要从上一个周期结束
@@ -770,7 +633,7 @@ impl OptionService {
         let end = interval.get_now_close_unix_ms_utc() - interval.to_milliseconds() + 1; // 结束时间是当前时间的下一个间隔的开始时间
         // 并发拉取，每个任务返回 Result<Vec<OkxKlinePo>, YuError>
         let stream = futures::stream::iter(inst_vec.into_iter().map(move |inst| {
-            let common_io = common_io.clone();
+            let okx_sync = okx_sync.clone();
             let interval = interval.clone();
             let max_ts_map = max_ts_map.clone();
 
@@ -785,7 +648,7 @@ impl OptionService {
                 let start = interval.get_close_unix_ms(std::cmp::max(latest_timestamp, earliest)) + 1;
                 let gap = interval.to_milliseconds();
                 if end <= start || (end.saturating_sub(start) < gap) {
-                    debug!(
+                    trace!(
                         "Skipping fetch_history for {} as the time gap is too small: end={}, start={}, window_ms={}",
                         inst.inst_identify,
                         unix_2_readable(&end),
@@ -795,7 +658,7 @@ impl OptionService {
                     return Ok(vec![]);
                 }
 
-                common_io
+                okx_sync
                     .fetch_history(inst.inst_identify.as_ref(), inst.id, start, end, &interval, None, None)
                     .await
             }
@@ -839,20 +702,16 @@ impl OptionService {
 
     pub(crate) async fn check_history_data(&self) -> Result<Vec<OkxKlinePo>, YuError> {
         let binary_search_ds = DuckDBBinarySearchDataImpl::new(
-            self.common_io.get_kline_repo().get_db_provider(),
+            self.okx_sync.get_kline_repo().get_db_provider(),
             OkxTables::Kline.table_name(),
             "timestamp".to_string(),
             "inst_id".to_string(),
         );
         let now_ms = self.interval.get_now_close_unix_ms_utc();
         let interval_ms = self.interval.to_milliseconds();
-        let broadcast_sender = self.kline_broadcast_sender.clone();
         let mut repaired_history = Vec::new();
         let instruments = {
-            let g = self
-                .live_instruments
-                .read()
-                .map_err(|_| YuError::new("failed to acquire live_instruments read lock"))?;
+            let g = self.live_instruments.read().await;
             g.clone()
         };
         for instrument in instruments.iter() {
@@ -894,7 +753,7 @@ impl OptionService {
                         }
 
                         let pos = self
-                            .common_io
+                            .okx_sync
                             .fetch_history(
                                 instrument.inst_identify.as_ref(),
                                 instrument.id,
@@ -907,11 +766,6 @@ impl OptionService {
                             .await?;
                         for h in pos.iter() {
                             repaired_history.push(h.clone());
-                            if broadcast_sender.receiver_count() != 0 {
-                                if let Err(e) = broadcast_sender.send(h.clone()) {
-                                    warn!("Failed to broadcast okx kline: {:?}", e);
-                                }
-                            }
                         }
                     }
                     _ => {
@@ -921,36 +775,6 @@ impl OptionService {
             }
         }
         Ok(repaired_history)
-    }
-
-    pub async fn sync_latest_candles(&self) -> Result<Vec<OkxKlinePo>, YuError> {
-        let instrument_repo = self.common_io.get_instrument_repo();
-        let kline_repo = self.common_io.get_kline_repo();
-        let instruments = instrument_repo.get_instrument_by_type_live(InstrumentType::Option).await?;
-        let max_timestamps = kline_repo.max_timestamp_group_by_inst_id().await?;
-        let interval_ms = self.interval.to_milliseconds();
-        let end_ms = self.interval.get_now_close_unix_ms_utc() - interval_ms + 1;
-        let mut synced_history = Vec::new();
-
-        for instrument in instruments {
-            let latest_timestamp = match max_timestamps.get(&instrument.id) {
-                Some(timestamp) => *timestamp,
-                None => instrument
-                    .list_time
-                    .ok_or_else(|| YuError::CustomError(format!("missing list_time for OKX instrument {}", instrument.inst_identify)))?,
-            };
-            let start_ms = self.interval.get_close_unix_ms(latest_timestamp).saturating_add(1);
-            if end_ms.saturating_sub(start_ms) < interval_ms {
-                continue;
-            }
-
-            let history = self
-                .common_io
-                .fetch_history(&instrument.inst_identify, instrument.id, start_ms, end_ms, &self.interval, None, None)
-                .await?;
-            synced_history.extend(history);
-        }
-        Ok(synced_history)
     }
 
     ///
@@ -963,16 +787,16 @@ impl OptionService {
         let id_identify_dict = self
             .live_instruments
             .read()
-            .map_err(|_| YuError::new("failed to acquire live_instruments read lock"))?
+            .await
             .clone()
             .into_iter()
             .map(|inst| (inst.inst_identify.clone(), inst))
             .collect::<HashMap<String, InstrumentPo>>();
-        let api = self.common_io.get_okx_api();
+        let api = self.okx_sync.get_okx_api();
 
         let summary_btc = api.option_summary(btc_query_param).await?;
         let acquire_ts = self.interval.get_now_close_unix_ms_utc();
-        let repo = self.common_io.get_option_summary_repo();
+        let repo = self.okx_sync.get_option_summary_repo();
         for btc_summary in summary_btc.data.iter() {
             let inst_info = id_identify_dict.get(&btc_summary.inst_id);
             if inst_info.is_none() {
@@ -981,7 +805,6 @@ impl OptionService {
             }
             let po = OkxOptionSummaryPo::from_detail(inst_info.unwrap().id, acquire_ts, btc_summary);
             repo.insert_history(po.clone()).await?;
-            self.broadcast_okx_option_summary(po).await?;
         }
 
         let summary_eth = api.option_summary(eth_query_param).await?;
@@ -993,25 +816,14 @@ impl OptionService {
             }
             let po = OkxOptionSummaryPo::from_detail(inst_info.unwrap().id, acquire_ts, eth_summary);
             repo.insert_history(po.clone()).await?;
-            self.broadcast_okx_option_summary(po).await?;
         }
-        Ok(())
-    }
-
-    async fn broadcast_okx_option_summary(&self, po: OkxOptionSummaryPo) -> Result<(), YuError> {
-        if self.option_summary_broadcast_sender.receiver_count() != 0 {
-            if let Err(e) = self.option_summary_broadcast_sender.send(po) {
-                error!("Failed to broadcast okx option summary: {:?}", e);
-            }
-        }
-
         Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{KlineHandler, MockOkxRemoteServiceTrait, OkxRemoteService, OptionService, fetch_history, sync_instruments};
+    use super::{KlineHandler, MockOkxRemoteServiceTrait, OkxSyncService, OptionService, fetch_history, sync_instruments};
     use crate::errors::YuError;
     use crate::okx::duck_po::InstrumentPo;
     use crate::okx::duckdb_repository::OkxInstrumentRepository;
@@ -1020,8 +832,8 @@ mod tests {
     use crate::test_utils::create_memory_db_provider;
     use li::websocket::connection::MessageHandlerTrait;
     use std::collections::HashMap;
-    use std::sync::{Arc, RwLock};
-    use tokio::sync::broadcast;
+    use std::sync::Arc;
+    use tokio::sync::{RwLock, broadcast};
     use yue::models::{HistoryInterval, InstrumentType};
     use yue::okx::models::restful::{CandleResponse, InstrumentInfo, OkxListResponse};
     use yue::okx::models::websocket::{ArgBody, KlinePayload, OkxWebsocketResponse};
@@ -1338,7 +1150,7 @@ mod tests {
         mock_instrument_repo: MockOkxInstrumentRepositoryTrait,
         mock_kline_repo: MockOkxKlineRepositoryTrait,
         mock_api: MockOKXApiTrait,
-    ) -> OkxRemoteService {
+    ) -> OkxSyncService {
         let arc_mock_inst_repo: OkxInstrumentRepository = Arc::new(mock_instrument_repo);
         let arc_mock_kline_repo: OkxKlineRepository = Arc::new(mock_kline_repo);
         let arc_mock_api: OKxApi = Arc::new(mock_api);
@@ -1369,7 +1181,7 @@ mod tests {
             .withf(move |inst_id, _, start_ts, _, _, _, _| inst_id == "BTC1" && start_ts == &expected_start)
             .return_once(|_, _, _, _, _, _, _| Ok(vec![]));
 
-        let common_io: OkxRemoteService = link_mock_common_io_service(mock_common_io, mock_instrument_repo, mock_kline_repo, mock_api);
+        let common_io: OkxSyncService = link_mock_common_io_service(mock_common_io, mock_instrument_repo, mock_kline_repo, mock_api);
 
         let inst_po = InstrumentPo::builder()
             .id(123)
@@ -1406,7 +1218,7 @@ mod tests {
             .withf(move |inst_id, _, start_ts, _, _, _, _| inst_id == "BTC1" && start_ts == &expected_start)
             .return_once(|_, _, _, _, _, _, _| Ok(vec![]));
 
-        let common_io: OkxRemoteService = link_mock_common_io_service(mock_common_io, mock_instrument_repo, mock_kline_repo, mock_api);
+        let common_io: OkxSyncService = link_mock_common_io_service(mock_common_io, mock_instrument_repo, mock_kline_repo, mock_api);
 
         let inst_po = InstrumentPo::builder()
             .id(123)
@@ -1443,7 +1255,7 @@ mod tests {
             .withf(move |inst_id, _, start_ts, _, _, _, _| inst_id == "BTC1" && start_ts == &expected_start)
             .return_once(|_, _, _, _, _, _, _| Ok(vec![]));
 
-        let common_io: OkxRemoteService = link_mock_common_io_service(mock_common_io, mock_instrument_repo, mock_kline_repo, mock_api);
+        let common_io: OkxSyncService = link_mock_common_io_service(mock_common_io, mock_instrument_repo, mock_kline_repo, mock_api);
 
         let inst_po = InstrumentPo::builder()
             .id(123)

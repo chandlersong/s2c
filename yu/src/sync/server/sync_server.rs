@@ -1,6 +1,5 @@
 use crate::duck_db::DuckDBDSProvider;
 use crate::errors::YuError;
-use crate::polymarket::po::PolyMarketInstrumentPo;
 use crate::sync::models::grpc_sync::sync_interface_server::SyncInterface;
 use crate::sync::models::grpc_sync::{Empty, HistoryEntry, HistoryType, Instrument, InstrumentList, ServerMessage, SubscribeRequest, SyncRequest};
 use async_trait::async_trait;

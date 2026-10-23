@@ -1,11 +1,14 @@
 use li::tools::logs::setup_logger;
 use log::{LevelFilter, error, info};
 use std::collections::HashMap;
-use tokio::sync::mpsc;
+use std::sync::Arc;
+use tokio::sync::{RwLock, mpsc};
 use yu::config::get_config;
 use yu::errors::YuError;
-use yu::okx::sync_job::start_okx_sync_server_job;
-use yu::sync::models::grpc_sync::HistoryEntry;
+use yu::okx::duck_po::InstrumentPo;
+use yu::okx::sync_server::OkxSyncInstrumentService;
+use yu::sync::models::grpc_sync::{HistoryEntry, HistoryType};
+use yu::sync::server::sync_server::{SyncHistoryService, SyncInstrumentServiceTrait};
 use yue::http_client::init_http_client;
 
 #[tokio::main]
@@ -30,9 +33,10 @@ async fn main() -> Result<(), YuError> {
             info!("received OKX history entry: {:?}", entry);
         }
     });
-
-    let sync_service = start_okx_sync_server_job(&app_config, history_tx).await?;
-    if let Err(e) = sync_service.sync_instrument().await {
+    let live_instruments = Arc::new(RwLock::new(Vec::<InstrumentPo>::new()));
+    let support_history_service: HashMap<HistoryType, SyncHistoryService> = HashMap::new();
+    let instrument_service = OkxSyncInstrumentService::for_production(support_history_service, live_instruments);
+    if let Err(e) = instrument_service.sync_instrument().await {
         error!("error when syncing instrument: {}", e);
     }
     // let history_service = sync_service
@@ -43,11 +47,11 @@ async fn main() -> Result<(), YuError> {
     // history_service.check_history_data().await?;
     // history_service.sync_all().await?;
 
-    let instruments_in_db = sync_service.list_instruments().await?;
+    let instruments_in_db = instrument_service.list_instruments().await?;
 
     info!("OKX instruments in database num: {}", instruments_in_db.len());
 
-    drop(sync_service);
+    drop(instrument_service);
     history_receiver
         .await
         .map_err(|error| YuError::new(&format!("history receiver task failed: {error}")))?;

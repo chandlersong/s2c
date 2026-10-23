@@ -1,14 +1,17 @@
 use crate::errors::YuError;
 use crate::okx::duck_po::{InstrumentPo, OkxKlinePo};
-use crate::okx::service::{OkxRemoteService, OptionService, okx_remote_service_for_production};
+use crate::okx::duckdb_repository::OkxKlineRepository;
+use crate::okx::service::{OkxSyncService, OptionService, okx_sync_service_for_production};
 use crate::sync::models::grpc_sync::{HistoryEntry, HistoryType, Instrument, InstrumentType, OkxInstrument, OkxKline, ServerMessage, history_entry};
 use crate::sync::server::sync_server::{SyncHistoryService, SyncHistoryServiceTrait, SyncInstrumentServiceTrait};
 use async_trait::async_trait;
-use log::{error, info};
+use li::websocket::connection::MessageHandlerTrait;
+use log::{error, info, trace, warn};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
 use tonic::Status;
+use yue::okx::models::websocket::OkxWebsocketResponse;
 use yue::okx::restful_api::InstrumentsParam;
 
 fn history_entry_from_kline(kline: &OkxKlinePo) -> HistoryEntry {
@@ -34,7 +37,7 @@ fn history_entry_from_kline(kline: &OkxKlinePo) -> HistoryEntry {
 ///
 /// 当前版本，只是处理option的Instrument
 pub struct OkxSyncInstrumentService {
-    ok_remote: OkxRemoteService,
+    okx_sync: OkxSyncService,
     support_history_service: HashMap<HistoryType, SyncHistoryService>,
     live_instruments: Arc<RwLock<Vec<InstrumentPo>>>,
 }
@@ -45,7 +48,7 @@ impl OkxSyncInstrumentService {
         live_instruments: Arc<RwLock<Vec<InstrumentPo>>>,
     ) -> Arc<Self> {
         Arc::new(Self {
-            ok_remote: okx_remote_service_for_production(),
+            okx_sync: okx_sync_service_for_production(),
             support_history_service,
             live_instruments,
         })
@@ -56,7 +59,7 @@ impl OkxSyncInstrumentService {
 impl SyncInstrumentServiceTrait for OkxSyncInstrumentService {
     async fn list_instruments(&self) -> Result<Vec<Instrument>, YuError> {
         let instruments = self
-            .ok_remote
+            .okx_sync
             .get_instrument_repo()
             .get_instrument_by_type(yue::models::InstrumentType::Option)
             .await?;
@@ -64,7 +67,6 @@ impl SyncInstrumentServiceTrait for OkxSyncInstrumentService {
         Ok(instruments
             .into_iter()
             .map(|instrument| {
-                let inst_id = instrument.id.to_string();
                 let instrument = Instrument {
                     instrument_type: InstrumentType::Okx as i32,
                     payload: Some(crate::sync::models::grpc_sync::instrument::Payload::Okx(OkxInstrument::from(instrument))),
@@ -76,14 +78,14 @@ impl SyncInstrumentServiceTrait for OkxSyncInstrumentService {
 
     async fn sync_instrument(&self) -> Result<Vec<Instrument>, YuError> {
         // call for BTC and ETH
-        self.ok_remote
+        self.okx_sync
             .sync_instruments(InstrumentsParam::query_option("BTC-USD"), yue::models::InstrumentType::Option)
             .await?;
-        self.ok_remote
+        self.okx_sync
             .sync_instruments(InstrumentsParam::query_option("ETH-USD"), yue::models::InstrumentType::Option)
             .await?;
         let live_instruments = self
-            .ok_remote
+            .okx_sync
             .get_instrument_repo()
             .get_instrument_by_type_live(yue::models::InstrumentType::Option)
             .await?;
@@ -110,27 +112,96 @@ impl SyncInstrumentServiceTrait for OkxSyncInstrumentService {
     }
 }
 
+pub struct OkxSyncKlineHandler {
+    kline_repo: OkxKlineRepository,
+    history_tx: mpsc::Sender<HistoryEntry>,
+    live_instruments: Arc<RwLock<Vec<InstrumentPo>>>,
+    instrument_id_cache: RwLock<HashMap<String, u64>>,
+}
+
+impl OkxSyncKlineHandler {
+    pub fn new(kline_repo: OkxKlineRepository, history_tx: mpsc::Sender<HistoryEntry>, live_instruments: Arc<RwLock<Vec<InstrumentPo>>>) -> Self {
+        Self {
+            kline_repo,
+            history_tx,
+            live_instruments,
+            instrument_id_cache: RwLock::new(HashMap::new()),
+        }
+    }
+
+    async fn resolve_inst_id(&self, inst_identify: &str) -> Option<u64> {
+        if let Some(inst_id) = self.instrument_id_cache.read().await.get(inst_identify).copied() {
+            return Some(inst_id);
+        }
+
+        let inst_id = {
+            let instruments = self.live_instruments.read().await;
+            instruments
+                .iter()
+                .find(|instrument| instrument.inst_identify == inst_identify)
+                .map(|instrument| instrument.id)
+        };
+        if let Some(inst_id) = inst_id {
+            self.instrument_id_cache.write().await.entry(inst_identify.to_string()).or_insert(inst_id);
+        }
+        inst_id
+    }
+}
+
+#[async_trait]
+impl MessageHandlerTrait<OkxWebsocketResponse> for OkxSyncKlineHandler {
+    async fn handle_message(&self, message: &OkxWebsocketResponse) {
+        match message {
+            OkxWebsocketResponse::SubscribeResponse(response) => {
+                if response.event == "error" {
+                    warn!("OKX kline subscription failed: {:?}", response.msg);
+                } else {
+                    trace!("OKX kline subscription response: {:?}", response);
+                }
+            }
+            OkxWebsocketResponse::Kline(payload) => {
+                let mut confirmed_payload = payload.clone();
+                confirmed_payload
+                    .data
+                    .retain(|candle| candle.last().is_some_and(|confirm| confirm == "1"));
+                if confirmed_payload.data.is_empty() {
+                    return;
+                }
+
+                let Some(inst_id) = self.resolve_inst_id(&payload.arg.inst_id).await else {
+                    warn!("Received OKX kline for non-live instrument: {}", payload.arg.inst_id);
+                    return;
+                };
+
+                for kline in OkxKlinePo::from_ws_response(inst_id, &confirmed_payload) {
+                    if let Err(error) = self.kline_repo.insert_history(kline.clone()).await {
+                        warn!(
+                            "failed to save OKX kline, inst_id:{}, timestamp:{}, error:{}",
+                            kline.inst_id, kline.ts, error
+                        );
+                    }
+                    broadcast_kline(&self.history_tx, kline).await;
+                }
+            }
+        }
+    }
+}
+
 pub struct OkxSyncHistoryService {
     okx_option_service: Arc<OptionService>,
     history_tx: mpsc::Sender<HistoryEntry>,
 }
 
 impl OkxSyncHistoryService {
-    pub fn for_production(okx_option_service: Arc<OptionService>, history_tx: mpsc::Sender<HistoryEntry>) -> Arc<Self> {
-        Arc::new(Self {
+    pub fn for_production(history_tx: mpsc::Sender<HistoryEntry>, okx_option_service: Arc<OptionService>) -> Result<Arc<Self>, YuError> {
+        Ok(Arc::new(Self {
             okx_option_service,
             history_tx,
-        })
+        }))
     }
 
     pub async fn broadcast_message(&self, kline: OkxKlinePo) {
-        let history_entry = history_entry_from_kline(&kline);
-        if let Err(error) = self.history_tx.send(history_entry).await {
-            error!(
-                "failed to broadcast OKX kline, inst_id:{}, timestamp:{}, error:{}",
-                kline.inst_id, kline.ts, error
-            );
-        }
+        broadcast_kline(&self.history_tx, kline).await;
     }
 
     pub async fn check_and_broadcast_history(&self) -> Result<(), YuError> {
@@ -139,12 +210,15 @@ impl OkxSyncHistoryService {
         }
         Ok(())
     }
+}
 
-    pub async fn sync_all_history(&self) -> Result<(), YuError> {
-        for kline in self.okx_option_service.sync_latest_candles().await? {
-            self.broadcast_message(kline).await;
-        }
-        Ok(())
+async fn broadcast_kline(history_tx: &mpsc::Sender<HistoryEntry>, kline: OkxKlinePo) {
+    let history_entry = history_entry_from_kline(&kline);
+    if let Err(error) = history_tx.send(history_entry).await {
+        error!(
+            "failed to broadcast OKX kline, inst_id:{}, timestamp:{}, error:{}",
+            kline.inst_id, kline.ts, error
+        );
     }
 }
 
@@ -200,8 +274,11 @@ impl SyncHistoryServiceTrait for OkxSyncHistoryService {
         self.okx_option_service.initial_candle(0, None).await
     }
 
+    ///
+    /// 因为这里是通过websocket来同步的。
+    ///
     async fn sync_all(&self) -> Result<(), YuError> {
-        self.sync_all_history().await
+        Ok(())
     }
 
     async fn sync_period(&self) -> Result<Option<String>, YuError> {
@@ -212,6 +289,10 @@ impl SyncHistoryServiceTrait for OkxSyncHistoryService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::okx::duckdb_repository::{MockOkxKlineRepositoryTrait, OkxKlineRepository};
+    use li::websocket::connection::MessageHandlerTrait;
+    use tokio::sync::mpsc::error::TryRecvError;
+    use yue::okx::models::websocket::{ArgBody, KlinePayload};
 
     #[test]
     fn converts_kline_to_sync_history_entry() {
@@ -247,5 +328,91 @@ mod tests {
         assert_eq!(proto.vol_ccy, kline.vol_ccy);
         assert_eq!(proto.vol_ccy_quote, kline.vol_ccy_quote);
         assert_eq!(proto.confirm, u32::from(kline.confirm));
+    }
+
+    #[tokio::test]
+    async fn websocket_handler_broadcasts_only_completed_live_klines() {
+        let instrument = InstrumentPo::builder()
+            .id(7)
+            .inst_identify("BTC-USD-260101-100000-C".to_string())
+            .inst_type("OPTION".to_string())
+            .base_ccy("BTC".to_string())
+            .list_time(1)
+            .build();
+        let live_instruments = Arc::new(RwLock::new(vec![instrument]));
+        let (history_tx, mut history_rx) = mpsc::channel(2);
+        let mut mock_kline_repo = MockOkxKlineRepositoryTrait::new();
+        mock_kline_repo
+            .expect_insert_history()
+            .times(2)
+            .withf(|kline| kline.inst_id == 7 && kline.confirm == 1)
+            .returning(|_| Ok(()));
+        let kline_repo: OkxKlineRepository = Arc::new(mock_kline_repo);
+        let handler = OkxSyncKlineHandler::new(kline_repo, history_tx, live_instruments.clone());
+        let payload = KlinePayload::builder()
+            .arg(
+                ArgBody::builder()
+                    .channel("candle1H".to_string())
+                    .inst_id("BTC-USD-260101-100000-C".to_string())
+                    .build(),
+            )
+            .data(vec![
+                vec![
+                    "1700000000000".to_string(),
+                    "1".to_string(),
+                    "2".to_string(),
+                    "0.5".to_string(),
+                    "1.5".to_string(),
+                    "3".to_string(),
+                    "4".to_string(),
+                    "5".to_string(),
+                    "1".to_string(),
+                ],
+                vec!["0".to_string()],
+            ])
+            .build();
+
+        handler.handle_message(&OkxWebsocketResponse::Kline(payload.clone())).await;
+
+        let entry = history_rx.recv().await.expect("completed kline should be broadcast");
+        assert_eq!(entry.inst_id, 7);
+        assert!(matches!(entry.payload, Some(history_entry::Payload::OkxKline(_))));
+
+        live_instruments.write().await.clear();
+        handler.handle_message(&OkxWebsocketResponse::Kline(payload)).await;
+        let cached_entry = history_rx.recv().await.expect("cached instrument should be broadcast");
+        assert_eq!(cached_entry.inst_id, 7);
+        assert!(matches!(history_rx.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    #[tokio::test]
+    async fn websocket_handler_ignores_non_live_instruments() {
+        let live_instruments = Arc::new(RwLock::new(Vec::new()));
+        let (history_tx, mut history_rx) = mpsc::channel(1);
+        let kline_repo: OkxKlineRepository = Arc::new(MockOkxKlineRepositoryTrait::new());
+        let handler = OkxSyncKlineHandler::new(kline_repo, history_tx, live_instruments);
+        let payload = KlinePayload::builder()
+            .arg(
+                ArgBody::builder()
+                    .channel("candle1H".to_string())
+                    .inst_id("BTC-USD-260101-100000-C".to_string())
+                    .build(),
+            )
+            .data(vec![vec![
+                "1700000000000".to_string(),
+                "1".to_string(),
+                "2".to_string(),
+                "0.5".to_string(),
+                "1.5".to_string(),
+                "3".to_string(),
+                "4".to_string(),
+                "5".to_string(),
+                "1".to_string(),
+            ]])
+            .build();
+
+        handler.handle_message(&OkxWebsocketResponse::Kline(payload)).await;
+
+        assert!(matches!(history_rx.try_recv(), Err(TryRecvError::Empty)));
     }
 }

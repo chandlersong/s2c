@@ -72,7 +72,7 @@ pub async fn start_polymarket_sync_series_job(
 
     let mut polymarket_sync_history_service_map: HashMap<HistoryType, SyncHistoryService> = HashMap::new();
 
-    polymarket_sync_history_service_map.insert(HistoryType::PolymarketToken, token_history);
+    polymarket_sync_history_service_map.insert(HistoryType::PolymarketToken, token_history.clone());
     let res = PolyMarketSyncInstrumentService::for_production(series_ids.unwrap(), polymarket_sync_history_service_map, live_instruments);
     if let Err(e) = res.sync_instrument().await {
         error!("Error when syncing polymarket instrument when start server: {:?}", e);
@@ -88,6 +88,11 @@ pub async fn start_polymarket_sync_series_job(
             info!("finish sync polymarket instrument");
         })
     });
+
+    let initial_service = token_history.clone();
+    if let Err(e) = initial_service.initial_history_data().await {
+        error!("Error initializing polymarket history data: {:?}", e);
+    }
 
     Ok(res)
 }

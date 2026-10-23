@@ -105,10 +105,14 @@ Instrument相关的内容。包括repository、service。
 组装氛围两部分。
 
 - 模仿`yu/src/polymarket/sync_job.rs`中的`start_polymarket_sync_series_job`方法，组装自己的同步链路。
-  - 关于HistoryService的组装。必须做以下几件事
-    - 调用initial_history_data方法，初始化历史数据。
-    - 每隔6小时调用一次check_history_data方法，检查本地数据。具体分钟数随机。但不能是整点活着5的倍数。
-    - 每隔1小时调用一次sync_all方法，获取最新的数据。
+    - 关于HistoryService的组装。必须做以下几件事
+        - 调用initial_history_data方法，初始化历史数据。且其调用时间，应该在InstrumentService初始时sync_instruments方法之后。
+        - 每隔6小时调用一次check_history_data方法，检查本地数据。具体分钟数随机。但不能是整点活着5的倍数。
+        - 每隔1小时调用一次sync_all方法，获取最新的数据。
+    - 关于InstrumentService的组装。必须做以下几件事
+        - 调用list_all_instruments方法，获取所有的instrument。
+        - 必须在启动时调用一次sync_instruments方法，获取最新的instrument。
+        - 每隔6小时调用一次sync_instruments方法，获取最新的instrument。
 - 在`yu/src/bin/yu_sync_server.rs`中，调用上面部分的代码。然后注册到`YuSyncServer`中
     - 需要检查配置文件是否启用改服务。
 
@@ -116,8 +120,8 @@ Instrument相关的内容。包括repository、service。
 
 - 创建自己的example，命名规则为 `yu/examples/sync_server_{history_type}_example.rs`，例如：
   `yu/examples/sync_server_polymarket_token_example.rs`
-  - 不允许直接使用sync_job.rs，必须显示的调用这些方法。
-  - 必须显示的调用一遍sync_job.rs的方法
+    - 不允许直接使用sync_job.rs，必须显示的调用这些方法。
+    - 必须显示的调用一遍sync_job.rs的方法
 
 #### 验证
 
