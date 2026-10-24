@@ -7,17 +7,25 @@ description: 根据用户指定的 VO，在 s2c 中创建完整的服务端/客�
 
 ## 目标
 
-用户指定 VO 后，以它为业务语义来源创建一套可端到端同步和持久化的数据模型。不能只生成某一端的 PO 或 protobuf。完整工作包括：
+用户指定 VO 后，以它为业务语义来源创建一套可端到端同步和持久化的数据模型,具体内容依据参考模式。完整工作包括：
 
 - VO → 服务端 PO → protobuf → 客户端 PO 的字段转换，明确处理空值、时间精度和 ID 映射。
 - 服务端和客户端各自的表定义及初始化注册；若表已存在则检查兼容并复用，不重复创建。
 - 生成客户端的和服务器端的repository，只是作为place hodler，**不实现**任何方法。只是为了后续的工作使用。
 
 参考模式：
+
 - VO：`yue/src/okx/models/restful.rs` 中的 `OptionSummaryDetail` 是 VO。
 - 服务端 PO: `yu/src/okx/duck_po.rs`
-- 服务器中的表：`yu/src/okx/duckdb_consts.rs`、`yu/src/okx/duckdb_tables.rs`
-中对应 Option Summary 的实现。客户端 protobuf、客户端 PO、PostgreSQL 表和 repository 参考已有同步模型中最接近的实现。
+- 服务器中的表：`yu/src/okx/duckdb_consts.rs` 中的 `CREATE_OKX_OPTION_SUMMARY_TABLE`、
+- 流失写入(非必选项)： 参考`yu/src/okx/duckdb_tables.rs` 中的 `OKX_OPTION_SUMMARY`
+- 服务器端的repository: 参考`yu/src/okx/duckdb_repository.rs`, 只是参考trait和相应的type，以及文件放置的位置，不生成任何方法。
+- protobuf定义: `yu/proto/history_data.proto` 中的OkxOptionSummary
+- 客户端 PO：`yu/src/sync/client/po/okx.rs`:LocalOkxOptionSummaryPo
+- 客户端表: `yu/src/sync/client/db_consts.rs` 中的CREATE_OKX_OPTION_SUMMARY_TABLE
+- 客户端的repository参考：`yu/src/sync/client/repository/okx.rs`中的ClientOkxRepositoryTrait，
+    - 只是参考trait和相应的type，以及文件放置的位置，不生成任何方法。
+    - 原则一个交易所一个。
 
 ## 开始前确认
 
@@ -44,17 +52,15 @@ description: 根据用户指定的 VO，在 s2c 中创建完整的服务端/客�
 如某项已完成，检查正确性后继续，不要重复创建。
 
 1. **理解指定 VO 和数据流。** 明确字段语义、nullable、精度/时间单位、业务唯一键、服务端数据来源和客户端关联方式。
-2. **创建/补齐服务端 PO。** 实现 VO → 服务端 PO 转换及数据库读写所需的 row/appender 参数转换；明确服务端业务 ID 与数据库本地
-   ID。
-3. **创建/补齐服务端表和 repository。** 检查 DDL、表枚举/注册和初始化入口；按同步实际需要实现常规 repository
-   操作，例如插入/批量插入、范围查询、最新时间查询。沿用 Option Summary repository 的 trait、实现和构造入口模式，不无差别生成
-   CRUD。
+2. **创建/补齐服务端 PO。** 实现 VO → 服务端 PO 转换
+3. **创建/补齐服务端表和 repository。** 检查 DDL、表枚举/注册和初始化入口； repository只是占位用，为了方便后续方法，不做任何工作，
 4. **创建 protobuf 定义。** 定义传输消息并接入需要的 `oneof`、`ServerMessage`、枚举或请求。遵守 protobuf
    兼容性：不可复用已占用字段号，不随意删除或改号已发布字段。
 5. **创建/补齐客户端 PO 和映射。** 实现 protobuf → 客户端 PO 转换；明确远端 ID 如何关联客户端本地 instrument ID 和本地 PO
    主键。
 6. **创建/补齐客户端表。** 更新 PostgreSQL DDL、表枚举/注册、`ALL_CLIENT_TABLES` 或对应初始化入口；逐列核对 DDL、客户端 PO。
-7. **添加针对性测试并验证。** 覆盖 VO→服务端 PO→protobuf→客户端 PO 的字段、nullable、ID、时间精度，以及多种上游形态、检查实际
+7. **创建/补齐客户端repository。** ；repository只是占位用，为了方便后续方法，不做任何工作，
+8. **添加针对性测试并验证。** 覆盖 VO→服务端 PO→protobuf→客户端 PO 的字段、nullable、ID、时间精度，以及多种上游形态、检查实际
    DDL 与 SQL 的列、约束、冲突目标一致；运行最小相关格式化、编译和测试；不声称未执行的验证已通过。
 
 ## 持久化与同步约定
