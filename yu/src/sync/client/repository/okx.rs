@@ -22,11 +22,13 @@ pub trait ClientOkxRepositoryTrait {
     //返回server id+数据库中timestamp
     async fn list_instrument_timestamps(&self) -> Result<HashMap<u64, u64>, YuError>;
 
+    async fn find_latest_kline_timestamp_by_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError>;
+
     // 返回 server id -> latest acquire_ts (ms) 在 okx_option_summary 表中
     async fn list_option_summary_timestamps(&self) -> Result<HashMap<u64, u64>, YuError>;
 
     /// Insert a new okx instrument into okx_instruments table.
-    async fn create_instruments(&self, po: LocalOkxInstrumentPo) -> Result<(), YuError>;
+    async fn create_instruments(&self, po: LocalOkxInstrumentPo) -> Result<u64, YuError>;
 }
 
 pub type ClientOkxRepository = Arc<dyn ClientOkxRepositoryTrait + Send + Sync>;
@@ -72,6 +74,27 @@ impl ClientOkxRepositoryTrait for ClientOkxRepositoryImpl {
         Ok(map)
     }
 
+    async fn find_latest_kline_timestamp_by_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError> {
+        let server_id = i64::try_from(server_id).map_err(|_| YuError::new("OKX server instrument ID exceeds BIGINT range"))?;
+        let timestamp: Option<i64> = sqlx::query_scalar(
+            r#"
+            SELECT (EXTRACT(EPOCH FROM max(h.timestamp)) * 1000)::bigint
+            FROM okx_instruments i
+            LEFT JOIN okx_kline_history h ON h.instrument_id = i.id
+            WHERE i.server_id = $1
+            GROUP BY i.server_id
+            "#,
+        )
+        .bind(server_id)
+        .fetch_optional(&self.pg_pool)
+        .await?
+        .flatten();
+
+        timestamp
+            .map(|timestamp| u64::try_from(timestamp).map_err(|_| YuError::new("negative OKX kline timestamp")))
+            .transpose()
+    }
+
     async fn list_option_summary_timestamps(&self) -> Result<HashMap<u64, u64>, YuError> {
         let sql = r#"
             SELECT pi.server_id::bigint AS server_id, (EXTRACT(EPOCH FROM max(oac.acquire_ts)) * 1000)::bigint AS max_ts
@@ -84,13 +107,16 @@ impl ClientOkxRepositoryTrait for ClientOkxRepositoryImpl {
         Ok(map)
     }
 
-    async fn create_instruments(&self, po: LocalOkxInstrumentPo) -> Result<(), YuError> {
+    async fn create_instruments(&self, po: LocalOkxInstrumentPo) -> Result<u64, YuError> {
         let sql = r#"INSERT INTO okx_instruments (id, server_id, inst_identify, inst_type, inst_family, base_ccy, quote_ccy, settle_ccy, list_time, exp_time, tick_sz, lot_sz, min_sz, alias, state, inst_id_code, inst_category)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT (id) DO NOTHING"#;
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT (id) DO NOTHING
+            RETURNING id"#;
 
-        sqlx::query(sql)
-            .bind(po.id as i64)
-            .bind(po.server_id as i64)
+        let id = i64::try_from(po.id).map_err(|_| YuError::new("local OKX instrument ID exceeds BIGINT range"))?;
+        let server_id = i64::try_from(po.server_id).map_err(|_| YuError::new("OKX server instrument ID exceeds BIGINT range"))?;
+        let inserted_id: i64 = sqlx::query_scalar(sql)
+            .bind(id)
+            .bind(server_id)
             .bind(&po.inst_identify)
             .bind(&po.inst_type)
             .bind(&po.inst_family)
@@ -106,9 +132,32 @@ impl ClientOkxRepositoryTrait for ClientOkxRepositoryImpl {
             .bind(&po.state)
             .bind(&po.inst_id_code)
             .bind(&po.inst_category)
-            .execute(&self.pg_pool)
+            .fetch_one(&self.pg_pool)
             .await?;
 
-        Ok(())
+        u64::try_from(inserted_id).map_err(|_| YuError::new("negative local OKX instrument ID"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 测试目的：验证超出 PostgreSQL BIGINT 范围的服务端 instrument ID 会在查询前被拒绝。
+    // 准备数据/过程：使用不建立真实连接的 PgPool，并传入 u64::MAX 调用最新 Kline 时间戳查询。
+    // 预期结果：方法返回范围错误，不尝试连接数据库。
+    #[tokio::test]
+    async fn rejects_server_id_outside_bigint_range() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://user:password@localhost/database")
+            .unwrap();
+        let repository = ClientOkxRepositoryImpl { pg_pool: pool };
+
+        let result = repository.find_latest_kline_timestamp_by_server_id(u64::MAX).await;
+
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Custom error: OKX server instrument ID exceeds BIGINT range"
+        );
     }
 }

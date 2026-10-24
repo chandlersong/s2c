@@ -24,13 +24,12 @@ use yue::tools::get_snow_flake_id_u64;
 type SeverId2LocalId = Arc<RwLock<HashMap<u64, LocalPolyMarketInstrumentPo>>>;
 
 pub struct PolymarketClientInstrumentService {
-    pm_repo: ClientPolyMarketRepository,
     history_services: HashMap<HistoryType, ClientHistoryService>,
 }
 
 impl PolymarketClientInstrumentService {
-    fn new(pm_repo: ClientPolyMarketRepository, history_services: HashMap<HistoryType, ClientHistoryService>) -> Self {
-        Self { pm_repo, history_services }
+    fn new(history_services: HashMap<HistoryType, ClientHistoryService>) -> Self {
+        Self { history_services }
     }
 
     pub fn for_production() -> Result<Arc<Self>, YuError> {
@@ -42,7 +41,7 @@ impl PolymarketClientInstrumentService {
 
         let mut history_services: HashMap<HistoryType, ClientHistoryService> = HashMap::new();
         history_services.insert(HistoryType::PolymarketToken, history_service);
-        Ok(Arc::new(Self::new(pm_repo, history_services)))
+        Ok(Arc::new(Self::new(history_services)))
     }
 }
 
@@ -56,14 +55,6 @@ impl ClientInstrumentServiceTrait for PolymarketClientInstrumentService {
             history_service.initial_data(instrument.clone(), end_ms).await?;
         }
         Ok(())
-    }
-
-    async fn check_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError> {
-        Ok(self
-            .pm_repo
-            .find_instrument_by_server_id(server_id)
-            .await?
-            .map(|instrument| instrument.id))
     }
 
     fn supported_history_services(&self) -> Result<HashMap<HistoryType, ClientHistoryService>, YuError> {
@@ -341,10 +332,6 @@ mod tests {
         }
     }
 
-    fn instrument_service(pm_repo: ClientPolyMarketRepository) -> PolymarketClientInstrumentService {
-        PolymarketClientInstrumentService::new(pm_repo, HashMap::new())
-    }
-
     fn mock_binary_search_ds() -> BinarySearchDS {
         let mut mock = MockBinarySearchDSTrait::new();
         mock.expect_count_distinct_between().returning(|_, _, _| Ok(0));
@@ -413,10 +400,7 @@ mod tests {
             .times(1)
             .returning(|_, _| Box::pin(async { Ok(()) }));
         let history_service: ClientHistoryService = Arc::new(history_service);
-        let instrument_service = PolymarketClientInstrumentService::new(
-            Arc::new(MockClientPolyMarketRepositoryTrait::new()),
-            HashMap::from([(HistoryType::PolymarketToken, history_service)]),
-        );
+        let instrument_service = PolymarketClientInstrumentService::new(HashMap::from([(HistoryType::PolymarketToken, history_service)]));
 
         instrument_service.initial_data(polymarket_instrument(42), end_ms).await.unwrap();
     }
@@ -711,32 +695,5 @@ mod tests {
         instrument.payload = None;
 
         assert!(service.initial_data(instrument, now).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn check_server_id_returns_local_instrument_id_when_found() {
-        let mut repo = MockClientPolyMarketRepositoryTrait::new();
-        repo.expect_find_instrument_by_server_id()
-            .withf(|server_id| *server_id == 42)
-            .returning(|_| {
-                Ok(Some(LocalPolyMarketInstrumentPo {
-                    id: 123,
-                    ..local_instrument(42)
-                }))
-            });
-        let service = instrument_service(Arc::new(repo));
-
-        assert_eq!(service.check_server_id(42).await.unwrap(), Some(123));
-    }
-
-    #[tokio::test]
-    async fn check_server_id_returns_none_when_not_found() {
-        let mut repo = MockClientPolyMarketRepositoryTrait::new();
-        repo.expect_find_instrument_by_server_id()
-            .withf(|server_id| *server_id == 42)
-            .returning(|_| Ok(None));
-        let service = instrument_service(Arc::new(repo));
-
-        assert_eq!(service.check_server_id(42).await.unwrap(), None);
     }
 }

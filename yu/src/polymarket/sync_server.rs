@@ -530,7 +530,7 @@ impl SyncHistoryServiceTrait for PolyMarketSyncHistoryService {
                     let res = self.interval.get_close_unix_ms(instrument.start_ms) + self.interval.to_milliseconds();
                     res.saturating_div(1000).saturating_sub(1)
                 }
-                Some(v) => v.saturating_div(1000).saturating_add(30),
+                Some(v) => v.saturating_div(1000).saturating_add(120),
             };
             if (start_ts >= now) || ((now - start_ts) < gap) {
                 continue;

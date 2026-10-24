@@ -22,11 +22,6 @@ use yue::tools::get_snow_flake_id_u64;
 pub trait ClientInstrumentServiceTrait: Send + Sync {
     async fn initial_data(&self, instrument: Instrument, end_ms: UnixTimeStamp) -> Result<(), YuError>;
 
-    ///
-    /// 判断对应的server_id是否存在。如果存在，返回该instrument的id。反之，则返回None
-    ///
-    async fn check_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError>;
-
     fn supported_history_services(&self) -> Result<HashMap<HistoryType, ClientHistoryService>, YuError>;
 }
 

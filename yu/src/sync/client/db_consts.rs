@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS okx_instruments (
         inst_id_code VARCHAR,
         inst_category VARCHAR
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_OKX_INSTRUMENTS_IDENTIFY ON okx_instruments(inst_identify);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_OKX_INSTRUMENTS_SERVER_ID ON okx_instruments(server_id);
 "#;
 
 pub const CREATE_OKX_KLINE_HISTORY_TABLE: &str = r#"
