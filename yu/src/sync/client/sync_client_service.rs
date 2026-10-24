@@ -12,8 +12,13 @@ use log::{error, info, warn};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio::task::JoinSet;
 use yue::tools::get_snow_flake_id_u64;
+
+const INITIAL_DATA_CONCURRENCY: usize = 5;
+const INITIAL_DATA_PROGRESS_INTERVAL: Duration = Duration::from_secs(30);
 
 ///
 /// 该方法中的start和finish其实是钩子，因为在实际中，需要冲数据库中更新一些数据
@@ -118,17 +123,42 @@ impl SyncClientService {
     pub async fn initial_data(&self, server_inst: InstrumentList) -> Result<(), YuError> {
         // 因为整个流程时间很长，且监听会同时开始。所以要统一结束时间。
         let now = unix_time_now_u64_utc();
-        for inst in server_inst.instruments.into_iter() {
-            let inst_type = InstrumentType::try_from(inst.instrument_type).map_err(|_| YuError::new("unknown exchange type"))?;
-            let inst_name = inst_type.readable_name();
-            let Some(instrument_sync_service) = self.instrument_services.get(&inst_type) else {
-                error!("{} not found instrument sync service to handle", inst_name);
-                continue;
-            };
-            if let Err(e) = instrument_sync_service.initial_data(inst, now).await {
-                error!("error initializing exchange {},error:{}", inst_name, e);
+        info!("initial_data start");
+        let total = server_inst.instruments.len();
+        let instrument_services = Arc::new(self.instrument_services.clone());
+        let mut instruments = server_inst.instruments.into_iter();
+        let mut tasks = JoinSet::new();
+        for _ in 0..INITIAL_DATA_CONCURRENCY {
+            if let Some(instrument) = instruments.next() {
+                tasks.spawn(initialize_instrument(instrument, now, instrument_services.clone()));
             }
         }
+        let mut completed = 0;
+        let mut progress_interval = tokio::time::interval_at(
+            tokio::time::Instant::now() + INITIAL_DATA_PROGRESS_INTERVAL,
+            INITIAL_DATA_PROGRESS_INTERVAL,
+        );
+        while completed < total {
+            tokio::select! {
+                result = tasks.join_next(), if !tasks.is_empty() => {
+                    let Some(result) = result else {
+                        continue;
+                    };
+                    match result {
+                        Ok(result) => result?,
+                        Err(error) => return Err(YuError::new(&format!("instrument initialization task failed: {error}"))),
+                    }
+                    completed += 1;
+                    if let Some(instrument) = instruments.next() {
+                        tasks.spawn(initialize_instrument(instrument, now, instrument_services.clone()));
+                    }
+                }
+                _ = progress_interval.tick() => {
+                    info!("initial_data progress: {}/{} instruments completed", completed, total);
+                }
+            }
+        }
+        info!("initial_data done");
         Ok(())
     }
 
@@ -213,6 +243,23 @@ impl SyncClientService {
     }
 }
 
+async fn initialize_instrument(
+    instrument: Instrument,
+    end_ms: UnixTimeStamp,
+    instrument_services: Arc<HashMap<InstrumentType, ClientInstrumentService>>,
+) -> Result<(), YuError> {
+    let instrument_type = InstrumentType::try_from(instrument.instrument_type).map_err(|_| YuError::new("unknown exchange type"))?;
+    let instrument_name = instrument_type.readable_name();
+    let Some(service) = instrument_services.get(&instrument_type) else {
+        error!("{} not found instrument sync service to handle", instrument_name);
+        return Ok(());
+    };
+    if let Err(error) = service.initial_data(instrument, end_ms).await {
+        error!("error initializing instrument {},error:{}", instrument_name, error);
+    }
+    Ok(())
+}
+
 struct ProductionServerMessageProcessor;
 
 #[async_trait]
@@ -245,7 +292,33 @@ async fn process_server_message(history_services: &HashMap<HistoryType, ClientHi
 mod tests {
     use super::*;
     use crate::sync::models::grpc_sync::{PolyMarketHistory, history_entry::Payload};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::Barrier;
 
+    struct ConcurrencyTrackingInstrumentService {
+        active: Arc<AtomicUsize>,
+        max_active: Arc<AtomicUsize>,
+        barrier: Arc<Barrier>,
+    }
+
+    #[async_trait]
+    impl ClientInstrumentServiceTrait for ConcurrencyTrackingInstrumentService {
+        async fn initial_data(&self, _instrument: Instrument, _end_ms: UnixTimeStamp) -> Result<(), YuError> {
+            let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+            self.max_active.fetch_max(active, Ordering::SeqCst);
+            self.barrier.wait().await;
+            self.active.fetch_sub(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn supported_history_services(&self) -> Result<HashMap<HistoryType, ClientHistoryService>, YuError> {
+            Ok(HashMap::new())
+        }
+    }
+
+    // 测试目的：验证实时历史消息会路由到注册了对应 HistoryType 的 service。
+    // 准备数据/过程：注册 PolymarketToken mock service，并发送一条该类型的 history entry。
+    // 预期结果：mock service 收到一次 server ID 为 42 的记录。
     #[tokio::test]
     async fn routes_history_to_service_registered_for_its_history_type() {
         let mut history_service = MockClientHistoryServiceTrait::new();
@@ -270,5 +343,37 @@ mod tests {
             },
         )
         .await;
+    }
+
+    // 测试目的：验证初始 instrument 同步最多并发执行 5 项。
+    // 准备数据/过程：构造 10 个 OKX instruments，mock service 在 5 个请求同时到达 barrier 后才继续。
+    // 预期结果：同步完整处理 10 项，观测到的最大并发数恰为 5。
+    #[tokio::test]
+    async fn initial_data_limits_concurrency_to_five() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let max_active = Arc::new(AtomicUsize::new(0));
+        let instrument_service: ClientInstrumentService = Arc::new(ConcurrencyTrackingInstrumentService {
+            active: active.clone(),
+            max_active: max_active.clone(),
+            barrier: Arc::new(Barrier::new(INITIAL_DATA_CONCURRENCY)),
+        });
+        let service = SyncClientService {
+            instrument_services: HashMap::from([(InstrumentType::Okx, instrument_service)]),
+            history_services: HashMap::new(),
+        };
+        let instrument_list = InstrumentList {
+            instruments: (0..10)
+                .map(|_| Instrument {
+                    instrument_type: InstrumentType::Okx as i32,
+                    payload: None,
+                })
+                .collect(),
+            server_timestamp: 0,
+        };
+
+        service.initial_data(instrument_list).await.unwrap();
+
+        assert_eq!(max_active.load(Ordering::SeqCst), INITIAL_DATA_CONCURRENCY);
+        assert_eq!(active.load(Ordering::SeqCst), 0);
     }
 }
