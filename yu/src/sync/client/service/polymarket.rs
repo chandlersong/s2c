@@ -8,41 +8,80 @@ use crate::sync::client::db_consts::ClientsTables;
 use crate::sync::client::grpc_manager::{GrpcChannelManager, get_grpc_manager_from_config};
 use crate::sync::client::po::polymarket::{LocalPolyMarketHistoryPo, LocalPolyMarketInstrumentPo};
 use crate::sync::client::repository::polymarket::{ClientPolyMarketRepository, default_client_polymarket_repository};
-use crate::sync::client::sync_client_service::{ClientExchangeService, ClientExchangeServiceTrait};
-use crate::sync::models::grpc_sync::{HistoryType, Instrument, InstrumentType, SyncRequest, history_entry::Payload, instrument};
+use crate::sync::client::sync_client_service::{ClientHistoryService, ClientHistoryServiceTrait, ClientInstrumentServiceTrait};
+use crate::sync::models::grpc_sync::{HistoryEntry, HistoryType, Instrument, InstrumentType, SyncRequest, history_entry::Payload, instrument};
 use async_trait::async_trait;
 use futures::StreamExt;
+use futures::executor::block_on;
 use li::tools::time::UnixTimeStamp;
-use log::{debug, error};
+use log::{debug, error, warn};
+use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use yue::models::HistoryInterval;
 use yue::tools::get_snow_flake_id_u64;
 
-pub struct PolymarketClientExchangeService {
+type SeverId2LocalId = Arc<RwLock<HashMap<u64, LocalPolyMarketInstrumentPo>>>;
+
+pub struct PolymarketClientInstrumentService {
     pm_repo: ClientPolyMarketRepository,
-    history_batch_insert: PostgresqlBatchInsert<LocalPolyMarketHistoryPo>,
-    grpc_manager: GrpcChannelManager,
-    binary_search: BinarySearchDS,
-    interval: HistoryInterval,
+    history_services: HashMap<HistoryType, ClientHistoryService>,
 }
-impl PolymarketClientExchangeService {
-    fn new(
-        pm_repo: ClientPolyMarketRepository,
-        history_batch_insert: PostgresqlBatchInsert<LocalPolyMarketHistoryPo>,
-        grpc_manager: GrpcChannelManager,
-        binary_search: BinarySearchDS,
-        interval: HistoryInterval,
-    ) -> Self {
-        Self {
-            pm_repo,
-            history_batch_insert,
-            grpc_manager,
-            binary_search,
-            interval,
-        }
+
+impl PolymarketClientInstrumentService {
+    fn new(pm_repo: ClientPolyMarketRepository, history_services: HashMap<HistoryType, ClientHistoryService>) -> Self {
+        Self { pm_repo, history_services }
     }
 
-    pub fn for_production() -> Result<ClientExchangeService, YuError> {
+    pub fn for_production() -> Result<Arc<Self>, YuError> {
+        let pm_repo = default_client_polymarket_repository();
+
+        let id_maps: SeverId2LocalId = Arc::new(RwLock::new(block_on(pm_repo.server_id_instrument_dictionary())?));
+
+        let history_service = PolymarketClientHistoryService::for_production(id_maps)?;
+
+        let mut history_services: HashMap<HistoryType, ClientHistoryService> = HashMap::new();
+        history_services.insert(HistoryType::PolymarketToken, history_service);
+        Ok(Arc::new(Self::new(pm_repo, history_services)))
+    }
+}
+
+#[async_trait]
+impl ClientInstrumentServiceTrait for PolymarketClientInstrumentService {
+    ///
+    /// loop  history_services的values。调用他们的初始化
+    ///
+    async fn initial_data(&self, instrument: Instrument, end_ms: UnixTimeStamp) -> Result<(), YuError> {
+        for history_service in self.history_services.values() {
+            history_service.initial_data(instrument.clone(), end_ms).await?;
+        }
+        Ok(())
+    }
+
+    async fn check_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError> {
+        Ok(self
+            .pm_repo
+            .find_instrument_by_server_id(server_id)
+            .await?
+            .map(|instrument| instrument.id))
+    }
+
+    fn supported_history_services(&self) -> Result<HashMap<HistoryType, ClientHistoryService>, YuError> {
+        Ok(self.history_services.clone())
+    }
+}
+
+pub struct PolymarketClientHistoryService {
+    history_batch_insert: PostgresqlBatchInsert<LocalPolyMarketHistoryPo>,
+    pm_repo: ClientPolyMarketRepository,
+    interval: HistoryInterval,
+    grpc_manager: GrpcChannelManager,
+    binary_search: BinarySearchDS,
+    id_maps: SeverId2LocalId,
+}
+
+impl PolymarketClientHistoryService {
+    pub fn for_production(id_maps: SeverId2LocalId) -> Result<Arc<Self>, YuError> {
         let pm_repo = default_client_polymarket_repository();
         let history_batch_insert = get_polymarket_price_batch_insert();
         let pg_pool = get_sync_client_pg_pool_sync()?;
@@ -52,13 +91,15 @@ impl PolymarketClientExchangeService {
             ClientsTables::PolyMarketInstruments.table_name(),
             "timestamp",
         );
-        Ok(Arc::new(Self::new(
-            pm_repo,
+        let grpc_manager = get_grpc_manager_from_config();
+        Ok(Arc::new(Self {
             history_batch_insert,
-            get_grpc_manager_from_config(),
-            pm_binary_search_ds,
-            HistoryInterval::OneHour,
-        )))
+            pm_repo,
+            interval: HistoryInterval::OneHour,
+            grpc_manager,
+            binary_search: pm_binary_search_ds,
+            id_maps,
+        }))
     }
 
     async fn backfill_history(&self, server_inst_id: u64, local_inst_id: u64, start_timestamp: u64, end_timestamp: u64) -> Result<(), YuError> {
@@ -97,8 +138,9 @@ impl PolymarketClientExchangeService {
         Ok(())
     }
 }
+
 #[async_trait]
-impl ClientExchangeServiceTrait for PolymarketClientExchangeService {
+impl ClientHistoryServiceTrait for PolymarketClientHistoryService {
     ///
     /// 流程：
     /// 1. 判断instrument是不是polymarket。如果不是，则报错
@@ -192,12 +234,38 @@ impl ClientExchangeServiceTrait for PolymarketClientExchangeService {
         Ok(())
     }
 
-    async fn check_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError> {
-        Ok(self
-            .pm_repo
-            .find_instrument_by_server_id(server_id)
-            .await?
-            .map(|instrument| instrument.id))
+    ///
+    /// 1. 判断history_entry是不是polymarket的。如果不是，则报错
+    /// 2. 判断history中inst_id是否存在与id_maps中。
+    ///     - 如果存在，则插入
+    ///     - 如果不存在，则去去repo中查询，如果存在，则插入，并更新id_maps，否则就跳过。
+    ///
+    async fn insert_history(&self, history_entry: HistoryEntry) -> Result<(), YuError> {
+        if history_entry.history_type != HistoryType::PolymarketToken as i32
+            || history_entry.instrument_type != InstrumentType::Polymarket as i32
+            || !matches!(history_entry.payload.as_ref(), Some(Payload::PolymarketHistory(_)))
+        {
+            return Err(YuError::new("received non-Polymarket history payload"));
+        }
+
+        let cached_local_inst_id = {
+            let id_maps = self.id_maps.read().await;
+            id_maps.get(&history_entry.inst_id).map(|instrument| instrument.id)
+        };
+        let local_inst_id = match cached_local_inst_id {
+            Some(local_inst_id) => local_inst_id,
+            None => {
+                let Some(local_instrument) = self.pm_repo.find_instrument_by_server_id(history_entry.inst_id).await? else {
+                    warn!("local Polymarket instrument {} not found; skipping history", history_entry.inst_id);
+                    return Ok(());
+                };
+                let local_inst_id = local_instrument.id;
+                self.id_maps.write().await.insert(history_entry.inst_id, local_instrument);
+                local_inst_id
+            }
+        };
+        self.history_batch_insert.insert_data(history_entry, local_inst_id).await;
+        Ok(())
     }
 }
 
@@ -256,6 +324,27 @@ mod tests {
         MockPostgresqlBatchInsertTrait::new()
     }
 
+    fn history_service(
+        pm_repo: ClientPolyMarketRepository,
+        history_batch_insert: PostgresqlBatchInsert<LocalPolyMarketHistoryPo>,
+        grpc_manager: GrpcChannelManager,
+        binary_search: BinarySearchDS,
+        interval: HistoryInterval,
+    ) -> PolymarketClientHistoryService {
+        PolymarketClientHistoryService {
+            history_batch_insert,
+            pm_repo,
+            interval,
+            grpc_manager,
+            binary_search,
+            id_maps: Arc::new(Default::default()),
+        }
+    }
+
+    fn instrument_service(pm_repo: ClientPolyMarketRepository) -> PolymarketClientInstrumentService {
+        PolymarketClientInstrumentService::new(pm_repo, HashMap::new())
+    }
+
     fn mock_binary_search_ds() -> BinarySearchDS {
         let mut mock = MockBinarySearchDSTrait::new();
         mock.expect_count_distinct_between().returning(|_, _, _| Ok(0));
@@ -304,7 +393,7 @@ mod tests {
             .withf(|request| request.inst_id == 42 && request.start_ms == 101 && request.history_type == HistoryType::PolymarketToken as i32)
             .returning(|_| Ok(empty_history_stream()));
 
-        let service = PolymarketClientExchangeService::new(
+        let service = history_service(
             Arc::new(repo),
             Arc::new(mock_batch_insert()),
             Arc::new(manager),
@@ -312,6 +401,24 @@ mod tests {
             HistoryInterval::OneHour,
         );
         service.initial_data(polymarket_instrument(42), now).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn initial_data_delegates_to_registered_history_services() {
+        let end_ms = unix_time_now_u64_utc();
+        let mut history_service = crate::sync::client::sync_client_service::MockClientHistoryServiceTrait::new();
+        history_service
+            .expect_initial_data()
+            .withf(move |instrument, requested_end_ms| instrument.instrument_type == InstrumentType::Polymarket as i32 && *requested_end_ms == end_ms)
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+        let history_service: ClientHistoryService = Arc::new(history_service);
+        let instrument_service = PolymarketClientInstrumentService::new(
+            Arc::new(MockClientPolyMarketRepositoryTrait::new()),
+            HashMap::from([(HistoryType::PolymarketToken, history_service)]),
+        );
+
+        instrument_service.initial_data(polymarket_instrument(42), end_ms).await.unwrap();
     }
 
     // 测试目的：验证本地已存在的 Polymarket instrument 不会重复创建。
@@ -333,7 +440,7 @@ mod tests {
             .expect_sync_history()
             .withf(|request| request.inst_id == 42 && request.start_ms == 151 && request.history_type == HistoryType::PolymarketToken as i32)
             .returning(|_| Ok(empty_history_stream()));
-        let service = PolymarketClientExchangeService::new(
+        let service = history_service(
             Arc::new(repo),
             Arc::new(mock_batch_insert()),
             Arc::new(manager),
@@ -384,7 +491,7 @@ mod tests {
             })
             .times(1)
             .returning(|_, _| ());
-        let service = PolymarketClientExchangeService::new(
+        let service = history_service(
             Arc::new(MockClientPolyMarketRepositoryTrait::new()),
             Arc::new(batch_insert),
             Arc::new(manager),
@@ -393,6 +500,109 @@ mod tests {
         );
 
         service.backfill_history(42, 1, 150, 200).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn insert_new_entity_uses_local_instrument_id() {
+        let mut repo = MockClientPolyMarketRepositoryTrait::new();
+        repo.expect_find_instrument_by_server_id()
+            .withf(|server_id| *server_id == 42)
+            .returning(|_| {
+                Ok(Some(LocalPolyMarketInstrumentPo {
+                    id: 123,
+                    ..local_instrument(42)
+                }))
+            });
+        let mut batch_insert = mock_batch_insert();
+        batch_insert
+            .expect_insert_data()
+            .withf(|entry, local_inst_id| *local_inst_id == 123 && entry.history_type == HistoryType::PolymarketToken as i32 && entry.inst_id == 42)
+            .times(1)
+            .returning(|_, _| ());
+        let id_maps = Arc::new(RwLock::new(HashMap::new()));
+        let mut service = history_service(
+            Arc::new(repo),
+            Arc::new(batch_insert),
+            Arc::new(MockGrpcChannelManagerTrait::new()),
+            mock_binary_search_ds(),
+            HistoryInterval::OneHour,
+        );
+        service.id_maps = id_maps.clone();
+
+        service
+            .insert_history(HistoryEntry {
+                history_type: HistoryType::PolymarketToken as i32,
+                instrument_type: InstrumentType::Polymarket as i32,
+                inst_id: 42,
+                payload: Some(Payload::PolymarketHistory(PolyMarketHistory { timestamp: 175, price: 0.42 })),
+            })
+            .await
+            .unwrap();
+        assert_eq!(id_maps.read().await.get(&42).map(|instrument| instrument.id), Some(123));
+    }
+
+    #[tokio::test]
+    async fn insert_history_uses_cached_local_instrument_id() {
+        let mut repo = MockClientPolyMarketRepositoryTrait::new();
+        repo.expect_find_instrument_by_server_id().never();
+        let mut batch_insert = mock_batch_insert();
+        batch_insert
+            .expect_insert_data()
+            .withf(|entry, local_inst_id| *local_inst_id == 321 && entry.inst_id == 42)
+            .times(1)
+            .returning(|_, _| ());
+        let id_maps = Arc::new(RwLock::new(HashMap::from([(
+            42,
+            LocalPolyMarketInstrumentPo {
+                id: 321,
+                ..local_instrument(42)
+            },
+        )])));
+        let mut service = history_service(
+            Arc::new(repo),
+            Arc::new(batch_insert),
+            Arc::new(MockGrpcChannelManagerTrait::new()),
+            mock_binary_search_ds(),
+            HistoryInterval::OneHour,
+        );
+        service.id_maps = id_maps;
+
+        service
+            .insert_history(HistoryEntry {
+                history_type: HistoryType::PolymarketToken as i32,
+                instrument_type: InstrumentType::Polymarket as i32,
+                inst_id: 42,
+                payload: Some(Payload::PolymarketHistory(PolyMarketHistory { timestamp: 175, price: 0.42 })),
+            })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn insert_history_skips_when_instrument_is_not_local() {
+        let mut repo = MockClientPolyMarketRepositoryTrait::new();
+        repo.expect_find_instrument_by_server_id()
+            .withf(|server_id| *server_id == 42)
+            .returning(|_| Ok(None));
+        let mut batch_insert = mock_batch_insert();
+        batch_insert.expect_insert_data().never();
+        let service = history_service(
+            Arc::new(repo),
+            Arc::new(batch_insert),
+            Arc::new(MockGrpcChannelManagerTrait::new()),
+            mock_binary_search_ds(),
+            HistoryInterval::OneHour,
+        );
+
+        service
+            .insert_history(HistoryEntry {
+                history_type: HistoryType::PolymarketToken as i32,
+                instrument_type: InstrumentType::Polymarket as i32,
+                inst_id: 42,
+                payload: Some(Payload::PolymarketHistory(PolyMarketHistory { timestamp: 175, price: 0.42 })),
+            })
+            .await
+            .unwrap();
     }
 
     // 测试目的：验证定时校对只检查仍在运行的 instrument，并将缺失区间回补到本地 instrument。
@@ -431,7 +641,7 @@ mod tests {
             })
             .times(1)
             .returning(|_| Ok(empty_history_stream()));
-        let service = PolymarketClientExchangeService::new(
+        let service = history_service(
             Arc::new(repo),
             Arc::new(mock_batch_insert()),
             Arc::new(manager),
@@ -452,7 +662,7 @@ mod tests {
         repo.expect_get_live_instruments()
             .withf(move |at_ms| *at_ms == end_ms)
             .returning(|_| Ok(vec![]));
-        let service = PolymarketClientExchangeService::new(
+        let service = history_service(
             Arc::new(repo),
             Arc::new(mock_batch_insert()),
             Arc::new(MockGrpcChannelManagerTrait::new()),
@@ -470,7 +680,7 @@ mod tests {
     async fn rejects_non_polymarket_instrument() {
         let now = unix_time_now_u64_utc();
         let repo = MockClientPolyMarketRepositoryTrait::new();
-        let service = PolymarketClientExchangeService::new(
+        let service = history_service(
             Arc::new(repo),
             Arc::new(mock_batch_insert()),
             Arc::new(MockGrpcChannelManagerTrait::new()),
@@ -490,7 +700,7 @@ mod tests {
     async fn rejects_non_polymarket_payload() {
         let now = unix_time_now_u64_utc();
         let repo = MockClientPolyMarketRepositoryTrait::new();
-        let service = PolymarketClientExchangeService::new(
+        let service = history_service(
             Arc::new(repo),
             Arc::new(mock_batch_insert()),
             Arc::new(MockGrpcChannelManagerTrait::new()),
@@ -514,13 +724,7 @@ mod tests {
                     ..local_instrument(42)
                 }))
             });
-        let service = PolymarketClientExchangeService::new(
-            Arc::new(repo),
-            Arc::new(mock_batch_insert()),
-            Arc::new(MockGrpcChannelManagerTrait::new()),
-            mock_binary_search_ds(),
-            HistoryInterval::OneHour,
-        );
+        let service = instrument_service(Arc::new(repo));
 
         assert_eq!(service.check_server_id(42).await.unwrap(), Some(123));
     }
@@ -531,13 +735,7 @@ mod tests {
         repo.expect_find_instrument_by_server_id()
             .withf(|server_id| *server_id == 42)
             .returning(|_| Ok(None));
-        let service = PolymarketClientExchangeService::new(
-            Arc::new(repo),
-            Arc::new(mock_batch_insert()),
-            Arc::new(MockGrpcChannelManagerTrait::new()),
-            mock_binary_search_ds(),
-            HistoryInterval::OneHour,
-        );
+        let service = instrument_service(Arc::new(repo));
 
         assert_eq!(service.check_server_id(42).await.unwrap(), None);
     }

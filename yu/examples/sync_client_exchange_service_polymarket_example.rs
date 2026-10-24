@@ -7,7 +7,8 @@ use yu::config::get_config;
 use yu::errors::YuError;
 use yu::sync::client::database::initial_grpc_client_tables;
 use yu::sync::client::grpc_manager::get_grpc_manager_from_config;
-use yu::sync::client::service::polymarket::PolymarketClientExchangeService;
+use yu::sync::client::service::polymarket::PolymarketClientInstrumentService;
+use yu::sync::client::sync_client_service::ClientInstrumentServiceTrait;
 use yu::sync::models::grpc_sync::Empty;
 use yu::sync::models::grpc_sync::instrument::Payload;
 use yu::sync::models::grpc_sync::sync_interface_client::SyncInterfaceClient;
@@ -31,7 +32,7 @@ async fn main() -> Result<(), YuError> {
     let _app_config = get_config();
 
     initial_grpc_client_tables(None).await?;
-    let polymarket_instrument_service = PolymarketClientExchangeService::for_production()?;
+    let polymarket_instrument_service = PolymarketClientInstrumentService::for_production()?;
 
     let connection_manager = get_grpc_manager_from_config();
     info!("开始连接到 gRPC 服务端");
@@ -68,7 +69,10 @@ async fn main() -> Result<(), YuError> {
     polymarket_instrument_service.initial_data(instrument, now).await?;
     tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
     info!("和服务器对账");
-    polymarket_instrument_service.reconcile_living_instrument_with_server(now).await?;
+    for (history_type, history_service) in polymarket_instrument_service.supported_history_services()? {
+        info!("对账历史类型: {:?}", history_type.readable_name());
+        history_service.reconcile_living_instrument_with_server(now).await?;
+    }
     tokio::time::sleep(tokio::time::Duration::from_mins(5)).await;
     Ok(())
 }

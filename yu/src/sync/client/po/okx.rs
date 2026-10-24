@@ -107,8 +107,8 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for LocalOkxKlinePo {
         let id_i64: i64 = row.try_get("id")?;
         let instrument_id_i64: i64 = row.try_get("instrument_id")?;
 
-        let timestamp_dt: chrono::DateTime<chrono::Utc> = row.try_get("candle_begin_time")?;
-        let timestamp = timestamp_dt.timestamp() as u64;
+        let timestamp_dt: chrono::DateTime<chrono::Utc> = row.try_get("timestamp")?;
+        let timestamp = timestamp_dt.timestamp_millis() as u64;
 
         let open: f64 = row.try_get("open")?;
         let high: f64 = row.try_get("high")?;
@@ -120,7 +120,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for LocalOkxKlinePo {
         let confirm_i32: i32 = row.try_get("confirm")?;
 
         let batch_timestamp_dt: chrono::DateTime<chrono::Utc> = row.try_get("batch_timestamp")?;
-        let batch_timestamp = batch_timestamp_dt.timestamp() as u64;
+        let batch_timestamp = batch_timestamp_dt.timestamp_millis() as u64;
 
         Ok(Self {
             id: id_i64 as u64,
@@ -141,7 +141,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for LocalOkxKlinePo {
 
 impl CopyInsertable for LocalOkxKlinePo {
     fn columns() -> &'static str {
-        "id,instrument_id,candle_begin_time,open,high,low,close,vol,vol_ccy,vol_ccy_quote,confirm,batch_timestamp"
+        "id,instrument_id,timestamp,open,high,low,close,vol,vol_ccy,vol_ccy_quote,confirm,batch_timestamp"
     }
 
     fn to_csv_row(&self) -> String {
@@ -370,5 +370,45 @@ impl CopyInsertable for LocalOkxOptionSummaryPo {
         };
 
         Self::from_okx_summary(summary.clone(), local_inst_id, unix_time_now_u64_utc())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sync::models::grpc_sync::{HistoryType, InstrumentType, OkxKline, history_entry::Payload};
+
+    #[test]
+    fn okx_kline_history_maps_to_local_po_and_database_columns() {
+        let entry = HistoryEntry {
+            history_type: HistoryType::OkxKline as i32,
+            instrument_type: InstrumentType::Okx as i32,
+            inst_id: 42,
+            payload: Some(Payload::OkxKline(OkxKline {
+                id: 7,
+                ts: 1_700_000_000_123,
+                open: 100.0,
+                high: 110.0,
+                low: 90.0,
+                close: 105.0,
+                vol: 12.0,
+                vol_ccy: 1_200.0,
+                vol_ccy_quote: 1_260.0,
+                confirm: 1,
+            })),
+        };
+
+        let po = LocalOkxKlinePo::from_history_entry(&entry, 123);
+
+        assert_eq!(po.instrument_id, 123);
+        assert_eq!(po.candle_begin_time, 1_700_000_000_123);
+        assert_eq!(po.open, 100.0);
+        assert_eq!(po.vol_ccy_quote, 1_260.0);
+        assert_eq!(po.confirm, 1);
+        assert_eq!(
+            LocalOkxKlinePo::columns(),
+            "id,instrument_id,timestamp,open,high,low,close,vol,vol_ccy,vol_ccy_quote,confirm,batch_timestamp"
+        );
+        assert_eq!(po.to_csv_row().split(',').count(), 12);
     }
 }

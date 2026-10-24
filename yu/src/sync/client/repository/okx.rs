@@ -10,6 +10,8 @@ use std::sync::Arc;
 pub trait ClientOkxRepositoryTrait {
     async fn list_all_instrument(&self) -> Result<Vec<LocalOkxInstrumentPo>, YuError>;
 
+    async fn find_instrument_id_by_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError>;
+
     // 返回一个mapping。key是每个的inst_id,value是LocalOkxInstrumentPo
     async fn server_id_instrument_dictionary(&self) -> Result<HashMap<u64, LocalOkxInstrumentPo>, YuError> {
         let all_instruments = self.list_all_instrument().await?;
@@ -47,9 +49,19 @@ impl ClientOkxRepositoryTrait for ClientOkxRepositoryImpl {
             .await?)
     }
 
+    async fn find_instrument_id_by_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError> {
+        let server_id = i64::try_from(server_id).map_err(|_| YuError::new("OKX server instrument ID exceeds BIGINT range"))?;
+        let id: Option<i64> = sqlx::query_scalar("SELECT id FROM okx_instruments WHERE server_id = $1")
+            .bind(server_id)
+            .fetch_optional(&self.pg_pool)
+            .await?;
+        id.map(|id| u64::try_from(id).map_err(|_| YuError::new("negative local OKX instrument ID")))
+            .transpose()
+    }
+
     async fn list_instrument_timestamps(&self) -> Result<HashMap<u64, u64>, YuError> {
         let sql = r#"
-            SELECT pi.server_id::bigint AS server_id, (EXTRACT(EPOCH FROM max(pph.candle_begin_time)) * 1000)::bigint AS max_ts
+            SELECT pi.server_id::bigint AS server_id, (EXTRACT(EPOCH FROM max(pph.timestamp)) * 1000)::bigint AS max_ts
             FROM okx_instruments pi
             JOIN okx_kline_history pph ON pph.instrument_id = pi.id
             GROUP BY pi.server_id
