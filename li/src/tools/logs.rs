@@ -26,10 +26,12 @@ pub fn setup_logger(default_level: Option<LevelFilter>, special_level: HashMap<S
     let mut logger_builder = fern::Dispatch::new()
         .format(|out, message, record| {
             out.finish(format_args!(
-                "[{} {} {}] {}",
+                "[{} {} {} {}:{}] {}",
                 humantime::format_rfc3339_seconds(SystemTime::now()),
                 record.level(),
                 record.target(),
+                record.file().unwrap_or("?"),
+                record.line().map_or("?".to_string(), |line| line.to_string()),
                 message
             ))
         })
