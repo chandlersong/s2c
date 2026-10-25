@@ -3,10 +3,10 @@ use crate::data_integrity::models::ValidationGap;
 use crate::errors::YuError;
 use crate::postgresql_db::{PostgresqlTableTrait, get_sync_client_pg_pool_sync};
 use crate::postgresql_db_tables::PostgresqlBatchInsert;
-use crate::sync::client::database::get_okx_kline_batch_insert;
+use crate::sync::client::database::{get_okx_kline_batch_insert, get_okx_option_summary_batch_insert};
 use crate::sync::client::db_consts::ClientsTables;
 use crate::sync::client::grpc_manager::{GrpcChannelManager, get_grpc_manager_from_config};
-use crate::sync::client::po::okx::{LocalOkxInstrumentPo, LocalOkxKlinePo};
+use crate::sync::client::po::okx::{LocalOkxInstrumentPo, LocalOkxKlinePo, LocalOkxOptionSummaryPo};
 use crate::sync::client::repository::okx::{ClientOkxRepository, ClientOkxRepositoryImpl};
 use crate::sync::client::sync_client_service::{
     ClientHistoryService, ClientHistoryServiceTrait, ClientInstrumentService, ClientInstrumentServiceTrait,
@@ -39,8 +39,13 @@ impl OkxHistoryClientService {
             .into_iter()
             .map(|(server_id, instrument)| (server_id, instrument.id))
             .collect();
-        let history_service = OkxKlineClientHistoryService::for_production(repository, pool, Arc::new(RwLock::new(id_maps)));
-        let history_services = HashMap::from([(HistoryType::OkxKline, history_service)]);
+        let id_maps = Arc::new(RwLock::new(id_maps));
+        let kline_history_service = OkxKlineClientHistoryService::for_production(repository.clone(), pool, id_maps.clone());
+        let option_summary_history_service = OkxOptionSummaryClientHistoryService::for_production(repository, id_maps);
+        let history_services = HashMap::from([
+            (HistoryType::OkxKline, kline_history_service),
+            (HistoryType::OkxOptionSummary, option_summary_history_service),
+        ]);
         Ok(Arc::new(Self { history_services }))
     }
 }
@@ -246,15 +251,159 @@ impl ClientHistoryServiceTrait for OkxKlineClientHistoryService {
     }
 }
 
+pub struct OkxOptionSummaryClientHistoryService {
+    history_batch_insert: PostgresqlBatchInsert<LocalOkxOptionSummaryPo>,
+    repository: ClientOkxRepository,
+    grpc_manager: GrpcChannelManager,
+    id_maps: ServerIdToLocalId,
+}
+
+impl OkxOptionSummaryClientHistoryService {
+    fn for_production(repository: ClientOkxRepository, id_maps: ServerIdToLocalId) -> ClientHistoryService {
+        Arc::new(Self {
+            history_batch_insert: get_okx_option_summary_batch_insert(),
+            repository,
+            grpc_manager: get_grpc_manager_from_config(),
+            id_maps,
+        })
+    }
+
+    async fn backfill_history(&self, server_inst_id: u64, local_inst_id: u64, start_ms: u64, end_ms: u64) -> Result<(), YuError> {
+        if start_ms >= end_ms {
+            return Ok(());
+        }
+
+        let mut history_stream = self
+            .grpc_manager
+            .sync_history(SyncRequest {
+                inst_id: server_inst_id,
+                start_ms: start_ms.saturating_add(1),
+                end_ms,
+                history_type: HistoryType::OkxOptionSummary as i32,
+            })
+            .await?;
+
+        while let Some(message) = history_stream.next().await {
+            for entry in message?.history {
+                if entry.history_type != HistoryType::OkxOptionSummary as i32
+                    || entry.instrument_type != InstrumentType::Okx as i32
+                    || entry.inst_id != server_inst_id
+                    || !matches!(entry.payload.as_ref(), Some(Payload::OkxOptionSummary(_)))
+                {
+                    return Err(YuError::new("received invalid OKX option summary history entry"));
+                }
+                self.history_batch_insert.insert_data(entry, local_inst_id).await;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn resolve_local_instrument_id(&self, instrument: &OkxInstrument) -> Result<u64, YuError> {
+        if let Some(local_inst_id) = self.id_maps.read().await.get(&instrument.server_id).copied() {
+            return Ok(local_inst_id);
+        }
+
+        let local_inst_id = match self.repository.find_instrument_id_by_server_id(instrument.server_id).await? {
+            Some(local_inst_id) => local_inst_id,
+            None => {
+                self.repository
+                    .create_instruments(OkxKlineClientHistoryService::local_instrument_from_server(instrument.clone()))
+                    .await?
+            }
+        };
+        self.id_maps.write().await.insert(instrument.server_id, local_inst_id);
+        Ok(local_inst_id)
+    }
+}
+
+#[async_trait]
+impl ClientHistoryServiceTrait for OkxOptionSummaryClientHistoryService {
+    async fn initial_data(&self, instrument: Instrument, end_ms: UnixTimeStamp) -> Result<(), YuError> {
+        if instrument.instrument_type != InstrumentType::Okx as i32 {
+            return Err(YuError::new("instrument exchange is not OKX"));
+        }
+        let Some(instrument::Payload::Okx(okx_instrument)) = instrument.payload else {
+            return Err(YuError::new("instrument payload is not OKX"));
+        };
+
+        let local_inst_id = self.resolve_local_instrument_id(&okx_instrument).await?;
+        let latest_timestamp = self
+            .repository
+            .find_latest_option_summary_timestamp_by_server_id(okx_instrument.server_id)
+            .await?;
+        let start_ms = match latest_timestamp {
+            Some(timestamp) => timestamp,
+            None if okx_instrument.list_time > 0 => okx_instrument.list_time,
+            None => return Err(YuError::new("OKX instrument listing time is unavailable")),
+        };
+
+        self.backfill_history(okx_instrument.server_id, local_inst_id, start_ms, end_ms).await
+    }
+
+    async fn reconcile_living_instrument_with_server(&self, end_ms: UnixTimeStamp) -> Result<(), YuError> {
+        let instruments = self.repository.list_all_instrument().await?;
+        let latest_timestamps = self.repository.list_option_summary_timestamps().await?;
+
+        for instrument in instruments {
+            if !instrument.state.as_deref().is_some_and(|state| state.eq_ignore_ascii_case("live")) {
+                continue;
+            }
+            let start_ms = match latest_timestamps.get(&instrument.server_id).copied() {
+                Some(timestamp) => timestamp,
+                None => {
+                    let Some(list_time) = instrument.list_time else {
+                        warn!(
+                            "OKX instrument {} has no listing time; skipping option summary reconciliation",
+                            instrument.server_id
+                        );
+                        continue;
+                    };
+                    list_time
+                }
+            };
+            self.backfill_history(instrument.server_id, instrument.id, start_ms, end_ms).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn insert_history(&self, history_entry: HistoryEntry) -> Result<(), YuError> {
+        if history_entry.history_type != HistoryType::OkxOptionSummary as i32
+            || history_entry.instrument_type != InstrumentType::Okx as i32
+            || !matches!(history_entry.payload.as_ref(), Some(Payload::OkxOptionSummary(_)))
+        {
+            return Err(YuError::new("received non-OKX option summary history payload"));
+        }
+
+        let local_inst_id = match self.id_maps.read().await.get(&history_entry.inst_id).copied() {
+            Some(local_inst_id) => local_inst_id,
+            None => {
+                let Some(local_inst_id) = self.repository.find_instrument_id_by_server_id(history_entry.inst_id).await? else {
+                    warn!(
+                        "local OKX instrument {} not found; skipping option summary history",
+                        history_entry.inst_id
+                    );
+                    return Ok(());
+                };
+                self.id_maps.write().await.insert(history_entry.inst_id, local_inst_id);
+                local_inst_id
+            }
+        };
+        self.history_batch_insert.insert_data(history_entry, local_inst_id).await;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::data_integrity::check::MockBinarySearchDSTrait;
     use crate::postgresql_db_tables::MockPostgresqlBatchInsertTrait;
     use crate::sync::client::grpc_manager::{GrpcServerMessageStream, MockGrpcChannelManagerTrait};
-    use crate::sync::client::po::okx::LocalOkxInstrumentPo;
+    use crate::sync::client::po::okx::{LocalOkxInstrumentPo, LocalOkxOptionSummaryPo};
     use crate::sync::client::repository::okx::MockClientOkxRepositoryTrait;
-    use crate::sync::models::grpc_sync::{OkxInstrument, instrument};
+    use crate::sync::models::grpc_sync::{HistoryEntry, OkxInstrument, OkxOptionSummary, ServerMessage, history_entry::Payload, instrument};
 
     fn empty_stream() -> GrpcServerMessageStream {
         Box::pin(futures::stream::empty())
@@ -299,6 +448,20 @@ mod tests {
         }
     }
 
+    fn option_summary_history_service(
+        repository: ClientOkxRepository,
+        history_batch_insert: PostgresqlBatchInsert<LocalOkxOptionSummaryPo>,
+        grpc_manager: GrpcChannelManager,
+        id_maps: ServerIdToLocalId,
+    ) -> OkxOptionSummaryClientHistoryService {
+        OkxOptionSummaryClientHistoryService {
+            history_batch_insert,
+            repository,
+            grpc_manager,
+            id_maps,
+        }
+    }
+
     fn server_instrument(server_id: u64) -> Instrument {
         Instrument {
             instrument_type: InstrumentType::Okx as i32,
@@ -319,6 +482,37 @@ mod tests {
                 state: "live".to_string(),
                 inst_id_code: String::new(),
                 inst_category: String::new(),
+            })),
+        }
+    }
+
+    fn option_summary_entry(server_id: u64) -> HistoryEntry {
+        HistoryEntry {
+            history_type: HistoryType::OkxOptionSummary as i32,
+            instrument_type: InstrumentType::Okx as i32,
+            inst_id: server_id,
+            payload: Some(Payload::OkxOptionSummary(OkxOptionSummary {
+                id: 1,
+                inst_identify: "BTC-USD-260101-100000-C".to_string(),
+                inst_type: "OPTION".to_string(),
+                uly: "BTC-USD".to_string(),
+                acquire_ts: 120_000,
+                server_ts: 121_000,
+                ask_vol: Some(0.5),
+                bid_vol: Some(0.4),
+                delta: Some(0.6),
+                delta_bs: None,
+                fwd_px: Some(100_000.0),
+                gamma: Some(0.01),
+                gamma_bs: None,
+                lever: Some(2.0),
+                mark_vol: Some(0.7),
+                real_vol: None,
+                vol_lv: Some(0.8),
+                theta: Some(-0.02),
+                theta_bs: None,
+                vega: Some(0.03),
+                vega_bs: None,
             })),
         }
     }
@@ -508,5 +702,161 @@ mod tests {
         );
 
         service.reconcile_living_instrument_with_server(239_000).await.unwrap();
+    }
+
+    // 测试目的：验证 Option Summary 初始化从本地最新快照之后增量请求服务端历史。
+    // 准备数据/过程：预置 server ID 到本地 ID 映射及最新 acquire_ts，并让服务端返回一条 Option Summary。
+    // 预期结果：SyncRequest 使用 OkxOptionSummary 类型和 start_ms + 1 的排他起点，历史落库使用本地 instrument ID。
+    #[tokio::test]
+    async fn option_summary_initial_data_backfills_after_latest_timestamp() {
+        let mut repository = MockClientOkxRepositoryTrait::new();
+        repository
+            .expect_find_latest_option_summary_timestamp_by_server_id()
+            .withf(|server_id| *server_id == 42)
+            .times(1)
+            .returning(|_| Ok(Some(120_000)));
+
+        let mut batch_insert = MockPostgresqlBatchInsertTrait::<LocalOkxOptionSummaryPo>::new();
+        batch_insert
+            .expect_insert_data()
+            .withf(|entry, local_inst_id| {
+                entry.inst_id == 42 && *local_inst_id == 7 && matches!(entry.payload.as_ref(), Some(Payload::OkxOptionSummary(_)))
+            })
+            .times(1)
+            .returning(|_, _| ());
+
+        let mut grpc_manager = MockGrpcChannelManagerTrait::new();
+        grpc_manager
+            .expect_sync_history()
+            .withf(|request| {
+                request.inst_id == 42
+                    && request.start_ms == 120_001
+                    && request.end_ms == 200_000
+                    && request.history_type == HistoryType::OkxOptionSummary as i32
+            })
+            .returning(|_| {
+                Ok(Box::pin(futures::stream::iter(vec![Ok(ServerMessage {
+                    history: vec![option_summary_entry(42)],
+                    server_timestamp: 200_000,
+                })])))
+            });
+
+        let service = option_summary_history_service(
+            Arc::new(repository),
+            Arc::new(batch_insert),
+            Arc::new(grpc_manager),
+            Arc::new(RwLock::new(HashMap::from([(42, 7)]))),
+        );
+
+        service.initial_data(server_instrument(42), 200_000).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn option_summary_initial_data_creates_missing_instrument() {
+        let mut repository = MockClientOkxRepositoryTrait::new();
+        repository
+            .expect_find_instrument_id_by_server_id()
+            .withf(|server_id| *server_id == 42)
+            .times(1)
+            .returning(|_| Ok(None));
+        repository
+            .expect_create_instruments()
+            .withf(|po| po.server_id == 42 && po.inst_identify == "BTC-USDT" && po.list_time == Some(60_000))
+            .times(1)
+            .returning(|_| Ok(7));
+        repository
+            .expect_find_latest_option_summary_timestamp_by_server_id()
+            .withf(|server_id| *server_id == 42)
+            .times(1)
+            .returning(|_| Ok(None));
+
+        let mut grpc_manager = MockGrpcChannelManagerTrait::new();
+        grpc_manager
+            .expect_sync_history()
+            .withf(|request| {
+                request.inst_id == 42
+                    && request.start_ms == 60_001
+                    && request.end_ms == 200_000
+                    && request.history_type == HistoryType::OkxOptionSummary as i32
+            })
+            .returning(|_| Ok(empty_stream()));
+
+        let id_maps = Arc::new(RwLock::new(HashMap::new()));
+        let service = option_summary_history_service(
+            Arc::new(repository),
+            Arc::new(MockPostgresqlBatchInsertTrait::<LocalOkxOptionSummaryPo>::new()),
+            Arc::new(grpc_manager),
+            id_maps.clone(),
+        );
+
+        service.initial_data(server_instrument(42), 200_000).await.unwrap();
+        assert_eq!(id_maps.read().await.get(&42), Some(&7));
+    }
+
+    // 测试目的：验证实时 Option Summary 使用 server ID 映射成本地 instrument ID 后落库。
+    // 准备数据/过程：预置 server ID 42 到本地 ID 7 的缓存映射并插入合法的 Option Summary history entry。
+    // 预期结果：batch insert 收到合法 payload 和本地 ID 7。
+    #[tokio::test]
+    async fn option_summary_insert_history_uses_cached_local_instrument_id() {
+        let mut batch_insert = MockPostgresqlBatchInsertTrait::<LocalOkxOptionSummaryPo>::new();
+        batch_insert
+            .expect_insert_data()
+            .withf(|entry, local_inst_id| {
+                entry.inst_id == 42 && *local_inst_id == 7 && matches!(entry.payload.as_ref(), Some(Payload::OkxOptionSummary(_)))
+            })
+            .times(1)
+            .returning(|_, _| ());
+
+        let service = option_summary_history_service(
+            Arc::new(MockClientOkxRepositoryTrait::new()),
+            Arc::new(batch_insert),
+            Arc::new(MockGrpcChannelManagerTrait::new()),
+            Arc::new(RwLock::new(HashMap::from([(42, 7)]))),
+        );
+
+        service.insert_history(option_summary_entry(42)).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn option_summary_insert_history_rejects_invalid_payload() {
+        let service = option_summary_history_service(
+            Arc::new(MockClientOkxRepositoryTrait::new()),
+            Arc::new(MockPostgresqlBatchInsertTrait::<LocalOkxOptionSummaryPo>::new()),
+            Arc::new(MockGrpcChannelManagerTrait::new()),
+            Arc::new(RwLock::new(HashMap::from([(42, 7)]))),
+        );
+        let mut entry = option_summary_entry(42);
+        entry.history_type = HistoryType::OkxKline as i32;
+
+        assert!(service.insert_history(entry).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn option_summary_reconcile_requests_snapshots_after_the_latest_timestamp() {
+        let mut repository = MockClientOkxRepositoryTrait::new();
+        repository.expect_list_all_instrument().returning(|| Ok(vec![local_instrument(42, 7)]));
+        repository
+            .expect_list_option_summary_timestamps()
+            .returning(|| Ok(HashMap::from([(42, 120_000)])));
+
+        let mut grpc_manager = MockGrpcChannelManagerTrait::new();
+        grpc_manager
+            .expect_sync_history()
+            .withf(|request| {
+                request.inst_id == 42
+                    && request.start_ms == 120_001
+                    && request.end_ms == 200_000
+                    && request.history_type == HistoryType::OkxOptionSummary as i32
+            })
+            .returning(|_| Ok(empty_stream()));
+
+        let service = option_summary_history_service(
+            Arc::new(repository),
+            Arc::new(MockPostgresqlBatchInsertTrait::<LocalOkxOptionSummaryPo>::new()),
+            Arc::new(grpc_manager),
+            Arc::new(RwLock::new(HashMap::from([(42, 7)]))),
+        );
+
+        service.reconcile_living_instrument_with_server(200_000).await.unwrap();
     }
 }

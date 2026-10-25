@@ -77,11 +77,6 @@ pub async fn start_okx_sync_server_job(app_config: &AppConfig, history_tx: mpsc:
         error!("failed to initial OKX kline history data: {:?}", e);
         return Err(e);
     }
-    if let Err(e) = option_summary_history_service.initial_history_data().await {
-        error!("failed to initial OKX option summary history data: {:?}", e);
-        return Err(e);
-    }
-
     let sync_option_summary_job = option_summary_history_service.clone();
     let _ = cron_job!("0 1 * * * *", move |_uuid, _locked| {
         let each_sync = sync_option_summary_job.clone();

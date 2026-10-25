@@ -27,6 +27,8 @@ pub trait ClientOkxRepositoryTrait {
     // 返回 server id -> latest acquire_ts (ms) 在 okx_option_summary 表中
     async fn list_option_summary_timestamps(&self) -> Result<HashMap<u64, u64>, YuError>;
 
+    async fn find_latest_option_summary_timestamp_by_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError>;
+
     /// Insert a new okx instrument into okx_instruments table.
     async fn create_instruments(&self, po: LocalOkxInstrumentPo) -> Result<u64, YuError>;
 }
@@ -107,6 +109,27 @@ impl ClientOkxRepositoryTrait for ClientOkxRepositoryImpl {
         Ok(map)
     }
 
+    async fn find_latest_option_summary_timestamp_by_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError> {
+        let server_id = i64::try_from(server_id).map_err(|_| YuError::new("OKX server instrument ID exceeds BIGINT range"))?;
+        let timestamp: Option<i64> = sqlx::query_scalar(
+            r#"
+            SELECT (EXTRACT(EPOCH FROM max(h.acquire_ts)) * 1000)::bigint
+            FROM okx_instruments i
+            LEFT JOIN okx_option_summary h ON h.instrument_id = i.id
+            WHERE i.server_id = $1
+            GROUP BY i.server_id
+            "#,
+        )
+        .bind(server_id)
+        .fetch_optional(&self.pg_pool)
+        .await?
+        .flatten();
+
+        timestamp
+            .map(|timestamp| u64::try_from(timestamp).map_err(|_| YuError::new("negative OKX option summary timestamp")))
+            .transpose()
+    }
+
     async fn create_instruments(&self, po: LocalOkxInstrumentPo) -> Result<u64, YuError> {
         let sql = r#"INSERT INTO okx_instruments (id, server_id, inst_identify, inst_type, inst_family, base_ccy, quote_ccy, settle_ccy, list_time, exp_time, tick_sz, lot_sz, min_sz, alias, state, inst_id_code, inst_category)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT (id) DO NOTHING
@@ -154,6 +177,21 @@ mod tests {
         let repository = ClientOkxRepositoryImpl { pg_pool: pool };
 
         let result = repository.find_latest_kline_timestamp_by_server_id(u64::MAX).await;
+
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Custom error: OKX server instrument ID exceeds BIGINT range"
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_option_summary_server_id_outside_bigint_range() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/database")
+            .unwrap();
+        let repository = ClientOkxRepositoryImpl { pg_pool: pool };
+
+        let result = repository.find_latest_option_summary_timestamp_by_server_id(u64::MAX).await;
 
         assert_eq!(
             result.unwrap_err().to_string(),

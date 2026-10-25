@@ -1,6 +1,6 @@
 use crate::postgresql_db::CopyInsertable;
 use crate::sync::models::grpc_sync::{HistoryEntry, history_entry::Payload};
-use li::tools::time::unix_time_now_u64_utc;
+use li::tools::time::{format_timestamp_millis, unix_time_now_u64_utc};
 use sqlx::Row;
 use yue::tools::get_snow_flake_id_u64;
 
@@ -254,9 +254,9 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for LocalOkxOptionSummaryPo {
         let uly: Option<String> = row.try_get("uly")?;
 
         let acquire_ts_dt: chrono::DateTime<chrono::Utc> = row.try_get("acquire_ts")?;
-        let acquire_ts = acquire_ts_dt.timestamp() as u64;
+        let acquire_ts = acquire_ts_dt.timestamp_millis() as u64;
         let server_ts_dt: chrono::DateTime<chrono::Utc> = row.try_get("server_ts")?;
-        let server_ts = server_ts_dt.timestamp() as u64;
+        let server_ts = server_ts_dt.timestamp_millis() as u64;
 
         let ask_vol: Option<f64> = row.try_get("ask_vol")?;
         let bid_vol: Option<f64> = row.try_get("bid_vol")?;
@@ -275,7 +275,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for LocalOkxOptionSummaryPo {
         let vega_bs: Option<f64> = row.try_get("vega_bs")?;
 
         let batch_timestamp_dt: chrono::DateTime<chrono::Utc> = row.try_get("batch_timestamp")?;
-        let batch_timestamp = batch_timestamp_dt.timestamp() as u64;
+        let batch_timestamp = batch_timestamp_dt.timestamp_millis() as u64;
 
         Ok(Self {
             id: id_i64 as u64,
@@ -311,38 +311,17 @@ impl CopyInsertable for LocalOkxOptionSummaryPo {
     }
 
     fn to_csv_row(&self) -> String {
-        use chrono::{LocalResult, TimeZone};
-        let acquire_secs = (self.acquire_ts / 1000) as i64;
-        let acquire_nanos = ((self.acquire_ts % 1000) * 1_000_000) as u32;
-        let acquire_dt = match chrono::Utc.timestamp_opt(acquire_secs, acquire_nanos) {
-            LocalResult::Single(dt) => dt,
-            _ => chrono::Utc.timestamp_opt(0, 0).single().unwrap(),
-        };
-        let acquire = acquire_dt.to_rfc3339();
-
-        let server_secs = (self.server_ts / 1000) as i64;
-        let server_nanos = ((self.server_ts % 1000) * 1_000_000) as u32;
-        let server_dt = match chrono::Utc.timestamp_opt(server_secs, server_nanos) {
-            LocalResult::Single(dt) => dt,
-            _ => chrono::Utc.timestamp_opt(0, 0).single().unwrap(),
-        };
-        let server = server_dt.to_rfc3339();
-
-        let batch_secs = (self.batch_timestamp / 1000) as i64;
-        let batch_nanos = ((self.batch_timestamp % 1000) * 1_000_000) as u32;
-        let batch_dt = match chrono::Utc.timestamp_opt(batch_secs, batch_nanos) {
-            LocalResult::Single(dt) => dt,
-            _ => chrono::Utc.timestamp_opt(0, 0).single().unwrap(),
-        };
-        let bts = batch_dt.to_rfc3339();
+        let acquire = format_timestamp_millis(i64::try_from(self.acquire_ts).expect("acquire_ts must fit in i64 milliseconds"));
+        let server = format_timestamp_millis(i64::try_from(self.server_ts).expect("server_ts must fit in i64 milliseconds"));
+        let bts = format_timestamp_millis(i64::try_from(self.batch_timestamp).expect("batch_timestamp must fit in i64 milliseconds"));
 
         format!(
             "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             self.id,
             self.instrument_id,
-            self.inst_identify,
-            self.inst_type,
-            self.uly.clone().unwrap_or_default(),
+            csv_quote(&self.inst_identify),
+            csv_quote(&self.inst_type),
+            self.uly.as_deref().map(csv_quote).unwrap_or_default(),
             acquire,
             server,
             self.ask_vol.map_or(String::from(""), |v| v.to_string()),
@@ -373,10 +352,14 @@ impl CopyInsertable for LocalOkxOptionSummaryPo {
     }
 }
 
+fn csv_quote(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sync::models::grpc_sync::{HistoryType, InstrumentType, OkxKline, history_entry::Payload};
+    use crate::sync::models::grpc_sync::{HistoryType, InstrumentType, OkxKline, OkxOptionSummary, history_entry::Payload};
 
     #[test]
     fn okx_kline_history_maps_to_local_po_and_database_columns() {
@@ -410,5 +393,91 @@ mod tests {
             "id,instrument_id,timestamp,open,high,low,close,vol,vol_ccy,vol_ccy_quote,confirm,batch_timestamp"
         );
         assert_eq!(po.to_csv_row().split(',').count(), 12);
+    }
+
+    #[test]
+    fn okx_option_summary_history_maps_to_local_po_and_database_columns() {
+        let summary = OkxOptionSummary {
+            id: 7,
+            inst_identify: "BTC-USD-260101-100000-C".to_string(),
+            inst_type: "OPTION".to_string(),
+            uly: "BTC-USD".to_string(),
+            acquire_ts: 1_700_000_000_123,
+            server_ts: 1_700_000_001_456,
+            ask_vol: Some(0.5),
+            bid_vol: Some(0.4),
+            delta: Some(0.6),
+            delta_bs: None,
+            fwd_px: Some(100_000.0),
+            gamma: Some(0.01),
+            gamma_bs: None,
+            lever: Some(2.0),
+            mark_vol: Some(0.7),
+            real_vol: None,
+            vol_lv: Some(0.8),
+            theta: Some(-0.02),
+            theta_bs: None,
+            vega: Some(0.03),
+            vega_bs: None,
+        };
+        let entry = HistoryEntry {
+            history_type: HistoryType::OkxOptionSummary as i32,
+            instrument_type: InstrumentType::Okx as i32,
+            inst_id: 42,
+            payload: Some(Payload::OkxOptionSummary(summary)),
+        };
+
+        let po = LocalOkxOptionSummaryPo::from_history_entry(&entry, 123);
+
+        assert_eq!(po.instrument_id, 123);
+        assert_eq!(po.inst_identify, "BTC-USD-260101-100000-C");
+        assert_eq!(po.uly.as_deref(), Some("BTC-USD"));
+        assert_eq!(po.acquire_ts, 1_700_000_000_123);
+        assert_eq!(po.server_ts, 1_700_000_001_456);
+        assert_eq!(po.ask_vol, Some(0.5));
+        assert_eq!(po.delta_bs, None);
+        assert_eq!(
+            LocalOkxOptionSummaryPo::columns(),
+            "id,instrument_id,inst_identify,inst_type,uly,acquire_ts,server_ts,ask_vol,bid_vol,delta,delta_bs,fwd_px,gamma,gamma_bs,lever,mark_vol,real_vol,vol_lv,theta,theta_bs,vega,vega_bs,batch_timestamp"
+        );
+
+        let csv_row = po.to_csv_row();
+        assert_eq!(csv_row.split(',').count(), 23);
+        assert!(csv_row.contains("2023-11-14T22:13:20.123+00:00"));
+        assert!(csv_row.contains("2023-11-14T22:13:21.456+00:00"));
+    }
+
+    #[test]
+    fn okx_option_summary_csv_escapes_text_fields_and_preserves_nulls() {
+        let po = LocalOkxOptionSummaryPo {
+            id: 1,
+            instrument_id: 2,
+            inst_identify: "BTC,USD\"CALL".to_string(),
+            inst_type: "OPTION".to_string(),
+            uly: None,
+            acquire_ts: 1_700_000_000_123,
+            server_ts: 1_700_000_001_456,
+            ask_vol: None,
+            bid_vol: None,
+            delta: None,
+            delta_bs: None,
+            fwd_px: None,
+            gamma: None,
+            gamma_bs: None,
+            lever: None,
+            mark_vol: None,
+            real_vol: None,
+            vol_lv: None,
+            theta: None,
+            theta_bs: None,
+            vega: None,
+            vega_bs: None,
+            batch_timestamp: 1_700_000_002_789,
+        };
+
+        let csv_row = po.to_csv_row();
+
+        assert!(csv_row.starts_with("1,2,\"BTC,USD\"\"CALL\",\"OPTION\",,"));
+        assert!(csv_row.ends_with("2023-11-14T22:13:22.789+00:00"));
     }
 }

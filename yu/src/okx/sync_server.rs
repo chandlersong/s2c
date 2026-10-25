@@ -397,7 +397,9 @@ impl SyncHistoryServiceTrait for OkxSyncOptionSummaryHistoryService {
     }
 
     async fn initial_history_data(&self) -> Result<(), YuError> {
-        self.okx_option_service.query_option_summary().await.map(|_| ())
+        // OKX exposes current option-summary snapshots but no historical range endpoint to detect or repair gaps.
+        log::debug!("skip OKX option summary history Initial: historical snapshots are unavailable from the REST API");
+        Ok(())
     }
 
     async fn sync_all(&self) -> Result<(), YuError> {
