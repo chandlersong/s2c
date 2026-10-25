@@ -48,12 +48,21 @@ History相关的内容。包括repository、service
 
 - `initial_history_data`方法：初始化历史数据。
     - 默认使用restful API获取历史数据，具体可以在yu和yue包里面查看有没有相应的API，如果没有，就询问用户是否需要自己实现获取历史数据的逻辑。不允许擅自生成
-- `fetch_latest_history`方法：获取最新的数据。
+    - 这里的数据直接进数据库。这里的数据不需要发送到客户端。
+    - 有些如果没有办法活的历史数据的，比如`OkxOptionSummaryPo`，则可以不实现这个方法,如需打印log，打印debug级别的。但是需要写上注释。
+- `sync_all`方法：获取最新的数据。
     - 具体可以在yu和yue包里面查看有没有相应的API，如果没有，就询问用户是否需要自己实现获取历史数据的逻辑。不允许擅自生成
     - `PolyMarketSyncHistoryService`为restful的实现。但是实际可能有其他实现。
+    - sync_all方法获取的数据需要发送到客户端。
+    - sync_all活的的两种方式
+        - restful API获取最新数据：具体可以参考`PolyMarketSyncHistoryService`中的`sync_all`方法。
+            - 需要在组装的地方，周期性调用。因为现在基本都是1小时为周期，原则上，应该随机在整点的90秒内调用。
+        - websocket获取最新数据，具体可以参考`OkxSyncHistoryService`中方式。
+            - 不用在组装的地方，加入周期性调用。
 - `check_history_data`方法：检查本地数据。
     - 模仿`PolyMarketSyncHistoryService`中用现有的二分法查找工具来实现这个方法。
     - 补全数据，模仿自己的initial_history_data方法来实现这个方法。
+    - 检查出的缺失数据，在补全后，要发给客户端。
 
 ###### repository
 
@@ -112,7 +121,7 @@ Instrument相关的内容。包括repository、service。
     - 关于InstrumentService的组装。必须做以下几件事
         - 调用list_all_instruments方法，获取所有的instrument。
         - 必须在启动时调用一次sync_instruments方法，获取最新的instrument。
-        - 每隔6小时调用一次sync_instruments方法，获取最新的instrument。
+        - 每隔6小时调用一次sync_instruments方法，获取最新的instrument。具体分钟和秒是随机。但不能是整点活着5的倍数。
 - 在`yu/src/bin/yu_sync_server.rs`中，调用上面部分的代码。然后注册到`YuSyncServer`中
     - 需要检查配置文件是否启用改服务。
 
@@ -139,3 +148,5 @@ Instrument相关的内容。包括repository、service。
 - 遵循 Cargo 分层和现有错误处理；不复制查询逻辑、不增加无关抽象，不改无关文件、用户注释或既有说明。
 - 尊重工作区未提交改动；不要读取、输出或修改凭证及私有环境配置。
 - 只是做服务器端的处理，而不涉及客户端的任何处理。
+- 如果一些方法业务上不需要实现，或者无法实现，则可以不实现。并在代码中写上注释说明原因。
+    - 注释级别为debug级别，且必须写上原因。

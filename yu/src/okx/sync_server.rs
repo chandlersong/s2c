@@ -1,8 +1,10 @@
 use crate::errors::YuError;
-use crate::okx::duck_po::{InstrumentPo, OkxKlinePo};
-use crate::okx::duckdb_repository::OkxKlineRepository;
+use crate::okx::duck_po::{InstrumentPo, OkxKlinePo, OkxOptionSummaryPo};
+use crate::okx::duckdb_repository::{OkxKlineRepository, OkxOptionSummaryRepository};
 use crate::okx::service::{OkxSyncService, OptionService, okx_sync_service_for_production};
-use crate::sync::models::grpc_sync::{HistoryEntry, HistoryType, Instrument, InstrumentType, OkxInstrument, OkxKline, ServerMessage, history_entry};
+use crate::sync::models::grpc_sync::{
+    HistoryEntry, HistoryType, Instrument, InstrumentType, OkxInstrument, OkxKline, OkxOptionSummary, ServerMessage, history_entry,
+};
 use crate::sync::server::sync_server::{SyncHistoryService, SyncHistoryServiceTrait, SyncInstrumentServiceTrait};
 use async_trait::async_trait;
 use li::websocket::connection::MessageHandlerTrait;
@@ -30,6 +32,37 @@ fn history_entry_from_kline(kline: &OkxKlinePo) -> HistoryEntry {
             vol_ccy: kline.vol_ccy,
             vol_ccy_quote: kline.vol_ccy_quote,
             confirm: kline.confirm.into(),
+        })),
+    }
+}
+
+fn history_entry_from_option_summary(summary: &OkxOptionSummaryPo) -> HistoryEntry {
+    HistoryEntry {
+        history_type: HistoryType::OkxOptionSummary.into(),
+        instrument_type: InstrumentType::Okx.into(),
+        inst_id: summary.inst_id,
+        payload: Some(history_entry::Payload::OkxOptionSummary(OkxOptionSummary {
+            id: summary.id,
+            inst_identify: summary.inst_identify.clone(),
+            inst_type: summary.inst_type.clone(),
+            uly: summary.uly.clone().unwrap_or_default(),
+            acquire_ts: summary.acquire_ts,
+            server_ts: summary.server_ts,
+            ask_vol: summary.ask_vol,
+            bid_vol: summary.bid_vol,
+            delta: summary.delta,
+            delta_bs: summary.delta_bs,
+            fwd_px: summary.fwd_px,
+            gamma: summary.gamma,
+            gamma_bs: summary.gamma_bs,
+            lever: summary.lever,
+            mark_vol: summary.mark_vol,
+            real_vol: summary.real_vol,
+            vol_lv: summary.vol_lv,
+            theta: summary.theta,
+            theta_bs: summary.theta_bs,
+            vega: summary.vega,
+            vega_bs: summary.vega_bs,
         })),
     }
 }
@@ -286,6 +319,99 @@ impl SyncHistoryServiceTrait for OkxSyncHistoryService {
     }
 }
 
+pub struct OkxSyncOptionSummaryHistoryService {
+    option_summary_repo: OkxOptionSummaryRepository,
+    okx_option_service: Arc<OptionService>,
+    history_tx: mpsc::Sender<HistoryEntry>,
+}
+
+impl OkxSyncOptionSummaryHistoryService {
+    pub fn for_production(
+        history_tx: mpsc::Sender<HistoryEntry>,
+        okx_option_service: Arc<OptionService>,
+        option_summary_repo: OkxOptionSummaryRepository,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            option_summary_repo,
+            okx_option_service,
+            history_tx,
+        })
+    }
+
+    pub async fn broadcast_message(&self, summary: OkxOptionSummaryPo) {
+        let entry = history_entry_from_option_summary(&summary);
+        if let Err(error) = self.history_tx.send(entry).await {
+            error!(
+                "failed to broadcast OKX option summary, inst_id:{}, timestamp:{}, error:{}",
+                summary.inst_id, summary.server_ts, error
+            );
+        }
+    }
+}
+
+#[async_trait]
+impl SyncHistoryServiceTrait for OkxSyncOptionSummaryHistoryService {
+    async fn query_and_broadcast_history(
+        &self,
+        inst_id: u64,
+        start_ms: u64,
+        end_ms: u64,
+        batch_size: usize,
+        tx: mpsc::Sender<Result<ServerMessage, Status>>,
+    ) -> Result<(), YuError> {
+        match self.option_summary_repo.find_summary_between(inst_id, start_ms, end_ms).await {
+            Ok(summaries) => {
+                if summaries.is_empty() {
+                    let message = ServerMessage {
+                        history: vec![],
+                        server_timestamp: li::tools::time::unix_time_now_u64_utc(),
+                    };
+                    let _ = tx.send(Ok(message)).await;
+                    return Ok(());
+                }
+
+                for batch in summaries.chunks(batch_size.max(1)) {
+                    let message = ServerMessage {
+                        history: batch.iter().map(history_entry_from_option_summary).collect(),
+                        server_timestamp: li::tools::time::unix_time_now_u64_utc(),
+                    };
+                    if tx.send(Ok(message)).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(())
+            }
+            Err(error) => {
+                error!("query OKX option summary history failed: {error}");
+                let status = Status::internal(format!("query OKX option summary history failed: {error}"));
+                let _ = tx.send(Err(status.clone())).await;
+                Err(status.into())
+            }
+        }
+    }
+
+    async fn check_history_data(&self) -> Result<(), YuError> {
+        // OKX exposes current option-summary snapshots but no historical range endpoint to detect or repair gaps.
+        log::debug!("skip OKX option summary history validation: historical snapshots are unavailable from the REST API");
+        Ok(())
+    }
+
+    async fn initial_history_data(&self) -> Result<(), YuError> {
+        self.okx_option_service.query_option_summary().await.map(|_| ())
+    }
+
+    async fn sync_all(&self) -> Result<(), YuError> {
+        for summary in self.okx_option_service.query_option_summary().await? {
+            self.broadcast_message(summary).await;
+        }
+        Ok(())
+    }
+
+    async fn sync_period(&self) -> Result<Option<String>, YuError> {
+        Ok(None)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -328,6 +454,64 @@ mod tests {
         assert_eq!(proto.vol_ccy, kline.vol_ccy);
         assert_eq!(proto.vol_ccy_quote, kline.vol_ccy_quote);
         assert_eq!(proto.confirm, u32::from(kline.confirm));
+    }
+
+    #[test]
+    fn converts_option_summary_to_sync_history_entry_preserving_optional_values() {
+        let summary = OkxOptionSummaryPo {
+            id: 11,
+            inst_id: 7,
+            inst_identify: "BTC-USD-260101-100000-C".to_string(),
+            inst_type: "OPTION".to_string(),
+            uly: Some("BTC-USD".to_string()),
+            acquire_ts: 1_700_000_000_000,
+            server_ts: 1_700_000_000_123,
+            ask_vol: Some(0.25),
+            bid_vol: None,
+            delta: Some(0.5),
+            delta_bs: None,
+            fwd_px: Some(50_000.0),
+            gamma: None,
+            gamma_bs: Some(0.01),
+            lever: None,
+            mark_vol: Some(0.3),
+            real_vol: None,
+            vol_lv: Some(0.2),
+            theta: None,
+            theta_bs: Some(-0.1),
+            vega: Some(0.05),
+            vega_bs: None,
+        };
+
+        let entry = history_entry_from_option_summary(&summary);
+
+        assert_eq!(HistoryType::try_from(entry.history_type), Ok(HistoryType::OkxOptionSummary));
+        assert_eq!(InstrumentType::try_from(entry.instrument_type), Ok(InstrumentType::Okx));
+        assert_eq!(entry.inst_id, summary.inst_id);
+        let Some(history_entry::Payload::OkxOptionSummary(proto)) = entry.payload else {
+            panic!("expected OKX option summary payload");
+        };
+        assert_eq!(proto.id, summary.id);
+        assert_eq!(proto.inst_identify, summary.inst_identify);
+        assert_eq!(proto.inst_type, summary.inst_type);
+        assert_eq!(proto.uly, "BTC-USD");
+        assert_eq!(proto.acquire_ts, summary.acquire_ts);
+        assert_eq!(proto.server_ts, summary.server_ts);
+        assert_eq!(proto.ask_vol, summary.ask_vol);
+        assert_eq!(proto.bid_vol, summary.bid_vol);
+        assert_eq!(proto.delta, summary.delta);
+        assert_eq!(proto.delta_bs, summary.delta_bs);
+        assert_eq!(proto.fwd_px, summary.fwd_px);
+        assert_eq!(proto.gamma, summary.gamma);
+        assert_eq!(proto.gamma_bs, summary.gamma_bs);
+        assert_eq!(proto.lever, summary.lever);
+        assert_eq!(proto.mark_vol, summary.mark_vol);
+        assert_eq!(proto.real_vol, summary.real_vol);
+        assert_eq!(proto.vol_lv, summary.vol_lv);
+        assert_eq!(proto.theta, summary.theta);
+        assert_eq!(proto.theta_bs, summary.theta_bs);
+        assert_eq!(proto.vega, summary.vega);
+        assert_eq!(proto.vega_bs, summary.vega_bs);
     }
 
     #[tokio::test]

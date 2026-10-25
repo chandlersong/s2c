@@ -2,10 +2,10 @@ use crate::config::AppConfig;
 use crate::cron_job;
 use crate::errors::YuError;
 use crate::okx::duck_po::InstrumentPo;
-use crate::okx::duckdb_repository::get_default_kline_repo;
+use crate::okx::duckdb_repository::{get_default_kline_repo, get_default_option_summary_repo};
 use crate::okx::duckdb_tables::initial_okx_tables;
 use crate::okx::service::OptionService;
-use crate::okx::sync_server::{OkxSyncHistoryService, OkxSyncInstrumentService, OkxSyncKlineHandler};
+use crate::okx::sync_server::{OkxSyncHistoryService, OkxSyncInstrumentService, OkxSyncKlineHandler, OkxSyncOptionSummaryHistoryService};
 use crate::sync::models::grpc_sync::{HistoryEntry, HistoryType};
 use crate::sync::server::sync_server::{SyncHistoryService, SyncHistoryServiceTrait, SyncInstrumentService, SyncInstrumentServiceTrait};
 use log::{debug, error};
@@ -27,6 +27,8 @@ pub async fn start_okx_sync_server_job(app_config: &AppConfig, history_tx: mpsc:
     let okx_option_service = OptionService::for_production(live_instruments.clone());
 
     let history_service = OkxSyncHistoryService::for_production(history_tx.clone(), okx_option_service.clone())?;
+    let option_summary_history_service =
+        OkxSyncOptionSummaryHistoryService::for_production(history_tx.clone(), okx_option_service.clone(), get_default_option_summary_repo(None));
 
     let check_history_job = history_service.clone();
     let _ = cron_job!("0 17 */6 * * *", move |_uuid, _locked| {
@@ -42,6 +44,7 @@ pub async fn start_okx_sync_server_job(app_config: &AppConfig, history_tx: mpsc:
 
     let mut support_history_service: HashMap<HistoryType, SyncHistoryService> = HashMap::new();
     support_history_service.insert(HistoryType::OkxKline, history_service.clone());
+    support_history_service.insert(HistoryType::OkxOptionSummary, option_summary_history_service.clone());
 
     let instrument_service = OkxSyncInstrumentService::for_production(support_history_service, live_instruments.clone());
 
@@ -49,7 +52,9 @@ pub async fn start_okx_sync_server_job(app_config: &AppConfig, history_tx: mpsc:
     if let Err(error) = sync_instrument_job.sync_instrument().await {
         error!("failed to sync okx option instrument when server start: {}", error);
     }
-    let _ = cron_job!("0 0 * * * *", move |_uuid, _locked| {
+    let instruments = instrument_service.list_instruments().await?;
+    debug!("loaded {} OKX instruments for sync server", instruments.len());
+    let _ = cron_job!("0 17 */6 * * *", move |_uuid, _locked| {
         let each_sync = sync_instrument_job.clone();
         Box::pin(async move {
             debug!("start syncing okx option instrument");
@@ -72,5 +77,21 @@ pub async fn start_okx_sync_server_job(app_config: &AppConfig, history_tx: mpsc:
         error!("failed to initial OKX kline history data: {:?}", e);
         return Err(e);
     }
+    if let Err(e) = option_summary_history_service.initial_history_data().await {
+        error!("failed to initial OKX option summary history data: {:?}", e);
+        return Err(e);
+    }
+
+    let sync_option_summary_job = option_summary_history_service.clone();
+    let _ = cron_job!("0 1 * * * *", move |_uuid, _locked| {
+        let each_sync = sync_option_summary_job.clone();
+        Box::pin(async move {
+            debug!("start syncing OKX option summary");
+            if let Err(error) = each_sync.sync_all().await {
+                error!("failed to sync OKX option summary: {}", error);
+            }
+            debug!("finished syncing OKX option summary");
+        })
+    });
     Ok(instrument_service)
 }

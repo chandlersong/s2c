@@ -781,7 +781,7 @@ impl OptionService {
     /// 这里要做的事一个转换。
     /// 1.查询转换。
     ///
-    pub async fn query_option_summary(&self) -> Result<(), YuError> {
+    pub async fn query_option_summary(&self) -> Result<Vec<OkxOptionSummaryPo>, YuError> {
         let btc_query_param = OptionSummaryParam::btc();
         let eth_query_param = OptionSummaryParam::eth();
         let id_identify_dict = self
@@ -797,27 +797,42 @@ impl OptionService {
         let summary_btc = api.option_summary(btc_query_param).await?;
         let acquire_ts = self.interval.get_now_close_unix_ms_utc();
         let repo = self.okx_sync.get_option_summary_repo();
+        let mut summaries = Vec::new();
         for btc_summary in summary_btc.data.iter() {
-            let inst_info = id_identify_dict.get(&btc_summary.inst_id);
-            if inst_info.is_none() {
+            let Some(inst_info) = id_identify_dict.get(&btc_summary.inst_id) else {
                 info!("{} 没有被存入数据库,跳过更新option summary", btc_summary.inst_id);
                 continue;
+            };
+            let po = OkxOptionSummaryPo::from_detail(inst_info.id, acquire_ts, btc_summary);
+            if repo
+                .latest_summary_by_inst_id(po.inst_id)
+                .await?
+                .is_some_and(|latest| latest.server_ts >= po.server_ts)
+            {
+                continue;
             }
-            let po = OkxOptionSummaryPo::from_detail(inst_info.unwrap().id, acquire_ts, btc_summary);
             repo.insert_history(po.clone()).await?;
+            summaries.push(po);
         }
 
         let summary_eth = api.option_summary(eth_query_param).await?;
         for eth_summary in summary_eth.data.iter() {
-            let inst_info = id_identify_dict.get(&eth_summary.inst_id);
-            if inst_info.is_none() {
+            let Some(inst_info) = id_identify_dict.get(&eth_summary.inst_id) else {
                 info!("{} 没有被存入数据库,跳过更新option summary", eth_summary.inst_id);
                 continue;
+            };
+            let po = OkxOptionSummaryPo::from_detail(inst_info.id, acquire_ts, eth_summary);
+            if repo
+                .latest_summary_by_inst_id(po.inst_id)
+                .await?
+                .is_some_and(|latest| latest.server_ts >= po.server_ts)
+            {
+                continue;
             }
-            let po = OkxOptionSummaryPo::from_detail(inst_info.unwrap().id, acquire_ts, eth_summary);
             repo.insert_history(po.clone()).await?;
+            summaries.push(po);
         }
-        Ok(())
+        Ok(summaries)
     }
 }
 
