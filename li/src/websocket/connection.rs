@@ -266,11 +266,11 @@ impl WebSocketConnection {
                 {
                     Ok(action) => match action {
                         ConnectionAction::Reconnection(payload) => {
-                            info!("主动连接重启：{}", take_or_all_cow_with_ellipsis(url.as_str(), 50));
+                            debug!("主动连接重启：{}", take_or_all_cow_with_ellipsis(url.as_str(), 50));
                             message_cache = payload.initial_command;
                         }
                         ConnectionAction::Close => {
-                            info!("主动连接关闭：{}", take_or_all_cow_with_ellipsis(url.as_str(), 50));
+                            debug!("主动连接关闭：{}", take_or_all_cow_with_ellipsis(url.as_str(), 50));
                             return;
                         }
                     },
@@ -341,7 +341,7 @@ impl WebSocketConnection {
                             if let Err(e) = write.close().await {
                                 error!("调用 write.close() 失败: {},url:{}", e, take_or_all_cow_with_ellipsis(url, 50));
                             } else {
-                                info!("主动关闭connection关闭:{}",take_or_all_cow_with_ellipsis(url, 50));
+                                debug!("主动关闭connection关闭:{}",take_or_all_cow_with_ellipsis(url, 50));
                             }
                             return Ok(action);
                         }

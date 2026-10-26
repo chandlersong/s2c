@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use futures::executor::block_on;
 use li::tools::time::UnixTimeStamp;
-use log::{debug, error, warn};
+use log::{debug, error};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
