@@ -247,7 +247,8 @@ impl ClientHistoryServiceTrait for PolymarketClientHistoryService {
             Some(local_inst_id) => local_inst_id,
             None => {
                 let Some(local_instrument) = self.pm_repo.find_instrument_by_server_id(history_entry.inst_id).await? else {
-                    warn!("local Polymarket instrument {} not found; skipping history", history_entry.inst_id);
+                    //按照设计来说，这里的如果没有，会在第一次初始化的时候，进入。
+                    debug!("local Polymarket instrument {} not found; skipping history", history_entry.inst_id);
                     return Ok(());
                 };
                 let local_inst_id = local_instrument.id;
