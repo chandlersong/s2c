@@ -18,7 +18,6 @@ pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: m
     if !app_config.binance.as_ref().is_some_and(|config| config.enable()) {
         return Err(YuError::ConfigError("Binance sync server is not configured or disabled".to_string()));
     }
-    drop_tables(None)?;
     initial_tables(None)?;
     info!(
         "Binance sync server job started with data retention hours: {}",
