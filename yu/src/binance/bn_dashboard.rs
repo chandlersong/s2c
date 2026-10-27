@@ -1,6 +1,6 @@
 use crate::binance::bn_consts::BN_SYMBOL_STATUS_TRADING;
+use crate::binance::db_consts::initial_tables;
 use crate::binance::duckdb_repository::{BNInstrumentRepository, get_instrument_repo_for_production};
-use crate::binance::jobs::initial_tables;
 use crate::binance::models::po::BinanceInstrument;
 use crate::duck_db::DuckDBDSProvider;
 use crate::errors::YuError;

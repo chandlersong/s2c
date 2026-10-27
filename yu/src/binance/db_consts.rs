@@ -1,6 +1,10 @@
 // 2020年1月1日零点的毫秒时间戳
 
+use crate::duck_db::DuckDBDSProvider;
 use crate::duck_db_tables::DuckDbTableTrait;
+use crate::errors::YuError;
+use log::info;
+use yue::query_message::DataSourceProviderTrait;
 
 pub static QUERY_LATEST_SPOT_KLINE_SQL: &str = "select symbol,max(close_time) as latest from bn_spot_kline group by symbol;";
 pub static QUERY_LATEST_SWAP_KLINE_SQL: &str = "select symbol,max(close_time) as latest from bn_swap_kline group by symbol;";
@@ -186,6 +190,33 @@ pub(crate) const ALL_BINANCE_TABLES: &[BinanceTables] = &[
     BinanceTables::SpotTrade,
 ];
 
+pub fn drop_tables(provider: Option<DuckDBDSProvider>) -> Result<(), YuError> {
+    let db_provider = provider.unwrap_or_else(|| DuckDBDSProvider::default());
+    let conn = db_provider.acquire()?;
+    for table in ALL_BINANCE_TABLES {
+        conn.execute(&format!("DROP TABLE IF EXISTS {}", table.table_name()), [])?;
+    }
+
+    Ok(())
+}
+
+pub fn initial_tables(provider: Option<DuckDBDSProvider>) -> Result<(), YuError> {
+    let db_provider = provider.unwrap_or_else(|| DuckDBDSProvider::default());
+    let conn = db_provider.acquire()?;
+    for table in ALL_BINANCE_TABLES.iter() {
+        let create_sql = table.create_table_statement();
+        let table_initial_stmt = create_sql.split(';');
+        for stmt in table_initial_stmt {
+            let sql = stmt.trim();
+            if !sql.is_empty() {
+                conn.execute(sql, [])?;
+            }
+        }
+    }
+    info!("initial binance tables done");
+    Ok(())
+}
+
 // K线表字段定义
 
 const CREATE_BN_ORDER_EVENTS_SWAP_TABLE: &str = r#"
@@ -238,5 +269,33 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM pragma_table_info('bn_instruments')", [], |row| row.get(0))
             .unwrap();
         assert_eq!(column_count, 9);
+    }
+
+    // 测试目的：验证 drop_tables 会删除 BinanceTables 中定义的全部数据表。
+    // 准备数据/过程：在内存 DuckDB 中创建所有 Binance 表，再调用 drop_tables 并逐一查询表是否存在。
+    // 预期结果：所有 Binance 表均不再存在，且删除操作返回成功。
+    #[test]
+    fn drops_all_binance_tables() {
+        let db_provider = DuckDBDSProvider::memory_db();
+
+        let conn = db_provider.acquire().unwrap();
+        for table in ALL_BINANCE_TABLES {
+            for statement in table.create_table_statement().split(';').map(str::trim).filter(|sql| !sql.is_empty()) {
+                conn.execute(statement, []).unwrap();
+            }
+        }
+
+        drop_tables(Some(db_provider)).unwrap();
+
+        for table in ALL_BINANCE_TABLES {
+            let table_count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = ?",
+                    [table.table_name()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(table_count, 0, "{} should be dropped", table.table_name());
+        }
     }
 }

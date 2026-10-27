@@ -1,19 +1,16 @@
 use crate::binance::bn_backend_service::{get_spot_order_book_service, get_spot_trading_service};
 use crate::binance::bn_dashboard::{BinanceDashboard, BinanceDashboardWatcher};
 use crate::binance::bn_data_integrity::{KlineGapRepairStrategy, SpotCheckStrategy};
-use crate::binance::db_consts::ALL_BINANCE_TABLES;
+use crate::binance::db_consts::initial_tables;
 use crate::config::{AccountType, AppConfig, SecurityType, get_config};
 use crate::cron_job;
 use crate::data_integrity::check::ValidationStrategyTrait;
 use crate::data_integrity::models::RepairRequest;
 use crate::data_integrity::repair::RepairStrategyTrait;
-use crate::duck_db::DuckDBDSProvider;
-use crate::duck_db_tables::DuckDbTableTrait;
 use crate::errors::YuError;
 use log::{error, info, warn};
 use std::sync::Arc;
 use tokio::sync::watch;
-use yue::query_message::DataSourceProviderTrait;
 
 ///
 /// NEXT: 加入的功能
@@ -288,21 +285,4 @@ async fn start_refresh_history_data(
     //
     // start_sync_funding_rate(swap_symbol, config, HistoryInterval::OneHour, dash_board_watch).await?;
     // Ok(())
-}
-
-pub fn initial_tables(provider: Option<DuckDBDSProvider>) -> Result<(), YuError> {
-    let db_provider = provider.unwrap_or_else(|| DuckDBDSProvider::default());
-    let conn = db_provider.acquire()?;
-    for table in ALL_BINANCE_TABLES.iter() {
-        let create_sql = table.create_table_statement();
-        let table_initial_stmt = create_sql.split(';');
-        for stmt in table_initial_stmt {
-            let sql = stmt.trim();
-            if !sql.is_empty() {
-                conn.execute(sql, [])?;
-            }
-        }
-    }
-    info!("initial binance tables done");
-    Ok(())
 }
