@@ -10,6 +10,8 @@ pub enum ClientsTables {
     BinanceInstruments,
     BinanceSpotKline,
     BinanceSpotTrade,
+    BinanceSwapKline,
+    BinanceSwapTrade,
 }
 
 impl PostgresqlTableTrait for ClientsTables {
@@ -23,6 +25,8 @@ impl PostgresqlTableTrait for ClientsTables {
             ClientsTables::BinanceInstruments => "binance_instruments",
             ClientsTables::BinanceSpotKline => "binance_spot_kline_history",
             ClientsTables::BinanceSpotTrade => "binance_spot_trade_history",
+            ClientsTables::BinanceSwapKline => "binance_swap_kline_history",
+            ClientsTables::BinanceSwapTrade => "binance_swap_trade_history",
         }
     }
 
@@ -36,6 +40,8 @@ impl PostgresqlTableTrait for ClientsTables {
             ClientsTables::BinanceInstruments => CREATE_BINANCE_INSTRUMENTS_TABLE,
             ClientsTables::BinanceSpotKline => CREATE_BINANCE_SPOT_KLINE_TABLE,
             ClientsTables::BinanceSpotTrade => CREATE_BINANCE_SPOT_TRADE_TABLE,
+            ClientsTables::BinanceSwapKline => CREATE_BINANCE_SWAP_KLINE_TABLE,
+            ClientsTables::BinanceSwapTrade => CREATE_BINANCE_SWAP_TRADE_TABLE,
         }
     }
 }
@@ -224,6 +230,40 @@ ALTER TABLE binance_spot_kline_history SET (
 SELECT add_compression_policy('binance_spot_kline_history', INTERVAL '30 days');
 "#;
 
+pub const CREATE_BINANCE_SWAP_KLINE_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS binance_swap_kline_history (
+    id BIGINT NOT NULL,
+    inst_id BIGINT NOT NULL,
+    candle_begin_time TIMESTAMPTZ NOT NULL,
+    open DOUBLE PRECISION NOT NULL,
+    high DOUBLE PRECISION NOT NULL,
+    low DOUBLE PRECISION NOT NULL,
+    close DOUBLE PRECISION NOT NULL,
+    volume DOUBLE PRECISION NOT NULL,
+    quote_volume DOUBLE PRECISION NOT NULL,
+    number_of_trades BIGINT NOT NULL,
+    taker_buy_base_asset_volume DOUBLE PRECISION NOT NULL,
+    taker_buy_quote_asset_volume DOUBLE PRECISION NOT NULL,
+    close_time BIGINT NOT NULL,
+    interval INTEGER NOT NULL,
+    first_trade_id BIGINT,
+    last_trade_id BIGINT,
+    batch_timestamp BIGINT NOT NULL,
+    PRIMARY KEY (inst_id,candle_begin_time)
+);
+SELECT create_hypertable(
+  'binance_swap_kline_history',
+  'candle_begin_time',
+  if_not_exists => TRUE
+);
+ALTER TABLE binance_swap_kline_history SET (
+  timescaledb.enable_columnstore,
+  timescaledb.orderby = 'candle_begin_time DESC',
+  timescaledb.segmentby = 'inst_id'
+);
+SELECT add_compression_policy('binance_swap_kline_history', INTERVAL '30 days');
+"#;
+
 pub const CREATE_BINANCE_SPOT_TRADE_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS binance_spot_trade_history (
     id BIGINT NOT NULL,
@@ -251,6 +291,33 @@ ALTER TABLE binance_spot_trade_history SET (
 SELECT add_compression_policy('binance_spot_trade_history', INTERVAL '30 days');
 "#;
 
+pub const CREATE_BINANCE_SWAP_TRADE_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS binance_swap_trade_history (
+    id BIGINT NOT NULL,
+    event_time TIMESTAMPTZ NOT NULL,
+    inst_id BIGINT NOT NULL,
+    trade_id BIGINT NOT NULL,
+    price DOUBLE PRECISION NOT NULL,
+    qty DOUBLE PRECISION NOT NULL,
+    trade_time BIGINT,
+    is_buyer_maker BOOLEAN,
+    created_at BIGINT NOT NULL,
+    batch_timestamp BIGINT NOT NULL,
+    PRIMARY KEY (inst_id, trade_id, event_time)
+);
+SELECT create_hypertable(
+  'binance_swap_trade_history',
+  'event_time',
+  if_not_exists => TRUE
+);
+ALTER TABLE binance_swap_trade_history SET (
+  timescaledb.enable_columnstore,
+  timescaledb.orderby = 'event_time DESC',
+  timescaledb.segmentby = 'inst_id'
+);
+SELECT add_compression_policy('binance_swap_trade_history', INTERVAL '30 days');
+"#;
+
 pub(crate) const ALL_CLIENT_TABLES: &[ClientsTables] = &[
     ClientsTables::PolymarketPriceHistory,
     ClientsTables::PolyMarketInstruments,
@@ -260,4 +327,6 @@ pub(crate) const ALL_CLIENT_TABLES: &[ClientsTables] = &[
     ClientsTables::BinanceInstruments,
     ClientsTables::BinanceSpotKline,
     ClientsTables::BinanceSpotTrade,
+    ClientsTables::BinanceSwapKline,
+    ClientsTables::BinanceSwapTrade,
 ];
