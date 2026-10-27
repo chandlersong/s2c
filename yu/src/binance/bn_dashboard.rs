@@ -259,12 +259,10 @@ impl BinanceDashboard {
         let mut existing_symbols = self.instrument_repo.get_map_of_symbol_id(inst_types).await?;
         let mut live_instruments = HashMap::new();
 
-        info!("exiting xauusdt symbols count: {}", existing_symbols.contains_key("XAUUSDT"));
         for symbol in symbols {
             let instrument = match existing_symbols.remove(symbol.symbol()) {
                 Some(server_id) => BinanceInstrument::from_symbol_info_with_id(symbol, server_id as i64),
                 None => {
-                    info!("exiting xauusdt symbols count: {}", existing_symbols.contains_key("XAUUSDT"));
                     let instrument = BinanceInstrument::from(symbol);
                     if let Err(error) = self.instrument_repo.insert_instrument(instrument.clone()).await {
                         error!(
