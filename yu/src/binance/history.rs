@@ -132,7 +132,6 @@ async fn acquire_permit_with_retry(sem: Arc<Semaphore>) -> Result<OwnedSemaphore
 ///
 pub async fn initial_kline(
     instrument_provider: InstrumentProvider,
-    instruments: Vec<BinanceInstrument>,
     data_retention_ms: u64,
     interval: HistoryInterval,
     db: DuckTableTableChannel<KlinePo>,
@@ -157,6 +156,7 @@ pub async fn initial_kline(
     }
 
     let now = unix_time_now_u64_utc();
+    let instruments = instrument_provider.instruments(None);
     //kline会有一个会取到未闭合K线的问题。所以我这里也就去取上一根K线的之前的一毫秒。
     //例如现在是36分，通过restful能够取到35～39的K线，但是未闭合。所以我直接取34.59.59.999这个时间点的K线。所以就规避了。
     let start = interval.get_close_unix_ms(now - data_retention_ms);

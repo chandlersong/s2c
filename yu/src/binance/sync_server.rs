@@ -212,14 +212,7 @@ impl SyncHistoryServiceTrait for BinanceSpotSyncHistoryService {
     async fn initial_history_data(&self) -> Result<(), YuError> {
         let instrument_provider = SpotInstrumentProvider::new_provider(self.dashboard.clone());
 
-        initial_kline(
-            instrument_provider,
-            self.dashboard.spot_living_symbols(),
-            self.data_retention_ms,
-            self.interval.clone(),
-            get_spot_kline_table(),
-        )
-        .await
+        initial_kline(instrument_provider, self.data_retention_ms, self.interval.clone(), get_spot_kline_table()).await
     }
 
     async fn sync_all(&self) -> Result<(), YuError> {

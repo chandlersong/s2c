@@ -43,7 +43,6 @@ async fn main() -> Result<(), YuError> {
     let shared_dash_board = Arc::new(dash_board);
     initial_kline(
         SpotInstrumentProvider::new_provider(shared_dash_board.clone()),
-        spot_all,
         app_config.get_data_retention_ms(),
         HistoryInterval::OneHour,
         spot_db,
@@ -51,7 +50,6 @@ async fn main() -> Result<(), YuError> {
     .await?;
     initial_kline(
         SwapInstrumentProvider::new_provider(shared_dash_board.clone()),
-        swap_all,
         app_config.get_data_retention_ms(),
         HistoryInterval::OneHour,
         swap_db,
