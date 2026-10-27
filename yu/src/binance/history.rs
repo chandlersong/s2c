@@ -1,6 +1,6 @@
 use crate::binance::bn_backend_service::get_swap_funding_rate_table;
 use crate::binance::bn_dashboard::{BinanceDashboardWatcher, InstrumentProvider};
-use crate::binance::models::po::{BinanceInstrument, FundingRatePo, KlinePo};
+use crate::binance::models::po::{FundingRatePo, KlinePo};
 use crate::config::AppConfig;
 use crate::duck_db_tables::DuckTableTableChannel;
 use crate::errors::YuError;

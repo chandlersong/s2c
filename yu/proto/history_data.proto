@@ -30,6 +30,8 @@ enum HistoryType {
   OKX_OPTION_SUMMARY = 3;
   BINANCE_SPOT = 4;
   BINANCE_TRADE = 5;
+  BINANCE_SWAP = 6;
+  BINANCE_SWAP_TRADE = 7;
 }
 
 message PolymarketInstrument{

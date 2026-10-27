@@ -1,6 +1,6 @@
 use crate::binance::bn_backend_service::get_spot_kline_table;
 use crate::binance::bn_dashboard::BinanceDashboard;
-use crate::binance::db_consts::{drop_tables, initial_tables};
+use crate::binance::db_consts::initial_tables;
 use crate::binance::sync_server::{BinanceSpotSyncHistoryService, BinanceSyncSpotInstrumentService};
 use crate::binance::websocket_service::KlineSubscribeService;
 use crate::config::AppConfig;

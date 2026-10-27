@@ -26,6 +26,8 @@ pub mod grpc_sync {
                 Self::BinanceSpot => "Binance Spot",
                 Self::BinanceTrade => "Binance Trade",
                 Self::InstrumentUnspecified => "InstrumentUnspecified",
+                Self::BinanceSwap => "Binance Swap",
+                Self::BinanceSwapTrade => "Binance Swap Trade",
             }
         }
     }
