@@ -32,16 +32,10 @@ async fn main() -> Result<(), YuError> {
     }
     #[allow(deprecated)]
     let dash_board = BinanceDashboard::debug_mode(app_config.get_data_retention_hours(), None)?;
-    let snapshot = dash_board.execute().await?;
+    let snapshot = dash_board.sync_instruments().await?;
     let (dash_board_watch, _) = watch::channel(snapshot);
-    let swap_all = dash_board.swap_all_symbols();
-    let swap_symbol: Vec<String> = swap_all
-        .read()
-        .unwrap()
-        .iter()
-        .filter(|s| s.quote_asset == "USDT")
-        .map(|s| s.symbol.clone())
-        .collect();
+    let swap_all = dash_board.swap_living_symbols();
+    let swap_symbol: Vec<String> = swap_all.iter().filter(|s| s.quote_asset == "USDT").map(|s| s.symbol.clone()).collect();
     start_sync_funding_rate(swap_symbol, app_config, HistoryInterval::OneHour, dash_board_watch)
         .await
         .unwrap();

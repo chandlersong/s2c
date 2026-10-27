@@ -1,9 +1,7 @@
-use crate::binance::bn_backend_service::{get_spot_kline_table, get_spot_order_book_service, get_spot_trading_service, get_swap_kline_table};
+use crate::binance::bn_backend_service::{get_spot_order_book_service, get_spot_trading_service};
 use crate::binance::bn_dashboard::{BinanceDashboard, BinanceDashboardWatcher};
 use crate::binance::bn_data_integrity::{KlineGapRepairStrategy, SpotCheckStrategy};
 use crate::binance::db_consts::ALL_BINANCE_TABLES;
-use crate::binance::history::{initial_kline, start_sync_funding_rate};
-use crate::binance::websocket_service::KlineSubscribeService;
 use crate::config::{AccountType, AppConfig, SecurityType, get_config};
 use crate::cron_job;
 use crate::data_integrity::check::ValidationStrategyTrait;
@@ -15,8 +13,6 @@ use crate::errors::YuError;
 use log::{error, info, warn};
 use std::sync::Arc;
 use tokio::sync::watch;
-use yue::binance::bn_models::common::SymbolType;
-use yue::models::HistoryInterval;
 use yue::query_message::DataSourceProviderTrait;
 
 ///
@@ -30,7 +26,7 @@ use yue::query_message::DataSourceProviderTrait;
 pub async fn start_bn_jobs() -> Result<(), YuError> {
     let config = get_config();
     let dash_board = Arc::new(BinanceDashboard::new(config.get_data_retention_hours(), None));
-    let snapshot = dash_board.execute().await?;
+    let snapshot = dash_board.sync_instruments().await?;
     let (dash_board_watch, _) = watch::channel(snapshot);
     let dash_board_refresh = dash_board.clone();
     let dashboard_watch_sender = dash_board_watch.clone();
@@ -39,7 +35,7 @@ pub async fn start_bn_jobs() -> Result<(), YuError> {
         let dashboard_watch_refresher = dashboard_watch_sender.clone();
         Box::pin(async move {
             info!("start refresh binance exchange info");
-            match dash_board_job.clone().execute().await {
+            match dash_board_job.clone().sync_instruments().await {
                 Ok(snapshot) => {
                     if let Err(e) = dashboard_watch_refresher.send(snapshot) {
                         error!("Failed to send updated snapshot to channel: {}", e);
@@ -61,19 +57,20 @@ pub async fn start_bn_jobs() -> Result<(), YuError> {
     start_refresh_history_data(dash_board.clone(), config, dash_board_watch.clone()).await?;
     // start_monitor_account().await?;
     start_spot_websocket_stream_job().await?;
-    start_data_integrity_jobs(config).await?;
+    start_data_integrity_jobs(config, dash_board).await?;
     Ok(())
 }
 
 //开始数据监控的job
-pub async fn start_data_integrity_jobs(config: &AppConfig) -> Result<(), YuError> {
+pub async fn start_data_integrity_jobs(config: &AppConfig, dash_board: Arc<BinanceDashboard>) -> Result<(), YuError> {
     let data_integrity_config = config.get_data_integrity_config();
     let data_retention_time = config.get_data_retention_hours();
     let _ = cron_job!(data_integrity_config.periodic_check_interval_cron, move |_uuid, _locked| {
         info!("start periodic data integrity check for binance kline data");
+        let dash_board_ref = dash_board.clone();
         Box::pin(async move {
-            let repair_spot_kline_strategy = KlineGapRepairStrategy::spot();
-            let repair_swap_kline_strategy = KlineGapRepairStrategy::swap();
+            let repair_spot_kline_strategy = KlineGapRepairStrategy::spot(dash_board_ref.clone());
+            let repair_swap_kline_strategy = KlineGapRepairStrategy::swap(dash_board_ref);
             let check_spot_kline_strategy = SpotCheckStrategy::spot_check_strategy(None, data_retention_time);
             let check_swap_kline_strategy = SpotCheckStrategy::swap_check_strategy(None, data_retention_time);
             info!("finish periodic data integrity check for binance spot kline data");
@@ -246,45 +243,51 @@ async fn start_spot_websocket_stream_job() -> Result<(), YuError> {
 /// 1. 直接去aws下载文本数据，然后再考虑处理。
 ///
 async fn start_refresh_history_data(
-    dash_board: Arc<BinanceDashboard>,
-    config: &AppConfig,
-    dash_board_watch: BinanceDashboardWatcher,
+    _dash_board: Arc<BinanceDashboard>,
+    _config: &AppConfig,
+    _dash_board_watch: BinanceDashboardWatcher,
 ) -> Result<(), YuError> {
-    let interval = HistoryInterval::FiveMinutes;
-
-    //开始websocket监听
-    let spot_kline_table = get_spot_kline_table();
-    let proxy = config.proxy_url.clone();
-
-    if let Err(e) = KlineSubscribeService::startup_spot(spot_kline_table.clone(), dash_board_watch.clone(), proxy.clone(), interval.clone()).await {
-        error!("error starting kline service: {}", e);
-    }
-
-    let swap_kline_table = get_swap_kline_table();
-    if let Err(e) = KlineSubscribeService::startup_swap(swap_kline_table.clone(), dash_board_watch.clone(), proxy, interval.clone()).await {
-        error!("error starting swap kline service: {}", e);
-    }
-    let spot_all = dash_board.spot_all_symbols();
-    let swap_all = dash_board.swap_all_symbols();
-    let spot_symbol: Vec<String> = spot_all
-        .read()
-        .unwrap()
-        .iter()
-        .filter(|s| s.quote_asset == "USDT")
-        .map(|s| s.symbol.clone())
-        .collect();
-    let swap_symbol: Vec<String> = swap_all
-        .read()
-        .unwrap()
-        .iter()
-        .filter(|s| s.quote_asset == "USDT")
-        .map(|s| s.symbol.clone())
-        .collect();
-    initial_kline(SymbolType::Spot, spot_symbol, config, interval, spot_kline_table).await?;
-    initial_kline(SymbolType::Swap, swap_symbol.clone(), config, HistoryInterval::OneHour, swap_kline_table).await?;
-
-    start_sync_funding_rate(swap_symbol, config, HistoryInterval::OneHour, dash_board_watch).await?;
-    Ok(())
+    todo!(
+        "start_refresh_history_data is not implemented yet. Please implement the logic to refresh history data for Binance Kline and Funding Rate."
+    );
+    // let interval = HistoryInterval::FiveMinutes;
+    //
+    // //开始websocket监听
+    // let spot_kline_table = get_spot_kline_table();
+    // let proxy = config.proxy_url.clone();
+    //
+    // if let Err(e) = KlineSubscribeService::startup_spot(spot_kline_table.clone(), dash_board_watch.clone(), proxy.clone(), interval.clone()).await {
+    //     error!("error starting kline service: {}", e);
+    // }
+    //
+    // let swap_kline_table = get_swap_kline_table();
+    // if let Err(e) = KlineSubscribeService::startup_swap(swap_kline_table.clone(), dash_board_watch.clone(), proxy, interval.clone()).await {
+    //     error!("error starting swap kline service: {}", e);
+    // }
+    // let spot_all = dash_board.spot_living_symbols();
+    // let swap_all = dash_board.swap_living_symbols();
+    // let spot_symbol: Vec<String> = spot_all
+    //     .iter()
+    //     .filter(|s| s.quote_asset == "USDT")
+    //     .map(|s| s.symbol.clone())
+    //     .collect();
+    // let swap_symbol: Vec<String> = swap_all
+    //     .iter()
+    //     .filter(|s| s.quote_asset == "USDT")
+    //     .map(|s| s.symbol.clone())
+    //     .collect();
+    // initial_kline(SymbolType::Spot, spot_symbol, config.get_data_retention_ms(), interval, spot_kline_table).await?;
+    // initial_kline(
+    //     SymbolType::Swap,
+    //     swap_symbol.clone(),
+    //     config.get_data_retention_ms(),
+    //     HistoryInterval::OneHour,
+    //     swap_kline_table,
+    // )
+    // .await?;
+    //
+    // start_sync_funding_rate(swap_symbol, config, HistoryInterval::OneHour, dash_board_watch).await?;
+    // Ok(())
 }
 
 pub fn initial_tables(provider: Option<DuckDBDSProvider>) -> Result<(), YuError> {

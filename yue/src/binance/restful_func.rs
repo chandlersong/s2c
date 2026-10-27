@@ -151,8 +151,8 @@ const DEFAULT_HISTORY_START_TIME_MS: u64 = 1609459200000;
 
 /// 获取合约交易对信息
 /// PERPETUAL 为永续
-/// CURRENT_QUARTER：为下一季
-/// NEXT_QUARTER：当前季度合约
+/// CurrentQuarter：为下一季
+/// NextQuarter：当前季度合约
 pub async fn get_trading_swap_symbols(exchange: SwapExchangeInfo, type_filter: Option<&str>) -> Result<Vec<SymbolInfo>, YueError> {
     let all = translate_symbols(exchange.symbols());
     if let Some(filter) = type_filter {

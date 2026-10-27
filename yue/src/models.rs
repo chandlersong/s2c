@@ -27,6 +27,8 @@ pub enum InstrumentType {
     Spot,
     Swap,
     TradifiPerpetual,
+    CurrentQuarter, //当季合约
+    NextQuarter,    //下一季合约
 }
 
 impl InstrumentType {
@@ -36,6 +38,8 @@ impl InstrumentType {
             Self::Swap => "SWAP",
             Self::Option => "OPTION",
             InstrumentType::TradifiPerpetual => "TRADIFI_PERPETUAL",
+            InstrumentType::CurrentQuarter => "CURRENT_QUARTER",
+            InstrumentType::NextQuarter => "NEXT_QUARTER",
         }
     }
 
@@ -45,6 +49,8 @@ impl InstrumentType {
             "SWAP" | "PERPETUAL" => Some(Self::Swap),
             "OPTION" => Some(Self::Option),
             "TRADIFI_PERPETUAL" => Some(Self::TradifiPerpetual),
+            "CURRENT_QUARTER" => Some(Self::CurrentQuarter),
+            "NEXT_QUARTER" => Some(Self::NextQuarter),
             _ => None,
         }
     }

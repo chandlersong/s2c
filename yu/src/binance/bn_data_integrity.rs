@@ -1,4 +1,5 @@
 use crate::binance::bn_backend_service::{get_spot_kline_table, get_swap_kline_table};
+use crate::binance::bn_dashboard::{BinanceDashboard, InstrumentProvider, SpotInstrumentProvider, SwapInstrumentProvider};
 use crate::binance::db_consts::BinanceTables;
 use crate::binance::history::HistoryKlineSaver;
 use crate::data_integrity::check::{BinarySearchDS, DuckDBBinarySearchDataImpl, ValidationStrategyTrait, binary_search_gap};
@@ -362,18 +363,21 @@ impl ValidationStrategyTrait for SpotCheckStrategy {
 ///
 pub struct KlineGapRepairStrategy {
     symbol_type: SymbolType,
+    instrument_provider: InstrumentProvider,
 }
 
 impl KlineGapRepairStrategy {
-    pub fn spot() -> Self {
+    pub fn spot(dash_board: Arc<BinanceDashboard>) -> Self {
         Self {
             symbol_type: SymbolType::Spot,
+            instrument_provider: SpotInstrumentProvider::new_provider(dash_board),
         }
     }
 
-    pub fn swap() -> Self {
+    pub fn swap(dash_board: Arc<BinanceDashboard>) -> Self {
         Self {
             symbol_type: SymbolType::Swap,
+            instrument_provider: SwapInstrumentProvider::new_provider(dash_board),
         }
     }
 }
@@ -420,12 +424,14 @@ impl RepairStrategyTrait for KlineGapRepairStrategy {
                     };
                     let symbol_type = self.symbol_type.clone();
                     // spawn 一个异步任务来处理该 gap
+                    let inst_provider = self.instrument_provider.clone();
                     let handle = tokio::spawn(async move {
                         // 获取信号量许可
                         let _permit = sem_clone.acquire().await;
 
                         let base_param = CommonRequestBuilder::new(symbol.to_string(), 1000, HistoryInterval::FiveMinutes);
-                        let saver = HistoryKlineSaver::new(table);
+
+                        let saver = HistoryKlineSaver::new(table, inst_provider.clone());
                         if let Err(e) = kline_fetcher
                             .get_all_kline_data(
                                 base_param,

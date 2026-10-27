@@ -17,6 +17,10 @@ applyTo: "**/*.rs"
 
 ## 开发规范
 
+### 模型转换
+
+- PO、VO 与 protobuf 对象之间的转换应定义在相关模型类型的实现中（如 `From`、`TryFrom` 或模型的转换方法），不要在 service、repository、job 等业务流程方法中编写转换逻辑。调用方只负责调用模型转换并编排业务流程。
+
 # li
 
 - tools: 工具类存放于此

@@ -1,5 +1,5 @@
-use crate::binance::bn_consts::BN_SYMBOL_STATUS_NOT_TRADING;
-use crate::binance::models::po::BinanceInstrument;
+use crate::binance::bn_consts::{BN_SYMBOL_STATUS_NOT_TRADING, BN_SYMBOL_STATUS_TRADING};
+use crate::binance::models::po::{BinanceInstrument, KlinePo};
 use crate::duck_db::DuckDBDSProvider;
 use crate::errors::YuError;
 use async_trait::async_trait;
@@ -26,7 +26,9 @@ fn read_order_types(value: duckdb::types::Value) -> Result<Vec<String>, YuError>
 #[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
 #[async_trait]
 pub trait BNInstrumentRepositoryTrait {
-    async fn get_instrument_by_type(&self, inst_type: InstrumentType) -> Result<Vec<BinanceInstrument>, YuError>;
+    async fn get_trading_instrument_by_type(&self, inst_type: InstrumentType) -> Result<Vec<BinanceInstrument>, YuError>;
+
+    async fn get_all_instruments_by_type(&self, inst_type: InstrumentType) -> Result<Vec<BinanceInstrument>, YuError>;
 
     //
     // a map key is symbol，value is id
@@ -40,12 +42,48 @@ pub trait BNInstrumentRepositoryTrait {
     async fn mark_instruments_not_trading(&self, instrument_ids: Vec<u64>) -> Result<(), YuError>;
 }
 
-pub type BNInstrumentRepository = Arc<dyn BNInstrumentRepositoryTrait + Send + Sync>;
+#[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
+#[async_trait]
+pub trait BinanceKlineRepositoryTrait {
+    async fn find_by_inst_id_between(&self, inst_id: u64, start_ms: u64, end_ms: u64) -> Result<Vec<KlinePo>, YuError>;
+}
 
-pub fn get_instrument_repo(provider: Option<DuckDBDSProvider>) -> BNInstrumentRepository {
+pub type BNInstrumentRepository = Arc<dyn BNInstrumentRepositoryTrait + Send + Sync>;
+pub type BinanceKlineRepository = Arc<dyn BinanceKlineRepositoryTrait + Send + Sync>;
+
+pub fn get_instrument_repo_for_production(provider: Option<DuckDBDSProvider>) -> BNInstrumentRepository {
     Arc::new(BNInstrumentRepositoryImpl {
         provider: provider.unwrap_or_default(),
     })
+}
+
+pub fn get_default_spot_kline_repo(provider: Option<DuckDBDSProvider>) -> BinanceKlineRepository {
+    Arc::new(BinanceKlineRepositoryImpl {
+        provider: provider.unwrap_or_default(),
+    })
+}
+
+struct BinanceKlineRepositoryImpl {
+    provider: DuckDBDSProvider,
+}
+
+#[async_trait]
+impl BinanceKlineRepositoryTrait for BinanceKlineRepositoryImpl {
+    async fn find_by_inst_id_between(&self, inst_id: u64, start_ms: u64, end_ms: u64) -> Result<Vec<KlinePo>, YuError> {
+        let conn = self.provider.acquire()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, inst_id, candle_begin_time, open, high, low, close, volume, quote_volume, number_of_trades, \
+             taker_buy_base_asset_volume, taker_buy_quote_asset_volume, close_time, interval, first_trade_id, last_trade_id \
+             FROM bn_spot_kline WHERE inst_id = ? AND candle_begin_time >= ? AND candle_begin_time <= ? \
+             ORDER BY candle_begin_time",
+        )?;
+        let mut rows = stmt.query(duckdb::params![inst_id as i64, start_ms as i64, end_ms as i64])?;
+        let mut klines = Vec::new();
+        while let Some(row) = rows.next()? {
+            klines.push(KlinePo::from(row));
+        }
+        Ok(klines)
+    }
 }
 
 struct BNInstrumentRepositoryImpl {
@@ -54,33 +92,12 @@ struct BNInstrumentRepositoryImpl {
 
 #[async_trait]
 impl BNInstrumentRepositoryTrait for BNInstrumentRepositoryImpl {
-    async fn get_instrument_by_type(&self, inst_type: InstrumentType) -> Result<Vec<BinanceInstrument>, YuError> {
-        let conn = self.provider.acquire()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, symbol, status, base_asset, quote_asset, quote_asset_precision, order_types, symbol_type, on_board_time \
-             FROM bn_instruments \
-             WHERE UPPER(symbol_type) = ? OR (? = 'SWAP' AND UPPER(symbol_type) = 'PERPETUAL');",
-        )?;
-        let inst_type = inst_type.as_str();
-        let mut rows = stmt.query([inst_type, inst_type])?;
-        let mut instruments = Vec::new();
+    async fn get_trading_instrument_by_type(&self, inst_type: InstrumentType) -> Result<Vec<BinanceInstrument>, YuError> {
+        self.query_instruments_by_type(inst_type, true)
+    }
 
-        while let Some(row) = rows.next()? {
-            instruments.push(BinanceInstrument {
-                id: row.get(0)?,
-                symbol: row.get(1)?,
-                status: row.get(2)?,
-                base_asset: row.get(3)?,
-                quote_asset: row.get(4)?,
-                quote_asset_precision: row.get(5)?,
-                order_types: read_order_types(row.get(6)?)?,
-                symbol_type: InstrumentType::from_symbol_type(&row.get::<_, String>(7)?)
-                    .ok_or_else(|| YuError::new("unsupported bn_instruments.symbol_type"))?,
-                on_board_time: row.get::<_, Option<i64>>(8)?.map(|time| time as u64),
-            });
-        }
-
-        Ok(instruments)
+    async fn get_all_instruments_by_type(&self, inst_type: InstrumentType) -> Result<Vec<BinanceInstrument>, YuError> {
+        self.query_instruments_by_type(inst_type, false)
     }
 
     async fn get_map_of_symbol_id(&self, inst_type: InstrumentType) -> Result<HashMap<String, u64>, YuError> {
@@ -177,13 +194,53 @@ impl BNInstrumentRepositoryTrait for BNInstrumentRepositoryImpl {
         let placeholders = vec!["?"; instrument_ids.len()].join(", ");
         let sql = format!(
             "UPDATE bn_instruments SET status = ? \
-             WHERE id IN ({placeholders}) AND UPPER(symbol_type) = 'SPOT';"
+             WHERE id IN ({placeholders}) ;"
         );
         let mut params = Vec::with_capacity(instrument_ids.len() + 1);
         params.push(duckdb::types::Value::Text(BN_SYMBOL_STATUS_NOT_TRADING.to_string()));
         params.extend(instrument_ids.into_iter().map(|id| duckdb::types::Value::BigInt(id as i64)));
         conn.execute(&sql, duckdb::params_from_iter(params.iter()))?;
         Ok(())
+    }
+}
+
+impl BNInstrumentRepositoryImpl {
+    fn query_instruments_by_type(&self, inst_type: InstrumentType, trading_only: bool) -> Result<Vec<BinanceInstrument>, YuError> {
+        let conn = self.provider.acquire()?;
+        let status_filter = if trading_only { " AND UPPER(status) = ?" } else { "" };
+        let sql = format!(
+            "SELECT id, symbol, status, base_asset, quote_asset, quote_asset_precision, order_types, symbol_type, on_board_time \
+             FROM bn_instruments \
+             WHERE (UPPER(symbol_type) = ? OR (? = 'SWAP' AND UPPER(symbol_type) = 'PERPETUAL')){status_filter};"
+        );
+        let inst_type = inst_type.as_str();
+        let mut params = vec![
+            duckdb::types::Value::Text(inst_type.to_string()),
+            duckdb::types::Value::Text(inst_type.to_string()),
+        ];
+        if trading_only {
+            params.push(duckdb::types::Value::Text(BN_SYMBOL_STATUS_TRADING.to_string()));
+        }
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = stmt.query(duckdb::params_from_iter(params.iter()))?;
+        let mut instruments = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            instruments.push(BinanceInstrument {
+                id: row.get(0)?,
+                symbol: row.get(1)?,
+                status: row.get(2)?,
+                base_asset: row.get(3)?,
+                quote_asset: row.get(4)?,
+                quote_asset_precision: row.get(5)?,
+                order_types: read_order_types(row.get(6)?)?,
+                symbol_type: InstrumentType::from_symbol_type(&row.get::<_, String>(7)?)
+                    .ok_or_else(|| YuError::new("unsupported bn_instruments.symbol_type"))?,
+                on_board_time: row.get::<_, Option<i64>>(8)?.map(|time| time as u64),
+            });
+        }
+
+        Ok(instruments)
     }
 }
 
@@ -194,6 +251,9 @@ mod tests {
     use crate::binance::db_consts::CREATE_BINANCE_INSTRUMENTS_TABLE;
     use crate::test_utils::create_memory_db_provider;
 
+    // 测试目的：验证 instrument 的全量查询和交易中查询会按 status 正确区分。
+    // 准备数据/过程：插入 BTCUSDT Spot，先查询交易中列表，再将其更新为 BREAK 后重新查询。
+    // 预期结果：全量查询始终返回该 instrument；交易中查询只在 status 为 TRADING 时返回它。
     #[tokio::test]
     async fn instrument_repository_supports_crud_queries() {
         let provider = create_memory_db_provider();
@@ -206,7 +266,7 @@ mod tests {
         .unwrap();
         drop(conn);
 
-        let repo = get_instrument_repo(Some(provider));
+        let repo = get_instrument_repo_for_production(Some(provider));
         let instrument = BinanceInstrument {
             id: 42,
             symbol: "BTCUSDT".to_string(),
@@ -221,11 +281,12 @@ mod tests {
 
         repo.insert_instrument(instrument.clone()).await.unwrap();
 
-        let fetched = repo.get_instrument_by_type(InstrumentType::Spot).await.unwrap();
+        let fetched = repo.get_all_instruments_by_type(InstrumentType::Spot).await.unwrap();
         assert_eq!(fetched.len(), 1);
         assert_eq!(fetched[0].id, instrument.id);
         assert_eq!(fetched[0].order_types, instrument.order_types);
         assert_eq!(fetched[0].on_board_time, instrument.on_board_time);
+        assert_eq!(repo.get_trading_instrument_by_type(InstrumentType::Spot).await.unwrap().len(), 1);
         assert_eq!(repo.get_map_of_symbol_id(InstrumentType::Spot).await.unwrap().get("BTCUSDT"), Some(&42));
 
         let updated = BinanceInstrument {
@@ -234,11 +295,15 @@ mod tests {
         };
         repo.update_instrument(updated.clone()).await.unwrap();
 
-        let fetched = repo.get_instrument_by_type(InstrumentType::Spot).await.unwrap();
+        let fetched = repo.get_all_instruments_by_type(InstrumentType::Spot).await.unwrap();
         assert_eq!(fetched.len(), 1);
         assert_eq!(fetched[0].status, updated.status);
+        assert!(repo.get_trading_instrument_by_type(InstrumentType::Spot).await.unwrap().is_empty());
     }
 
+    // 测试目的：验证按类型批量标记非交易后，两种查询函数分别保持正确筛选。
+    // 准备数据/过程：插入两个 Spot 和一个 Swap 交易中 instrument，再将两个 Spot 标记为非交易。
+    // 预期结果：全量查询仍返回对应类型的所有 instrument，交易中查询只返回未被标记的 Swap。
     #[tokio::test]
     async fn marks_multiple_spot_instruments_not_trading_in_one_call() {
         let provider = create_memory_db_provider();
@@ -251,7 +316,7 @@ mod tests {
         .unwrap();
         drop(conn);
 
-        let repo = get_instrument_repo(Some(provider));
+        let repo = get_instrument_repo_for_production(Some(provider));
         for (id, symbol, symbol_type) in [
             (1, "BTCUSDT", InstrumentType::Spot),
             (2, "ETHUSDT", InstrumentType::Spot),
@@ -274,13 +339,15 @@ mod tests {
 
         repo.mark_instruments_not_trading(vec![1, 2]).await.unwrap();
 
-        let spot_instruments = repo.get_instrument_by_type(InstrumentType::Spot).await.unwrap();
+        let spot_instruments = repo.get_all_instruments_by_type(InstrumentType::Spot).await.unwrap();
         assert!(
             spot_instruments
                 .iter()
                 .all(|instrument| instrument.status == BN_SYMBOL_STATUS_NOT_TRADING)
         );
-        let swap_instruments = repo.get_instrument_by_type(InstrumentType::Swap).await.unwrap();
+        let swap_instruments = repo.get_all_instruments_by_type(InstrumentType::Swap).await.unwrap();
         assert_eq!(swap_instruments[0].status, BN_SYMBOL_STATUS_TRADING);
+        assert!(repo.get_trading_instrument_by_type(InstrumentType::Spot).await.unwrap().is_empty());
+        assert_eq!(repo.get_trading_instrument_by_type(InstrumentType::Swap).await.unwrap().len(), 1);
     }
 }

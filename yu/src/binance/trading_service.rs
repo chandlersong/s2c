@@ -3,33 +3,33 @@ use crate::binance::models::SpotStreamTradeRecordPo;
 use crate::duck_db_tables::DuckTableTableChannel;
 use async_trait::async_trait;
 use li::websocket::connection::{CommandMessage, MessageHandlerTrait, ToServerMessage, WebSocketConnection, WebSocketInterface};
-use log::{error, trace};
 use std::sync::Arc;
 use yue::binance::bn_json_websocket::{SPOT_STREAM_WEBSOCKET, StreamCommandRequest, WS_SUBSCRIBE_COMMAND};
-use yue::binance::bn_models::spot_websocket_stream::{BinanceSpotWebSocketStreamResponse, BinanceSpotWebSocketStreamWrapper};
+use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamWrapper;
 use yue::errors::YueError;
-use yue::query_message::{InsertPayload, QueryCommand};
 
 pub struct TradingSaver {
-    table: DuckTableTableChannel<SpotStreamTradeRecordPo>,
+    _table: DuckTableTableChannel<SpotStreamTradeRecordPo>,
 }
 
 #[async_trait]
 impl MessageHandlerTrait<BinanceSpotWebSocketStreamWrapper> for TradingSaver {
-    async fn handle_message(&self, message: &BinanceSpotWebSocketStreamWrapper) {
-        trace!("Received WebSocket message: {:?}", message);
-        match &message.data {
-            BinanceSpotWebSocketStreamResponse::Trade(trade) => {
-                let po = SpotStreamTradeRecordPo::from(trade.clone());
-                let insert_command = QueryCommand::Insert(InsertPayload::new_no_replay(po));
-                if let Err(e) = self.table.send(insert_command).await {
-                    error!("Failed to send insert command to trade: {}", e);
-                }
-            }
-            _ => {
-                trace!("Received non-depth update message, ignoring");
-            }
-        }
+    async fn handle_message(&self, _message: &BinanceSpotWebSocketStreamWrapper) {
+        // TODO: 以后改吧。说不定可以删掉。
+        // trace!("Received WebSocket message: {:?}", message);
+        // match &message.data {
+        //     BinanceSpotWebSocketStreamResponse::Trade(trade) => {
+        //         let po = SpotStreamTradeRecordPo::from(trade.clone());
+        //         let insert_command = QueryCommand::Insert(InsertPayload::new_no_replay(po));
+        //         if let Err(e) = self._table.send(insert_command).await {
+        //             error!("Failed to send insert command to trade: {}", e);
+        //         }
+        //     }
+        //     _ => {
+        //         trace!("Received non-depth update message, ignoring");
+        //     }
+        // }
+        todo!("TradingSaver handle_message is not implemented yet, please implement it to handle trade messages and insert them into the database.")
     }
 }
 
@@ -41,7 +41,7 @@ pub struct TradingService {
 impl TradingService {
     pub async fn spot(proxy: Option<String>) -> Self {
         let saver = Arc::new(TradingSaver {
-            table: get_spot_trading_table(),
+            _table: get_spot_trading_table(),
         });
         let interface =
             WebSocketConnection::run::<BinanceSpotWebSocketStreamWrapper>(SPOT_STREAM_WEBSOCKET.to_string(), None, proxy, Some(saver)).await;

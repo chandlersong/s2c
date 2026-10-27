@@ -85,8 +85,9 @@ Instrument相关的内容。包括repository、service。
 - `for_production`方法，用于在生产函数调用
     - 具体参数可以参考`PolyMarketSyncInstrumentService`中的`for_production`方法。
     - 如果业务需要，可以自行添加参数
-- 维护一个`live_instruments`的缓存
-    - 需要能在多个环境中共享，方式方法包括但是不限于`PolyMarketSyncInstrumentService`中的加锁的方法。
+- 维护一个`live_instruments`的缓存，需要能在多个环境中共享
+    - 简单的方式，`yu/src/polymarket/sync_job.rs`中的live_instruments，加锁的方法，因为该交易所只有一种。
+    - 复杂的方式，`yu/src/binance/sync_job.rs`中的BinanceDashboard单独一个类来维护，因为该交易所有多种不同的instrument。
 - `support_history_list`方法：返回支持的历史数据类型列表。
     - 具体可以参考`PolyMarketSyncInstrumentService`中的`support_history_list`方法。
     - 优先使用外部注入的方式。

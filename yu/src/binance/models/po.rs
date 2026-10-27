@@ -46,11 +46,43 @@ impl<T: SymbolInfoTrait> From<&T> for BinanceInstrument {
     }
 }
 
+impl BinanceInstrument {
+    ///
+    /// 数据库的场景。已经已经存在了。就是需要传入id。而不是自动生成
+    ///
+    pub fn from_symbol_info_with_id<T: SymbolInfoTrait>(symbol: &T, id: i64) -> Self {
+        Self {
+            id,
+            symbol: symbol.symbol().to_string(),
+            status: symbol.status().to_string(),
+            base_asset: symbol.base_asset().to_string(),
+            quote_asset: symbol.quote_asset().to_string(),
+            quote_asset_precision: symbol.quote_precision(),
+            order_types: symbol.order_types().clone(),
+            symbol_type: InstrumentType::from_symbol_type(symbol.symbol_type()).expect("unsupported Binance symbol type"),
+            on_board_time: symbol.get_on_board_time(),
+        }
+    }
+
+    pub fn get_id_u64(&self) -> u64 {
+        self.id as u64
+    }
+
+    pub fn into_proto_instrument(self) -> crate::sync::models::grpc_sync::Instrument {
+        crate::sync::models::grpc_sync::Instrument {
+            instrument_type: crate::sync::models::grpc_sync::InstrumentType::Binance as i32,
+            payload: Some(crate::sync::models::grpc_sync::instrument::Payload::Binance(
+                crate::sync::models::grpc_sync::BinanceInstrument::from(self),
+            )),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpotStreamTradeRecordPo {
     pub id: i64,
     pub event_time: i64,
-    pub symbol: String,
+    pub inst_id: u64,
     pub trade_id: i64,
     pub price: f64,
     pub qty: f64,
@@ -64,7 +96,7 @@ impl DuckDBPO for SpotStreamTradeRecordPo {
         appender_params_from_iter(vec![
             &self.id as &dyn duckdb::ToSql,
             &self.event_time as &dyn duckdb::ToSql,
-            &self.symbol as &dyn duckdb::ToSql,
+            &self.inst_id as &dyn duckdb::ToSql,
             &self.trade_id as &dyn duckdb::ToSql,
             &self.price as &dyn duckdb::ToSql,
             &self.qty as &dyn duckdb::ToSql,
@@ -75,12 +107,12 @@ impl DuckDBPO for SpotStreamTradeRecordPo {
     }
 }
 
-impl From<TradeStreamPayload> for SpotStreamTradeRecordPo {
-    fn from(payload: TradeStreamPayload) -> Self {
+impl SpotStreamTradeRecordPo {
+    pub fn from_trade_stream_payload(payload: TradeStreamPayload, inst_id: u64) -> Self {
         SpotStreamTradeRecordPo {
             id: get_snow_flake_id_u64() as i64,
             event_time: payload.event_time as i64,
-            symbol: payload.symbol,
+            inst_id,
             trade_id: payload.trade_id as i64,
             price: payload.price.to_f64().unwrap(),
             qty: payload.qty.to_f64().unwrap(),
@@ -96,7 +128,7 @@ pub const INTERVAL_5M: u8 = 1;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KlinePo {
     pub id: i64,
-    pub symbol: String,
+    pub inst_id: u64,
     pub candle_begin_time: u64,
     pub open: f64,
     pub high: f64,
@@ -116,11 +148,24 @@ pub struct KlinePo {
     pub last_trade_id: Option<i64>,
 }
 
-impl From<SpotKlineData> for KlinePo {
-    fn from(value: SpotKlineData) -> Self {
+impl KlinePo {
+    pub fn to_history_entry(&self) -> crate::sync::models::grpc_sync::HistoryEntry {
+        use crate::sync::models::grpc_sync::{BinanceKline, HistoryType, InstrumentType, history_entry};
+
+        crate::sync::models::grpc_sync::HistoryEntry {
+            history_type: HistoryType::BinanceSpot.into(),
+            instrument_type: InstrumentType::Binance.into(),
+            inst_id: self.inst_id,
+            payload: Some(history_entry::Payload::BinanceKline(BinanceKline::from(self.clone()))),
+        }
+    }
+}
+
+impl KlinePo {
+    pub fn from_spot_kline_data(value: SpotKlineData, inst_id: u64) -> Self {
         KlinePo {
             id: get_snow_flake_id_u64() as i64,
-            symbol: value.symbol,
+            inst_id,
             candle_begin_time: value.start_time,
             open: value.open.to_f64().unwrap(),
             high: value.high.to_f64().unwrap(),
@@ -137,19 +182,15 @@ impl From<SpotKlineData> for KlinePo {
             last_trade_id: Some(value.last_trade_id),
         }
     }
-}
 
-impl From<KlineStreamPayload> for KlinePo {
-    fn from(payload: KlineStreamPayload) -> Self {
-        Self::from(payload.kline)
+    pub fn from_kline_stream_payload(payload: KlineStreamPayload, inst_id: u64) -> Self {
+        Self::from_spot_kline_data(payload.kline, inst_id)
     }
-}
 
-impl From<BinanceKline> for KlinePo {
-    fn from(source: BinanceKline) -> Self {
+    pub fn from_binance_kline(source: BinanceKline, inst_id: u64) -> Self {
         KlinePo {
             id: get_snow_flake_id_u64() as i64,
-            symbol: source.symbol.unwrap(),
+            inst_id,
             candle_begin_time: source.open_time,
             open: source.open.to_f64().unwrap(),
             high: source.high.to_f64().unwrap(),
@@ -166,13 +207,11 @@ impl From<BinanceKline> for KlinePo {
             last_trade_id: Some(-1),
         }
     }
-}
 
-impl From<SwapWebsocketKlineData> for KlinePo {
-    fn from(value: SwapWebsocketKlineData) -> Self {
+    pub fn from_swap_websocket_kline(value: SwapWebsocketKlineData, inst_id: u64) -> Self {
         KlinePo {
             id: get_snow_flake_id_u64() as i64,
-            symbol: value.symbol,
+            inst_id,
             candle_begin_time: value.start_time,
             open: value.open.to_f64().unwrap(),
             high: value.high.to_f64().unwrap(),
@@ -195,7 +234,7 @@ impl<'a> From<&duckdb::Row<'a>> for KlinePo {
     fn from(row: &duckdb::Row) -> Self {
         KlinePo {
             id: row.get(0).unwrap_or_default(),
-            symbol: row.get(1).unwrap_or_default(),
+            inst_id: row.get(1).unwrap_or_default(),
             candle_begin_time: row.get(2).unwrap_or_default(),
             open: row.get(3).unwrap_or_default(),
             high: row.get(4).unwrap_or_default(),
@@ -218,7 +257,7 @@ impl DuckDBPO for KlinePo {
     fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>> {
         appender_params_from_iter(vec![
             &self.id as &dyn duckdb::ToSql,
-            &self.symbol as &dyn duckdb::ToSql,
+            &self.inst_id as &dyn duckdb::ToSql,
             &self.candle_begin_time as &dyn duckdb::ToSql,
             &self.open as &dyn duckdb::ToSql,
             &self.high as &dyn duckdb::ToSql,
@@ -241,10 +280,10 @@ impl Display for KlinePo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "KlineData {{ id: {},interval {}, symbol: {}, candle_begin_time: {}, open: {}, high: {}, low: {}, close: {}, volume: {}, quote_volume: {}, number_of_trades: {}, taker_buy_base_asset_volume: {}, taker_buy_quote_asset_volume: {}, close_time: {} }}",
+            "KlineData {{ id: {},interval {}, inst_id: {}, candle_begin_time: {}, open: {}, high: {}, low: {}, close: {}, volume: {}, quote_volume: {}, number_of_trades: {}, taker_buy_base_asset_volume: {}, taker_buy_quote_asset_volume: {}, close_time: {} }}",
             self.id,
             self.interval,
-            self.symbol,
+            self.inst_id,
             self.candle_begin_time,
             self.open,
             self.high,
@@ -265,7 +304,7 @@ pub struct SpotOrderPo {
     pub event: String,
     pub account_name: String,
     pub event_time: i64,
-    pub symbol: String,
+    pub inst_id: u64,
     pub client_order_id: Option<String>,
     pub side: String,
     pub order_type: String,
@@ -292,15 +331,15 @@ pub struct SpotOrderPo {
     pub quote_order_quantity: Option<f64>,
 }
 
-impl From<SpotOrderData> for SpotOrderPo {
-    fn from(data: SpotOrderData) -> Self {
+impl SpotOrderPo {
+    pub fn from_spot_order_data(data: SpotOrderData, inst_id: u64) -> Self {
         let payload = data.data;
 
         Self {
             event: payload.event,
             account_name: data.account_name,
             event_time: payload.event_time as i64,
-            symbol: payload.symbol,
+            inst_id,
             client_order_id: payload.client_order_id,
             side: payload.side,
             order_type: payload.order_type,
@@ -327,16 +366,14 @@ impl From<SpotOrderData> for SpotOrderPo {
             quote_order_quantity: payload.quote_order_quantity.and_then(|d| d.to_f64()),
         }
     }
-}
 
-impl From<PortfolioSpotOrderData> for SpotOrderPo {
-    fn from(data: PortfolioSpotOrderData) -> Self {
+    pub fn from_portfolio_spot_order_data(data: PortfolioSpotOrderData, inst_id: u64) -> Self {
         let payload = data.data;
         Self {
             event: payload.event,
             account_name: data.account_name,
             event_time: payload.event_time as i64,
-            symbol: payload.symbol,
+            inst_id,
             client_order_id: payload.client_order_id,
             side: payload.side,
             order_type: payload.order_type,
@@ -371,7 +408,7 @@ pub struct SwapOrderPo {
     pub account_name: String,
     pub event_time: i64,
     pub trade_time: i64,
-    pub symbol: String,
+    pub inst_id: u64,
     pub client_order_id: Option<String>,
     pub side: String,
     pub order_type: String,
@@ -397,8 +434,8 @@ pub struct SwapOrderPo {
     pub gtd: Option<i64>,
 }
 
-impl From<SwapOrderData> for SwapOrderPo {
-    fn from(data: SwapOrderData) -> Self {
+impl SwapOrderPo {
+    pub fn from_swap_order_data(data: SwapOrderData, inst_id: u64) -> Self {
         let payload = data.data;
         let o = payload.order.expect("Order data must be present");
         Self {
@@ -406,7 +443,7 @@ impl From<SwapOrderData> for SwapOrderPo {
             account_name: data.account_name,
             event_time: payload.event_time as i64,
             trade_time: payload.trade_time as i64,
-            symbol: o.symbol,
+            inst_id,
             client_order_id: o.client_order_id,
             side: o.side.unwrap_or_default(),
             order_type: o.order_type,
@@ -432,10 +469,8 @@ impl From<SwapOrderData> for SwapOrderPo {
             gtd: o.gtd.map(|v| v as i64),
         }
     }
-}
 
-impl From<PortfolioSwapOrderData> for SwapOrderPo {
-    fn from(data: PortfolioSwapOrderData) -> Self {
+    pub fn from_portfolio_swap_order_data(data: PortfolioSwapOrderData, inst_id: u64) -> Self {
         let payload = data.data;
         let o = payload.order;
         Self {
@@ -443,7 +478,7 @@ impl From<PortfolioSwapOrderData> for SwapOrderPo {
             account_name: data.account_name,
             event_time: payload.event_time as i64,
             trade_time: payload.trade_time as i64,
-            symbol: o.symbol,
+            inst_id,
             client_order_id: o.client_order_id,
             side: o.side,
             order_type: o.order_type,
@@ -474,7 +509,7 @@ impl From<PortfolioSwapOrderData> for SwapOrderPo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FundingRatePo {
     pub id: i64,
-    pub symbol: String,
+    pub inst_id: u64,
     pub funding_rate: f64,
     pub funding_time: u64,
     pub mark_price: Option<f64>,
@@ -484,7 +519,7 @@ impl<'a> From<&duckdb::Row<'a>> for FundingRatePo {
     fn from(row: &duckdb::Row) -> Self {
         FundingRatePo {
             id: row.get(0).unwrap_or_default(),
-            symbol: row.get(1).unwrap_or_default(),
+            inst_id: row.get(1).unwrap_or_default(),
             funding_rate: row.get(2).unwrap_or_default(),
             funding_time: row.get(3).unwrap_or_default(),
             mark_price: row.get(4).ok(), // 支持数据库字段为空
@@ -492,13 +527,13 @@ impl<'a> From<&duckdb::Row<'a>> for FundingRatePo {
     }
 }
 
-impl<'a> From<FundingRate> for FundingRatePo {
-    fn from(source: FundingRate) -> Self {
+impl FundingRatePo {
+    pub fn from_funding_rate(source: FundingRate, inst_id: u64) -> Self {
         let snow_flake = SnowyFlakeWrapper::new();
         let id = snow_flake.next_id_u64() as i64;
         FundingRatePo {
             id,
-            symbol: source.symbol,
+            inst_id,
             funding_rate: source.funding_rate,
             funding_time: source.funding_time,
             mark_price: source.mark_price,
@@ -510,7 +545,7 @@ impl DuckDBPO for FundingRatePo {
     fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>> {
         appender_params_from_iter(vec![
             &self.id as &dyn duckdb::ToSql,
-            &self.symbol as &dyn duckdb::ToSql,
+            &self.inst_id as &dyn duckdb::ToSql,
             &self.funding_rate as &dyn duckdb::ToSql,
             &self.funding_time as &dyn duckdb::ToSql,
             &self.mark_price as &dyn duckdb::ToSql,
@@ -597,6 +632,9 @@ mod tests {
         assert_eq!(instrument.on_board_time, Some(1_600_000_000_000));
     }
 
+    // 测试目的：验证 Spot Kline stream payload 转换时写入传入的 instrument id。
+    // 准备数据/过程：构造带 BTCUSDT Kline 的 stream payload，并传入 instrument id 42。
+    // 预期结果：PO 保存 id 42，且时间、周期和成交 ID 字段保持正确。
     #[test]
     fn kline_stream_payload_converts_to_kline_po() {
         let payload = KlineStreamPayload {
@@ -624,9 +662,9 @@ mod tests {
             },
         };
 
-        let po = KlinePo::from(payload);
+        let po = KlinePo::from_kline_stream_payload(payload, 42);
 
-        assert_eq!(po.symbol, "BTCUSDT");
+        assert_eq!(po.inst_id, 42);
         assert_eq!(po.candle_begin_time, 1_700_000_000_000);
         assert_eq!(po.close_time, 1_700_000_299_999);
         assert_eq!(po.interval, INTERVAL_5M);
@@ -634,6 +672,9 @@ mod tests {
         assert_eq!(po.last_trade_id, Some(20));
     }
 
+    // 测试目的：验证 Spot trade stream payload 转换时写入传入的 instrument id。
+    // 准备数据/过程：构造完整 trade payload，并传入 instrument id 42。
+    // 预期结果：PO 保存 id 42，且成交事件字段保持正确。
     #[test]
     fn trade_stream_payload_preserves_event_fields() {
         let payload = TradeStreamPayload {
@@ -648,8 +689,9 @@ mod tests {
             ignore: false,
         };
 
-        let po = SpotStreamTradeRecordPo::from(payload);
+        let po = SpotStreamTradeRecordPo::from_trade_stream_payload(payload, 42);
 
+        assert_eq!(po.inst_id, 42);
         assert_eq!(po.event_time, 1_700_000_000_000);
         assert_eq!(po.trade_time, Some(1_700_000_000_001));
         assert_eq!(po.is_buyer_maker, Some(true));

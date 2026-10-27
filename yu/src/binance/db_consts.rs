@@ -73,7 +73,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_bn_instruments_symbol_type
 pub const CREATE_SPOT_KLINE_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS bn_spot_kline (
     id                          BIGINT,   -- 主键ID
-    symbol                      VARCHAR,  -- 交易对
+    inst_id                     BIGINT,  -- 交易对
     candle_begin_time           BIGINT,   -- K线开始时间
     open                        DOUBLE,   -- 开盘价
     high                        DOUBLE,   -- 最高价
@@ -89,13 +89,13 @@ CREATE TABLE IF NOT EXISTS bn_spot_kline (
     first_trade_id              BIGINT,    -- 第一个trading id
     last_trade_id               BIGINT    -- 最后一个trading id
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_spot_kline_symbol_candle_begin_time ON bn_spot_kline(symbol, candle_begin_time);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_spot_kline_symbol_candle_begin_time ON bn_spot_kline(inst_id, candle_begin_time);
 "#;
 
 pub const CREATE_SWAP_KLINE_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS bn_swap_kline (
     id                          BIGINT,   -- 主键ID
-    symbol                      VARCHAR,  -- 交易对
+    inst_id                     BIGINT,  -- 交易对
     candle_begin_time           BIGINT,   -- K线开始时间
     open                        DOUBLE,   -- 开盘价
     high                        DOUBLE,   -- 最高价
@@ -111,18 +111,18 @@ CREATE TABLE IF NOT EXISTS bn_swap_kline (
     first_trade_id              BIGINT,    -- 第一个trading id
     last_trade_id               BIGINT    -- 最后一个trading id
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_swap_kline_symbol_candle_begin_time ON bn_swap_kline(symbol, candle_begin_time);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_swap_kline_symbol_candle_begin_time ON bn_swap_kline(inst_id, candle_begin_time);
 "#;
 
 pub const CREATE_FUNDING_RATE_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS bn_swap_funding_rate (
     id           BIGINT,   -- 主键ID
-    symbol       VARCHAR,  -- 交易对
+    inst_id       BIGINT,  -- 交易对
     funding_rate DOUBLE,   -- 资金费率
     funding_time BIGINT,   -- 资金费率时间
     mark_price   DOUBLE    -- 标记价格
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_swap_funding_rate_symbol_funding_time ON bn_swap_funding_rate(symbol, funding_time);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_swap_funding_rate_symbol_funding_time ON bn_swap_funding_rate(inst_id, funding_time);
 "#;
 
 const CREATE_BN_ORDER_EVENTS_SPOT_TABLE: &str = r#"
@@ -130,7 +130,7 @@ CREATE TABLE IF NOT EXISTS bn_order_events_spot (
     event TEXT NOT NULL,
     account_name TEXT NOT NULL,
     event_time BIGINT NOT NULL,
-    symbol TEXT NOT NULL,
+    inst_id BIGINT NOT NULL,
     client_order_id TEXT,
     side TEXT NOT NULL,
     order_type TEXT NOT NULL,
@@ -157,14 +157,14 @@ CREATE TABLE IF NOT EXISTS bn_order_events_spot (
     quote_order_quantity DOUBLE,
     PRIMARY KEY (order_id, event_time)
 );
-CREATE INDEX IF NOT EXISTS idx_order_events_symbol_time ON bn_order_events_spot (symbol, event_time DESC)
+CREATE INDEX IF NOT EXISTS idx_order_events_symbol_time ON bn_order_events_spot (inst_id, event_time DESC)
 "#;
 
 const BN_SPOT_TRADE_TABLE: &str = r#"
     CREATE TABLE IF NOT EXISTS bn_spot_trade (
         id BIGINT NOT NULL PRIMARY KEY,
         event_time BIGINT NOT NULL,
-        symbol VARCHAR NOT NULL,
+        inst_id BIGINT NOT NULL,
         trade_id BIGINT NOT NULL,
         price DECIMAL(20,8) NOT NULL,
         qty DECIMAL(20,8) NOT NULL,
@@ -172,7 +172,7 @@ const BN_SPOT_TRADE_TABLE: &str = r#"
         is_buyer_maker BOOLEAN,
         created_at BIGINT NOT NULL
     );
-    CREATE INDEX IF NOT EXISTS idx_bn_spot_trade_symbol_time ON bn_spot_trade(symbol, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_bn_spot_trade_symbol_time ON bn_spot_trade(inst_id, created_at DESC);
     "#;
 
 // 原生方式：维护一个静态数组，便于遍历所有表类型
@@ -194,7 +194,7 @@ CREATE TABLE IF NOT EXISTS bn_order_events_swap (
     account_name TEXT NOT NULL,
     event_time BIGINT NOT NULL,
     trade_time BIGINT NOT NULL,
-    symbol TEXT NOT NULL,
+    inst_id BIGINT NOT NULL,
     client_order_id TEXT,
     side TEXT NOT NULL,
     order_type TEXT NOT NULL,
@@ -220,7 +220,7 @@ CREATE TABLE IF NOT EXISTS bn_order_events_swap (
     gtd BIGINT,
     PRIMARY KEY (order_id, event_time)
 );
-CREATE INDEX IF NOT EXISTS idx_order_events_swap_symbol_time ON bn_order_events_swap (symbol, event_time DESC)
+CREATE INDEX IF NOT EXISTS idx_order_events_swap_symbol_time ON bn_order_events_swap (inst_id, event_time DESC)
 "#;
 
 #[cfg(test)]

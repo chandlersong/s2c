@@ -1,7 +1,9 @@
 // 使用新的 Supervisor + CheckActor 设计的示例
 use li::tools::logs::setup_logger;
-use log::{info, LevelFilter};
+use log::{LevelFilter, info};
 use std::collections::HashMap;
+use std::sync::Arc;
+use yu::binance::bn_dashboard::BinanceDashboard;
 use yu::binance::bn_data_integrity::{KlineGapRepairStrategy, SpotCheckStrategy};
 use yu::config::get_config;
 use yu::data_integrity::check::ValidationStrategyTrait;
@@ -26,7 +28,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let data_retention_time = app_config.get_data_retention_ms();
-    let repair_spot_kline_strategy = KlineGapRepairStrategy::spot();
+    #[allow(deprecated)]
+    let dash_board = BinanceDashboard::debug_mode(app_config.get_data_retention_hours(), None)?;
+    let repair_spot_kline_strategy = KlineGapRepairStrategy::spot(Arc::new(dash_board));
     let check_spot_kline_strategy = SpotCheckStrategy::spot_check_strategy(None, data_retention_time);
     match check_spot_kline_strategy.validate().await {
         Ok(Some(gaps)) => {

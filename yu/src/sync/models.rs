@@ -182,7 +182,7 @@ mod tests {
     fn binance_kline_server_to_client_mapping_preserves_fields() {
         let server_po = KlinePo {
             id: 7,
-            symbol: "BTCUSDT".to_string(),
+            inst_id: 123,
             candle_begin_time: 1_700_000_000_000,
             open: 100.0,
             high: 110.0,
@@ -211,7 +211,7 @@ mod tests {
         let server_po = SpotStreamTradeRecordPo {
             id: 9,
             event_time: 1_700_000_000_001,
-            symbol: "BTCUSDT".to_string(),
+            inst_id: 123,
             trade_id: 42,
             price: 100.25,
             qty: 0.5,

@@ -1,13 +1,13 @@
 use li::tools::logs::setup_logger;
 use log::{LevelFilter, info, warn};
 use std::collections::HashMap;
+use std::sync::Arc;
 use yu::binance::bn_backend_service::{get_spot_kline_table, get_swap_kline_table};
-use yu::binance::bn_dashboard::BinanceDashboard;
+use yu::binance::bn_dashboard::{BinanceDashboard, SpotInstrumentProvider, SwapInstrumentProvider};
 use yu::binance::history::initial_kline;
 use yu::binance::jobs::initial_tables;
 use yu::config::get_config;
 use yu::errors::YuError;
-use yue::binance::bn_models::common::SymbolType;
 use yue::http_client::init_http_client;
 use yue::models::HistoryInterval;
 
@@ -34,27 +34,29 @@ async fn main() -> Result<(), YuError> {
     //初始化数据
     #[allow(deprecated)]
     let dash_board = BinanceDashboard::debug_mode(app_config.get_data_retention_hours(), None)?;
-    dash_board.execute().await?;
-    let spot_all = dash_board.spot_all_symbols();
-    let swap_all = dash_board.swap_all_symbols();
-    let spot_symbol: Vec<String> = spot_all
-        .read()
-        .unwrap()
-        .iter()
-        .filter(|s| s.quote_asset == "USDT")
-        .map(|s| s.symbol.clone())
-        .collect();
-    let swap_symbol: Vec<String> = swap_all
-        .read()
-        .unwrap()
-        .iter()
-        .filter(|s| s.quote_asset == "USDT")
-        .map(|s| s.symbol.clone())
-        .collect();
+    dash_board.sync_instruments().await?;
+    let spot_all = dash_board.spot_living_symbols();
+    let swap_all = dash_board.swap_living_symbols();
     let spot_db = get_spot_kline_table();
     let swap_db = get_swap_kline_table();
-    initial_kline(SymbolType::Spot, spot_symbol, app_config, HistoryInterval::OneHour, spot_db).await?;
-    initial_kline(SymbolType::Swap, swap_symbol, app_config, HistoryInterval::OneHour, swap_db).await?;
+
+    let shared_dash_board = Arc::new(dash_board);
+    initial_kline(
+        SpotInstrumentProvider::new_provider(shared_dash_board.clone()),
+        spot_all,
+        app_config.get_data_retention_ms(),
+        HistoryInterval::OneHour,
+        spot_db,
+    )
+    .await?;
+    initial_kline(
+        SwapInstrumentProvider::new_provider(shared_dash_board.clone()),
+        swap_all,
+        app_config.get_data_retention_ms(),
+        HistoryInterval::OneHour,
+        swap_db,
+    )
+    .await?;
 
     Ok(())
 }

@@ -2,7 +2,6 @@ use li::tools::logs::setup_logger;
 use log::{LevelFilter, error};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::watch;
 use yu::binance::bn_backend_service::{get_spot_kline_table, get_swap_kline_table};
 use yu::binance::bn_dashboard::BinanceDashboard;
 use yu::binance::websocket_service::KlineSubscribeService;
@@ -23,14 +22,12 @@ async fn main() -> Result<(), YuError> {
     let proxy = app_config.proxy_url.clone();
     #[allow(deprecated)]
     let dash_board = Arc::new(BinanceDashboard::debug_mode(app_config.get_data_retention_hours(), None)?);
-    let snapshot = dash_board.execute().await?;
-    let (dash_board_watch, _) = watch::channel(snapshot);
+    dash_board.sync_instruments().await?;
     let swap_kline_table = get_swap_kline_table();
-    if let Err(e) = KlineSubscribeService::startup_swap(swap_kline_table, dash_board_watch.clone(), proxy.clone(), HistoryInterval::FiveMinutes).await
-    {
+    if let Err(e) = KlineSubscribeService::startup_swap(swap_kline_table, dash_board.clone(), proxy.clone(), HistoryInterval::FiveMinutes).await {
         error!("error starting swap kline service: {}", e);
     }
-    if let Err(e) = KlineSubscribeService::startup_spot(get_spot_kline_table(), dash_board_watch, proxy, HistoryInterval::FiveMinutes).await {
+    if let Err(e) = KlineSubscribeService::startup_spot(get_spot_kline_table(), dash_board, proxy, HistoryInterval::FiveMinutes).await {
         error!("error starting spot kline service: {}", e);
     }
 

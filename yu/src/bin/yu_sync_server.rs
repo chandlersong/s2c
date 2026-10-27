@@ -3,6 +3,7 @@ use log::{LevelFilter, error, info};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 use tonic::transport::Server;
+use yu::binance::sync_job::start_binance_sync_server_job;
 use yu::config::get_config;
 use yu::errors::YuError;
 use yu::okx::sync_job::start_okx_sync_server_job;
@@ -47,6 +48,11 @@ async fn main() -> Result<(), YuError> {
 
     let mut instrument_services: Vec<SyncInstrumentService> = vec![];
     let (history_tx, history_rx) = mpsc::channel::<HistoryEntry>(10000);
+    if app_config.binance.as_ref().is_some_and(|config| config.enable()) {
+        let binance_sync_service = start_binance_sync_server_job(&app_config, history_tx.clone()).await?;
+        instrument_services.push(binance_sync_service);
+        info!("Started Binance Spot sync server job");
+    }
     if app_config.okx.as_ref().is_some_and(|config| config.enable()) {
         let okx_sync_service = start_okx_sync_server_job(&app_config, history_tx.clone()).await?;
         instrument_services.push(okx_sync_service);

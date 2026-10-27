@@ -1,69 +1,90 @@
 use crate::binance::bn_backend_service::get_swap_funding_rate_table;
-use crate::binance::bn_dashboard::BinanceDashboardWatcher;
-use crate::binance::models::po::{FundingRatePo, KlinePo};
+use crate::binance::bn_dashboard::{BinanceDashboardWatcher, InstrumentProvider};
+use crate::binance::models::po::{BinanceInstrument, FundingRatePo, KlinePo};
 use crate::config::AppConfig;
 use crate::duck_db_tables::DuckTableTableChannel;
 use crate::errors::YuError;
 use async_trait::async_trait;
 use governor::Jitter;
 use li::tools::time::{unix_2_readable, unix_time_now_u64_utc};
-use log::{error, info};
+use log::{debug, error, info};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{oneshot, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot};
 use tokio::time::timeout;
-use yue::binance::bn_models::common::SymbolType;
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_models::swap_restful::FundingRate;
 use yue::binance::bn_restful_commands::{SPOT_KLINE_HISTORY_COMMAND, SWAP_KLINE_HISTORY_COMMAND};
 use yue::binance::restful_func::{CommonRequestBuilder, HistoryBatchHandlerTrait, HistoryFetcherImpl, HistoryFetcherTrait, ShareHistoryBatchHandler};
 use yue::errors::YueError;
-use yue::models::HistoryInterval;
+use yue::models::{HistoryInterval, InstrumentType};
 use yue::query_message::{BatchInsertPayload, QueryCommand};
 
 pub(crate) struct HistoryKlineSaver {
     db: DuckTableTableChannel<KlinePo>,
+    instrument_provider: InstrumentProvider,
 }
 
 impl HistoryKlineSaver {
-    pub fn new(db: DuckTableTableChannel<KlinePo>) -> ShareHistoryBatchHandler<BinanceKline> {
-        Arc::new(Self { db }) as Arc<dyn HistoryBatchHandlerTrait<BinanceKline> + Send>
+    pub fn new(db: DuckTableTableChannel<KlinePo>, instrument_provider: InstrumentProvider) -> ShareHistoryBatchHandler<BinanceKline> {
+        Arc::new(Self { db, instrument_provider }) as Arc<dyn HistoryBatchHandlerTrait<BinanceKline> + Send>
     }
 }
 
 #[async_trait]
 impl HistoryBatchHandlerTrait<BinanceKline> for HistoryKlineSaver {
+    ///
+    /// 从provider里面，获取数据库里面的id。如果不存在，则跳过那一条，然后保存
+    ///
     async fn handle(&self, batch_data: Vec<BinanceKline>) -> Result<(), YueError> {
-        let po_vec = batch_data.iter().map(|v| KlinePo::from(v.clone())).collect::<Vec<KlinePo>>();
-
+        let po_vec = batch_data
+            .into_iter()
+            .filter_map(|kline| {
+                let Some(symbol) = kline.symbol.as_deref() else {
+                    debug!("SpotHistoryKline skipped because Binance kline has no symbol");
+                    return None;
+                };
+                let Some(instrument) = self.instrument_provider.get_instrument(symbol) else {
+                    debug!("SpotHistoryKline skipped because instrument {} was not found", symbol);
+                    return None;
+                };
+                Some(KlinePo::from_binance_kline(kline, instrument.id as u64))
+            })
+            .collect::<Vec<_>>();
+        if po_vec.is_empty() {
+            return Ok(());
+        }
         let batch_command = QueryCommand::BatchInsert(BatchInsertPayload::new_no_replay(po_vec));
         if let Err(e) = self.db.send(batch_command).await {
             error!("SpotHistoryKline send error {:?}", e);
-        }
+        };
+
         Ok(())
     }
 }
 
 struct FundingRateSaver {
-    db: DuckTableTableChannel<FundingRatePo>,
+    _db: DuckTableTableChannel<FundingRatePo>,
 }
 
 impl FundingRateSaver {
     pub fn new(db: DuckTableTableChannel<FundingRatePo>) -> ShareHistoryBatchHandler<FundingRate> {
-        Arc::new(Self { db }) as Arc<dyn HistoryBatchHandlerTrait<FundingRate> + Send>
+        Arc::new(Self { _db: db }) as Arc<dyn HistoryBatchHandlerTrait<FundingRate> + Send>
     }
 }
 
 #[async_trait]
 impl HistoryBatchHandlerTrait<FundingRate> for FundingRateSaver {
-    async fn handle(&self, batch_data: Vec<FundingRate>) -> Result<(), YueError> {
-        let po_vec = batch_data.iter().map(|v| FundingRatePo::from(v.clone())).collect::<Vec<FundingRatePo>>();
-
-        let batch_command = QueryCommand::BatchInsert(BatchInsertPayload::new_no_replay(po_vec));
-        if let Err(e) = self.db.send(batch_command).await {
-            error!("SpotHistoryKline send error {:?}", e);
-        }
-        Ok(())
+    async fn handle(&self, _batch_data: Vec<FundingRate>) -> Result<(), YueError> {
+        // TODO: 以后改吧
+        // let po_vec = batch_data.iter().map(|v| FundingRatePo::from(v.clone())).collect::<Vec<FundingRatePo>>();
+        //
+        // let batch_command = QueryCommand::BatchInsert(BatchInsertPayload::new_no_replay(po_vec));
+        // if let Err(e) = self.db.send(batch_command).await {
+        //     error!("SpotHistoryKline send error {:?}", e);
+        // }
+        // Ok(())
+        todo!("暂时不保存funding rate数据，后续可以考虑保存funding rate数据");
     }
 }
 
@@ -109,12 +130,13 @@ async fn acquire_permit_with_retry(sem: Arc<Semaphore>) -> Result<OwnedSemaphore
 ///     - 结束时间，上个周期的-1ms
 ///
 pub async fn initial_kline(
-    symbol_type: SymbolType,
-    spot_symbols: Vec<String>,
-    config: &AppConfig,
+    instrument_provider: InstrumentProvider,
+    instruments: Vec<BinanceInstrument>,
+    data_retention_ms: u64,
     interval: HistoryInterval,
     db: DuckTableTableChannel<KlinePo>,
 ) -> Result<(), YuError> {
+    let symbol_type = instrument_provider.instrument_type();
     let (tx, rx) = oneshot::channel();
     if let Err(e) = db.send(QueryCommand::GetCount(tx)).await {
         error!("binance {} HistoryKline query count error {:?}", symbol_type, e);
@@ -136,7 +158,7 @@ pub async fn initial_kline(
     let now = unix_time_now_u64_utc();
     //kline会有一个会取到未闭合K线的问题。所以我这里也就去取上一根K线的之前的一毫秒。
     //例如现在是36分，通过restful能够取到35～39的K线，但是未闭合。所以我直接取34.59.59.999这个时间点的K线。所以就规避了。
-    let start = interval.get_close_unix_ms(now - config.get_data_retention_ms());
+    let start = interval.get_close_unix_ms(now - data_retention_ms);
     let end = interval.get_close_unix_ms(now).saturating_sub(1);
     info!(
         "开始 {} kline 初始化数据，from {} to {}",
@@ -147,38 +169,33 @@ pub async fn initial_kline(
     // 使用并发任务来处理多个交易对的历史数据下载，但使用 Semaphore 限制最大并发数，
     // 等待所有任务完成后再返回。这样在低配机器上也能控制资源使用。
     let sem = Arc::new(Semaphore::new(10));
-    let saver = HistoryKlineSaver::new(db);
-    let mut handles = Vec::with_capacity(spot_symbols.len());
-    for spot_symbol in spot_symbols {
+    let saver = HistoryKlineSaver::new(db, instrument_provider);
+    let mut handles = Vec::with_capacity(instruments.len());
+    for spot in instruments {
         let sem = sem.clone();
-        let symbol = spot_symbol.clone();
+        let inst = spot.clone();
         // 拷贝需要的值到任务里（start/end 是 Copy）
         let start_ts = start;
         let end_ts = end;
         let saver_clone = saver.clone();
+        let query_interval = interval.clone();
+        let initial_symbol_type = symbol_type.clone();
         let handle = tokio::spawn(async move {
             // 获取一个 OwnedPermit，保证在任务完成前不会释放
             if let Err(e) = acquire_permit_with_retry(sem).await {
                 error!("初始化spot kline的获取锁出错: {}", e);
             }
 
-            let spot_kline_fetch = match symbol_type {
-                SymbolType::Spot => HistoryFetcherImpl::kline(&SPOT_KLINE_HISTORY_COMMAND),
-                SymbolType::Swap => HistoryFetcherImpl::kline(&SWAP_KLINE_HISTORY_COMMAND),
+            let spot_kline_fetch = match initial_symbol_type {
+                InstrumentType::Spot => HistoryFetcherImpl::kline(&SPOT_KLINE_HISTORY_COMMAND),
+                InstrumentType::Swap => HistoryFetcherImpl::kline(&SWAP_KLINE_HISTORY_COMMAND),
                 _ => return Err(YueError::new("类型不支持")),
             };
 
-            let base_param = CommonRequestBuilder::new(symbol.to_string(), 1000, HistoryInterval::FiveMinutes);
+            let base_param = CommonRequestBuilder::new(inst.symbol, 1000, query_interval.clone());
 
             spot_kline_fetch
-                .get_all_kline_data(
-                    base_param,
-                    Some(HistoryInterval::FiveMinutes),
-                    Some(start_ts),
-                    Some(end_ts),
-                    Some(saver_clone),
-                    true,
-                )
+                .get_all_kline_data(base_param, Some(query_interval), Some(start_ts), Some(end_ts), Some(saver_clone), true)
                 .await
         });
 
@@ -250,8 +267,8 @@ pub async fn start_sync_funding_rate(
             match rx.changed().await {
                 Ok(_) => {
                     let snapshot = (*rx.borrow()).clone();
-                    info!("重新开始更新binance funding rate 数目是:{}", snapshot.swap_trading_symbols.len());
-                    let trading_swaps_symbols = snapshot.swap_trading_symbols.clone().into_iter().map(|s| s.symbol).collect();
+                    info!("重新开始更新binance funding rate 数目是:{}", snapshot.live_swap.len());
+                    let trading_swaps_symbols = snapshot.live_swap.clone().into_iter().map(|(_, inst)| inst.symbol).collect();
                     let start = interval_clone.get_close_unix_ms(last_update);
                     let last_update = interval_clone.get_now_close_unix_ms_utc();
                     let end = last_update.saturating_sub(1);
