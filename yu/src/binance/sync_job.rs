@@ -1,6 +1,6 @@
 use crate::binance::bn_backend_service::{get_spot_kline_table, get_swap_kline_table};
 use crate::binance::bn_dashboard::BinanceDashboard;
-use crate::binance::db_consts::initial_tables;
+use crate::binance::db_consts::{drop_tables, initial_tables};
 use crate::binance::sync_server::{BinanceSpotSyncHistoryService, BinanceSwapSyncHistoryService, BinanceSyncSpotInstrumentService};
 use crate::binance::websocket_service::KlineSubscribeService;
 use crate::config::AppConfig;
@@ -19,7 +19,7 @@ pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: m
     if !app_config.binance.as_ref().is_some_and(|config| config.enable()) {
         return Err(YuError::ConfigError("Binance sync server is not configured or disabled".to_string()));
     }
-    // drop_tables(None)?;
+    drop_tables(None)?;
     initial_tables(None)?;
     info!(
         "Binance sync server job started with data retention hours: {}",
