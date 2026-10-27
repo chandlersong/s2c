@@ -21,12 +21,12 @@ use yue::binance::bn_restful_commands::{
 };
 use yue::errors::YueError;
 use yue::http_client::get_http_client;
-use yue::models::HistoryInterval;
 use yue::models::InstrumentType;
+use yue::models::{HistoryInterval, USDT_TEXT};
 
 pub trait KlineInstrumentProviderTrait: Send + Sync {
     fn instrument_type(&self) -> InstrumentType;
-    fn instruments(&self) -> Vec<BinanceInstrument>;
+    fn instruments(&self, quote_asset: Option<String>) -> Vec<BinanceInstrument>;
     fn get_instrument(&self, symbol: &str) -> Option<BinanceInstrument>;
 }
 
@@ -47,8 +47,13 @@ impl KlineInstrumentProviderTrait for SpotInstrumentProvider {
         InstrumentType::Spot
     }
 
-    fn instruments(&self) -> Vec<BinanceInstrument> {
-        self.dashboard.spot_living_symbols()
+    fn instruments(&self, quote_asset: Option<String>) -> Vec<BinanceInstrument> {
+        let asset = quote_asset.unwrap_or(USDT_TEXT.to_string());
+        self.dashboard
+            .spot_living_symbols()
+            .into_iter()
+            .filter(|inst| inst.quote_asset == asset)
+            .collect()
     }
 
     fn get_instrument(&self, symbol: &str) -> Option<BinanceInstrument> {
@@ -71,8 +76,13 @@ impl KlineInstrumentProviderTrait for SwapInstrumentProvider {
         InstrumentType::Swap
     }
 
-    fn instruments(&self) -> Vec<BinanceInstrument> {
-        self.dashboard.swap_living_symbols()
+    fn instruments(&self, quote_asset: Option<String>) -> Vec<BinanceInstrument> {
+        let asset = quote_asset.unwrap_or(USDT_TEXT.to_string());
+        self.dashboard
+            .swap_living_symbols()
+            .into_iter()
+            .filter(|inst| inst.quote_asset == asset)
+            .collect()
     }
 
     fn get_instrument(&self, symbol: &str) -> Option<BinanceInstrument> {
@@ -204,13 +214,21 @@ impl BinanceDashboard {
                 // let tradifi_perpetual = TRADIFI_PERPETUAL_TEXT.to_string();
 
                 let live_spot = self
-                    .parse_exchange_symbols(&spot.symbols, InstrumentType::Spot)
+                    .parse_exchange_symbols(&spot.symbols, vec![InstrumentType::Spot])
                     .await?
                     .into_iter()
                     .filter(|(_, instrument)| matches!(instrument.symbol_type, InstrumentType::Spot) && instrument.status == BN_SYMBOL_STATUS_TRADING)
                     .collect::<HashMap<String, BinanceInstrument>>();
                 let live_swap = self
-                    .parse_exchange_symbols(&swap.symbols, InstrumentType::Swap)
+                    .parse_exchange_symbols(
+                        &swap.symbols,
+                        vec![
+                            InstrumentType::Swap,
+                            InstrumentType::CurrentQuarter,
+                            InstrumentType::TradifiPerpetual,
+                            InstrumentType::NextQuarter,
+                        ],
+                    )
                     .await?
                     .into_iter()
                     .filter(|(_, instrument)| matches!(instrument.symbol_type, InstrumentType::Swap) && instrument.status == BN_SYMBOL_STATUS_TRADING)
@@ -236,15 +254,17 @@ impl BinanceDashboard {
     pub async fn parse_exchange_symbols<S: SymbolInfoTrait>(
         &self,
         symbols: &Vec<S>,
-        inst_type: InstrumentType,
+        inst_types: Vec<InstrumentType>,
     ) -> Result<HashMap<String, BinanceInstrument>, YuError> {
-        let mut existing_symbols = self.instrument_repo.get_map_of_symbol_id(inst_type).await?;
+        let mut existing_symbols = self.instrument_repo.get_map_of_symbol_id(inst_types).await?;
         let mut live_instruments = HashMap::new();
 
+        info!("exiting xauusdt symbols count: {}", existing_symbols.contains_key("XAUUSDT"));
         for symbol in symbols {
             let instrument = match existing_symbols.remove(symbol.symbol()) {
                 Some(server_id) => BinanceInstrument::from_symbol_info_with_id(symbol, server_id as i64),
                 None => {
+                    info!("exiting xauusdt symbols count: {}", existing_symbols.contains_key("XAUUSDT"));
                     let instrument = BinanceInstrument::from(symbol);
                     if let Err(error) = self.instrument_repo.insert_instrument(instrument.clone()).await {
                         error!(

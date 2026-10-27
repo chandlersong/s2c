@@ -148,7 +148,7 @@ impl KlineSubscribeService {
         let ws_url = SPOT_STREAM_WEBSOCKET;
         let instrument_provider = SpotInstrumentProvider::new_provider(dashboard);
         let saver = SpotKlineSaver::new(db, instrument_provider.clone());
-        Self::start_listen_kline(instrument_provider, proxy, interval, DEFAULT_RECONNECT_INTERVAL, ws_url, saver).await
+        Self::start_listen_kline(instrument_provider, proxy, interval, DEFAULT_RECONNECT_INTERVAL, ws_url, saver, None).await
     }
 
     pub async fn startup_spot_sync(
@@ -162,7 +162,7 @@ impl KlineSubscribeService {
         let ws_url = SPOT_STREAM_WEBSOCKET;
         let instrument_provider = SpotInstrumentProvider::new_provider(dashboard);
         let saver = SpotKlineSaver::new_for_sync(db, instrument_provider.clone(), history_tx, live_instruments);
-        Self::start_listen_kline(instrument_provider, proxy, interval, DEFAULT_RECONNECT_INTERVAL, ws_url, saver).await
+        Self::start_listen_kline(instrument_provider, proxy, interval, DEFAULT_RECONNECT_INTERVAL, ws_url, saver, None).await
     }
 
     pub async fn startup_swap(
@@ -174,7 +174,7 @@ impl KlineSubscribeService {
         let ws_url = SWAP_MARKET_STREAM_WEBSOCKET;
         let instrument_provider = SwapInstrumentProvider::new_provider(dashboard);
         let saver = SwapKlineSaver::new(db, instrument_provider.clone());
-        Self::start_listen_kline(instrument_provider, proxy, interval, DEFAULT_RECONNECT_INTERVAL, ws_url, saver).await
+        Self::start_listen_kline(instrument_provider, proxy, interval, DEFAULT_RECONNECT_INTERVAL, ws_url, saver, None).await
     }
 
     async fn start_listen_kline<M: WebSocketMessage>(
@@ -184,14 +184,23 @@ impl KlineSubscribeService {
         reconnect_interval: Duration,
         ws_url: &str,
         saver: ShareMessageHandler<M>,
+        quote_asset: Option<String>,
     ) -> Result<(), YuError> {
         let proxy_clone = proxy.clone();
 
-        let mut interface = Self::subscribe_trading_kline(instrument_provider.clone(), proxy, ws_url, saver.clone(), interval.clone())
-            .await
-            .map_err(|e| YuError::new(format!("启动监听:{}失败，因为:{}", ws_url, e).as_str()))?;
+        let mut interface = Self::subscribe_trading_kline(
+            instrument_provider.clone(),
+            proxy,
+            ws_url,
+            saver.clone(),
+            interval.clone(),
+            quote_asset.clone(),
+        )
+        .await
+        .map_err(|e| YuError::new(format!("启动监听:{}失败，因为:{}", ws_url, e).as_str()))?;
 
         let ws_for_reconnect = ws_url.to_string();
+        let asset_for_reconnect = quote_asset.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(reconnect_interval).await;
@@ -203,6 +212,7 @@ impl KlineSubscribeService {
                     ws_for_reconnect.as_str(),
                     saver.clone(),
                     interval.clone(),
+                    asset_for_reconnect.clone(),
                 )
                 .await
                 {
@@ -269,8 +279,9 @@ impl KlineSubscribeService {
         ws_url: &str,
         handler: ShareMessageHandler<M>,
         interval: HistoryInterval,
+        quote_asset: Option<String>,
     ) -> Result<Arc<WebSocketInterface<M>>, YuError> {
-        let symbols = instrument_provider.instruments();
+        let symbols = instrument_provider.instruments(quote_asset);
         let final_url = format!("{}?streams={}", ws_url, Self::compose_kline_url(&symbols, interval));
         debug!("Connecting to {}", final_url);
         let interface = WebSocketConnection::run::<M>(final_url, None, proxy, Some(handler)).await;

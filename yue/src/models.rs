@@ -21,6 +21,7 @@ use url::Url;
 /// PLAN：去除交易所之类的类的定义，因为发现这样没有办法统一
 ///
 
+pub const USDT_TEXT: &str = "USDT";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum InstrumentType {
     Option,

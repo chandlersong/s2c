@@ -32,7 +32,7 @@ pub trait BNInstrumentRepositoryTrait {
 
     //
     // a map key is symbol，value is id
-    async fn get_map_of_symbol_id(&self, inst_type: InstrumentType) -> Result<HashMap<String, u64>, YuError>;
+    async fn get_map_of_symbol_id(&self, inst_types: Vec<InstrumentType>) -> Result<HashMap<String, u64>, YuError>;
     async fn insert_instrument(&self, instrument: BinanceInstrument) -> Result<(), YuError>;
 
     ///
@@ -100,14 +100,23 @@ impl BNInstrumentRepositoryTrait for BNInstrumentRepositoryImpl {
         self.query_instruments_by_type(inst_type, false)
     }
 
-    async fn get_map_of_symbol_id(&self, inst_type: InstrumentType) -> Result<HashMap<String, u64>, YuError> {
+    async fn get_map_of_symbol_id(&self, inst_types: Vec<InstrumentType>) -> Result<HashMap<String, u64>, YuError> {
+        if inst_types.is_empty() {
+            return Ok(HashMap::new());
+        }
+
         let conn = self.provider.acquire()?;
-        let mut stmt = conn.prepare(
+        let placeholders = vec!["?"; inst_types.len()].join(", ");
+        let sql = format!(
             "SELECT symbol, id FROM bn_instruments \
-             WHERE UPPER(symbol_type) = ? OR (? = 'SWAP' AND UPPER(symbol_type) = 'PERPETUAL');",
-        )?;
-        let inst_type = inst_type.as_str();
-        let mut rows = stmt.query([inst_type, inst_type])?;
+             WHERE symbol_type IN ({placeholders});"
+        );
+        let params = inst_types
+            .iter()
+            .map(|inst_type| duckdb::types::Value::Text(inst_type.as_str().to_string()))
+            .collect::<Vec<_>>();
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = stmt.query(duckdb::params_from_iter(params.iter()))?;
         let mut instruments = HashMap::new();
 
         while let Some(row) = rows.next()? {
@@ -287,7 +296,10 @@ mod tests {
         assert_eq!(fetched[0].order_types, instrument.order_types);
         assert_eq!(fetched[0].on_board_time, instrument.on_board_time);
         assert_eq!(repo.get_trading_instrument_by_type(InstrumentType::Spot).await.unwrap().len(), 1);
-        assert_eq!(repo.get_map_of_symbol_id(InstrumentType::Spot).await.unwrap().get("BTCUSDT"), Some(&42));
+        assert_eq!(
+            repo.get_map_of_symbol_id(vec![InstrumentType::Spot]).await.unwrap().get("BTCUSDT"),
+            Some(&42)
+        );
 
         let updated = BinanceInstrument {
             status: BN_SYMBOL_STATUS_BREAK.to_string(),
@@ -301,9 +313,9 @@ mod tests {
         assert!(repo.get_trading_instrument_by_type(InstrumentType::Spot).await.unwrap().is_empty());
     }
 
-    // 测试目的：验证按类型批量标记非交易后，两种查询函数分别保持正确筛选。
-    // 准备数据/过程：插入两个 Spot 和一个 Swap 交易中 instrument，再将两个 Spot 标记为非交易。
-    // 预期结果：全量查询仍返回对应类型的所有 instrument，交易中查询只返回未被标记的 Swap。
+    // 测试目的：验证按类型批量标记非交易和多类型 symbol-id 查询的结果正确。
+    // 准备数据/过程：插入两个 Spot 和一个 Swap 交易中 instrument，再将两个 Spot 标记为非交易并查询 Spot、Swap 的 symbol-id。
+    // 预期结果：symbol-id 查询同时包含 Spot 和 Swap；全量查询仍返回对应类型的所有 instrument，交易中查询只返回未被标记的 Swap。
     #[tokio::test]
     async fn marks_multiple_spot_instruments_not_trading_in_one_call() {
         let provider = create_memory_db_provider();
@@ -320,7 +332,7 @@ mod tests {
         for (id, symbol, symbol_type) in [
             (1, "BTCUSDT", InstrumentType::Spot),
             (2, "ETHUSDT", InstrumentType::Spot),
-            (3, "BTCUSDT", InstrumentType::Swap),
+            (3, "BNBUSDT", InstrumentType::Swap),
         ] {
             repo.insert_instrument(BinanceInstrument {
                 id,
@@ -336,6 +348,11 @@ mod tests {
             .await
             .unwrap();
         }
+
+        let symbol_ids = repo.get_map_of_symbol_id(vec![InstrumentType::Spot, InstrumentType::Swap]).await.unwrap();
+        assert_eq!(symbol_ids.get("ETHUSDT"), Some(&2));
+        assert_eq!(symbol_ids.get("BNBUSDT"), Some(&3));
+        assert!(repo.get_map_of_symbol_id(vec![]).await.unwrap().is_empty());
 
         repo.mark_instruments_not_trading(vec![1, 2]).await.unwrap();
 
