@@ -270,12 +270,23 @@ pub struct SyncClientBinarySearchDataImpl {
 
 impl SyncClientBinarySearchDataImpl {
     pub fn new(pg_pool: sqlx::PgPool, table_name: &str, instrument_table_name: &str, time_column: &str) -> BinarySearchDS {
+        Self::new_with_instrument_column(pg_pool, table_name, instrument_table_name, "instrument_id", time_column)
+    }
+
+    pub fn new_with_instrument_column(
+        pg_pool: sqlx::PgPool,
+        table_name: &str,
+        instrument_table_name: &str,
+        history_instrument_column: &str,
+        time_column: &str,
+    ) -> BinarySearchDS {
         // construct SQL statements once and leak to &'static str after manual audit
         let count_sql = format!(
-            "SELECT COUNT(DISTINCT h.{time_col}) FROM {table} h join {instrument_table_name} i on h.instrument_id = i.id WHERE h.{time_col} >= $1 AND h.{time_col} < $2 AND i.server_id = $3",
+            "SELECT COUNT(DISTINCT h.{time_col}) FROM {table} h join {instrument_table_name} i on h.{history_instrument_column} = i.id WHERE h.{time_col} >= $1 AND h.{time_col} < $2 AND i.server_id = $3",
             time_col = time_column,
             table = table_name,
-            instrument_table_name = instrument_table_name
+            instrument_table_name = instrument_table_name,
+            history_instrument_column = history_instrument_column,
         );
 
         let count_sql_static: &'static str = Box::leak(count_sql.into_boxed_str());
