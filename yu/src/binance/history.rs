@@ -204,7 +204,7 @@ pub async fn initial_kline(
 
     // 等待所有任务完成，若有任务返回错误则提前返回错误
     let mut completed = 0;
-    let mut progress_interval = tokio::time::interval_at(tokio::time::Instant::now() + Duration::from_secs(60), Duration::from_secs(60));
+    let mut progress_interval = tokio::time::interval_at(tokio::time::Instant::now() + Duration::from_secs(300), Duration::from_secs(60));
     while completed < total {
         tokio::select! {
             result = handles.join_next(), if !handles.is_empty() => {
