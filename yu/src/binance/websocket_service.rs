@@ -74,7 +74,7 @@ impl MessageHandlerTrait<BinanceSpotWebSocketStreamWrapper> for SpotKlineSaver {
                     }
                     if let Some((history_tx, live_instruments)) = &self.sync_broadcast {
                         live_instruments.write().await.insert(payload.kline.symbol.clone(), inst_id);
-                        let entry = kline.to_history_entry();
+                        let entry = kline.to_spot_history_entry();
                         if let Err(error) = history_tx.send(entry).await {
                             error!("failed to broadcast live Binance Spot kline {}: {}", payload.kline.symbol, error);
                         }
@@ -91,11 +91,29 @@ impl MessageHandlerTrait<BinanceSpotWebSocketStreamWrapper> for SpotKlineSaver {
 struct SwapKlineSaver {
     db: DuckTableTableChannel<KlinePo>,
     instrument_provider: InstrumentProvider,
+    sync_broadcast: Option<(mpsc::Sender<HistoryEntry>, Arc<RwLock<HashMap<String, u64>>>)>,
 }
 
 impl SwapKlineSaver {
     fn new(db: DuckTableTableChannel<KlinePo>, instrument_provider: InstrumentProvider) -> ShareMessageHandler<BinanceSwapWebSocketStreamWrapper> {
-        Arc::new(SwapKlineSaver { db, instrument_provider })
+        Arc::new(SwapKlineSaver {
+            db,
+            instrument_provider,
+            sync_broadcast: None,
+        })
+    }
+
+    fn new_for_sync(
+        db: DuckTableTableChannel<KlinePo>,
+        instrument_provider: InstrumentProvider,
+        history_tx: mpsc::Sender<HistoryEntry>,
+        live_instruments: Arc<RwLock<HashMap<String, u64>>>,
+    ) -> ShareMessageHandler<BinanceSwapWebSocketStreamWrapper> {
+        Arc::new(SwapKlineSaver {
+            db,
+            instrument_provider,
+            sync_broadcast: Some((history_tx, live_instruments)),
+        })
     }
 }
 
@@ -109,9 +127,16 @@ impl MessageHandlerTrait<BinanceSwapWebSocketStreamWrapper> for SwapKlineSaver {
                         error!("cannot save Binance Swap kline for unknown symbol {}", _payload.kline.symbol);
                         return;
                     };
-                    let kline = KlinePo::from_swap_websocket_kline(_payload.kline.clone(), instrument.id as u64);
-                    if let Err(e) = self.db.send(QueryCommand::Insert(InsertPayload::new_no_replay(kline))).await {
+                    let inst_id = instrument.id as u64;
+                    let kline = KlinePo::from_swap_websocket_kline(_payload.kline.clone(), inst_id);
+                    if let Err(e) = self.db.send(QueryCommand::Insert(InsertPayload::new_no_replay(kline.clone()))).await {
                         error!("Error save swap kline: {}", e);
+                    }
+                    if let Some((history_tx, live_instruments)) = &self.sync_broadcast {
+                        live_instruments.write().await.insert(_payload.kline.symbol.clone(), inst_id);
+                        if let Err(error) = history_tx.send(kline.to_swap_history_entry()).await {
+                            error!("failed to broadcast live Binance Swap kline {}: {}", _payload.kline.symbol, error);
+                        }
                     }
                 }
             }
@@ -174,6 +199,20 @@ impl KlineSubscribeService {
         let ws_url = SWAP_MARKET_STREAM_WEBSOCKET;
         let instrument_provider = SwapInstrumentProvider::new_provider(dashboard);
         let saver = SwapKlineSaver::new(db, instrument_provider.clone());
+        Self::start_listen_kline(instrument_provider, proxy, interval, DEFAULT_RECONNECT_INTERVAL, ws_url, saver, None).await
+    }
+
+    pub async fn startup_swap_sync(
+        db: DuckTableTableChannel<KlinePo>,
+        dashboard: Arc<BinanceDashboard>,
+        proxy: Option<String>,
+        interval: HistoryInterval,
+        history_tx: mpsc::Sender<HistoryEntry>,
+        live_instruments: Arc<RwLock<HashMap<String, u64>>>,
+    ) -> Result<(), YuError> {
+        let ws_url = SWAP_MARKET_STREAM_WEBSOCKET;
+        let instrument_provider = SwapInstrumentProvider::new_provider(dashboard);
+        let saver = SwapKlineSaver::new_for_sync(db, instrument_provider.clone(), history_tx, live_instruments);
         Self::start_listen_kline(instrument_provider, proxy, interval, DEFAULT_RECONNECT_INTERVAL, ws_url, saver, None).await
     }
 

@@ -89,7 +89,7 @@ impl SyncClientService {
         // 组装okx的service
         let okx_instruments = OkxHistoryClientService::for_production()?;
         history_services.extend(okx_instruments.supported_history_services()?);
-        // 组装Binance Spot的service
+        // 组装Binance Spot和Swap的service
         let binance_instruments = BinanceSpotClientInstrumentService::for_production()?;
         history_services.extend(binance_instruments.supported_history_services()?);
 

@@ -60,23 +60,34 @@ pub fn get_instrument_repo_for_production(provider: Option<DuckDBDSProvider>) ->
 pub fn get_default_spot_kline_repo(provider: Option<DuckDBDSProvider>) -> BinanceKlineRepository {
     Arc::new(BinanceKlineRepositoryImpl {
         provider: provider.unwrap_or_default(),
+        table_name: "bn_spot_kline",
+    })
+}
+
+pub fn get_default_swap_kline_repo(provider: Option<DuckDBDSProvider>) -> BinanceKlineRepository {
+    Arc::new(BinanceKlineRepositoryImpl {
+        provider: provider.unwrap_or_default(),
+        table_name: "bn_swap_kline",
     })
 }
 
 struct BinanceKlineRepositoryImpl {
     provider: DuckDBDSProvider,
+    table_name: &'static str,
 }
 
 #[async_trait]
 impl BinanceKlineRepositoryTrait for BinanceKlineRepositoryImpl {
     async fn find_by_inst_id_between(&self, inst_id: u64, start_ms: u64, end_ms: u64) -> Result<Vec<KlinePo>, YuError> {
         let conn = self.provider.acquire()?;
-        let mut stmt = conn.prepare(
+        let sql = format!(
             "SELECT id, inst_id, candle_begin_time, open, high, low, close, volume, quote_volume, number_of_trades, \
              taker_buy_base_asset_volume, taker_buy_quote_asset_volume, close_time, interval, first_trade_id, last_trade_id \
-             FROM bn_spot_kline WHERE inst_id = ? AND candle_begin_time >= ? AND candle_begin_time <= ? \
+             FROM {} WHERE inst_id = ? AND candle_begin_time >= ? AND candle_begin_time <= ? \
              ORDER BY candle_begin_time",
-        )?;
+            self.table_name
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let mut rows = stmt.query(duckdb::params![inst_id as i64, start_ms as i64, end_ms as i64])?;
         let mut klines = Vec::new();
         while let Some(row) = rows.next()? {
@@ -257,7 +268,7 @@ impl BNInstrumentRepositoryImpl {
 mod tests {
     use super::*;
     use crate::binance::bn_consts::{BN_SYMBOL_STATUS_BREAK, BN_SYMBOL_STATUS_TRADING};
-    use crate::binance::db_consts::CREATE_BINANCE_INSTRUMENTS_TABLE;
+    use crate::binance::db_consts::{CREATE_BINANCE_INSTRUMENTS_TABLE, CREATE_SWAP_KLINE_TABLE};
     use crate::test_utils::create_memory_db_provider;
 
     // 测试目的：验证 instrument 的全量查询和交易中查询会按 status 正确区分。
@@ -366,5 +377,31 @@ mod tests {
         assert_eq!(swap_instruments[0].status, BN_SYMBOL_STATUS_TRADING);
         assert!(repo.get_trading_instrument_by_type(InstrumentType::Spot).await.unwrap().is_empty());
         assert_eq!(repo.get_trading_instrument_by_type(InstrumentType::Swap).await.unwrap().len(), 1);
+    }
+
+    // 测试目的：验证 Swap Kline repository 从 bn_swap_kline 读取指定 instrument 和时间范围的数据。
+    // 准备数据/过程：在内存 DuckDB 创建 Swap Kline 表，插入一条符合条件的记录，再通过 Swap repository 查询。
+    // 预期结果：查询返回唯一记录，且 instrument ID、毫秒开盘时间和收盘价保持正确。
+    #[tokio::test]
+    async fn swap_kline_repository_reads_swap_table() {
+        let provider = create_memory_db_provider();
+        let conn = provider.acquire().unwrap();
+        for statement in CREATE_SWAP_KLINE_TABLE.split(';').map(str::trim).filter(|sql| !sql.is_empty()) {
+            conn.execute(statement, []).unwrap();
+        }
+        conn.execute(
+            "INSERT INTO bn_swap_kline VALUES (3, 42, 1700000000000, 100, 110, 90, 105, 2, 210, 20, 1, 105, 1700000059999, 0, -1, -1)",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        let repo = get_default_swap_kline_repo(Some(provider));
+        let klines = repo.find_by_inst_id_between(42, 1_700_000_000_000, 1_700_000_000_000).await.unwrap();
+
+        assert_eq!(klines.len(), 1);
+        assert_eq!(klines[0].inst_id, 42);
+        assert_eq!(klines[0].candle_begin_time, 1_700_000_000_000);
+        assert_eq!(klines[0].close, 105.0);
     }
 }

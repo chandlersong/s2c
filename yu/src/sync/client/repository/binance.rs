@@ -4,6 +4,20 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 use std::sync::Arc;
 
+const FIND_LATEST_SPOT_KLINE_TIMESTAMP_SQL: &str = "
+    SELECT MAX(h.candle_begin_time)
+    FROM binance_instruments i
+    LEFT JOIN binance_spot_kline_history h ON h.inst_id = i.id
+    WHERE i.server_id = $1
+";
+
+const FIND_LATEST_SWAP_KLINE_TIMESTAMP_SQL: &str = "
+    SELECT MAX(h.candle_begin_time)
+    FROM binance_instruments i
+    LEFT JOIN binance_swap_kline_history h ON h.inst_id = i.id
+    WHERE i.server_id = $1
+";
+
 #[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
 #[async_trait]
 pub trait ClientBinanceRepositoryTrait: Send + Sync {
@@ -12,6 +26,8 @@ pub trait ClientBinanceRepositoryTrait: Send + Sync {
     async fn find_instrument_id_by_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError>;
 
     async fn find_latest_kline_timestamp_by_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError>;
+
+    async fn find_latest_swap_kline_timestamp_by_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError>;
 
     async fn create_instrument(&self, instrument: LocalBinanceInstrumentPo) -> Result<u64, YuError>;
 }
@@ -47,23 +63,11 @@ impl ClientBinanceRepositoryTrait for ClientBinanceRepositoryImpl {
     }
 
     async fn find_latest_kline_timestamp_by_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError> {
-        let server_id = i64::try_from(server_id).map_err(|_| YuError::new("Binance server instrument ID exceeds BIGINT range"))?;
-        let timestamp: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
-            r#"
-            SELECT MAX(h.candle_begin_time)
-            FROM binance_instruments i
-            LEFT JOIN binance_spot_kline_history h ON h.inst_id = i.id
-            WHERE i.server_id = $1
-            "#,
-        )
-        .bind(server_id)
-        .fetch_optional(&self.pg_pool)
-        .await?
-        .flatten();
+        self.find_latest_kline_timestamp(server_id, FIND_LATEST_SPOT_KLINE_TIMESTAMP_SQL).await
+    }
 
-        timestamp
-            .map(|timestamp| u64::try_from(timestamp.timestamp_millis()).map_err(|_| YuError::new("negative Binance kline timestamp")))
-            .transpose()
+    async fn find_latest_swap_kline_timestamp_by_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError> {
+        self.find_latest_kline_timestamp(server_id, FIND_LATEST_SWAP_KLINE_TIMESTAMP_SQL).await
     }
 
     async fn create_instrument(&self, instrument: LocalBinanceInstrumentPo) -> Result<u64, YuError> {
@@ -99,5 +103,16 @@ impl ClientBinanceRepositoryTrait for ClientBinanceRepositoryImpl {
         .await?;
 
         u64::try_from(inserted_id).map_err(|_| YuError::new("negative local Binance instrument ID"))
+    }
+}
+
+impl ClientBinanceRepositoryImpl {
+    async fn find_latest_kline_timestamp(&self, server_id: u64, query: &'static str) -> Result<Option<u64>, YuError> {
+        let server_id = i64::try_from(server_id).map_err(|_| YuError::new("Binance server instrument ID exceeds BIGINT range"))?;
+        let timestamp: Option<chrono::DateTime<chrono::Utc>> =
+            sqlx::query_scalar(query).bind(server_id).fetch_optional(&self.pg_pool).await?.flatten();
+        timestamp
+            .map(|timestamp| u64::try_from(timestamp.timestamp_millis()).map_err(|_| YuError::new("negative Binance kline timestamp")))
+            .transpose()
     }
 }

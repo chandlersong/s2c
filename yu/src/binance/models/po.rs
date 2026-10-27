@@ -149,11 +149,18 @@ pub struct KlinePo {
 }
 
 impl KlinePo {
-    pub fn to_history_entry(&self) -> crate::sync::models::grpc_sync::HistoryEntry {
-        use crate::sync::models::grpc_sync::{BinanceKline, HistoryType, InstrumentType, history_entry};
+    pub fn to_spot_history_entry(&self) -> crate::sync::models::grpc_sync::HistoryEntry {
+        self.to_history_entry_with_type(crate::sync::models::grpc_sync::HistoryType::BinanceSpot)
+    }
 
+    pub fn to_swap_history_entry(&self) -> crate::sync::models::grpc_sync::HistoryEntry {
+        self.to_history_entry_with_type(crate::sync::models::grpc_sync::HistoryType::BinanceSwap)
+    }
+
+    fn to_history_entry_with_type(&self, history_type: crate::sync::models::grpc_sync::HistoryType) -> crate::sync::models::grpc_sync::HistoryEntry {
+        use crate::sync::models::grpc_sync::{BinanceKline, InstrumentType, history_entry};
         crate::sync::models::grpc_sync::HistoryEntry {
-            history_type: HistoryType::BinanceSpot.into(),
+            history_type: history_type.into(),
             instrument_type: InstrumentType::Binance.into(),
             inst_id: self.inst_id,
             payload: Some(history_entry::Payload::BinanceKline(BinanceKline::from(self.clone()))),
@@ -557,6 +564,7 @@ impl DuckDBPO for FundingRatePo {
 mod tests {
     use super::*;
     use crate::binance::bn_consts::BN_SYMBOL_STATUS_TRADING;
+    use crate::sync::models::grpc_sync::{HistoryType, InstrumentType as SyncInstrumentType, history_entry};
     use yue::binance::bn_models::spot_restful::ExchangeSymbol;
     use yue::binance::bn_models::swap_restful::SwapExchangeSymbol;
 
@@ -695,5 +703,43 @@ mod tests {
         assert_eq!(po.event_time, 1_700_000_000_000);
         assert_eq!(po.trade_time, Some(1_700_000_000_001));
         assert_eq!(po.is_buyer_maker, Some(true));
+    }
+
+    // 测试目的：验证 Binance Swap Kline PO 转换为同步历史条目时使用 Swap 历史类型。
+    // 准备数据/过程：构造包含毫秒时间戳、instrument ID 和可选成交 ID 的 KlinePo，并调用 Swap 转换方法。
+    // 预期结果：协议条目保留 Binance instrument 类型、Swap history 类型、instrument ID 及 Kline 字段。
+    #[test]
+    fn swap_kline_po_converts_to_binance_swap_history_entry() {
+        let kline = KlinePo {
+            id: 3,
+            inst_id: 42,
+            candle_begin_time: 1_700_000_000_000,
+            open: 100.0,
+            high: 110.0,
+            low: 90.0,
+            close: 105.0,
+            volume: 2.0,
+            quote_volume: 210.0,
+            number_of_trades: 20,
+            taker_buy_base_asset_volume: 1.0,
+            taker_buy_quote_asset_volume: 105.0,
+            close_time: 1_700_000_059_999,
+            interval: 0,
+            first_trade_id: Some(-1),
+            last_trade_id: Some(-1),
+        };
+
+        let entry = kline.to_swap_history_entry();
+
+        assert_eq!(HistoryType::try_from(entry.history_type).unwrap(), HistoryType::BinanceSwap);
+        assert_eq!(SyncInstrumentType::try_from(entry.instrument_type).unwrap(), SyncInstrumentType::Binance);
+        assert_eq!(entry.inst_id, 42);
+        let Some(history_entry::Payload::BinanceKline(payload)) = entry.payload else {
+            panic!("expected Binance Kline payload");
+        };
+        assert_eq!(payload.id, 3);
+        assert_eq!(payload.candle_begin_time, kline.candle_begin_time);
+        assert_eq!(payload.close_time, kline.close_time);
+        assert_eq!(payload.first_trade_id, Some(-1));
     }
 }

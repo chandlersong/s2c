@@ -34,6 +34,8 @@ pub(crate) static OKX_OPTION_SUMMARY_BATCH_INSERT: OnceLock<PostgresqlBatchInser
     OnceLock::new();
 pub(crate) static BINANCE_KLINE_BATCH_INSERT: OnceLock<PostgresqlBatchInsert<crate::sync::client::po::binance::LocalBinanceKlinePo>> =
     OnceLock::new();
+pub(crate) static BINANCE_SWAP_KLINE_BATCH_INSERT: OnceLock<PostgresqlBatchInsert<crate::sync::client::po::binance::LocalBinanceKlinePo>> =
+    OnceLock::new();
 pub(crate) static BINANCE_TRADE_BATCH_INSERT: OnceLock<PostgresqlBatchInsert<crate::sync::client::po::binance::LocalBinanceTradePo>> =
     OnceLock::new();
 
@@ -82,6 +84,18 @@ pub fn get_binance_kline_batch_insert() -> PostgresqlBatchInsert<crate::sync::cl
             let pool = get_sync_client_pg_pool_sync().expect("get_sync_client_pg_pool failed");
             block_on(PostgresqlBatchInsertImpl::<crate::sync::client::po::binance::LocalBinanceKlinePo>::new(
                 ClientsTables::BinanceSpotKline.table_name(),
+                pool,
+            ))
+        })
+        .clone()
+}
+
+pub fn get_binance_swap_kline_batch_insert() -> PostgresqlBatchInsert<crate::sync::client::po::binance::LocalBinanceKlinePo> {
+    BINANCE_SWAP_KLINE_BATCH_INSERT
+        .get_or_init(|| {
+            let pool = get_sync_client_pg_pool_sync().expect("get_sync_client_pg_pool failed");
+            block_on(PostgresqlBatchInsertImpl::<crate::sync::client::po::binance::LocalBinanceKlinePo>::new(
+                ClientsTables::BinanceSwapKline.table_name(),
                 pool,
             ))
         })

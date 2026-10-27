@@ -51,7 +51,7 @@ async fn main() -> Result<(), YuError> {
     if app_config.binance.as_ref().is_some_and(|config| config.enable()) {
         let binance_sync_service = start_binance_sync_server_job(&app_config, history_tx.clone()).await?;
         instrument_services.push(binance_sync_service);
-        info!("Started Binance Spot sync server job");
+        info!("Started Binance Spot and Swap sync server job");
     }
     if app_config.okx.as_ref().is_some_and(|config| config.enable()) {
         let okx_sync_service = start_okx_sync_server_job(&app_config, history_tx.clone()).await?;
