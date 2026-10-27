@@ -251,6 +251,12 @@ impl BinanceDashboard {
     ///  - 如果不存在，则转换成po，存入数据库
     ///  - 如果存在，则跳过，在map中删除该条symbol
     /// 3. 把symbol中剩余的数据，标注为非交易
+    ///
+    ///
+    /// # 关于传统金融
+    /// 1. spot没有区分，swap区分了。
+    /// 2. bstock区分
+    ///     - 通过`capital/config/getall`活的列表，然后通过判断名字结尾是否是bStocks
     pub async fn parse_exchange_symbols<S: SymbolInfoTrait>(
         &self,
         symbols: &Vec<S>,
