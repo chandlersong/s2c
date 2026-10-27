@@ -11,6 +11,7 @@ use log::{debug, error, info};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot};
+use tokio::task::JoinSet;
 use tokio::time::timeout;
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_models::swap_restful::FundingRate;
@@ -170,7 +171,8 @@ pub async fn initial_kline(
     // 等待所有任务完成后再返回。这样在低配机器上也能控制资源使用。
     let sem = Arc::new(Semaphore::new(10));
     let saver = HistoryKlineSaver::new(db, instrument_provider);
-    let mut handles = Vec::with_capacity(instruments.len());
+    let total = instruments.len();
+    let mut handles = JoinSet::new();
     for spot in instruments {
         let sem = sem.clone();
         let inst = spot.clone();
@@ -180,7 +182,7 @@ pub async fn initial_kline(
         let saver_clone = saver.clone();
         let query_interval = interval.clone();
         let initial_symbol_type = symbol_type.clone();
-        let handle = tokio::spawn(async move {
+        handles.spawn(async move {
             // 获取一个 OwnedPermit，保证在任务完成前不会释放
             if let Err(e) = acquire_permit_with_retry(sem).await {
                 error!("初始化spot kline的获取锁出错: {}", e);
@@ -198,21 +200,32 @@ pub async fn initial_kline(
                 .get_all_kline_data(base_param, Some(query_interval), Some(start_ts), Some(end_ts), Some(saver_clone), true)
                 .await
         });
-
-        handles.push(handle);
     }
 
     // 等待所有任务完成，若有任务返回错误则提前返回错误
-    for h in handles {
-        match h.await {
-            Ok(Ok(_)) => {}
-            // 将内部的 yue::errors::YueError 转换为 crate::errors::YuError（实现了 From）
-            Ok(Err(e)) => {
-                error!("{}", e);
+    let mut completed = 0;
+    let mut progress_interval = tokio::time::interval_at(tokio::time::Instant::now() + Duration::from_secs(60), Duration::from_secs(60));
+    while completed < total {
+        tokio::select! {
+            result = handles.join_next(), if !handles.is_empty() => {
+                let Some(result) = result else {
+                    continue;
+                };
+                match result {
+                    Ok(Ok(_)) => {}
+                    // 将内部的 yue::errors::YueError 转换为 crate::errors::YuError（实现了 From）
+                    Ok(Err(e)) => {
+                        error!("{}", e);
+                    }
+                    // join error => 转为 YuError
+                    Err(join_err) => {
+                        error!("{}", join_err);
+                    }
+                }
+                completed += 1;
             }
-            // join error => 转为 YuError
-            Err(join_err) => {
-                error!("{}", join_err);
+            _ = progress_interval.tick() => {
+                info!("binance {} kline 初始化进度：{}/{} 个交易对已完成", symbol_type, completed, total);
             }
         }
     }
