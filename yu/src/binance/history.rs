@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use governor::Jitter;
 use li::tools::time::{unix_2_readable, unix_time_now_u64_utc};
 use log::{debug, error, info};
+use std::cmp::{max, min};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot};
@@ -170,7 +171,11 @@ pub async fn initial_kline(
     );
     // 使用并发任务来处理多个交易对的历史数据下载，但使用 Semaphore 限制最大并发数，
     // 等待所有任务完成后再返回。这样在低配机器上也能控制资源使用。
-    let sem = Arc::new(Semaphore::new(10));
+    let concurrency_limit = std::thread::available_parallelism()
+        .map_err(|error| YuError::new(&format!("failed to determine available CPU count for Kline history concurrency: {error}")))?
+        .get()
+        - 1;
+    let sem = Arc::new(Semaphore::new(min(max(concurrency_limit, 1), concurrency_limit)));
     let saver = HistoryKlineSaver::new(db, instrument_provider);
     let total = instruments.len();
     let mut handles = JoinSet::new();
@@ -205,7 +210,7 @@ pub async fn initial_kline(
 
     // 等待所有任务完成，若有任务返回错误则提前返回错误
     let mut completed = 0;
-    let mut progress_interval = tokio::time::interval_at(tokio::time::Instant::now() + Duration::from_secs(300), Duration::from_secs(60));
+    let mut progress_interval = tokio::time::interval_at(tokio::time::Instant::now() + Duration::from_mins(1), Duration::from_mins(5));
     while completed < total {
         tokio::select! {
             result = handles.join_next(), if !handles.is_empty() => {
