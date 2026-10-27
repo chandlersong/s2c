@@ -73,7 +73,7 @@ pub async fn start_okx_sync_server_job(app_config: &AppConfig, history_tx: mpsc:
         error!("failed to start OKX option listen okx kline: {:?}", e);
         return Err(YuError::from(e));
     }
-    if let Err(e) = history_service.initial_history_data().await {
+    if let Err(e) = history_service.initial_history_data(None).await {
         error!("failed to initial OKX kline history data: {:?}", e);
         return Err(e);
     }

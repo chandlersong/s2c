@@ -517,8 +517,9 @@ impl SyncHistoryServiceTrait for PolyMarketSyncHistoryService {
     /// 1. 如果polymarket_price_history里面有数据，就从最大值到现在
     /// 2. 如果没有，就取polymarket_instruments中的start_ms
     ///
-    async fn initial_history_data(&self) -> Result<(), YuError> {
-        let now = self.interval.get_now_close_unix_sec_utc();
+    async fn initial_history_data(&self, end_ms: Option<u64>) -> Result<(), YuError> {
+        let end = end_ms.unwrap_or_else(|| self.interval.get_now_close_unix_ms_utc());
+        let now = self.interval.get_close_unix_sec(end);
         let fidelity = self.interval.to_second() / 60;
         info!("start to initial polymarket history data");
         let max_timestamp_dictionary = self.history_repo.max_timestamp_group_by_inst_id().await?;

@@ -40,10 +40,6 @@ pub async fn start_polymarket_sync_series_job(
 
     let live_instruments: Arc<RwLock<Vec<PolyMarketInstrumentPo>>> = Arc::new(RwLock::new(Vec::new()));
     let token_history = PolyMarketSyncHistoryService::for_production(live_instruments.clone(), history_tx);
-    let initial_service = token_history.clone();
-    if let Err(e) = initial_service.initial_history_data().await {
-        error!("Error initializing polymarket history data: {:?}", e);
-    }
 
     let sync_history_job = token_history.clone();
     let _ = cron_job!("1 2 * * * *", move |_uuid, _locked| {
@@ -90,7 +86,7 @@ pub async fn start_polymarket_sync_series_job(
     });
 
     let initial_service = token_history.clone();
-    if let Err(e) = initial_service.initial_history_data().await {
+    if let Err(e) = initial_service.initial_history_data(None).await {
         error!("Error initializing polymarket history data: {:?}", e);
     }
 

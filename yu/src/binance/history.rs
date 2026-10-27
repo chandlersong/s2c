@@ -135,6 +135,7 @@ pub async fn initial_kline(
     data_retention_ms: u64,
     interval: HistoryInterval,
     db: DuckTableTableChannel<KlinePo>,
+    end_ms: Option<u64>,
 ) -> Result<(), YuError> {
     let symbol_type = instrument_provider.instrument_type();
     let (tx, rx) = oneshot::channel();
@@ -155,7 +156,7 @@ pub async fn initial_kline(
         }
     }
 
-    let now = unix_time_now_u64_utc();
+    let now = end_ms.unwrap_or_else(unix_time_now_u64_utc);
     let instruments = instrument_provider.instruments(None);
     //kline会有一个会取到未闭合K线的问题。所以我这里也就去取上一根K线的之前的一毫秒。
     //例如现在是36分，通过restful能够取到35～39的K线，但是未闭合。所以我直接取34.59.59.999这个时间点的K线。所以就规避了。

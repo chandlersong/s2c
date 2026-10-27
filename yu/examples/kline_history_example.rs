@@ -35,8 +35,6 @@ async fn main() -> Result<(), YuError> {
     #[allow(deprecated)]
     let dash_board = BinanceDashboard::debug_mode(app_config.get_data_retention_hours(), None)?;
     dash_board.sync_instruments().await?;
-    let spot_all = dash_board.spot_living_symbols();
-    let swap_all = dash_board.swap_living_symbols();
     let spot_db = get_spot_kline_table();
     let swap_db = get_swap_kline_table();
 
@@ -46,6 +44,7 @@ async fn main() -> Result<(), YuError> {
         app_config.get_data_retention_ms(),
         HistoryInterval::OneHour,
         spot_db,
+        None,
     )
     .await?;
     initial_kline(
@@ -53,6 +52,7 @@ async fn main() -> Result<(), YuError> {
         app_config.get_data_retention_ms(),
         HistoryInterval::OneHour,
         swap_db,
+        None,
     )
     .await?;
 

@@ -73,7 +73,7 @@ pub trait SyncHistoryServiceTrait {
     ///
     /// 服务器启动时，比较本地数据和服务器的数据的差异，然后补全差异数据
     ///
-    async fn initial_history_data(&self) -> Result<(), YuError>;
+    async fn initial_history_data(&self, end_ms: Option<u64>) -> Result<(), YuError>;
 
     ///
     /// 同步所有的历史数据，主要用于定时任务
@@ -427,7 +427,7 @@ mod tests {
             todo!()
         }
 
-        async fn initial_history_data(&self) -> Result<(), YuError> {
+        async fn initial_history_data(&self, _: Option<u64>) -> Result<(), YuError> {
             todo!()
         }
 

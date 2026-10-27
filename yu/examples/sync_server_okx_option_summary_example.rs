@@ -35,7 +35,7 @@ async fn main() -> Result<(), YuError> {
         .remove(&HistoryType::OkxOptionSummary)
         .ok_or_else(|| YuError::new("OKX option summary history service is not registered"))?;
 
-    history_service.initial_history_data().await?;
+    history_service.initial_history_data(None).await?;
     history_service.sync_all().await?;
 
     let (query_tx, mut query_rx) = mpsc::channel::<Result<ServerMessage, tonic::Status>>(10);

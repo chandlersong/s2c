@@ -8,6 +8,7 @@ use crate::cron_job;
 use crate::errors::YuError;
 use crate::sync::models::grpc_sync::{HistoryEntry, HistoryType};
 use crate::sync::server::sync_server::{SyncHistoryService, SyncHistoryServiceTrait, SyncInstrumentService, SyncInstrumentServiceTrait};
+use li::tools::time::unix_time_now_u64_utc;
 use log::{debug, error, info};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -18,6 +19,7 @@ pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: m
     if !app_config.binance.as_ref().is_some_and(|config| config.enable()) {
         return Err(YuError::ConfigError("Binance sync server is not configured or disabled".to_string()));
     }
+    drop_tables(None)?;
     initial_tables(None)?;
     info!(
         "Binance sync server job started with data retention hours: {}",
@@ -108,11 +110,12 @@ pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: m
         Arc::new(RwLock::new(HashMap::new())),
     )
     .await?;
+    let start_initial_ms = unix_time_now_u64_utc();
     info!("started initial Binance Spot kline history data");
-    history_service.initial_history_data().await?;
+    history_service.initial_history_data(Some(start_initial_ms)).await?;
     info!("finished initial Binance Spot kline history data");
     info!("started initial Binance Swap kline history data");
-    swap_history_service.initial_history_data().await?;
+    swap_history_service.initial_history_data(Some(start_initial_ms)).await?;
     info!("finished initial Binance Swap kline history data");
     history_service.check_history_data().await?;
     swap_history_service.check_history_data().await?;

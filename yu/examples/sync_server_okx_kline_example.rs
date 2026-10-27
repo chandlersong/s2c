@@ -59,7 +59,7 @@ async fn main() -> Result<(), YuError> {
         error!("failed to start OKX option listen okx kline: {:?}", e);
         return Err(YuError::from(e));
     }
-    if let Err(e) = kline_history_service.initial_history_data().await {
+    if let Err(e) = kline_history_service.initial_history_data(None).await {
         error!("failed to initial OKX kline history data: {:?}", e);
         return Err(e);
     }

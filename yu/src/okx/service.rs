@@ -582,7 +582,7 @@ impl OptionService {
     /// FUTURE:
     /// 1. 更新非live的instrument的candle。主要是为了一些历史数据
     ///
-    pub async fn initial_candle(&self, earliest_timestamp: UnixTimeStamp, max_sync: Option<usize>) -> Result<(), YuError> {
+    pub async fn initial_candle(&self, earliest_timestamp: UnixTimeStamp, max_sync: Option<usize>, end_ms: Option<u64>) -> Result<(), YuError> {
         // 先从 RwLock 中克隆出一份 Vec，避免持有读锁跨 await，确保 Send
 
         let kline_repo = self.okx_sync.get_kline_repo();
@@ -630,7 +630,8 @@ impl OptionService {
         //因为已经启动监听，那么应该是以开始时间30s为结束
         //因为时间是candle begin time。所以需要从上一个周期结束
         //TODO: 检查一下不会不会因为这样漏掉。因为有时候，begin 会是非整点，会慢几秒
-        let end = interval.get_now_close_unix_ms_utc() - interval.to_milliseconds() + 1; // 结束时间是当前时间的下一个间隔的开始时间
+        let end_ms = end_ms.unwrap_or_else(|| self.interval.get_now_close_unix_ms_utc());
+        let end = interval.get_close_unix_ms(end_ms) - interval.to_milliseconds() + 1; // 结束时间是当前时间的下一个间隔的开始时间
         // 并发拉取，每个任务返回 Result<Vec<OkxKlinePo>, YuError>
         let stream = futures::stream::iter(inst_vec.into_iter().map(move |inst| {
             let okx_sync = okx_sync.clone();
@@ -1207,7 +1208,7 @@ mod tests {
             .build();
         let option_service = OptionService::new_with_mock(Arc::new(RwLock::new(vec![inst_po])), common_io, HistoryInterval::OneHour);
 
-        let res = option_service.initial_candle(0, None).await;
+        let res = option_service.initial_candle(0, None, None).await;
         assert!(res.is_ok());
     }
 
@@ -1244,7 +1245,7 @@ mod tests {
             .build();
         let option_service = OptionService::new_with_mock(Arc::new(RwLock::new(vec![inst_po])), common_io, HistoryInterval::OneHour);
 
-        let res = option_service.initial_candle(0, None).await;
+        let res = option_service.initial_candle(0, None, None).await;
         assert!(res.is_ok());
     }
 
@@ -1281,7 +1282,9 @@ mod tests {
             .build();
         let option_service = OptionService::new_with_mock(Arc::new(RwLock::new(vec![inst_po])), common_io, HistoryInterval::OneHour);
 
-        let res = option_service.initial_candle(HistoryInterval::OneHour.to_milliseconds() * 3, None).await;
+        let res = option_service
+            .initial_candle(HistoryInterval::OneHour.to_milliseconds() * 3, None, None)
+            .await;
         assert!(res.is_ok());
     }
 

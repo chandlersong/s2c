@@ -209,10 +209,17 @@ impl SyncHistoryServiceTrait for BinanceSpotSyncHistoryService {
         Ok(())
     }
 
-    async fn initial_history_data(&self) -> Result<(), YuError> {
+    async fn initial_history_data(&self, end_ms: Option<u64>) -> Result<(), YuError> {
         let instrument_provider = SpotInstrumentProvider::new_provider(self.dashboard.clone());
 
-        initial_kline(instrument_provider, self.data_retention_ms, self.interval.clone(), get_spot_kline_table()).await
+        initial_kline(
+            instrument_provider,
+            self.data_retention_ms,
+            self.interval.clone(),
+            get_spot_kline_table(),
+            end_ms,
+        )
+        .await
     }
 
     async fn sync_all(&self) -> Result<(), YuError> {
@@ -364,9 +371,16 @@ impl SyncHistoryServiceTrait for BinanceSwapSyncHistoryService {
         Ok(())
     }
 
-    async fn initial_history_data(&self) -> Result<(), YuError> {
+    async fn initial_history_data(&self, start_initial_ms: Option<u64>) -> Result<(), YuError> {
         let instrument_provider = SwapInstrumentProvider::new_provider(self.dashboard.clone());
-        initial_kline(instrument_provider, self.data_retention_ms, self.interval.clone(), get_swap_kline_table()).await
+        initial_kline(
+            instrument_provider,
+            self.data_retention_ms,
+            self.interval.clone(),
+            get_swap_kline_table(),
+            start_initial_ms,
+        )
+        .await
     }
 
     async fn sync_all(&self) -> Result<(), YuError> {
