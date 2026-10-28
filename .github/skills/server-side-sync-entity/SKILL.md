@@ -61,6 +61,7 @@ History相关的内容。包括repository、service
             - 不用在组装的地方，加入周期性调用。
 - `check_history_data`方法：检查本地数据。
     - 模仿`PolyMarketSyncHistoryService`中用现有的二分法查找工具来实现这个方法。
+        - BinarySearchDS默认作为struct的变量，然后在`for_production`方法中初始化。
     - 补全数据，模仿自己的initial_history_data方法来实现这个方法。
     - 检查出的缺失数据，在补全后，要发给客户端。
 

@@ -7,7 +7,7 @@ use crate::binance::duckdb_repository::{
 };
 use crate::binance::history::initial_kline;
 use crate::binance::models::po::{BinanceInstrument, FundingRatePo, KlinePo};
-use crate::data_integrity::check::{DuckDBBinarySearchDataImpl, binary_search_gap};
+use crate::data_integrity::check::{BinarySearchDS, DuckDBBinarySearchDataImpl, binary_search_gap};
 use crate::data_integrity::models::ValidationGap;
 use crate::duck_db::DuckDBDSProvider;
 use crate::duck_db_tables::DuckDbTableTrait;
@@ -141,6 +141,7 @@ pub struct BinanceSpotSyncHistoryService {
     data_retention_ms: u64,
     dashboard: Arc<BinanceDashboard>,
     kline_repo: BinanceKlineRepository,
+    binary_search_ds: BinarySearchDS,
     history_tx: mpsc::Sender<HistoryEntry>,
     interval: HistoryInterval,
 }
@@ -152,10 +153,17 @@ impl BinanceSpotSyncHistoryService {
         dashboard: Arc<BinanceDashboard>,
         interval: HistoryInterval,
     ) -> Arc<Self> {
+        let binary_search_ds = DuckDBBinarySearchDataImpl::new(
+            DuckDBDSProvider::default(),
+            BinanceTables::SpotKline.table_name(),
+            "candle_begin_time".to_string(),
+            "inst_id".to_string(),
+        );
         Arc::new(Self {
             data_retention_ms,
             dashboard,
             kline_repo: get_default_spot_kline_repo(None),
+            binary_search_ds,
             history_tx,
             interval,
         })
@@ -198,12 +206,6 @@ impl SyncHistoryServiceTrait for BinanceSpotSyncHistoryService {
         let interval = self.interval.clone();
         let now_ms = interval.get_now_close_unix_ms_utc();
         let retention_floor = now_ms.saturating_sub(self.data_retention_ms);
-        let binary_search_ds = DuckDBBinarySearchDataImpl::new(
-            DuckDBDSProvider::default(),
-            BinanceTables::SpotKline.table_name(),
-            "candle_begin_time".to_string(),
-            "inst_id".to_string(),
-        );
 
         for instrument in self.dashboard.spot_living_symbols() {
             let instrument_start = instrument.on_board_time.unwrap_or(retention_floor).max(retention_floor);
@@ -218,7 +220,7 @@ impl SyncHistoryServiceTrait for BinanceSpotSyncHistoryService {
                 start_ms,
                 now_ms,
                 &interval,
-                binary_search_ds.clone(),
+                self.binary_search_ds.clone(),
             )?;
             debug!("{} has {} gaps", instrument.symbol, gaps.len());
 
@@ -303,6 +305,7 @@ pub struct BinanceSwapSyncHistoryService {
     data_retention_ms: u64,
     dashboard: Arc<BinanceDashboard>,
     kline_repo: BinanceKlineRepository,
+    binary_search_ds: BinarySearchDS,
     history_tx: mpsc::Sender<HistoryEntry>,
     interval: HistoryInterval,
 }
@@ -314,10 +317,17 @@ impl BinanceSwapSyncHistoryService {
         dashboard: Arc<BinanceDashboard>,
         interval: HistoryInterval,
     ) -> Arc<Self> {
+        let binary_search_ds = DuckDBBinarySearchDataImpl::new(
+            DuckDBDSProvider::default(),
+            BinanceTables::SwapKline.table_name(),
+            "candle_begin_time".to_string(),
+            "inst_id".to_string(),
+        );
         Arc::new(Self {
             data_retention_ms,
             dashboard,
             kline_repo: get_default_swap_kline_repo(None),
+            binary_search_ds,
             history_tx,
             interval,
         })
@@ -360,12 +370,6 @@ impl SyncHistoryServiceTrait for BinanceSwapSyncHistoryService {
         let interval = self.interval.clone();
         let now_ms = interval.get_now_close_unix_ms_utc();
         let retention_floor = now_ms.saturating_sub(self.data_retention_ms);
-        let binary_search_ds = DuckDBBinarySearchDataImpl::new(
-            DuckDBDSProvider::default(),
-            BinanceTables::SwapKline.table_name(),
-            "candle_begin_time".to_string(),
-            "inst_id".to_string(),
-        );
 
         for instrument in self.dashboard.swap_living_symbols() {
             let instrument_start = instrument.on_board_time.unwrap_or(retention_floor).max(retention_floor);
@@ -380,7 +384,7 @@ impl SyncHistoryServiceTrait for BinanceSwapSyncHistoryService {
                 start_ms,
                 now_ms,
                 &interval,
-                binary_search_ds.clone(),
+                self.binary_search_ds.clone(),
             )?;
             debug!("{} has {} gaps", instrument.symbol, gaps.len());
 
@@ -426,15 +430,23 @@ impl SyncHistoryServiceTrait for BinanceSwapSyncHistoryService {
 pub struct BinanceSwapFundingRateSyncHistoryService {
     funding_rate_repo: BinanceFundingRateRepository,
     inst_provider: InstrumentProvider,
+    binary_search_ds: BinarySearchDS,
     data_retention_ms: u64,
     history_tx: mpsc::Sender<HistoryEntry>,
 }
 
 impl BinanceSwapFundingRateSyncHistoryService {
     pub fn for_production(dash_board: Arc<BinanceDashboard>, data_retention_ms: u64, history_tx: mpsc::Sender<HistoryEntry>) -> Arc<Self> {
+        let binary_search_ds = DuckDBBinarySearchDataImpl::new(
+            DuckDBDSProvider::default(),
+            BinanceTables::SwapFundingRate.table_name(),
+            "funding_time".to_string(),
+            "inst_id".to_string(),
+        );
         Arc::new(Self {
             funding_rate_repo: get_default_funding_rate_repo(None),
             inst_provider: SwapInstrumentProvider::new_provider(dash_board),
+            binary_search_ds,
             data_retention_ms,
             history_tx,
         })
@@ -530,13 +542,6 @@ impl SyncHistoryServiceTrait for BinanceSwapFundingRateSyncHistoryService {
         let interval = HistoryInterval::OneHour;
         let now_ms = unix_time_now_u64_utc();
         let retention_floor = now_ms.saturating_sub(self.data_retention_ms);
-
-        let binary_search_ds = DuckDBBinarySearchDataImpl::new(
-            DuckDBDSProvider::default(),
-            BinanceTables::SwapFundingRate.table_name(),
-            "funding_time".to_string(),
-            "inst_id".to_string(),
-        );
         let now_ms = interval.get_now_close_unix_ms_utc();
         let trading_instruments = self.inst_provider.instruments(None);
         for instrument in trading_instruments {
@@ -552,7 +557,7 @@ impl SyncHistoryServiceTrait for BinanceSwapFundingRateSyncHistoryService {
                 start_ms,
                 now_ms,
                 &interval,
-                binary_search_ds.clone(),
+                self.binary_search_ds.clone(),
             )?;
             debug!("{} has {} gaps", instrument.symbol, gaps.len());
 
