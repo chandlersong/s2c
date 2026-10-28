@@ -20,7 +20,7 @@ use log::warn;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use yue::models::HistoryInterval;
+use yue::models::{DEFAULT_START_TIMESTAMP, HistoryInterval};
 
 type ServerIdToLocalId = Arc<RwLock<HashMap<u64, u64>>>;
 
@@ -348,8 +348,9 @@ impl ClientHistoryServiceTrait for BinanceSpotKlineClientHistoryService {
         {
             Some(timestamp) => timestamp.saturating_add(1),
             None => {
-                let Some(on_board_time) = binance_instrument.on_board_time else {
-                    return Err(YuError::new("Binance spot instrument listing time is unavailable"));
+                let on_board_time = match binance_instrument.on_board_time {
+                    Some(time) => time,
+                    None => DEFAULT_START_TIMESTAMP,
                 };
                 self.first_candle_timestamp(on_board_time)
             }

@@ -7,7 +7,7 @@ use yu::binance::bn_backend_service::get_swap_kline_table;
 use yu::binance::bn_dashboard::BinanceDashboard;
 use yu::binance::db_consts::initial_tables;
 use yu::binance::sync_job::start_binance_sync_server_job;
-use yu::binance::sync_server::{BinanceSwapSyncHistoryService, BinanceSyncSpotInstrumentService};
+use yu::binance::sync_server::{BinanceSwapSyncHistoryService, BinanceSyncInstrumentService};
 use yu::binance::websocket_service::KlineSubscribeService;
 use yu::config::get_config;
 use yu::errors::YuError;
@@ -58,7 +58,7 @@ async fn main() -> Result<(), YuError> {
     );
     let history_services: HashMap<HistoryType, SyncHistoryService> =
         HashMap::from([(HistoryType::BinanceSwap, history_service.clone() as SyncHistoryService)]);
-    let instrument_service = BinanceSyncSpotInstrumentService::for_production(dashboard.clone(), history_services);
+    let instrument_service = BinanceSyncInstrumentService::for_production(dashboard.clone(), history_services);
 
     if let Err(error) = instrument_service.sync_instrument().await {
         error!("failed to sync Binance instruments: {error}");

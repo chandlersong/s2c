@@ -8,7 +8,7 @@ use crate::okx::service::OptionService;
 use crate::okx::sync_server::{OkxSyncHistoryService, OkxSyncInstrumentService, OkxSyncKlineHandler, OkxSyncOptionSummaryHistoryService};
 use crate::sync::models::grpc_sync::{HistoryEntry, HistoryType};
 use crate::sync::server::sync_server::{SyncHistoryService, SyncHistoryServiceTrait, SyncInstrumentService, SyncInstrumentServiceTrait};
-use log::{debug, error};
+use log::{debug, error, info};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
@@ -49,9 +49,11 @@ pub async fn start_okx_sync_server_job(app_config: &AppConfig, history_tx: mpsc:
     let instrument_service = OkxSyncInstrumentService::for_production(support_history_service, live_instruments.clone());
 
     let sync_instrument_job = instrument_service.clone();
+    info!("start initial OKX option instrument");
     if let Err(error) = sync_instrument_job.sync_instrument().await {
         error!("failed to sync okx option instrument when server start: {}", error);
     }
+    info!("finished initial OKX option instrument");
     let instruments = instrument_service.list_instruments().await?;
     debug!("loaded {} OKX instruments for sync server", instruments.len());
     let _ = cron_job!("0 17 */6 * * *", move |_uuid, _locked| {
@@ -73,10 +75,12 @@ pub async fn start_okx_sync_server_job(app_config: &AppConfig, history_tx: mpsc:
         error!("failed to start OKX option listen okx kline: {:?}", e);
         return Err(YuError::from(e));
     }
+    info!("start initial OKX option kline history data");
     if let Err(e) = history_service.initial_history_data(None).await {
         error!("failed to initial OKX kline history data: {:?}", e);
         return Err(e);
     }
+    info!("finish initial OKX option kline history data");
     let sync_option_summary_job = option_summary_history_service.clone();
     let _ = cron_job!("0 1 * * * *", move |_uuid, _locked| {
         let each_sync = sync_option_summary_job.clone();

@@ -393,13 +393,13 @@ impl SyncHistoryServiceTrait for BinanceSwapSyncHistoryService {
     }
 }
 
-pub struct BinanceSyncSpotInstrumentService {
+pub struct BinanceSyncInstrumentService {
     dashboard: Arc<BinanceDashboard>,
     instrument_repo: BNInstrumentRepository,
     support_history_service: HashMap<HistoryType, SyncHistoryService>,
 }
 
-impl BinanceSyncSpotInstrumentService {
+impl BinanceSyncInstrumentService {
     pub fn for_production(dashboard: Arc<BinanceDashboard>, support_history_service: HashMap<HistoryType, SyncHistoryService>) -> Arc<Self> {
         Arc::new(Self {
             dashboard,
@@ -410,7 +410,7 @@ impl BinanceSyncSpotInstrumentService {
 }
 
 #[async_trait]
-impl SyncInstrumentServiceTrait for BinanceSyncSpotInstrumentService {
+impl SyncInstrumentServiceTrait for BinanceSyncInstrumentService {
     async fn list_instruments(&self) -> Result<Vec<Instrument>, YuError> {
         let mut instruments = self
             .instrument_repo

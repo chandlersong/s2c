@@ -22,6 +22,12 @@ use url::Url;
 ///
 
 pub const USDT_TEXT: &str = "USDT";
+
+///
+/// 作为系统的时间。有些时候，没有办法确定起始时间，则用这个时间戳。默认是2020-01-01 00:00:00 UTC
+///
+pub const DEFAULT_START_TIMESTAMP: UnixTimeStamp = 1577836800000;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum InstrumentType {
     Option,
