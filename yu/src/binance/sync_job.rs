@@ -54,35 +54,6 @@ pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: m
     }
     info!("finished initial Binance Spot and Swap instruments data");
 
-    let check_history_job = history_service.clone();
-    let check_swap_history_job = swap_history_service.clone();
-    let _ = cron_job!("0 23 */6 * * *", move |_uuid, _locked| {
-        let each_spot_sync = check_history_job.clone();
-        let each_swap_sync = check_swap_history_job.clone();
-        Box::pin(async move {
-            debug!("start checking Binance Spot and Swap kline history");
-            if let Err(error) = each_spot_sync.check_history_data().await {
-                error!("failed to check Binance Spotkline history: {}", error);
-            }
-            if let Err(error) = each_swap_sync.check_history_data().await {
-                error!("failed to check Binance Swap kline history: {}", error);
-            }
-            debug!("finished checking Binance Spot and Swap kline history");
-        })
-    });
-
-    let sync_instrument_job = instrument_service.clone();
-    let _ = cron_job!("37 17 */6 * * *", move |_uuid, _locked| {
-        let each_sync = sync_instrument_job.clone();
-        Box::pin(async move {
-            debug!("start syncing Binance Spot and Swap instruments");
-            if let Err(error) = each_sync.sync_instrument().await {
-                error!("failed to sync Binance Spot and Swap instruments: {}", error);
-            } else {
-                debug!("finished syncing Binance Spot and Swap instruments");
-            }
-        })
-    });
     let start_initial_ms = unix_time_now_u64_utc();
     info!(
         "started initial Binance Spot kline history data,end time: {}",
@@ -119,5 +90,33 @@ pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: m
     info!("started checking Binance Swap kline history data");
     swap_history_service.check_history_data().await?;
 
+    let check_history_job = history_service.clone();
+    let check_swap_history_job = swap_history_service.clone();
+    let _ = cron_job!("0 23 */6 * * *", move |_uuid, _locked| {
+        let each_spot_sync = check_history_job.clone();
+        let each_swap_sync = check_swap_history_job.clone();
+        Box::pin(async move {
+            debug!("start checking Binance Spot and Swap kline history");
+            if let Err(error) = each_spot_sync.check_history_data().await {
+                error!("failed to check Binance Spotkline history: {}", error);
+            }
+            if let Err(error) = each_swap_sync.check_history_data().await {
+                error!("failed to check Binance Swap kline history: {}", error);
+            }
+            debug!("finished checking Binance Spot and Swap kline history");
+        })
+    });
+    let sync_instrument_job = instrument_service.clone();
+    let _ = cron_job!("37 17 */6 * * *", move |_uuid, _locked| {
+        let each_sync = sync_instrument_job.clone();
+        Box::pin(async move {
+            debug!("start syncing Binance Spot and Swap instruments");
+            if let Err(error) = each_sync.sync_instrument().await {
+                error!("failed to sync Binance Spot and Swap instruments: {}", error);
+            } else {
+                debug!("finished syncing Binance Spot and Swap instruments");
+            }
+        })
+    });
     Ok(instrument_service)
 }
