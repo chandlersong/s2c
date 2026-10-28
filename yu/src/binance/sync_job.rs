@@ -1,7 +1,9 @@
 use crate::binance::bn_backend_service::{get_spot_kline_table, get_swap_kline_table};
 use crate::binance::bn_dashboard::BinanceDashboard;
 use crate::binance::db_consts::initial_tables;
-use crate::binance::sync_server::{BinanceSpotSyncHistoryService, BinanceSwapSyncHistoryService, BinanceSyncInstrumentService};
+use crate::binance::sync_server::{
+    BinanceSpotSyncHistoryService, BinanceSwapFundingRateSyncHistoryService, BinanceSwapSyncHistoryService, BinanceSyncInstrumentService,
+};
 use crate::binance::websocket_service::KlineSubscribeService;
 use crate::config::AppConfig;
 use crate::cron_job;
@@ -49,9 +51,12 @@ pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: m
         dash_board.clone(),
         interval.clone(),
     );
+    let funding_rate_history_service =
+        BinanceSwapFundingRateSyncHistoryService::for_production(dash_board.clone(), app_config.get_data_retention_ms(), history_tx.clone());
     let mut support_history_service: HashMap<HistoryType, SyncHistoryService> = HashMap::new();
     support_history_service.insert(HistoryType::BinanceSpot, history_service.clone());
     support_history_service.insert(HistoryType::BinanceSwap, swap_history_service.clone());
+    support_history_service.insert(HistoryType::BinanceSwapFundingRate, funding_rate_history_service.clone());
     let instrument_service = BinanceSyncInstrumentService::for_production(dash_board.clone(), support_history_service);
     info!("start initial Binance Spot and Swap instruments");
     if let Err(error) = instrument_service.sync_instrument().await {
@@ -85,11 +90,22 @@ pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: m
         Arc::new(RwLock::new(HashMap::new())),
     )
     .await?;
+    let funding_rate_history_sync = funding_rate_history_service.clone();
+    let _ = cron_job!("30 0 * * * *", move |_uuid, _locked| {
+        let each_fuding_rate_sync = funding_rate_history_sync.clone();
+        Box::pin(async move {
+            if let Err(error) = each_fuding_rate_sync.sync_all().await {
+                error!("failed to check Binance Spotkline history: {}", error);
+            }
+        })
+    });
 
     info!("started initial Binance Spot kline history data");
     history_service.initial_history_data(Some(start_initial_ms)).await?;
     info!("started initial Binance Swap kline history data");
     swap_history_service.initial_history_data(Some(start_initial_ms)).await?;
+    info!("start initial Binance Swap funding rate history data");
+    funding_rate_history_service.initial_history_data(Some(start_initial_ms)).await?;
     info!("started checking Binance Spot kline history data");
     history_service.check_history_data().await?;
     info!("started checking Binance Swap kline history data");
@@ -121,6 +137,17 @@ pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: m
             } else {
                 debug!("finished syncing Binance Spot and Swap instruments");
             }
+        })
+    });
+    let funding_rate_history_check = funding_rate_history_service.clone();
+    let _ = cron_job!("37 12 */6 * * *", move |_uuid, _locked| {
+        let each_fuding_rate_sync = funding_rate_history_check.clone();
+        Box::pin(async move {
+            debug!("start check Binance Swap funding ");
+            if let Err(error) = each_fuding_rate_sync.check_history_data().await {
+                error!("failed to check Binance Swap funding rate history: {}", error);
+            }
+            debug!("finished check Binance Swap funding ");
         })
     });
     Ok(instrument_service)

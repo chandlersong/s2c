@@ -1,5 +1,5 @@
 use crate::postgresql_db::CopyInsertable;
-use crate::sync::models::grpc_sync::{BinanceInstrument, BinanceKline, BinanceTrade, HistoryEntry, history_entry::Payload};
+use crate::sync::models::grpc_sync::{BinanceFundingRate, BinanceInstrument, BinanceKline, BinanceTrade, HistoryEntry, history_entry::Payload};
 use li::tools::time::{format_timestamp_millis, unix_time_now_u64_utc};
 use sqlx::Row;
 use yue::tools::get_snow_flake_id_u64;
@@ -200,6 +200,57 @@ impl CopyInsertable for LocalBinanceTradePo {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct LocalBinanceFundingRatePo {
+    pub id: u64,
+    pub inst_id: u64,
+    pub funding_time: u64,
+    pub funding_rate: f64,
+    pub mark_price: Option<f64>,
+    pub batch_timestamp: u64,
+}
+
+impl LocalBinanceFundingRatePo {
+    pub fn from_proto(rate: BinanceFundingRate, inst_id: u64, batch_timestamp: u64) -> Self {
+        Self {
+            id: get_snow_flake_id_u64(),
+            inst_id,
+            funding_time: rate.funding_time,
+            funding_rate: rate.funding_rate,
+            mark_price: rate.mark_price,
+            batch_timestamp,
+        }
+    }
+}
+
+impl CopyInsertable for LocalBinanceFundingRatePo {
+    fn columns() -> &'static str {
+        "id,inst_id,funding_time,funding_rate,mark_price,batch_timestamp"
+    }
+
+    fn to_csv_row(&self) -> String {
+        let funding_time = format_timestamp_millis(i64::try_from(self.funding_time).expect("funding_time must fit in i64 milliseconds"));
+
+        format!(
+            "{},{},{},{},{},{}",
+            self.id,
+            self.inst_id,
+            funding_time,
+            self.funding_rate,
+            self.mark_price.map_or(String::new(), |value| value.to_string()),
+            self.batch_timestamp
+        )
+    }
+
+    fn from_history_entry(history_entry: &HistoryEntry, local_inst_id: u64) -> Self {
+        let Some(Payload::BinanceFundingRate(rate)) = history_entry.payload.as_ref() else {
+            panic!("HistoryEntry payload is not a BinanceFundingRate");
+        };
+
+        Self::from_proto(rate.clone(), local_inst_id, unix_time_now_u64_utc())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,5 +383,31 @@ mod tests {
             row.split(',').count()
         );
         assert_eq!(row.split(',').nth(2), Some("17"));
+    }
+
+    // 测试目的：验证 protobuf 可空标记价格与毫秒资金费率时间正确转换并按 COPY 格式输出。
+    // 准备数据/过程：构造不含 mark_price 的 BinanceFundingRate，转换为本地 PO 并生成 CSV 行。
+    // 预期结果：本地 instrument ID 和 funding_time 保持正确，NULL 字段为空，CSV 列数与声明列数相同。
+    #[test]
+    fn binance_funding_rate_copy_row_preserves_nullable_mark_price_and_time() {
+        let proto = BinanceFundingRate {
+            id: 10,
+            funding_time: 1_700_000_000_123,
+            funding_rate: 0.0001,
+            mark_price: None,
+        };
+        let po = LocalBinanceFundingRatePo::from_proto(proto, 17, 1_700_000_300_000);
+
+        let row = po.to_csv_row();
+
+        assert_eq!(po.inst_id, 17);
+        assert_eq!(po.funding_time, 1_700_000_000_123);
+        assert_eq!(po.mark_price, None);
+        assert!(row.contains("2023-11-14T22:13:20.123+00:00"));
+        assert_eq!(
+            <LocalBinanceFundingRatePo as CopyInsertable>::columns().split(',').count(),
+            row.split(',').count()
+        );
+        assert_eq!(row.split(',').nth(4), Some(""));
     }
 }

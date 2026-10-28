@@ -1,5 +1,5 @@
 use crate::binance::bn_consts::{BN_SYMBOL_STATUS_NOT_TRADING, BN_SYMBOL_STATUS_TRADING};
-use crate::binance::models::po::{BinanceInstrument, KlinePo};
+use crate::binance::models::po::{BinanceInstrument, FundingRatePo, KlinePo};
 use crate::duck_db::DuckDBDSProvider;
 use crate::errors::YuError;
 use async_trait::async_trait;
@@ -48,8 +48,15 @@ pub trait BinanceKlineRepositoryTrait {
     async fn find_by_inst_id_between(&self, inst_id: u64, start_ms: u64, end_ms: u64) -> Result<Vec<KlinePo>, YuError>;
 }
 
+#[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
+#[async_trait]
+pub trait BinanceFundingRateRepositoryTrait {
+    async fn find_by_inst_id_between(&self, inst_id: u64, start_ms: u64, end_ms: u64) -> Result<Vec<FundingRatePo>, YuError>;
+}
+
 pub type BNInstrumentRepository = Arc<dyn BNInstrumentRepositoryTrait + Send + Sync>;
 pub type BinanceKlineRepository = Arc<dyn BinanceKlineRepositoryTrait + Send + Sync>;
+pub type BinanceFundingRateRepository = Arc<dyn BinanceFundingRateRepositoryTrait + Send + Sync>;
 
 pub fn get_instrument_repo_for_production(provider: Option<DuckDBDSProvider>) -> BNInstrumentRepository {
     Arc::new(BNInstrumentRepositoryImpl {
@@ -69,6 +76,34 @@ pub fn get_default_swap_kline_repo(provider: Option<DuckDBDSProvider>) -> Binanc
         provider: provider.unwrap_or_default(),
         table_name: "bn_swap_kline",
     })
+}
+
+pub fn get_default_funding_rate_repo(provider: Option<DuckDBDSProvider>) -> BinanceFundingRateRepository {
+    Arc::new(BinanceFundingRateRepositoryImpl {
+        provider: provider.unwrap_or_default(),
+    })
+}
+
+struct BinanceFundingRateRepositoryImpl {
+    provider: DuckDBDSProvider,
+}
+
+#[async_trait]
+impl BinanceFundingRateRepositoryTrait for BinanceFundingRateRepositoryImpl {
+    async fn find_by_inst_id_between(&self, inst_id: u64, start_ms: u64, end_ms: u64) -> Result<Vec<FundingRatePo>, YuError> {
+        let conn = self.provider.acquire()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, inst_id, funding_rate, funding_time, mark_price \
+             FROM bn_swap_funding_rate WHERE inst_id = ? AND funding_time >= ? AND funding_time <= ? \
+             ORDER BY funding_time",
+        )?;
+        let mut rows = stmt.query(duckdb::params![inst_id as i64, start_ms as i64, end_ms as i64])?;
+        let mut funding_rates = Vec::new();
+        while let Some(row) = rows.next()? {
+            funding_rates.push(FundingRatePo::from(row));
+        }
+        Ok(funding_rates)
+    }
 }
 
 struct BinanceKlineRepositoryImpl {
@@ -268,7 +303,7 @@ impl BNInstrumentRepositoryImpl {
 mod tests {
     use super::*;
     use crate::binance::bn_consts::{BN_SYMBOL_STATUS_BREAK, BN_SYMBOL_STATUS_TRADING};
-    use crate::binance::db_consts::{CREATE_BINANCE_INSTRUMENTS_TABLE, CREATE_SWAP_KLINE_TABLE};
+    use crate::binance::db_consts::{CREATE_BINANCE_INSTRUMENTS_TABLE, CREATE_FUNDING_RATE_TABLE, CREATE_SWAP_KLINE_TABLE};
     use crate::test_utils::create_memory_db_provider;
 
     // 测试目的：验证 instrument 的全量查询和交易中查询会按 status 正确区分。
@@ -403,5 +438,32 @@ mod tests {
         assert_eq!(klines[0].inst_id, 42);
         assert_eq!(klines[0].candle_begin_time, 1_700_000_000_000);
         assert_eq!(klines[0].close, 105.0);
+    }
+
+    // 测试目的：验证 Funding Rate repository 按 instrument 和含端点的毫秒时间范围读取，并按 funding_time 稳定排序。
+    // 准备数据/过程：在内存 DuckDB 创建资金费率表，插入不同 instrument 和时间的记录，再查询指定范围。
+    // 预期结果：只返回目标 instrument 的范围内记录，顺序正确且 nullable mark_price 保持 None。
+    #[tokio::test]
+    async fn funding_rate_repository_reads_inclusive_time_range_in_order() {
+        let provider = create_memory_db_provider();
+        let conn = provider.acquire().unwrap();
+        for statement in CREATE_FUNDING_RATE_TABLE.split(';').map(str::trim).filter(|sql| !sql.is_empty()) {
+            conn.execute(statement, []).unwrap();
+        }
+        conn.execute(
+            "INSERT INTO bn_swap_funding_rate VALUES (1, 42, 0.0001, 1000, NULL), (2, 42, 0.0002, 2000, 100.5), (3, 43, 0.0003, 1500, 100.0)",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        let repo = get_default_funding_rate_repo(Some(provider));
+        let funding_rates = repo.find_by_inst_id_between(42, 1000, 2000).await.unwrap();
+
+        assert_eq!(funding_rates.len(), 2);
+        assert_eq!(funding_rates[0].funding_time, 1000);
+        assert_eq!(funding_rates[0].mark_price, None);
+        assert_eq!(funding_rates[1].funding_time, 2000);
+        assert_eq!(funding_rates[1].mark_price, Some(100.5));
     }
 }

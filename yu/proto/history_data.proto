@@ -32,6 +32,7 @@ enum HistoryType {
   BINANCE_TRADE = 5;
   BINANCE_SWAP = 6;
   BINANCE_SWAP_TRADE = 7;
+  BINANCE_SWAP_FUNDING_RATE = 8;
 }
 
 message PolymarketInstrument{
@@ -138,6 +139,7 @@ message HistoryEntry{
     OkxOptionSummary okx_option_summary = 6;
     BinanceKline binance_kline = 7;
     BinanceTrade binance_trade = 8;
+    BinanceFundingRate binance_funding_rate = 9;
   }
 }
 
@@ -230,3 +232,9 @@ message BinanceTrade {
   int64 created_at = 9;
 }
 
+message BinanceFundingRate {
+  uint64 id = 1;
+  uint64 funding_time = 2;
+  double funding_rate = 3;
+  optional double mark_price = 4;
+}

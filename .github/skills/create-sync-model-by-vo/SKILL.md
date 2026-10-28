@@ -1,84 +1,66 @@
 ---
 name: create-sync-model-by-vo
-description: 根据用户指定的 VO，在 s2c 中创建完整的服务端/客户端同步模型，包括双方 PO、protobuf、双方表和 repository、转换映射及同步落库接线。
+description: 根据指定 VO 创建服务端/客户端 PO、protobuf 实体、对应表定义及转换测试，不接入运行时服务。
 ---
 
-# 根据指定 VO 创建同步模型
+# 根据 VO 创建业务实体
 
-## 目标
+## 目标与范围
 
-用户指定 VO 后，以它为业务语义来源创建一套可端到端同步和持久化的数据模型,具体内容依据参考模式。完整工作包括：
+根据用户指定的 VO，创建或补齐该业务对象在同步数据模型中的实体定义和字段转换。只允许做以下与目标实体直接相关的改动：
 
-- VO → 服务端 PO → protobuf → 客户端 PO 的字段转换，明确处理空值、时间精度和 ID 映射。
-- 服务端和客户端各自的表定义及初始化注册；若表已存在则检查兼容并复用，不重复创建。
-- 生成客户端的和服务器端的repository，只是作为place hodler，**不实现**任何方法。只是为了后续的工作使用。
+- 服务端 PO 及其 VO → PO 转换，放在该业务对象所属的模型文件中。
+- `yu/proto/history_data.proto` 中对应的 protobuf message；仅在承载该实体所必需时，追加对应的 enum 值或 `HistoryEntry.oneof` 字段。
+- `yu/src/sync/models.rs` 中对应的 PO → protobuf 转换（遵循仓库既有放置模式）。
+- 客户端 PO 及其 protobuf → 客户端 PO 转换，放在对应客户端 PO 文件中。
+- 服务端和客户端该实体对应的表 DDL，以及让表被既有初始化入口识别所需的最小表注册改动。
+- 仅验证本次实体字段映射和 schema 对齐所需的针对性测试。
+
+只添加目标对象所需的字段和转换，不重写或重命名已有模型，不改动 VO 的定义或业务语义。若目标端已有等价实体，检查后复用或只补齐缺失字段，不重复创建。
+
+## 明确禁止
+
+除非用户在当前请求中明确要求，否则不得创建、修改或接线以下内容：
+
+- repository、service、controller、RPC/gRPC service、RESTful、WebSocket、job、调度、采集或广播逻辑。
+- 同步请求/订阅流程、运行入口、依赖、通用抽象或其他业务对象。
+- 与本次 PO/protobuf/客户端 PO 转换或实体 schema 无关的测试、测试文件或测试函数。
+- 数据写入器、查询逻辑、冲突处理流程或数据库初始化实现；只允许添加既有初始化入口需要的新表注册，不修改初始化流程本身。
+
+`history_data.proto` 中的 message、enum 值和 `oneof` 字段属于实体传输定义，可以按上述范围添加；不得添加或修改 RPC service、请求流程或运行时分发逻辑。
+
+## 开始前检查
+
+1. 定位用户指定 VO 的定义、字段类型及已有 PO/protobuf/客户端 PO。
+2. 只读检查与字段语义直接相关的转换代码，确认 nullable、金融数值类型、时间单位/时区、实体 ID 与关联 ID 的含义。
+3. 不沿运行入口扩展调查服务端查询、订阅、消费或 repository；只定位新表所需的既有表注册列表，不扩展到数据库初始化流程。
+4. 只有字段语义或 ID/时间映射存在无法从 VO 和相邻模型推断的歧义，且会改变实体字段或 protobuf 兼容性时，才使用 `ask_user` 澄清。
 
 参考模式：
 
-- VO：`yue/src/okx/models/restful.rs` 中的 `OptionSummaryDetail` 是 VO。
-- 服务端 PO: `yu/src/okx/duck_po.rs`
-- 服务器中的表：`yu/src/okx/duckdb_consts.rs` 中的 `CREATE_OKX_OPTION_SUMMARY_TABLE`、
-- 流失写入(非必选项)： 参考`yu/src/okx/duckdb_tables.rs` 中的 `OKX_OPTION_SUMMARY`
-- 服务器端的repository: 参考`yu/src/okx/duckdb_repository.rs`, 只是参考trait和相应的type，以及文件放置的位置，不生成任何方法。
-- protobuf定义: `yu/proto/history_data.proto` 中的OkxOptionSummary
-- 客户端 PO：`yu/src/sync/client/po/okx.rs`:LocalOkxOptionSummaryPo
-- 客户端表: `yu/src/sync/client/db_consts.rs` 中的CREATE_OKX_OPTION_SUMMARY_TABLE
-- 客户端的repository参考：`yu/src/sync/client/repository/okx.rs`中的ClientOkxRepositoryTrait，
-    - 只是参考trait和相应的type，以及文件放置的位置，不生成任何方法。
-    - 原则一个交易所一个。
+- VO：`yue/src/okx/models/restful.rs` 中的 `OptionSummaryDetail`。
+- 服务端 PO：`yu/src/okx/duck_po.rs`。
+- 服务端表：`yu/src/okx/duckdb_consts.rs` 中对应的实体 DDL。
+- protobuf message：`yu/proto/history_data.proto` 中的 `OkxOptionSummary`。
+- 客户端 PO：`yu/src/sync/client/po/okx.rs` 中的 `LocalOkxOptionSummaryPo`。
+- 客户端表：`yu/src/sync/client/db_consts.rs` 中对应的实体 DDL。
+- PO/protobuf 转换：参考相邻业务模型的既有实现位置和风格。
 
-## 开始前确认
+## 实施约定
 
-先定位用户指定 VO 的定义和生产点，再沿完整链路检查服务端 PO/表、protobuf、客户端 PO/表、同步服务和消费入口。以
-`OptionSummaryDetail` 模式为主要参考，复用现有结构和约定。
+- 先核对字段一一映射，再仅在上述模型文件和对应的表定义/注册位置实现缺失实体、转换与 schema。
+- 表定义只反映目标实体字段和已确认的业务键；不创建 repository、writer、查询或冲突处理逻辑。
+- `Option<T>` 保持可空；不得无依据转成零值、空字符串或其他默认值。
+- 明确秒/毫秒/纳秒及时间时区，转换中保留原始精度。
+- 金融数值优先使用仓库约定的 Decimal；若 VO、protobuf 或既有实体使用浮点类型，不擅自改变协议类型，并注意精度影响。
+- 服务端 ID、客户端 PO 主键、客户端本地关联 ID 各自语义清晰，不混用。不得臆造业务键。
+- protobuf 仅追加未使用的字段号和 enum 值；不得复用、删除或改号已有字段。
+- DDL 列、客户端 PO 字段及批量序列化列（若已有转换实现使用该列序列）必须逐列一致；不得顺带修改既有表或其它实体。
+- 不改动用户已有注释、说明文档及无关文件。
 
-只有目标客户端数据库、业务唯一键或历史/实时行为无法从用户请求及邻近代码推断，且会实质改变协议/API/schema 时，才用
-`ask_user` 澄清。不得因为用户只提供 VO 就遗漏另一端对象或表；不得臆造业务键、默认值或同步语义。
+## 验证
 
-## 架构与发现
-
-- 遵循 Cargo 依赖方向 `yu -> yue -> li`，禁止反向依赖。服务端/客户端数据库编排、PO、protobuf 接线通常位于 `yu/`。
-- 从指定 VO 及其生产/消费调用点确定字段类型、Decimal/浮点策略、nullable、时间单位、主键/业务键、关联对象和生命周期。
-- 分别检查服务端与客户端的 PO、schema、表注册/初始化、再检查 protobuf 与两端同步转换；不能只查一侧。
-- 若一个统一模型由多个上游形态产生（例如现货/合约共用 instrument 模型），检查每种来源的
-  trait/转换实现和生产入口，保留区分数据所需的类型字段；不能只验证单一来源的映射。
-- 确认任务涉及历史记录、实时事件还是二者。若相邻同步类型已实现两条路径，按请求接入对应路径；不擅自增加采集来源、定时任务或完整性修复。
-- 沿运行入口追踪完整接线：protobuf 枚举/`oneof` → 服务端请求或订阅分发 → 服务端查询/发送 → 客户端请求或订阅 →
-  客户端消息分发 → ID/关联映射。检查实际运行入口和初始化是否覆盖新表，不能以新增消息类型、字段或 repository 壳子代替可运行链路。
-- 用户指定的数据库、表名、文件位置和同步范围优先；影响协议/API/schema 的重要选项不明确时先询问。
-
-## 实施流程
-
-如某项已完成，检查正确性后继续，不要重复创建。
-
-1. **理解指定 VO 和数据流。** 明确字段语义、nullable、精度/时间单位、业务唯一键、服务端数据来源和客户端关联方式。
-2. **创建/补齐服务端 PO。** 实现 VO → 服务端 PO 转换
-3. **创建/补齐服务端表和 repository。** 检查 DDL、表枚举/注册和初始化入口； repository只是占位用，为了方便后续方法，不做任何工作，
-4. **创建 protobuf 定义。** 定义传输消息并接入需要的 `oneof`、`ServerMessage`、枚举或请求。遵守 protobuf
-   兼容性：不可复用已占用字段号，不随意删除或改号已发布字段。
-5. **创建/补齐客户端 PO 和映射。** 实现 protobuf → 客户端 PO 转换；明确远端 ID 如何关联客户端本地 instrument ID 和本地 PO
-   主键。
-6. **创建/补齐客户端表。** 更新 PostgreSQL DDL、表枚举/注册、`ALL_CLIENT_TABLES` 或对应初始化入口；逐列核对 DDL、客户端 PO。
-7. **创建/补齐客户端repository。** ；repository只是占位用，为了方便后续方法，不做任何工作，
-8. **添加针对性测试并验证。** 覆盖 VO→服务端 PO→protobuf→客户端 PO 的字段、nullable、ID、时间精度，以及多种上游形态、检查实际
-   DDL 与 SQL 的列、约束、冲突目标一致；运行最小相关格式化、编译和测试；不声称未执行的验证已通过。
-
-## 持久化与同步约定
-
-- 数据库错误沿用对应 crate 错误类型并传播；不吞错、不伪造成功、不把查询失败转为空结果。
-- SQL 值使用绑定参数；表名等 SQL 标识符必须来自静态受控定义。
-- 冲突目标基于明确业务唯一键，随机 ID 不能替代业务键。服务端 ID、客户端本地 ID 和关联外键不可混用。
-- 客户端 schema、PO 与 repository 必须对同一列达成一致：若表使用本地 instrument 外键（如 `inst_id`），写入前完成业务键到本地
-  ID 的解析；不要在 SQL 中引用 DDL 未定义的列，也不要使用 DDL 未声明的唯一键作为冲突目标。
-- 范围查询声明开闭区间并稳定排序；批量 writer 沿用仓库的批次/背压机制，并保证列顺序、NULL 编码、flush 和失败处理符合现有语义。
-- `Option<T>` 保持 nullable，不得无依据转成零值、空字符串或其他默认值。
-- 确认秒/毫秒/纳秒和时区；protobuf、PO 与 SQL 列之间保留规定时间精度，尤其是 `TIMESTAMPTZ`。
-- 金融数值优先使用仓库约定的 Decimal；仅当 protobuf/schema/存储路径要求时转换为浮点，并确认精度损失。
-
-## 不在默认范围内
-
-- 不修改 VO、采集规则或交易行为，除非同步转换确实需要且用户同意。
-- 不新增通用 ORM、迁移框架、依赖、代码生成器或新的数据库抽象。
-- 不扩展无关 CRUD、缓存、定时任务、完整性修复或其他数据类型；repository 只覆盖同步实际需要的常规操作。
-- 不擅自改变 protobuf 已有字段语义、数据库约束、保留策略或实时同步默认启停配置。
-- 不修改无关文件、用户注释或说明文档。
+- 添加针对性测试，验证 VO → 服务端 PO → protobuf → 客户端 PO 的字段、nullable、ID 和时间精度；若有不同上游 VO 形态，覆盖各形态。
+- 必要时添加轻量 schema 对齐测试，验证 DDL/注册与 PO 字段对应；不测试或实现 repository、writer、service、RPC 或运行时同步链路。
+- 仅对本次修改的 Rust 文件运行格式化，并运行最小相关编译和测试。
+- 最终说明新增或补齐了哪些业务实体/转换，并明确任何因禁止范围而未处理的表或运行时接线；不得声称未执行的验证已通过。

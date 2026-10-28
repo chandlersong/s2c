@@ -18,6 +18,13 @@ const FIND_LATEST_SWAP_KLINE_TIMESTAMP_SQL: &str = "
     WHERE i.server_id = $1
 ";
 
+const FIND_LATEST_SWAP_FUNDING_RATE_TIMESTAMP_SQL: &str = "
+    SELECT MAX(h.funding_time)
+    FROM binance_instruments i
+    LEFT JOIN binance_swap_funding_rate_history h ON h.inst_id = i.id
+    WHERE i.server_id = $1
+";
+
 #[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
 #[async_trait]
 pub trait ClientBinanceRepositoryTrait: Send + Sync {
@@ -28,6 +35,8 @@ pub trait ClientBinanceRepositoryTrait: Send + Sync {
     async fn find_latest_kline_timestamp_by_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError>;
 
     async fn find_latest_swap_kline_timestamp_by_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError>;
+
+    async fn find_latest_swap_funding_rate_timestamp_by_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError>;
 
     async fn create_instrument(&self, instrument: LocalBinanceInstrumentPo) -> Result<u64, YuError>;
 }
@@ -70,6 +79,11 @@ impl ClientBinanceRepositoryTrait for ClientBinanceRepositoryImpl {
         self.find_latest_kline_timestamp(server_id, FIND_LATEST_SWAP_KLINE_TIMESTAMP_SQL).await
     }
 
+    async fn find_latest_swap_funding_rate_timestamp_by_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError> {
+        self.find_latest_history_timestamp(server_id, FIND_LATEST_SWAP_FUNDING_RATE_TIMESTAMP_SQL)
+            .await
+    }
+
     async fn create_instrument(&self, instrument: LocalBinanceInstrumentPo) -> Result<u64, YuError> {
         let id = i64::try_from(instrument.id).map_err(|_| YuError::new("local Binance instrument ID exceeds BIGINT range"))?;
         let server_id = i64::try_from(instrument.server_id).map_err(|_| YuError::new("Binance server instrument ID exceeds BIGINT range"))?;
@@ -108,11 +122,15 @@ impl ClientBinanceRepositoryTrait for ClientBinanceRepositoryImpl {
 
 impl ClientBinanceRepositoryImpl {
     async fn find_latest_kline_timestamp(&self, server_id: u64, query: &'static str) -> Result<Option<u64>, YuError> {
+        self.find_latest_history_timestamp(server_id, query).await
+    }
+
+    async fn find_latest_history_timestamp(&self, server_id: u64, query: &'static str) -> Result<Option<u64>, YuError> {
         let server_id = i64::try_from(server_id).map_err(|_| YuError::new("Binance server instrument ID exceeds BIGINT range"))?;
         let timestamp: Option<chrono::DateTime<chrono::Utc>> =
             sqlx::query_scalar(query).bind(server_id).fetch_optional(&self.pg_pool).await?.flatten();
         timestamp
-            .map(|timestamp| u64::try_from(timestamp.timestamp_millis()).map_err(|_| YuError::new("negative Binance kline timestamp")))
+            .map(|timestamp| u64::try_from(timestamp.timestamp_millis()).map_err(|_| YuError::new("negative Binance history timestamp")))
             .transpose()
     }
 }

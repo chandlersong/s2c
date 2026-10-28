@@ -535,6 +535,18 @@ impl<'a> From<&duckdb::Row<'a>> for FundingRatePo {
 }
 
 impl FundingRatePo {
+    pub fn to_swap_history_entry(&self) -> crate::sync::models::grpc_sync::HistoryEntry {
+        use crate::sync::models::grpc_sync::{HistoryType, InstrumentType, history_entry};
+        crate::sync::models::grpc_sync::HistoryEntry {
+            history_type: HistoryType::BinanceSwapFundingRate.into(),
+            instrument_type: InstrumentType::Binance.into(),
+            inst_id: self.inst_id,
+            payload: Some(history_entry::Payload::BinanceFundingRate(
+                crate::sync::models::grpc_sync::BinanceFundingRate::from(self.clone()),
+            )),
+        }
+    }
+
     pub fn from_funding_rate(source: FundingRate, inst_id: u64) -> Self {
         let snow_flake = SnowyFlakeWrapper::new();
         let id = snow_flake.next_id_u64() as i64;

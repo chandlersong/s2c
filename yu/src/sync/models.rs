@@ -28,6 +28,7 @@ pub mod grpc_sync {
                 Self::InstrumentUnspecified => "InstrumentUnspecified",
                 Self::BinanceSwap => "Binance Swap",
                 Self::BinanceSwapTrade => "Binance Swap Trade",
+                Self::BinanceSwapFundingRate => "Binance Swap Funding Rate",
             }
         }
     }
@@ -127,11 +128,22 @@ pub mod grpc_sync {
             }
         }
     }
+
+    impl From<crate::binance::models::po::FundingRatePo> for BinanceFundingRate {
+        fn from(value: crate::binance::models::po::FundingRatePo) -> Self {
+            Self {
+                id: value.id as u64,
+                funding_time: value.funding_time,
+                funding_rate: value.funding_rate,
+                mark_price: value.mark_price,
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::grpc_sync::{BinanceKline, BinanceTrade, HistoryType, InstrumentType as GrpcInstrumentType};
+    use super::grpc_sync::{BinanceFundingRate, BinanceKline, BinanceTrade, HistoryType, InstrumentType as GrpcInstrumentType};
     use crate::binance::models::po::{BinanceInstrument as BinanceInstrumentPo, KlinePo, SpotStreamTradeRecordPo};
     use crate::sync::client::po::binance::{LocalBinanceKlinePo, LocalBinanceTradePo};
     use yue::models::InstrumentType;
@@ -228,5 +240,26 @@ mod tests {
         assert_eq!(client_po.trade_id, 42);
         assert_eq!(client_po.trade_time, None);
         assert_eq!(client_po.is_buyer_maker, Some(true));
+    }
+
+    // 测试目的：验证 Binance Funding Rate 服务端 PO 到 protobuf 的转换保留时间、费率和可空标记价格。
+    // 准备数据/过程：构造包含 mark_price 的 FundingRatePo，并转换为 BinanceFundingRate 消息。
+    // 预期结果：消息字段与服务端 PO 一致，FundingTime 保持毫秒精度，mark_price 为 Some。
+    #[test]
+    fn binance_funding_rate_server_po_maps_to_proto() {
+        let server_po = crate::binance::models::po::FundingRatePo {
+            id: 11,
+            inst_id: 42,
+            funding_rate: 0.0001,
+            funding_time: 1_700_000_000_123,
+            mark_price: Some(100.25),
+        };
+
+        let proto = BinanceFundingRate::from(server_po);
+
+        assert_eq!(proto.id, 11);
+        assert_eq!(proto.funding_time, 1_700_000_000_123);
+        assert_eq!(proto.funding_rate, 0.0001);
+        assert_eq!(proto.mark_price, Some(100.25));
     }
 }

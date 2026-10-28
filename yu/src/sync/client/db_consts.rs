@@ -12,6 +12,7 @@ pub enum ClientsTables {
     BinanceSpotTrade,
     BinanceSwapKline,
     BinanceSwapTrade,
+    BinanceSwapFundingRate,
 }
 
 impl PostgresqlTableTrait for ClientsTables {
@@ -27,6 +28,7 @@ impl PostgresqlTableTrait for ClientsTables {
             ClientsTables::BinanceSpotTrade => "binance_spot_trade_history",
             ClientsTables::BinanceSwapKline => "binance_swap_kline_history",
             ClientsTables::BinanceSwapTrade => "binance_swap_trade_history",
+            ClientsTables::BinanceSwapFundingRate => "binance_swap_funding_rate_history",
         }
     }
 
@@ -42,6 +44,7 @@ impl PostgresqlTableTrait for ClientsTables {
             ClientsTables::BinanceSpotTrade => CREATE_BINANCE_SPOT_TRADE_TABLE,
             ClientsTables::BinanceSwapKline => CREATE_BINANCE_SWAP_KLINE_TABLE,
             ClientsTables::BinanceSwapTrade => CREATE_BINANCE_SWAP_TRADE_TABLE,
+            ClientsTables::BinanceSwapFundingRate => CREATE_BINANCE_SWAP_FUNDING_RATE_TABLE,
         }
     }
 }
@@ -318,6 +321,29 @@ ALTER TABLE binance_swap_trade_history SET (
 SELECT add_compression_policy('binance_swap_trade_history', INTERVAL '30 days');
 "#;
 
+pub const CREATE_BINANCE_SWAP_FUNDING_RATE_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS binance_swap_funding_rate_history (
+    id BIGINT NOT NULL,
+    inst_id BIGINT NOT NULL,
+    funding_time TIMESTAMPTZ NOT NULL,
+    funding_rate DOUBLE PRECISION NOT NULL,
+    mark_price DOUBLE PRECISION,
+    batch_timestamp BIGINT NOT NULL,
+    PRIMARY KEY (inst_id, funding_time)
+);
+SELECT create_hypertable(
+  'binance_swap_funding_rate_history',
+  'funding_time',
+  if_not_exists => TRUE
+);
+ALTER TABLE binance_swap_funding_rate_history SET (
+  timescaledb.enable_columnstore,
+  timescaledb.orderby = 'funding_time DESC',
+  timescaledb.segmentby = 'inst_id'
+);
+SELECT add_compression_policy('binance_swap_funding_rate_history', INTERVAL '30 days');
+"#;
+
 pub(crate) const ALL_CLIENT_TABLES: &[ClientsTables] = &[
     ClientsTables::PolymarketPriceHistory,
     ClientsTables::PolyMarketInstruments,
@@ -329,4 +355,5 @@ pub(crate) const ALL_CLIENT_TABLES: &[ClientsTables] = &[
     ClientsTables::BinanceSpotTrade,
     ClientsTables::BinanceSwapKline,
     ClientsTables::BinanceSwapTrade,
+    ClientsTables::BinanceSwapFundingRate,
 ];
