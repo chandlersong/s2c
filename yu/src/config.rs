@@ -1,9 +1,11 @@
+use crate::errors::YuError;
 use config::Config;
 use serde::Deserialize;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use std::env;
 use std::path::Path;
 use std::sync::OnceLock;
+use yue::models::HistoryInterval;
 
 ///
 /// # 关于组织结构的规划
@@ -83,11 +85,17 @@ pub struct BinanceConfig {
     pub accounts: Option<Vec<AccountConfig>>,
     pub spot_stream: Option<SpotWebSocketStreamConfig>,
     pub enable: Option<bool>,
+    pub kline_interval: Option<String>,
 }
 
 impl BinanceConfig {
     pub fn enable(&self) -> bool {
         self.enable.unwrap_or(false)
+    }
+
+    pub fn get_kline_interval(&self) -> Result<HistoryInterval, YuError> {
+        let txt = self.kline_interval.clone().unwrap_or_else(|| "1m".to_string());
+        Ok(HistoryInterval::from_str(&txt)?)
     }
 }
 

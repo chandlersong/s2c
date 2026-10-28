@@ -515,6 +515,18 @@ impl AsRef<str> for HistoryInterval {
 }
 
 impl HistoryInterval {
+    /// 根据交易所间隔字符串创建 `HistoryInterval`。
+    ///
+    /// 支持 `1m`、`5m` 和 `1h`。
+    pub fn from_str(value: &str) -> Result<Self, YueError> {
+        match value {
+            "1m" => Ok(Self::OneMinute),
+            "5m" => Ok(Self::FiveMinutes),
+            "1h" => Ok(Self::OneHour),
+            _ => Err(YueError::ParseError(format!("unsupported history interval: {value}"))),
+        }
+    }
+
     pub fn to_milliseconds(&self) -> u64 {
         match self {
             HistoryInterval::OneMinute => 60 * 1000,
@@ -572,6 +584,17 @@ mod tests {
     use li::tools::time::unix_time_now_u64_utc;
     use std::sync::atomic::Ordering;
     use std::time::{Duration, Instant};
+
+    /// 测试目的：验证 `HistoryInterval::from_str` 能解析支持的间隔并拒绝未知值。
+    /// 准备数据/过程：分别传入 `1m`、`5m`、`1h` 和不支持的 `1d`。
+    /// 预期结果：三个合法字符串映射到对应枚举，`1d` 返回解析错误。
+    #[test]
+    fn test_history_interval_from_str() {
+        assert_eq!(HistoryInterval::from_str("1m").unwrap(), HistoryInterval::OneMinute);
+        assert_eq!(HistoryInterval::from_str("5m").unwrap(), HistoryInterval::FiveMinutes);
+        assert_eq!(HistoryInterval::from_str("1h").unwrap(), HistoryInterval::OneHour);
+        assert!(matches!(HistoryInterval::from_str("1d"), Err(crate::errors::YueError::ParseError(_))));
+    }
 
     /// 测试：HistoryInterval::get_close_unix_ms 在一分钟间隔下的对齐
     ///

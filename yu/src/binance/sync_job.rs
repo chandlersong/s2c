@@ -1,6 +1,6 @@
 use crate::binance::bn_backend_service::{get_spot_kline_table, get_swap_kline_table};
 use crate::binance::bn_dashboard::BinanceDashboard;
-use crate::binance::db_consts::{drop_tables, initial_tables};
+use crate::binance::db_consts::initial_tables;
 use crate::binance::sync_server::{BinanceSpotSyncHistoryService, BinanceSwapSyncHistoryService, BinanceSyncSpotInstrumentService};
 use crate::binance::websocket_service::KlineSubscribeService;
 use crate::config::AppConfig;
@@ -13,20 +13,22 @@ use log::{debug, error, info};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
-use yue::models::HistoryInterval;
 
 pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: mpsc::Sender<HistoryEntry>) -> Result<SyncInstrumentService, YuError> {
-    if !app_config.binance.as_ref().is_some_and(|config| config.enable()) {
-        return Err(YuError::ConfigError("Binance sync server is not configured or disabled".to_string()));
-    }
-    drop_tables(None)?;
-    initial_tables(None)?;
-    info!(
-        "Binance sync server job started with data retention hours: {}",
-        app_config.get_data_retention_hours()
-    );
+    let binance_config = app_config
+        .binance
+        .as_ref()
+        .filter(|config| config.enable())
+        .ok_or_else(|| YuError::ConfigError("Binance sync server is not configured or disabled".to_string()))?;
 
-    let interval = HistoryInterval::OneMinute;
+    // drop_tables(None)?;
+    initial_tables(None)?;
+    let interval = binance_config.get_kline_interval()?;
+    info!(
+        "Binance sync server job started with data retention hours: {},interval: {}",
+        app_config.get_data_retention_hours(),
+        interval.as_ref()
+    );
 
     let dash_board = Arc::new(BinanceDashboard::new(app_config.get_data_retention_hours(), None));
 
