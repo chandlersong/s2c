@@ -8,7 +8,7 @@ use crate::sync::client::database::{
 };
 use crate::sync::client::db_consts::ClientsTables;
 use crate::sync::client::grpc_manager::{GrpcChannelManager, get_grpc_manager_from_config};
-use crate::sync::client::po::binance::{LocalBinanceFundingRatePo, LocalBinanceInstrumentPo, LocalBinanceKlinePo};
+use crate::sync::client::po::binance::{BinanceInstrumentType, LocalBinanceFundingRatePo, LocalBinanceInstrumentPo, LocalBinanceKlinePo};
 use crate::sync::client::repository::binance::{ClientBinanceRepository, ClientBinanceRepositoryImpl};
 use crate::sync::client::sync_client_service::{
     ClientHistoryService, ClientHistoryServiceTrait, ClientInstrumentService, ClientInstrumentServiceTrait,
@@ -34,14 +34,17 @@ impl BinanceSpotClientInstrumentService {
     pub fn for_production() -> Result<ClientInstrumentService, YuError> {
         let pool = get_sync_client_pg_pool_sync()?;
         let repository = ClientBinanceRepositoryImpl::from_pool(pool.clone());
-        let id_maps = block_on(repository.list_all_instruments())?
+        let spot_instruments = block_on(repository.list_all_instruments(BinanceInstrumentType::Spot))?;
+        let swap_instruments = block_on(repository.list_all_instruments(BinanceInstrumentType::Swap))?;
+        let id_maps = spot_instruments
             .into_iter()
+            .chain(swap_instruments)
             .map(|instrument| (instrument.server_id, instrument.id))
             .collect();
         let id_maps = Arc::new(RwLock::new(id_maps));
         let kline_service = BinanceSpotKlineClientHistoryService::for_production(repository.clone(), pool.clone(), id_maps.clone());
         let swap_kline_service = BinanceSwapKlineClientHistoryService::for_production(repository.clone(), pool.clone(), id_maps.clone());
-        let swap_funding_rate_service = BinanceSwapFundingRateClientHistoryService::for_production(repository, id_maps);
+        let swap_funding_rate_service = BinanceSwapFundingRateClientHistoryService::for_production(repository, pool.clone(), id_maps);
         let swap_service: ClientHistoryService = Arc::new(BinanceSwapClientHistoryService {
             kline: swap_kline_service,
             funding_rate: swap_funding_rate_service.clone(),
@@ -62,10 +65,10 @@ impl ClientInstrumentServiceTrait for BinanceSpotClientInstrumentService {
         let Some(instrument::Payload::Binance(binance_instrument)) = instrument.payload.as_ref() else {
             return Err(YuError::new("instrument payload is not a Binance instrument"));
         };
-        let history_type = match binance_instrument.symbol_type.to_ascii_uppercase().as_str() {
-            "SPOT" => HistoryType::BinanceSpot,
-            "SWAP" | "PERPETUAL" => HistoryType::BinanceSwap,
-            _ => return Err(YuError::new("unsupported Binance instrument symbol type")),
+        let history_type = match BinanceInstrumentType::from_symbol_type(&binance_instrument.symbol_type) {
+            Some(BinanceInstrumentType::Spot) => HistoryType::BinanceSpot,
+            Some(BinanceInstrumentType::Swap) => HistoryType::BinanceSwap,
+            None => return Err(YuError::new("unsupported Binance instrument symbol type")),
         };
         self.history_services
             .get(&history_type)
@@ -157,7 +160,7 @@ impl ClientHistoryServiceTrait for BinanceSwapKlineClientHistoryService {
         let Some(instrument::Payload::Binance(binance_instrument)) = instrument.payload else {
             return Err(YuError::new("instrument payload is not Binance"));
         };
-        if !matches!(binance_instrument.symbol_type.to_ascii_uppercase().as_str(), "SWAP" | "PERPETUAL") {
+        if BinanceInstrumentType::from_symbol_type(&binance_instrument.symbol_type) != Some(BinanceInstrumentType::Swap) {
             return Err(YuError::new("instrument is not a Binance swap instrument"));
         }
 
@@ -197,10 +200,8 @@ impl ClientHistoryServiceTrait for BinanceSwapKlineClientHistoryService {
 
     async fn reconcile_living_instrument_with_server(&self, end_ms: UnixTimeStamp) -> Result<(), YuError> {
         let end_timestamp = self.interval.get_close_unix_ms(end_ms);
-        for instrument in self.repository.list_all_instruments().await? {
-            if !matches!(instrument.symbol_type.to_ascii_uppercase().as_str(), "SWAP" | "PERPETUAL")
-                || !instrument.status.eq_ignore_ascii_case("TRADING")
-            {
+        for instrument in self.repository.list_all_instruments(BinanceInstrumentType::Swap).await? {
+            if !instrument.status.eq_ignore_ascii_case("TRADING") {
                 continue;
             }
             let Some(on_board_time) = instrument.on_board_time else {
@@ -257,7 +258,9 @@ impl ClientHistoryServiceTrait for BinanceSwapKlineClientHistoryService {
 pub struct BinanceSwapFundingRateClientHistoryService {
     history_batch_insert: PostgresqlBatchInsert<LocalBinanceFundingRatePo>,
     repository: ClientBinanceRepository,
+    interval: HistoryInterval,
     grpc_manager: GrpcChannelManager,
+    binary_search: BinarySearchDS,
     id_maps: ServerIdToLocalId,
 }
 
@@ -287,11 +290,21 @@ impl ClientHistoryServiceTrait for BinanceSwapClientHistoryService {
 }
 
 impl BinanceSwapFundingRateClientHistoryService {
-    fn for_production(repository: ClientBinanceRepository, id_maps: ServerIdToLocalId) -> ClientHistoryService {
+    fn for_production(repository: ClientBinanceRepository, pool: sqlx::PgPool, id_maps: ServerIdToLocalId) -> ClientHistoryService {
+        let interval = HistoryInterval::OneHour;
+        let binary_search = SyncClientBinarySearchDataImpl::new_with_instrument_column(
+            pool,
+            ClientsTables::BinanceSwapFundingRate.table_name(),
+            ClientsTables::BinanceInstruments.table_name(),
+            "inst_id",
+            "funding_time",
+        );
         Arc::new(Self {
             history_batch_insert: get_binance_swap_funding_rate_batch_insert(),
             repository,
+            interval,
             grpc_manager: get_grpc_manager_from_config(),
+            binary_search,
             id_maps,
         })
     }
@@ -337,7 +350,7 @@ impl ClientHistoryServiceTrait for BinanceSwapFundingRateClientHistoryService {
         let Some(instrument::Payload::Binance(binance_instrument)) = instrument.payload else {
             return Err(YuError::new("instrument payload is not Binance"));
         };
-        if !matches!(binance_instrument.symbol_type.to_ascii_uppercase().as_str(), "SWAP" | "PERPETUAL") {
+        if BinanceInstrumentType::from_symbol_type(&binance_instrument.symbol_type) != Some(BinanceInstrumentType::Swap) {
             return Err(YuError::new("instrument is not a Binance swap instrument"));
         }
 
@@ -371,7 +384,40 @@ impl ClientHistoryServiceTrait for BinanceSwapFundingRateClientHistoryService {
         self.backfill_history(binance_instrument.server_id, local_inst_id, start_ms, end_ms).await
     }
 
-    async fn reconcile_living_instrument_with_server(&self, _end_ms: UnixTimeStamp) -> Result<(), YuError> {
+    async fn reconcile_living_instrument_with_server(&self, end_ms: UnixTimeStamp) -> Result<(), YuError> {
+        let end_timestamp = self.interval.get_close_unix_ms(end_ms);
+        for instrument in self.repository.list_all_instruments(BinanceInstrumentType::Swap).await? {
+            if !instrument.status.eq_ignore_ascii_case("TRADING") {
+                continue;
+            }
+            let Some(on_board_time) = instrument.on_board_time else {
+                warn!(
+                    "Binance swap instrument {} has no listing time; skipping funding rate reconciliation",
+                    instrument.server_id
+                );
+                continue;
+            };
+            let start_timestamp = self
+                .interval
+                .get_close_unix_ms(on_board_time)
+                .saturating_add(self.interval.to_milliseconds());
+            let gaps = binary_search_gap(
+                &instrument.server_id.to_string(),
+                "SWAP",
+                start_timestamp,
+                end_timestamp,
+                &self.interval,
+                self.binary_search.clone(),
+            )?;
+            for gap in gaps {
+                if let ValidationGap::MissingData { start_time, end_time, .. } = gap {
+                    self.backfill_history(instrument.server_id, instrument.id, start_time, end_time.saturating_sub(1))
+                        .await?;
+                } else {
+                    warn!("unexpected Binance funding rate validation gap: {:?}", gap);
+                }
+            }
+        }
         Ok(())
     }
 
@@ -481,7 +527,7 @@ impl ClientHistoryServiceTrait for BinanceSpotKlineClientHistoryService {
         let Some(instrument::Payload::Binance(binance_instrument)) = instrument.payload else {
             return Err(YuError::new("instrument payload is not Binance"));
         };
-        if !binance_instrument.symbol_type.eq_ignore_ascii_case("SPOT") {
+        if BinanceInstrumentType::from_symbol_type(&binance_instrument.symbol_type) != Some(BinanceInstrumentType::Spot) {
             return Err(YuError::new("instrument is not a Binance spot instrument"));
         }
 
@@ -522,8 +568,8 @@ impl ClientHistoryServiceTrait for BinanceSpotKlineClientHistoryService {
 
     async fn reconcile_living_instrument_with_server(&self, end_ms: UnixTimeStamp) -> Result<(), YuError> {
         let end_timestamp = self.interval.get_close_unix_ms(end_ms);
-        for instrument in self.repository.list_all_instruments().await? {
-            if !instrument.symbol_type.eq_ignore_ascii_case("SPOT") || !instrument.status.eq_ignore_ascii_case("TRADING") {
+        for instrument in self.repository.list_all_instruments(BinanceInstrumentType::Spot).await? {
+            if !instrument.status.eq_ignore_ascii_case("TRADING") {
                 continue;
             }
             let Some(on_board_time) = instrument.on_board_time else {
@@ -718,7 +764,9 @@ mod tests {
         let service = BinanceSwapFundingRateClientHistoryService {
             history_batch_insert: Arc::new(batch_insert),
             repository: Arc::new(repository),
+            interval: HistoryInterval::OneHour,
             grpc_manager: Arc::new(MockGrpcChannelManagerTrait::new()),
+            binary_search: mock_binary_search(),
             id_maps: Arc::new(RwLock::new(HashMap::new())),
         };
         let entry = HistoryEntry {
@@ -736,18 +784,106 @@ mod tests {
         service.insert_history(entry).await.unwrap();
     }
 
-    // 测试目的：验证 Binance PERPETUAL instrument 被路由到 Swap history service，而不误调 Spot service。
-    // 准备数据/过程：仅注册 Swap mock service，并向 instrument service 提交 symbol_type 为 PERPETUAL 的 Binance instrument。
+    // 测试目的：验证 Funding Rate 对账通过二分查找缺口并将缺失区间回补到本地。
+    // 准备数据/过程：mock 活跃 Perpetual instrument、缺口检测结果和服务端历史响应。
+    // 预期结果：按 Funding Rate 类型查询 instrument，并以本地 instrument ID 批量写入缺口历史。
+    #[tokio::test]
+    async fn funding_rate_reconciliation_backfills_binary_search_gap() {
+        let mut repository = MockClientBinanceRepositoryTrait::new();
+        repository
+            .expect_list_all_instruments()
+            .with(mockall::predicate::eq(BinanceInstrumentType::Swap))
+            .times(1)
+            .returning(|_| {
+                Ok(vec![LocalBinanceInstrumentPo {
+                    id: 7,
+                    server_id: 42,
+                    symbol: "BTCUSDT".to_string(),
+                    status: "TRADING".to_string(),
+                    base_asset: "BTC".to_string(),
+                    quote_asset: "USDT".to_string(),
+                    quote_asset_precision: 8,
+                    order_types: vec!["LIMIT".to_string()],
+                    symbol_type: "SWAP".to_string(),
+                    on_board_time: Some(1_000),
+                }])
+            });
+
+        let interval = HistoryInterval::OneHour;
+        let interval_ms = interval.to_milliseconds();
+        let start_timestamp = interval_ms;
+        let end_timestamp = interval_ms * 4;
+        let mut binary_search = MockBinarySearchDSTrait::new();
+        binary_search
+            .expect_count_distinct_between()
+            .withf(move |identify, start, end| identify == "42" && *start == start_timestamp && *end == end_timestamp)
+            .times(1)
+            .returning(|_, _, _| Ok(0));
+        binary_search
+            .expect_table_name()
+            .times(1)
+            .returning(|| "binance_swap_funding_rate_history".to_string());
+
+        let mut grpc_manager = MockGrpcChannelManagerTrait::new();
+        grpc_manager
+            .expect_sync_history()
+            .withf(move |request| {
+                request.inst_id == 42
+                    && request.start_ms == interval_ms
+                    && request.end_ms == interval_ms * 4 - 1
+                    && request.history_type == HistoryType::BinanceSwapFundingRate as i32
+            })
+            .times(1)
+            .returning(move |_| {
+                Ok(Box::pin(futures::stream::iter(vec![Ok(crate::sync::models::grpc_sync::ServerMessage {
+                    history: vec![HistoryEntry {
+                        history_type: HistoryType::BinanceSwapFundingRate as i32,
+                        instrument_type: InstrumentType::Binance as i32,
+                        inst_id: 42,
+                        payload: Some(Payload::BinanceFundingRate(BinanceFundingRate {
+                            id: 2,
+                            funding_time: interval_ms * 2,
+                            funding_rate: 0.0002,
+                            mark_price: Some(42_500.0),
+                        })),
+                    }],
+                    server_timestamp: end_timestamp,
+                })])) as crate::sync::client::grpc_manager::GrpcServerMessageStream)
+            });
+        let mut batch_insert = MockPostgresqlBatchInsertTrait::<LocalBinanceFundingRatePo>::new();
+        batch_insert
+            .expect_insert_data()
+            .withf(move |entry, local_inst_id| {
+                *local_inst_id == 7
+                    && matches!(entry.payload.as_ref(), Some(Payload::BinanceFundingRate(rate)) if rate.funding_time == interval_ms * 2)
+            })
+            .times(1)
+            .returning(|_, _| ());
+
+        let service = BinanceSwapFundingRateClientHistoryService {
+            history_batch_insert: Arc::new(batch_insert),
+            repository: Arc::new(repository),
+            interval,
+            grpc_manager: Arc::new(grpc_manager),
+            binary_search: Arc::new(binary_search),
+            id_maps: Arc::new(RwLock::new(HashMap::from([(42, 7)]))),
+        };
+
+        service.reconcile_living_instrument_with_server(end_timestamp).await.unwrap();
+    }
+
+    // 测试目的：验证 Binance Swap instrument 被路由到 Swap history service，而不误调 Spot service。
+    // 准备数据/过程：仅注册 Swap mock service，并向 instrument service 提交 symbol_type 为 SWAP 的 Binance instrument。
     // 预期结果：Swap service 收到一次该 instrument，调用成功。
     #[tokio::test]
-    async fn initial_data_routes_perpetual_instrument_to_swap_service() {
+    async fn initial_data_routes_swap_instrument_to_swap_service() {
         let mut swap_history_service = crate::sync::client::sync_client_service::MockClientHistoryServiceTrait::new();
         swap_history_service
             .expect_initial_data()
             .withf(|instrument, _| {
                 matches!(
                     instrument.payload.as_ref(),
-                    Some(instrument::Payload::Binance(binance_instrument)) if binance_instrument.symbol_type == "PERPETUAL"
+                    Some(instrument::Payload::Binance(binance_instrument)) if binance_instrument.symbol_type == "SWAP"
                 )
             })
             .times(1)
@@ -766,7 +902,7 @@ mod tests {
                 quote_asset: "USDT".to_string(),
                 quote_asset_precision: 8,
                 order_types: vec!["LIMIT".to_string()],
-                symbol_type: "PERPETUAL".to_string(),
+                symbol_type: "SWAP".to_string(),
                 on_board_time: Some(1_700_000_000_000),
             })),
         };
@@ -775,7 +911,7 @@ mod tests {
     }
 
     // 测试目的：验证 Binance Swap instrument 初始化会同时启动 Kline 和 Funding Rate 历史回补。
-    // 准备数据/过程：分别 mock 组合服务中的 Kline、Funding Rate 子服务，并提交 PERPETUAL instrument。
+    // 准备数据/过程：分别 mock 组合服务中的 Kline、Funding Rate 子服务，并提交 SWAP instrument。
     // 预期结果：两个子服务各收到一次相同 instrument 和结束时间，组合初始化成功。
     #[tokio::test]
     async fn swap_initial_data_backfills_kline_and_funding_rate() {
@@ -805,7 +941,7 @@ mod tests {
                 quote_asset: "USDT".to_string(),
                 quote_asset_precision: 8,
                 order_types: vec!["LIMIT".to_string()],
-                symbol_type: "PERPETUAL".to_string(),
+                symbol_type: "SWAP".to_string(),
                 on_board_time: Some(1_700_000_000_000),
             })),
         };

@@ -1,5 +1,5 @@
 use crate::errors::YuError;
-use crate::sync::client::po::binance::LocalBinanceInstrumentPo;
+use crate::sync::client::po::binance::{BinanceInstrumentType, LocalBinanceInstrumentPo};
 use async_trait::async_trait;
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -28,7 +28,7 @@ const FIND_LATEST_SWAP_FUNDING_RATE_TIMESTAMP_SQL: &str = "
 #[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
 #[async_trait]
 pub trait ClientBinanceRepositoryTrait: Send + Sync {
-    async fn list_all_instruments(&self) -> Result<Vec<LocalBinanceInstrumentPo>, YuError>;
+    async fn list_all_instruments(&self, instrument_type: BinanceInstrumentType) -> Result<Vec<LocalBinanceInstrumentPo>, YuError>;
 
     async fn find_instrument_id_by_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError>;
 
@@ -55,10 +55,13 @@ impl ClientBinanceRepositoryImpl {
 
 #[async_trait]
 impl ClientBinanceRepositoryTrait for ClientBinanceRepositoryImpl {
-    async fn list_all_instruments(&self) -> Result<Vec<LocalBinanceInstrumentPo>, YuError> {
-        Ok(sqlx::query_as::<_, LocalBinanceInstrumentPo>("SELECT * FROM binance_instruments")
-            .fetch_all(&self.pg_pool)
-            .await?)
+    async fn list_all_instruments(&self, instrument_type: BinanceInstrumentType) -> Result<Vec<LocalBinanceInstrumentPo>, YuError> {
+        Ok(
+            sqlx::query_as::<_, LocalBinanceInstrumentPo>("SELECT * FROM binance_instruments WHERE symbol_type = $1")
+                .bind(instrument_type.symbol_type())
+                .fetch_all(&self.pg_pool)
+                .await?,
+        )
     }
 
     async fn find_instrument_id_by_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError> {

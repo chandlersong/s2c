@@ -4,6 +4,30 @@ use li::tools::time::{format_timestamp_millis, unix_time_now_u64_utc};
 use sqlx::Row;
 use yue::tools::get_snow_flake_id_u64;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BinanceInstrumentType {
+    Spot,
+    Swap,
+}
+
+impl BinanceInstrumentType {
+    /// Maps Binance's symbol type to the supported local instrument type.
+    pub fn from_symbol_type(symbol_type: &str) -> Option<Self> {
+        match symbol_type.to_ascii_uppercase().as_str() {
+            "SPOT" => Some(Self::Spot),
+            "SWAP" => Some(Self::Swap),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn symbol_type(self) -> &'static str {
+        match self {
+            Self::Spot => "SPOT",
+            Self::Swap => "SWAP",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct LocalBinanceInstrumentPo {
     pub id: u64,
@@ -255,6 +279,19 @@ impl CopyInsertable for LocalBinanceFundingRatePo {
 mod tests {
     use super::*;
 
+    // 测试目的：验证 Binance symbol type 字符串映射到本地 enum。
+    // 准备数据/过程：分别转换 SPOT、SWAP、大小写混合的 swap 和不支持的类型。
+    // 预期结果：SPOT 映射为 Spot，SWAP 映射为 Swap，未知类型返回 None。
+    #[test]
+    fn binance_symbol_type_maps_to_local_instrument_type() {
+        assert_eq!(BinanceInstrumentType::from_symbol_type("SPOT"), Some(BinanceInstrumentType::Spot));
+        assert_eq!(BinanceInstrumentType::from_symbol_type("SWAP"), Some(BinanceInstrumentType::Swap));
+        assert_eq!(BinanceInstrumentType::from_symbol_type("swap"), Some(BinanceInstrumentType::Swap));
+        assert_eq!(BinanceInstrumentType::from_symbol_type("OPTION"), None);
+        assert_eq!(BinanceInstrumentType::Spot.symbol_type(), "SPOT");
+        assert_eq!(BinanceInstrumentType::Swap.symbol_type(), "SWAP");
+    }
+
     #[test]
     fn binance_instrument_proto_maps_all_fields_to_client_po() {
         let proto = BinanceInstrument {
@@ -265,7 +302,7 @@ mod tests {
             quote_asset: "USDT".to_string(),
             quote_asset_precision: 8,
             order_types: vec!["LIMIT".to_string(), "MARKET".to_string()],
-            symbol_type: "PERPETUAL".to_string(),
+            symbol_type: "SWAP".to_string(),
             on_board_time: Some(1_600_000_000_000),
         };
 
@@ -278,7 +315,7 @@ mod tests {
         assert_eq!(po.quote_asset, "USDT");
         assert_eq!(po.quote_asset_precision, 8);
         assert_eq!(po.order_types, vec!["LIMIT", "MARKET"]);
-        assert_eq!(po.symbol_type, "PERPETUAL");
+        assert_eq!(po.symbol_type, "SWAP");
         assert_eq!(po.on_board_time, Some(1_600_000_000_000));
     }
 
@@ -409,5 +446,31 @@ mod tests {
             row.split(',').count()
         );
         assert_eq!(row.split(',').nth(4), Some(""));
+    }
+
+    // 测试目的：验证 Funding Rate 的非空标记价格在本地 PO 和 COPY 行中保留。
+    // 准备数据/过程：构造包含 mark_price 的 BinanceFundingRate，转换为本地 PO 并生成 CSV 行。
+    // 预期结果：资金费率、标记价格和批次时间均按对应列输出，且 CSV 列数与声明列数一致。
+    #[test]
+    fn binance_funding_rate_copy_row_preserves_mark_price() {
+        let proto = BinanceFundingRate {
+            id: 10,
+            funding_time: 1_700_000_000_123,
+            funding_rate: 0.0001,
+            mark_price: Some(42_500.25),
+        };
+        let po = LocalBinanceFundingRatePo::from_proto(proto, 17, 1_700_000_300_000);
+
+        let row = po.to_csv_row();
+        let columns = <LocalBinanceFundingRatePo as CopyInsertable>::columns();
+        let values = row.split(',').collect::<Vec<_>>();
+
+        assert_eq!(po.mark_price, Some(42_500.25));
+        assert_eq!(values.len(), columns.split(',').count());
+        assert_eq!(values[1], "17");
+        assert_eq!(values[2], "2023-11-14T22:13:20.123+00:00");
+        assert_eq!(values[3], "0.0001");
+        assert_eq!(values[4], "42500.25");
+        assert_eq!(values[5], "1700000300000");
     }
 }
