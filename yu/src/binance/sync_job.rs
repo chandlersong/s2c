@@ -14,6 +14,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
 
+///
+/// FUTURE:
+/// 1. 通过aws的网盘下载历史数据，那个应该是最全的。
+///
+
 pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: mpsc::Sender<HistoryEntry>) -> Result<SyncInstrumentService, YuError> {
     let binance_config = app_config
         .binance
