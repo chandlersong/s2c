@@ -25,6 +25,15 @@ const FIND_LATEST_SWAP_FUNDING_RATE_TIMESTAMP_SQL: &str = "
     WHERE i.server_id = $1
 ";
 
+const FIND_LATEST_SPOT_TRADE_CURSOR_SQL: &str = "
+    SELECT h.event_time, h.trade_id
+    FROM binance_instruments i
+    JOIN binance_spot_trade_history h ON h.inst_id = i.id
+    WHERE i.server_id = $1
+    ORDER BY h.event_time DESC, h.trade_id DESC
+    LIMIT 1
+";
+
 #[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
 #[async_trait]
 pub trait ClientBinanceRepositoryTrait: Send + Sync {
@@ -37,6 +46,8 @@ pub trait ClientBinanceRepositoryTrait: Send + Sync {
     async fn find_latest_swap_kline_timestamp_by_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError>;
 
     async fn find_latest_swap_funding_rate_timestamp_by_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError>;
+
+    async fn find_latest_spot_trade_cursor_by_server_id(&self, server_id: u64) -> Result<Option<(u64, i64)>, YuError>;
 
     async fn create_instrument(&self, instrument: LocalBinanceInstrumentPo) -> Result<u64, YuError>;
 }
@@ -85,6 +96,21 @@ impl ClientBinanceRepositoryTrait for ClientBinanceRepositoryImpl {
     async fn find_latest_swap_funding_rate_timestamp_by_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError> {
         self.find_latest_history_timestamp(server_id, FIND_LATEST_SWAP_FUNDING_RATE_TIMESTAMP_SQL)
             .await
+    }
+
+    async fn find_latest_spot_trade_cursor_by_server_id(&self, server_id: u64) -> Result<Option<(u64, i64)>, YuError> {
+        let server_id = i64::try_from(server_id).map_err(|_| YuError::new("Binance server instrument ID exceeds BIGINT range"))?;
+        let latest: Option<(chrono::DateTime<chrono::Utc>, i64)> = sqlx::query_as(FIND_LATEST_SPOT_TRADE_CURSOR_SQL)
+            .bind(server_id)
+            .fetch_optional(&self.pg_pool)
+            .await?;
+        latest
+            .map(|(event_time, trade_id)| {
+                u64::try_from(event_time.timestamp_millis())
+                    .map(|event_time| (event_time, trade_id))
+                    .map_err(|_| YuError::new("negative Binance spot trade event time"))
+            })
+            .transpose()
     }
 
     async fn create_instrument(&self, instrument: LocalBinanceInstrumentPo) -> Result<u64, YuError> {
