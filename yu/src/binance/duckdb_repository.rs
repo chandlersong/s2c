@@ -1,5 +1,5 @@
 use crate::binance::bn_consts::{BN_SYMBOL_STATUS_NOT_TRADING, BN_SYMBOL_STATUS_TRADING};
-use crate::binance::models::po::{BinanceInstrument, FundingRatePo, KlinePo};
+use crate::binance::models::po::{BinanceInstrument, FundingRatePo, KlinePo, SpotStreamTradeRecordPo};
 use crate::duck_db::DuckDBDSProvider;
 use crate::errors::YuError;
 use async_trait::async_trait;
@@ -54,9 +54,16 @@ pub trait BinanceFundingRateRepositoryTrait {
     async fn find_by_inst_id_between(&self, inst_id: u64, start_ms: u64, end_ms: u64) -> Result<Vec<FundingRatePo>, YuError>;
 }
 
+#[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
+#[async_trait]
+pub trait BinanceTradeRepositoryTrait {
+    async fn find_by_inst_id_between(&self, inst_id: u64, start_ms: u64, end_ms: u64) -> Result<Vec<SpotStreamTradeRecordPo>, YuError>;
+}
+
 pub type BNInstrumentRepository = Arc<dyn BNInstrumentRepositoryTrait + Send + Sync>;
 pub type BinanceKlineRepository = Arc<dyn BinanceKlineRepositoryTrait + Send + Sync>;
 pub type BinanceFundingRateRepository = Arc<dyn BinanceFundingRateRepositoryTrait + Send + Sync>;
+pub type BinanceTradeRepository = Arc<dyn BinanceTradeRepositoryTrait + Send + Sync>;
 
 pub fn get_instrument_repo_for_production(provider: Option<DuckDBDSProvider>) -> BNInstrumentRepository {
     Arc::new(BNInstrumentRepositoryImpl {
@@ -84,6 +91,12 @@ pub fn get_default_funding_rate_repo(provider: Option<DuckDBDSProvider>) -> Bina
     })
 }
 
+pub fn get_default_spot_trade_repo(provider: Option<DuckDBDSProvider>) -> BinanceTradeRepository {
+    Arc::new(BinanceTradeRepositoryImpl {
+        provider: provider.unwrap_or_default(),
+    })
+}
+
 struct BinanceFundingRateRepositoryImpl {
     provider: DuckDBDSProvider,
 }
@@ -103,6 +116,38 @@ impl BinanceFundingRateRepositoryTrait for BinanceFundingRateRepositoryImpl {
             funding_rates.push(FundingRatePo::from(row));
         }
         Ok(funding_rates)
+    }
+}
+
+struct BinanceTradeRepositoryImpl {
+    provider: DuckDBDSProvider,
+}
+
+#[async_trait]
+impl BinanceTradeRepositoryTrait for BinanceTradeRepositoryImpl {
+    async fn find_by_inst_id_between(&self, inst_id: u64, start_ms: u64, end_ms: u64) -> Result<Vec<SpotStreamTradeRecordPo>, YuError> {
+        let conn = self.provider.acquire()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, event_time, inst_id, trade_id, CAST(price AS DOUBLE), CAST(qty AS DOUBLE), trade_time, is_buyer_maker, created_at \
+             FROM bn_spot_trade WHERE inst_id = ? AND event_time >= ? AND event_time <= ? \
+             ORDER BY event_time, trade_id",
+        )?;
+        let mut rows = stmt.query(duckdb::params![inst_id as i64, start_ms as i64, end_ms as i64])?;
+        let mut trades = Vec::new();
+        while let Some(row) = rows.next()? {
+            trades.push(SpotStreamTradeRecordPo {
+                id: row.get(0)?,
+                event_time: row.get(1)?,
+                inst_id: row.get(2)?,
+                trade_id: row.get(3)?,
+                price: row.get(4)?,
+                qty: row.get(5)?,
+                trade_time: row.get(6)?,
+                is_buyer_maker: row.get(7)?,
+                created_at: row.get(8)?,
+            });
+        }
+        Ok(trades)
     }
 }
 

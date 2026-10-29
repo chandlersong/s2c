@@ -1,5 +1,6 @@
+use crate::binance::bn_backend_service::get_spot_trading_table;
 use crate::binance::bn_dashboard::{BinanceDashboard, InstrumentProvider, SpotInstrumentProvider, SwapInstrumentProvider};
-use crate::binance::models::po::{BinanceInstrument, KlinePo};
+use crate::binance::models::po::{BinanceInstrument, KlinePo, SpotStreamTradeRecordPo};
 use crate::duck_db_tables::DuckTableTableChannel;
 use crate::errors::YuError;
 use crate::sync::models::grpc_sync::HistoryEntry;
@@ -10,14 +11,14 @@ use li::websocket::connection::{
 };
 use li::websocket::models::WebSocketMessage;
 use log::{debug, error, info};
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::{RwLock, mpsc};
 use yue::binance::bn_json_websocket::{SPOT_STREAM_WEBSOCKET, SWAP_MARKET_STREAM_WEBSOCKET};
-use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamResponse::Kline;
-use yue::binance::bn_models::spot_websocket_stream::BinanceSpotWebSocketStreamWrapper;
+use yue::binance::bn_models::spot_websocket_stream::{
+    BinanceSpotWebSocketStreamResponse, BinanceSpotWebSocketStreamResponse::Kline, BinanceSpotWebSocketStreamWrapper,
+};
 use yue::binance::bn_models::swap_websocket_stream::{BinanceSwapWebSocketStreamResponse, BinanceSwapWebSocketStreamWrapper};
 use yue::models::HistoryInterval;
 use yue::query_message::{InsertPayload, QueryCommand};
@@ -32,28 +33,19 @@ const DEFAULT_RECONNECT_INTERVAL: Duration = Duration::from_secs(90 * 60);
 struct SpotKlineSaver {
     db: DuckTableTableChannel<KlinePo>,
     instrument_provider: InstrumentProvider,
-    sync_broadcast: Option<(mpsc::Sender<HistoryEntry>, Arc<RwLock<HashMap<String, u64>>>)>,
+    sync_broadcast: mpsc::Sender<HistoryEntry>,
 }
 
 impl SpotKlineSaver {
-    fn new(db: DuckTableTableChannel<KlinePo>, instrument_provider: InstrumentProvider) -> ShareMessageHandler<BinanceSpotWebSocketStreamWrapper> {
-        Arc::new(SpotKlineSaver {
-            db,
-            instrument_provider,
-            sync_broadcast: None,
-        })
-    }
-
     fn new_for_sync(
         db: DuckTableTableChannel<KlinePo>,
         instrument_provider: InstrumentProvider,
         history_tx: mpsc::Sender<HistoryEntry>,
-        live_instruments: Arc<RwLock<HashMap<String, u64>>>,
     ) -> ShareMessageHandler<BinanceSpotWebSocketStreamWrapper> {
         Arc::new(SpotKlineSaver {
             db,
             instrument_provider,
-            sync_broadcast: Some((history_tx, live_instruments)),
+            sync_broadcast: history_tx,
         })
     }
 }
@@ -72,12 +64,8 @@ impl MessageHandlerTrait<BinanceSpotWebSocketStreamWrapper> for SpotKlineSaver {
                     if let Err(e) = self.db.send(QueryCommand::Insert(InsertPayload::new_no_replay(kline.clone()))).await {
                         error!("Error save spot kline: {}", e);
                     }
-                    if let Some((history_tx, live_instruments)) = &self.sync_broadcast {
-                        live_instruments.write().await.insert(payload.kline.symbol.clone(), inst_id);
-                        let entry = kline.to_spot_history_entry();
-                        if let Err(error) = history_tx.send(entry).await {
-                            error!("failed to broadcast live Binance Spot kline {}: {}", payload.kline.symbol, error);
-                        }
+                    if let Err(error) = self.sync_broadcast.send(kline.to_spot_history_entry()).await {
+                        error!("failed to broadcast live Binance Spot kline {}: {}", payload.kline.symbol, error);
                     }
                 }
             }
@@ -88,31 +76,70 @@ impl MessageHandlerTrait<BinanceSpotWebSocketStreamWrapper> for SpotKlineSaver {
     }
 }
 
-struct SwapKlineSaver {
-    db: DuckTableTableChannel<KlinePo>,
+pub struct SpotTradeSaver {
+    db: DuckTableTableChannel<SpotStreamTradeRecordPo>,
     instrument_provider: InstrumentProvider,
-    sync_broadcast: Option<(mpsc::Sender<HistoryEntry>, Arc<RwLock<HashMap<String, u64>>>)>,
+    sync_broadcast: mpsc::Sender<HistoryEntry>,
 }
 
-impl SwapKlineSaver {
-    fn new(db: DuckTableTableChannel<KlinePo>, instrument_provider: InstrumentProvider) -> ShareMessageHandler<BinanceSwapWebSocketStreamWrapper> {
-        Arc::new(SwapKlineSaver {
+impl SpotTradeSaver {
+    pub fn new(
+        db: DuckTableTableChannel<SpotStreamTradeRecordPo>,
+        instrument_provider: InstrumentProvider,
+        sync_broadcast: mpsc::Sender<HistoryEntry>,
+    ) -> ShareMessageHandler<BinanceSpotWebSocketStreamWrapper> {
+        Arc::new(SpotTradeSaver {
             db,
             instrument_provider,
-            sync_broadcast: None,
+            sync_broadcast,
         })
     }
 
+    pub async fn for_production(
+        dashboard: Arc<BinanceDashboard>,
+        sync_broadcast: mpsc::Sender<HistoryEntry>,
+    ) -> ShareMessageHandler<BinanceSpotWebSocketStreamWrapper> {
+        let instrument_provider = SpotInstrumentProvider::new_provider(dashboard);
+        let db = get_spot_trading_table();
+        Self::new(db, instrument_provider, sync_broadcast)
+    }
+}
+
+#[async_trait]
+impl MessageHandlerTrait<BinanceSpotWebSocketStreamWrapper> for SpotTradeSaver {
+    async fn handle_message(&self, message: &BinanceSpotWebSocketStreamWrapper) {
+        if let BinanceSpotWebSocketStreamResponse::Trade(payload) = &message.data {
+            let Some(instrument) = self.instrument_provider.get_instrument(&payload.symbol) else {
+                error!("cannot save Binance Spot trade for unknown symbol {}", payload.symbol);
+                return;
+            };
+            let trade = SpotStreamTradeRecordPo::from_trade_stream_payload(payload.clone(), instrument.id as u64);
+            if let Err(error) = self.db.send(QueryCommand::Insert(InsertPayload::new_no_replay(trade.clone()))).await {
+                error!("Error save spot trade: {}", error);
+            }
+            if let Err(error) = self.sync_broadcast.send(trade.to_spot_history_entry()).await {
+                error!("failed to broadcast live Binance Spot trade {}: {}", payload.symbol, error);
+            }
+        }
+    }
+}
+
+struct SwapKlineSaver {
+    db: DuckTableTableChannel<KlinePo>,
+    instrument_provider: InstrumentProvider,
+    sync_broadcast: mpsc::Sender<HistoryEntry>,
+}
+
+impl SwapKlineSaver {
     fn new_for_sync(
         db: DuckTableTableChannel<KlinePo>,
         instrument_provider: InstrumentProvider,
         history_tx: mpsc::Sender<HistoryEntry>,
-        live_instruments: Arc<RwLock<HashMap<String, u64>>>,
     ) -> ShareMessageHandler<BinanceSwapWebSocketStreamWrapper> {
         Arc::new(SwapKlineSaver {
             db,
             instrument_provider,
-            sync_broadcast: Some((history_tx, live_instruments)),
+            sync_broadcast: history_tx,
         })
     }
 }
@@ -132,11 +159,8 @@ impl MessageHandlerTrait<BinanceSwapWebSocketStreamWrapper> for SwapKlineSaver {
                     if let Err(e) = self.db.send(QueryCommand::Insert(InsertPayload::new_no_replay(kline.clone()))).await {
                         error!("Error save swap kline: {}", e);
                     }
-                    if let Some((history_tx, live_instruments)) = &self.sync_broadcast {
-                        live_instruments.write().await.insert(_payload.kline.symbol.clone(), inst_id);
-                        if let Err(error) = history_tx.send(kline.to_swap_history_entry()).await {
-                            error!("failed to broadcast live Binance Swap kline {}: {}", _payload.kline.symbol, error);
-                        }
+                    if let Err(error) = self.sync_broadcast.send(kline.to_swap_history_entry()).await {
+                        error!("failed to broadcast live Binance Swap kline {}: {}", _payload.kline.symbol, error);
                     }
                 }
             }
@@ -164,41 +188,16 @@ impl KlineSubscribeService {
     ///  1. 关闭之前的websocket连接
     ///  2. 重新订阅
     ///
-    pub async fn startup_spot(
-        db: DuckTableTableChannel<KlinePo>,
-        dashboard: Arc<BinanceDashboard>,
-        proxy: Option<String>,
-        interval: HistoryInterval,
-    ) -> Result<(), YuError> {
-        let ws_url = SPOT_STREAM_WEBSOCKET;
-        let instrument_provider = SpotInstrumentProvider::new_provider(dashboard);
-        let saver = SpotKlineSaver::new(db, instrument_provider.clone());
-        Self::start_listen_kline(instrument_provider, proxy, interval, DEFAULT_RECONNECT_INTERVAL, ws_url, saver, None).await
-    }
-
     pub async fn startup_spot_sync(
         db: DuckTableTableChannel<KlinePo>,
         dashboard: Arc<BinanceDashboard>,
         proxy: Option<String>,
         interval: HistoryInterval,
         history_tx: mpsc::Sender<HistoryEntry>,
-        live_instruments: Arc<RwLock<HashMap<String, u64>>>,
     ) -> Result<(), YuError> {
         let ws_url = SPOT_STREAM_WEBSOCKET;
         let instrument_provider = SpotInstrumentProvider::new_provider(dashboard);
-        let saver = SpotKlineSaver::new_for_sync(db, instrument_provider.clone(), history_tx, live_instruments);
-        Self::start_listen_kline(instrument_provider, proxy, interval, DEFAULT_RECONNECT_INTERVAL, ws_url, saver, None).await
-    }
-
-    pub async fn startup_swap(
-        db: DuckTableTableChannel<KlinePo>,
-        dashboard: Arc<BinanceDashboard>,
-        proxy: Option<String>,
-        interval: HistoryInterval,
-    ) -> Result<(), YuError> {
-        let ws_url = SWAP_MARKET_STREAM_WEBSOCKET;
-        let instrument_provider = SwapInstrumentProvider::new_provider(dashboard);
-        let saver = SwapKlineSaver::new(db, instrument_provider.clone());
+        let saver = SpotKlineSaver::new_for_sync(db, instrument_provider.clone(), history_tx.clone());
         Self::start_listen_kline(instrument_provider, proxy, interval, DEFAULT_RECONNECT_INTERVAL, ws_url, saver, None).await
     }
 
@@ -208,11 +207,10 @@ impl KlineSubscribeService {
         proxy: Option<String>,
         interval: HistoryInterval,
         history_tx: mpsc::Sender<HistoryEntry>,
-        live_instruments: Arc<RwLock<HashMap<String, u64>>>,
     ) -> Result<(), YuError> {
         let ws_url = SWAP_MARKET_STREAM_WEBSOCKET;
         let instrument_provider = SwapInstrumentProvider::new_provider(dashboard);
-        let saver = SwapKlineSaver::new_for_sync(db, instrument_provider.clone(), history_tx, live_instruments);
+        let saver = SwapKlineSaver::new_for_sync(db, instrument_provider.clone(), history_tx);
         Self::start_listen_kline(instrument_provider, proxy, interval, DEFAULT_RECONNECT_INTERVAL, ws_url, saver, None).await
     }
 

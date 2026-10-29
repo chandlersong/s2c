@@ -73,7 +73,6 @@ async fn main() -> Result<(), YuError> {
         app_config.proxy_url.clone(),
         HistoryInterval::OneMinute,
         history_tx,
-        Arc::new(RwLock::new(HashMap::new())),
     )
     .await?;
     history_service.initial_history_data(None).await?;

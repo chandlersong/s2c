@@ -2,7 +2,6 @@ use crate::binance::db_consts::BinanceTables;
 
 use crate::binance::models::SpotStreamTradeRecordPo;
 use crate::binance::models::po::{FundingRatePo, KlinePo};
-use crate::binance::trading_service::TradingService;
 use crate::config::get_config;
 use crate::duck_db_tables::{DuckDBOneTable, DuckTableTableChannel};
 use std::sync::OnceLock;
@@ -20,7 +19,6 @@ pub(crate) static SWAP_BINANCE_KLINE_TABLE: OnceLock<DuckTableTableChannel<Kline
 pub(crate) static SWAP_FUNDING_RATE_TABLE: OnceLock<DuckTableTableChannel<FundingRatePo>> = OnceLock::new();
 pub(crate) static SPOT_TRADE_TABLE: OnceLock<DuckTableTableChannel<SpotStreamTradeRecordPo>> = OnceLock::new();
 pub(crate) static SPOT_ORDER_BOOK: OnceCell<OrderBookService> = OnceCell::const_new();
-pub(crate) static SPOT_TRADING_SERVICE: OnceCell<TradingService> = OnceCell::const_new();
 
 pub async fn get_spot_order_book_service() -> &'static OrderBookService {
     SPOT_ORDER_BOOK
@@ -32,18 +30,6 @@ async fn init_spot_order_book_service() -> OrderBookService {
     let app_config = get_config();
     let proxy = app_config.proxy_url.clone();
     OrderBookService::spot(proxy).await
-}
-
-pub async fn get_spot_trading_service() -> &'static TradingService {
-    SPOT_TRADING_SERVICE
-        .get_or_init(init_spot_trading_service) // ← 这里会自动异步初始化，只执行一次
-        .await
-}
-
-async fn init_spot_trading_service() -> TradingService {
-    let app_config = get_config();
-    let proxy = app_config.proxy_url.clone();
-    TradingService::spot(proxy).await
 }
 
 pub fn get_spot_kline_table() -> DuckTableTableChannel<KlinePo> {

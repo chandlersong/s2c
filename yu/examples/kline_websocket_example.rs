@@ -24,12 +24,27 @@ async fn main() -> Result<(), YuError> {
     let dash_board = Arc::new(BinanceDashboard::debug_mode(app_config.get_data_retention_hours(), None)?);
     dash_board.sync_instruments().await?;
     let swap_kline_table = get_swap_kline_table();
-    if let Err(e) = KlineSubscribeService::startup_swap(swap_kline_table, dash_board.clone(), proxy.clone(), HistoryInterval::FiveMinutes).await {
+    let (tx, mut rx) = tokio::sync::mpsc::channel(100);
+    if let Err(e) = KlineSubscribeService::startup_swap_sync(
+        swap_kline_table,
+        dash_board.clone(),
+        proxy.clone(),
+        HistoryInterval::FiveMinutes,
+        tx.clone(),
+    )
+    .await
+    {
         error!("error starting swap kline service: {}", e);
     }
-    if let Err(e) = KlineSubscribeService::startup_spot(get_spot_kline_table(), dash_board, proxy, HistoryInterval::FiveMinutes).await {
+    if let Err(e) = KlineSubscribeService::startup_spot_sync(get_spot_kline_table(), dash_board, proxy, HistoryInterval::FiveMinutes, tx).await {
         error!("error starting spot kline service: {}", e);
     }
+
+    tokio::spawn(async move {
+        while let Some(entry) = rx.recv().await {
+            log::info!("Received history entry: {:?}", entry);
+        }
+    });
 
     tokio::time::sleep(tokio::time::Duration::from_mins(30)).await;
 

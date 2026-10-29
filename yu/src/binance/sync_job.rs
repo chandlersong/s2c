@@ -2,9 +2,11 @@ use crate::binance::bn_backend_service::{get_spot_kline_table, get_swap_kline_ta
 use crate::binance::bn_dashboard::BinanceDashboard;
 use crate::binance::db_consts::initial_tables;
 use crate::binance::sync_server::{
-    BinanceSpotSyncHistoryService, BinanceSwapFundingRateSyncHistoryService, BinanceSwapSyncHistoryService, BinanceSyncInstrumentService,
+    BinanceSpotSyncHistoryService, BinanceSpotTradeSyncHistoryService, BinanceSwapFundingRateSyncHistoryService, BinanceSwapSyncHistoryService,
+    BinanceSyncInstrumentService,
 };
-use crate::binance::websocket_service::KlineSubscribeService;
+use crate::binance::trading_service::TradingService;
+use crate::binance::websocket_service::{KlineSubscribeService, SpotTradeSaver};
 use crate::config::AppConfig;
 use crate::cron_job;
 use crate::errors::YuError;
@@ -14,7 +16,7 @@ use li::tools::time::{unix_2_readable, unix_time_now_u64_utc};
 use log::{debug, error, info};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::mpsc;
 
 ///
 /// FUTURE:
@@ -53,16 +55,19 @@ pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: m
     );
     let funding_rate_history_service =
         BinanceSwapFundingRateSyncHistoryService::for_production(dash_board.clone(), app_config.get_data_retention_ms(), history_tx.clone());
+    let trade_history_service = BinanceSpotTradeSyncHistoryService::for_production();
     let mut support_history_service: HashMap<HistoryType, SyncHistoryService> = HashMap::new();
     support_history_service.insert(HistoryType::BinanceSpot, history_service.clone());
     support_history_service.insert(HistoryType::BinanceSwap, swap_history_service.clone());
     support_history_service.insert(HistoryType::BinanceSwapFundingRate, funding_rate_history_service.clone());
+    support_history_service.insert(HistoryType::BinanceTrade, trade_history_service.clone());
     let instrument_service = BinanceSyncInstrumentService::for_production(dash_board.clone(), support_history_service);
     info!("start initial Binance Spot and Swap instruments");
     if let Err(error) = instrument_service.sync_instrument().await {
         error!("failed to sync Binance Spot and Swap instruments: {}", error);
     }
     info!("finished initial Binance Spot and Swap instruments data");
+    trade_history_service.initial_history_data(None).await?;
 
     let start_initial_ms = unix_time_now_u64_utc();
     info!(
@@ -78,18 +83,35 @@ pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: m
         app_config.proxy_url.clone(),
         interval.clone(),
         history_tx.clone(),
-        Arc::new(RwLock::new(HashMap::new())),
     )
     .await?;
     KlineSubscribeService::startup_swap_sync(
         get_swap_kline_table(),
-        dash_board,
+        dash_board.clone(),
         app_config.proxy_url.clone(),
         interval,
         history_tx.clone(),
-        Arc::new(RwLock::new(HashMap::new())),
     )
     .await?;
+    if let Some(spot_config) = &binance_config.spot_stream {
+        if let Some(trade_config) = &spot_config.trade {
+            if !trade_config.symbols.is_empty() {
+                let trade_saver = SpotTradeSaver::for_production(dash_board.clone(), history_tx.clone()).await;
+
+                let trading_service = TradingService::spot(app_config.proxy_url.clone(), trade_saver).await;
+                for symbol in trade_config.symbols.iter() {
+                    if let Err(e) = trading_service.subscribe_trade(symbol.clone()).await {
+                        error!("在订阅{}的交易流时出错{}", symbol, e);
+                        continue;
+                    }
+                    info!("订阅{}的交易流", symbol);
+                }
+            } else {
+                info!("binance_websocket.spot.trade 未启用或没有配置symbols，跳过交易流订阅");
+            }
+        };
+    };
+
     let funding_rate_history_sync = funding_rate_history_service.clone();
     let _ = cron_job!("30 0 * * * *", move |_uuid, _locked| {
         let each_fuding_rate_sync = funding_rate_history_sync.clone();
@@ -110,6 +132,7 @@ pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: m
     history_service.check_history_data().await?;
     info!("started checking Binance Swap kline history data");
     swap_history_service.check_history_data().await?;
+    trade_history_service.check_history_data().await?;
 
     let check_history_job = history_service.clone();
     let check_swap_history_job = swap_history_service.clone();

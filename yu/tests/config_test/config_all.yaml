@@ -30,6 +30,7 @@ binance:
       batch_size: 100
       flush_interval_ms: 5000
       retention_days: 7
+      reconnect_interval_secs: 5400
     depth:
       enabled: true
       symbols:
@@ -38,5 +39,4 @@ binance:
         - BNBUSDT
       update_speed: "100ms"
       levels: 20
-
 

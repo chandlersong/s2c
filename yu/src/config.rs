@@ -137,9 +137,16 @@ pub struct SpotTradeStreamConfig {
     pub batch_size: Option<usize>,
     pub flush_interval_ms: Option<u64>,
     pub retention_days: Option<u32>,
+    pub reconnect_interval_secs: Option<u64>,
 }
 
+pub const DEFAULT_TRADE_RECONNECT_INTERVAL_SECS: u64 = 90 * 60;
+
 impl SpotTradeStreamConfig {
+    pub fn reconnect_interval_secs(&self) -> u64 {
+        self.reconnect_interval_secs.unwrap_or(DEFAULT_TRADE_RECONNECT_INTERVAL_SECS).max(1)
+    }
+
     /// 获取所有需要订阅的交易对（大写，去重）
 
     /// 获取 trade 批量大小（默认 100）
@@ -333,7 +340,9 @@ mod tests {
     use super::{AccountType, AppConfig, SecurityType};
     use config::Config;
 
-    // 使用直接反序列化避免 OnceLock 缓存问题
+    // 测试目的：验证 Binance WebSocket 配置可反序列化，并能读取交易流重连间隔。
+    // 准备数据/过程：从完整 YAML fixture 读取配置，访问 Spot Trade 的重连秒数。
+    // 预期结果：原有 Binance 配置字段保持正确，重连间隔按 fixture 设置为 5400 秒。
     #[test]
     pub fn test_binance_websocket_config_all_deserialization() {
         let config_builder = Config::builder()
@@ -363,6 +372,12 @@ mod tests {
         assert_eq!(trade_config.batch_size, Some(100), "trade batch_size 应该是 100");
         assert_eq!(trade_config.flush_interval_ms, Some(5000), "trade flush_interval_ms 应该是 5000");
         assert_eq!(trade_config.retention_days, Some(7), "trade retention_days 应该是 7");
+        assert_eq!(
+            trade_config.reconnect_interval_secs,
+            Some(5400),
+            "trade reconnect_interval_secs 应该是 5400"
+        );
+        assert_eq!(trade_config.reconnect_interval_secs(), 5400);
 
         // 验证 depth 配置
         assert!(spot_stream_config.depth.is_some(), "depth 配置应该存在");

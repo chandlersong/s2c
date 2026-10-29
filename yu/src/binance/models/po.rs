@@ -121,6 +121,18 @@ impl SpotStreamTradeRecordPo {
             created_at: 0,
         }
     }
+
+    pub fn to_spot_history_entry(&self) -> crate::sync::models::grpc_sync::HistoryEntry {
+        use crate::sync::models::grpc_sync::{HistoryType, InstrumentType, history_entry};
+        crate::sync::models::grpc_sync::HistoryEntry {
+            history_type: HistoryType::BinanceTrade.into(),
+            instrument_type: InstrumentType::Binance.into(),
+            inst_id: self.inst_id,
+            payload: Some(history_entry::Payload::BinanceTrade(crate::sync::models::grpc_sync::BinanceTrade::from(
+                self.clone(),
+            ))),
+        }
+    }
 }
 
 pub const INTERVAL_5M: u8 = 1;

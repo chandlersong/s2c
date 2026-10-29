@@ -2,11 +2,11 @@ use crate::binance::bn_backend_service::{get_spot_kline_table, get_swap_funding_
 use crate::binance::bn_dashboard::{BinanceDashboard, InstrumentProvider, SpotInstrumentProvider, SwapInstrumentProvider};
 use crate::binance::db_consts::BinanceTables;
 use crate::binance::duckdb_repository::{
-    BNInstrumentRepository, BinanceFundingRateRepository, BinanceKlineRepository, get_default_funding_rate_repo, get_default_spot_kline_repo,
-    get_default_swap_kline_repo, get_instrument_repo_for_production,
+    BNInstrumentRepository, BinanceFundingRateRepository, BinanceKlineRepository, BinanceTradeRepository, get_default_funding_rate_repo,
+    get_default_spot_kline_repo, get_default_spot_trade_repo, get_default_swap_kline_repo, get_instrument_repo_for_production,
 };
 use crate::binance::history::initial_kline;
-use crate::binance::models::po::{BinanceInstrument, FundingRatePo, KlinePo};
+use crate::binance::models::po::{BinanceInstrument, FundingRatePo, KlinePo, SpotStreamTradeRecordPo};
 use crate::data_integrity::check::{BinarySearchDS, DuckDBBinarySearchDataImpl, binary_search_gap};
 use crate::data_integrity::models::ValidationGap;
 use crate::duck_db::DuckDBDSProvider;
@@ -34,6 +34,38 @@ use yue::query_message::{BatchInsertPayload, QueryCommand};
 mod tests {
     use super::*;
     use crate::sync::models::grpc_sync::{HistoryType, InstrumentType, history_entry};
+
+    // 测试目的：验证 Spot Trade PO 映射为 Binance Trade 历史条目时保留必要字段。
+    // 准备数据/过程：构造包含可选成交时间和买方做市标记的 PO，并转换为 HistoryEntry。
+    // 预期结果：历史类型、交易所类型、instrument ID 及 BinanceTrade payload 字段正确。
+    #[test]
+    fn spot_trade_po_converts_to_binance_trade_history_entry() {
+        let trade = SpotStreamTradeRecordPo {
+            id: 3,
+            event_time: 1_700_000_000_001,
+            inst_id: 42,
+            trade_id: 17,
+            price: 100.5,
+            qty: 2.0,
+            trade_time: Some(1_700_000_000_000),
+            is_buyer_maker: Some(true),
+            created_at: 0,
+        };
+
+        let entry = trade.to_spot_history_entry();
+
+        assert_eq!(HistoryType::try_from(entry.history_type).unwrap(), HistoryType::BinanceTrade);
+        assert_eq!(InstrumentType::try_from(entry.instrument_type).unwrap(), InstrumentType::Binance);
+        assert_eq!(entry.inst_id, 42);
+        let Some(history_entry::Payload::BinanceTrade(payload)) = entry.payload else {
+            panic!("expected Binance Trade payload");
+        };
+        assert_eq!(payload.id, 3);
+        assert_eq!(payload.event_time, trade.event_time);
+        assert_eq!(payload.trade_id, 17);
+        assert_eq!(payload.trade_time, Some(1_700_000_000_000));
+        assert_eq!(payload.is_buyer_maker, Some(true));
+    }
 
     // 测试目的：验证 Binance Spot Kline PO 会映射为正确的同步历史条目。
     // 准备数据/过程：构造完整的 KlinePo，使用 instrument id 42 转换为 HistoryEntry。
@@ -98,6 +130,70 @@ mod tests {
         assert_eq!(payload.funding_time, 1_700_000_000_123);
         assert_eq!(payload.funding_rate, 0.0001);
         assert_eq!(payload.mark_price, None);
+    }
+}
+
+pub struct BinanceSpotTradeSyncHistoryService {
+    trade_repo: BinanceTradeRepository,
+}
+
+impl BinanceSpotTradeSyncHistoryService {
+    pub fn for_production() -> Arc<Self> {
+        Arc::new(Self {
+            trade_repo: get_default_spot_trade_repo(None),
+        })
+    }
+}
+
+#[async_trait]
+impl SyncHistoryServiceTrait for BinanceSpotTradeSyncHistoryService {
+    async fn query_and_broadcast_history(
+        &self,
+        inst_id: u64,
+        start_ts: u64,
+        end_ts: u64,
+        batch_size: usize,
+        tx: mpsc::Sender<Result<ServerMessage, Status>>,
+    ) -> Result<(), YuError> {
+        let trades = self.trade_repo.find_by_inst_id_between(inst_id, start_ts, end_ts).await?;
+        if trades.is_empty() {
+            let message = ServerMessage {
+                history: vec![],
+                server_timestamp: unix_time_now_u64_utc(),
+            };
+            let _ = tx.send(Ok(message)).await;
+            return Ok(());
+        }
+
+        for batch in trades.chunks(batch_size.max(1)) {
+            let message = ServerMessage {
+                history: batch.iter().map(SpotStreamTradeRecordPo::to_spot_history_entry).collect(),
+                server_timestamp: unix_time_now_u64_utc(),
+            };
+            if tx.send(Ok(message)).await.is_err() {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    async fn check_history_data(&self) -> Result<(), YuError> {
+        debug!("Binance Spot trade history check is not implemented; trade records are live-stream data");
+        Ok(())
+    }
+
+    async fn initial_history_data(&self, _end_ms: Option<u64>) -> Result<(), YuError> {
+        debug!("Binance Spot trade history initialization is not implemented; no historical backfill is configured");
+        Ok(())
+    }
+
+    async fn sync_all(&self) -> Result<(), YuError> {
+        debug!("Binance Spot trade sync is driven by WebSocket");
+        Ok(())
+    }
+
+    async fn sync_period(&self) -> Result<Option<String>, YuError> {
+        Ok(None)
     }
 }
 

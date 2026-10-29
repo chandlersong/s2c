@@ -1,4 +1,4 @@
-use crate::binance::bn_backend_service::{get_spot_order_book_service, get_spot_trading_service};
+use crate::binance::bn_backend_service::get_spot_order_book_service;
 use crate::binance::bn_dashboard::{BinanceDashboard, BinanceDashboardWatcher};
 use crate::binance::bn_data_integrity::{KlineGapRepairStrategy, SpotCheckStrategy};
 use crate::binance::db_consts::initial_tables;
@@ -53,7 +53,7 @@ pub async fn start_bn_jobs() -> Result<(), YuError> {
     info!("数据库创建表完成");
     start_refresh_history_data(dash_board.clone(), config, dash_board_watch.clone()).await?;
     // start_monitor_account().await?;
-    start_spot_websocket_stream_job().await?;
+    start_spot_websocket_stream_job(dash_board.clone()).await?;
     start_data_integrity_jobs(config, dash_board).await?;
     Ok(())
 }
@@ -165,7 +165,7 @@ pub async fn start_monitor_account() -> Result<(), YuError> {
 /// 2. 启动WsMessageBus，订阅websocket客户端的事件，分发给不同的订阅者
 /// 3. SpotStreamStorageActor，订阅启动WsMessageBus信息
 /// 4，根据配置信息，启动一个专门管理spot的OrderBookService
-async fn start_spot_websocket_stream_job() -> Result<(), YuError> {
+async fn start_spot_websocket_stream_job(_: Arc<BinanceDashboard>) -> Result<(), YuError> {
     let config = get_config();
     // 检查是否启用了 WebSocket 功能
     let ws_config = match &config.binance {
@@ -203,20 +203,20 @@ async fn start_spot_websocket_stream_job() -> Result<(), YuError> {
         info!("binance_websocket.spot.depth 配置未启用，跳过深度流订阅");
     }
 
-    if let Some(trade_config) = &spot_config.trade {
-        if trade_config.enabled.unwrap() && !trade_config.symbols.is_empty() {
-            let trading_service = get_spot_trading_service().await;
-            for symbol in trade_config.symbols.iter() {
-                if let Err(e) = trading_service.subscribe_trade(symbol.clone()).await {
-                    error!("在订阅{}的交易流时出错{}", symbol, e);
-                    continue;
-                }
-                info!("订阅{}的交易流", symbol);
-            }
-        } else {
-            info!("binance_websocket.spot.trade 未启用或没有配置symbols，跳过交易流订阅");
-        }
-    }
+    // if let Some(trade_config) = &spot_config.trade {
+    //     if trade_config.enabled.unwrap() && !trade_config.symbols.is_empty() {
+    //         let trading_service = get_spot_trading_service(dashboard.clone()).await;
+    //         for symbol in trade_config.symbols.iter() {
+    //             if let Err(e) = trading_service.subscribe_trade(symbol.clone()).await {
+    //                 error!("在订阅{}的交易流时出错{}", symbol, e);
+    //                 continue;
+    //             }
+    //             info!("订阅{}的交易流", symbol);
+    //         }
+    //     } else {
+    //         info!("binance_websocket.spot.trade 未启用或没有配置symbols，跳过交易流订阅");
+    //     }
+    // }
 
     Ok(())
 }
