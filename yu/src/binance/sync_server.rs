@@ -16,9 +16,10 @@ use crate::sync::models::grpc_sync::{HistoryEntry, HistoryType, Instrument, Serv
 use crate::sync::server::sync_server::{SyncHistoryService, SyncHistoryServiceTrait, SyncInstrumentServiceTrait};
 use async_trait::async_trait;
 use li::tools::time::unix_time_now_u64_utc;
-use log::{debug, error};
+use log::{debug, info};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tonic::Status;
 use yue::binance::bn_models::spot_restful::BinanceKline;
@@ -579,10 +580,34 @@ impl SyncHistoryServiceTrait for BinanceSwapFundingRateSyncHistoryService {
         let interval = HistoryInterval::OneHour;
         let start = interval.get_close_unix_ms(unix_time_now_u64_utc() - self.data_retention_ms);
         let instruments = self.inst_provider.instruments(None);
+        let total = instruments.len();
         let end = end_ms.unwrap_or_else(|| unix_time_now_u64_utc());
+        let mut completed = 0;
+        let mut progress_interval = tokio::time::interval_at(tokio::time::Instant::now() + Duration::from_mins(1), Duration::from_mins(5));
         for instrument in instruments {
-            self.sync_funding_rate(instrument.id as u64, start, end, interval.clone()).await?;
+            let sync = self.sync_funding_rate(instrument.id as u64, start, end, interval.clone());
+            tokio::pin!(sync);
+            loop {
+                tokio::select! {
+                    result = &mut sync => {
+                        result?;
+                        completed += 1;
+                        break;
+                    }
+                    _ = progress_interval.tick() => {
+                        info!(
+                            "binance Swap Funding Rate history initialization progress: {}/{} instruments completed",
+                            completed,
+                            total
+                        );
+                    }
+                }
+            }
         }
+        info!(
+            "binance Swap Funding Rate history initialization done: {}/{} instruments completed",
+            completed, total
+        );
         Ok(())
     }
 
