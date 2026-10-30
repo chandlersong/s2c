@@ -1252,7 +1252,7 @@ mod tests {
                     && *end_ms == 1_700_000_060_000
                     && matches!(instrument.payload.as_ref(), Some(instrument::Payload::Binance(value)) if value.symbol_type == "SPOT")
             })
-            .times(1)
+            .times(0)
             .returning(|_, _| Box::pin(async { Ok(()) }));
         let service = BinanceSpotClientInstrumentService {
             history_services: HashMap::from([

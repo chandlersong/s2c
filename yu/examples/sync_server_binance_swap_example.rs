@@ -2,7 +2,7 @@ use li::tools::logs::setup_logger;
 use log::{LevelFilter, error, info};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::mpsc;
 use yu::binance::bn_backend_service::get_swap_kline_table;
 use yu::binance::bn_dashboard::BinanceDashboard;
 use yu::binance::db_consts::initial_tables;
