@@ -466,36 +466,44 @@ impl SyncHistoryServiceTrait for BinanceSwapSyncHistoryService {
         let interval = self.interval.clone();
         let now_ms = interval.get_now_close_unix_ms_utc();
         let retention_floor = now_ms.saturating_sub(self.data_retention_ms);
+        let instruments = self.dashboard.swap_living_symbols();
+        let total = instruments.len();
+        let mut completed = 0;
+        let mut last_progress_log = tokio::time::Instant::now();
 
-        for instrument in self.dashboard.swap_living_symbols() {
+        for instrument in instruments {
             let instrument_start = instrument.on_board_time.unwrap_or(retention_floor).max(retention_floor);
             let start_ms = interval.get_close_unix_ms(instrument_start).saturating_add(interval.to_milliseconds());
-            if start_ms >= now_ms {
-                continue;
+            if start_ms < now_ms {
+                let gaps = binary_search_gap(
+                    instrument.id.to_string().as_str(),
+                    "SWAP",
+                    start_ms,
+                    now_ms,
+                    &interval,
+                    self.binary_search_ds.clone(),
+                )?;
+                debug!("{} has {} gaps", instrument.symbol, gaps.len());
+
+                for gap in gaps {
+                    match gap {
+                        ValidationGap::MissingData { start_time, end_time, .. } => {
+                            let fetcher = HistoryFetcherImpl::kline(&SWAP_KLINE_HISTORY_COMMAND);
+                            let request = CommonRequestBuilder::new(instrument.symbol.clone(), 1000, interval.clone());
+                            let saver = BinanceSwapGapKlineSaver::new(get_swap_kline_table(), self.history_tx.clone(), instrument.id as u64);
+                            fetcher
+                                .get_all_kline_data(request, Some(interval.clone()), Some(start_time), Some(end_time), Some(saver), true)
+                                .await?;
+                        }
+                        other => debug!("skip unsupported Binance Swap history gap: {:?}", other),
+                    }
+                }
             }
 
-            let gaps = binary_search_gap(
-                instrument.id.to_string().as_str(),
-                "SWAP",
-                start_ms,
-                now_ms,
-                &interval,
-                self.binary_search_ds.clone(),
-            )?;
-            debug!("{} has {} gaps", instrument.symbol, gaps.len());
-
-            for gap in gaps {
-                match gap {
-                    ValidationGap::MissingData { start_time, end_time, .. } => {
-                        let fetcher = HistoryFetcherImpl::kline(&SWAP_KLINE_HISTORY_COMMAND);
-                        let request = CommonRequestBuilder::new(instrument.symbol.clone(), 1000, interval.clone());
-                        let saver = BinanceSwapGapKlineSaver::new(get_swap_kline_table(), self.history_tx.clone(), instrument.id as u64);
-                        fetcher
-                            .get_all_kline_data(request, Some(interval.clone()), Some(start_time), Some(end_time), Some(saver), true)
-                            .await?;
-                    }
-                    other => debug!("skip unsupported Binance Swap history gap: {:?}", other),
-                }
+            completed += 1;
+            if last_progress_log.elapsed() >= INITIAL_HISTORY_PROGRESS_LOG_INTERVAL {
+                info!("binance Swap Kline history check progress: {}/{} instruments checked", completed, total);
+                last_progress_log = tokio::time::Instant::now();
             }
         }
         Ok(())
@@ -640,31 +648,41 @@ impl SyncHistoryServiceTrait for BinanceSwapFundingRateSyncHistoryService {
         let retention_floor = now_ms.saturating_sub(self.data_retention_ms);
         let now_ms = interval.get_now_close_unix_ms_utc();
         let trading_instruments = self.inst_provider.instruments(None);
+        let total = trading_instruments.len();
+        let mut completed = 0;
+        let mut last_progress_log = tokio::time::Instant::now();
         for instrument in trading_instruments {
             let instrument_start = instrument.on_board_time.unwrap_or(retention_floor).max(retention_floor);
             let start_ms = interval.get_close_unix_ms(instrument_start).saturating_add(interval.to_milliseconds());
-            if start_ms >= now_ms {
-                continue;
+            if start_ms < now_ms {
+                let gaps = binary_search_gap(
+                    instrument.id.to_string().as_str(),
+                    "SWAP",
+                    start_ms,
+                    now_ms,
+                    &interval,
+                    self.binary_search_ds.clone(),
+                )?;
+                debug!("{} has {} gaps", instrument.symbol, gaps.len());
+
+                for gap in gaps {
+                    match gap {
+                        ValidationGap::MissingData { start_time, end_time, .. } => {
+                            self.sync_funding_rate(instrument.id as u64, start_time, end_time, HistoryInterval::OneHour)
+                                .await?;
+                        }
+                        other => debug!("skip unsupported Binance Swap history gap: {:?}", other),
+                    }
+                }
             }
 
-            let gaps = binary_search_gap(
-                instrument.id.to_string().as_str(),
-                "SWAP",
-                start_ms,
-                now_ms,
-                &interval,
-                self.binary_search_ds.clone(),
-            )?;
-            debug!("{} has {} gaps", instrument.symbol, gaps.len());
-
-            for gap in gaps {
-                match gap {
-                    ValidationGap::MissingData { start_time, end_time, .. } => {
-                        self.sync_funding_rate(instrument.id as u64, start_time, end_time, HistoryInterval::OneHour)
-                            .await?;
-                    }
-                    other => debug!("skip unsupported Binance Swap history gap: {:?}", other),
-                }
+            completed += 1;
+            if last_progress_log.elapsed() >= INITIAL_HISTORY_PROGRESS_LOG_INTERVAL {
+                info!(
+                    "binance Swap Funding Rate history check progress: {}/{} instruments checked",
+                    completed, total
+                );
+                last_progress_log = tokio::time::Instant::now();
             }
         }
 
