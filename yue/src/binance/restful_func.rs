@@ -3,8 +3,8 @@
 ///
 use crate::binance::bn_models::common::{ExchangeInfoTrait, HistoryVo, SymbolInfo, SymbolInfoTrait};
 use crate::binance::bn_models::spot_restful::ExchangeInfo;
-use crate::binance::bn_models::swap_restful::{FundingRate, SwapExchangeInfo};
-use crate::binance::bn_restful_commands::{PING_COMMAND, SWAP_FUNDING_RATE_COMMAND, execute_json_request};
+use crate::binance::bn_models::swap_restful::{FundingRate, FundingRateInfo, SwapExchangeInfo};
+use crate::binance::bn_restful_commands::{PING_COMMAND, SWAP_FUNDING_INFO_COMMAND, SWAP_FUNDING_RATE_COMMAND, execute_json_request};
 use crate::errors::YueError;
 use crate::http_client::{HTTP_CLIENT, ToRequestBuilder, get_http_client};
 use crate::models::{EmptyObject, HistoryInterval, RequestInfo};
@@ -122,9 +122,9 @@ pub async fn execute_ping() -> Result<(), YueError> {
     Ok(())
 }
 
-pub async fn get_funding_rates() -> Result<Vec<FundingRate>, YueError> {
-    let rb = get_http_client().get(SWAP_FUNDING_RATE_COMMAND.as_ref().as_str());
-    let res = execute_json_request::<Vec<FundingRate>>(&SWAP_FUNDING_RATE_COMMAND, rb, None).await?;
+pub async fn get_funding_rates() -> Result<Vec<FundingRateInfo>, YueError> {
+    let rb = get_http_client().get(SWAP_FUNDING_INFO_COMMAND.as_ref().as_str());
+    let res = execute_json_request::<Vec<FundingRateInfo>>(&SWAP_FUNDING_INFO_COMMAND, rb, None).await?;
     Ok(res)
 }
 

@@ -179,3 +179,32 @@ impl HistoryVo for FundingRate {
         self.funding_time
     }
 }
+
+//
+// {
+//     "symbol": "BLZUSDT",
+//     "adjustedFundingRateCap": "0.02500000",
+//     "adjustedFundingRateFloor": "-0.02500000",
+//     "fundingIntervalHours": 8,
+//     "disclaimer": false
+//   }
+//
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FundingRateInfo {
+    #[serde(rename = "symbol")]
+    pub symbol: String,
+
+    #[serde(rename = "adjustedFundingRateCap")]
+    #[serde(with = "string_to_float")]
+    pub adjusted_funding_rate_cap: f64,
+
+    #[serde(rename = "adjustedFundingRateFloor")]
+    #[serde(with = "string_to_float")]
+    pub adjusted_funding_rate_floor: f64,
+
+    #[serde(rename = "fundingIntervalHours")]
+    pub funding_interval_hours: u32,
+
+    #[serde(rename = "disclaimer")]
+    pub disclaimer: bool,
+}
