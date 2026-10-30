@@ -241,7 +241,7 @@ impl KlineSubscribeService {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(reconnect_interval).await;
-                info!("按周期重新订阅 Binance {:?} Kline", instrument_provider.instrument_type());
+                debug!("按周期重新订阅 Binance {:?} Kline", instrument_provider.instrument_type());
 
                 match Self::subscribe_trading_kline(
                     instrument_provider.clone(),
@@ -286,7 +286,7 @@ impl KlineSubscribeService {
 
             match command_sender.send(cmd) {
                 Ok(_) => {
-                    info!("Sent Close command to previous connection (attempt {})", attempt);
+                    debug!("Sent Close command to previous connection (attempt {})", attempt);
                     return Ok(());
                 }
                 Err(e) => {

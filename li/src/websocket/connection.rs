@@ -303,20 +303,20 @@ impl WebSocketConnection {
         connection_config: ConnectionConfig,
     ) -> Result<ConnectionAction, LiError> {
         let (ws_stream, _) = if let Some(proxy_url) = proxy {
-            info!("使用代理连接: {}", proxy_url);
+            debug!("使用代理连接: {}", proxy_url);
             Self::connect_with_proxy(url, proxy_url).await?
         } else {
-            info!("直接连接（无代理）");
+            debug!("直接连接（无代理）");
             connect_async(url).await.map_err(|e| LiError::CustomError(format!("连接失败: {}", e)))?
         };
 
-        info!("WebSocket 连接成功!");
+        debug!("WebSocket 连接成功!");
         Self::broadcast_event(event_tx, WebSocketEvent::Connected(command_tx.clone().into()));
 
         let (mut write, mut read) = ws_stream.split();
         let (ws_tx, mut ws_rx) = mpsc::unbounded_channel::<WsMessage>();
 
-        info!("开始发初始化消息! 数量: {}", initial_command.len());
+        debug!("开始发初始化消息! 数量: {}", initial_command.len());
         // 使用 iter() 避免移动 initial_command（后面需要继续使用它）
         for event in initial_command.iter() {
             if let Err(e) = ws_tx.send(event.clone()) {
