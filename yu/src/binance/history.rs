@@ -5,15 +5,11 @@ use crate::config::AppConfig;
 use crate::duck_db_tables::DuckTableTableChannel;
 use crate::errors::YuError;
 use async_trait::async_trait;
-use governor::Jitter;
 use li::tools::time::{unix_2_readable, unix_time_now_u64_utc};
 use log::{debug, error, info};
-use std::cmp::{max, min};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot};
-use tokio::task::JoinSet;
-use tokio::time::timeout;
+use tokio::sync::oneshot;
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_models::swap_restful::FundingRate;
 use yue::binance::bn_restful_commands::{SPOT_KLINE_HISTORY_COMMAND, SWAP_KLINE_HISTORY_COMMAND};
@@ -21,6 +17,8 @@ use yue::binance::restful_func::{CommonRequestBuilder, HistoryBatchHandlerTrait,
 use yue::errors::YueError;
 use yue::models::{HistoryInterval, InstrumentType};
 use yue::query_message::{BatchInsertPayload, QueryCommand};
+
+pub(crate) const INITIAL_HISTORY_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 pub(crate) struct HistoryKlineSaver {
     db: DuckTableTableChannel<KlinePo>,
@@ -90,34 +88,6 @@ impl HistoryBatchHandlerTrait<FundingRate> for FundingRateSaver {
     }
 }
 
-async fn acquire_permit_with_retry(sem: Arc<Semaphore>) -> Result<OwnedSemaphorePermit, YuError> {
-    loop {
-        // 使用 timeout 包裹 acquire_owned，以免无限等待
-        match timeout(Duration::from_secs(10), sem.clone().acquire_owned()).await {
-            Ok(acquire_res) => {
-                return match acquire_res {
-                    Ok(permit) => {
-                        // 成功获取 permit
-                        Ok(permit)
-                    }
-                    Err(acq_err) => {
-                        // AcquireError：semaphore 已关闭（通常是优雅关机），不可重试
-                        // 把它当成致命错误上抛
-                        Err(YuError::new(&format!("semaphore closed or acquire failed: {}", acq_err)))
-                    }
-                };
-            }
-            Err(_elapsed) => {
-                //因为初始化一般都会比较长，所以也就睡的长一点
-                let jitter = Jitter::up_to(Duration::from_secs(20));
-                let sleep_seconds = jitter + Duration::from_secs(10);
-                tokio::time::sleep(sleep_seconds).await;
-                continue;
-            }
-        }
-    }
-}
-
 ///
 ///  本模块主要是为了把历史的数据的取得工作
 ///
@@ -169,70 +139,32 @@ pub async fn initial_kline(
         unix_2_readable(&start),
         unix_2_readable(&end)
     );
-    // 使用并发任务来处理多个交易对的历史数据下载，但使用 Semaphore 限制最大并发数，
-    // 等待所有任务完成后再返回。这样在低配机器上也能控制资源使用。
-    let concurrency_limit = std::thread::available_parallelism()
-        .map_err(|error| YuError::new(&format!("failed to determine available CPU count for Kline history concurrency: {error}")))?
-        .get()
-        - 1;
-    let sem = Arc::new(Semaphore::new(min(max(concurrency_limit, 1), concurrency_limit)));
     let saver = HistoryKlineSaver::new(db, instrument_provider);
     let total = instruments.len();
-    let mut handles = JoinSet::new();
-    for spot in instruments {
-        let sem = sem.clone();
-        let inst = spot.clone();
-        // 拷贝需要的值到任务里（start/end 是 Copy）
-        let start_ts = start;
-        let end_ts = end;
-        let saver_clone = saver.clone();
-        let query_interval = interval.clone();
-        let initial_symbol_type = symbol_type.clone();
-        handles.spawn(async move {
-            // 获取一个 OwnedPermit，保证在任务完成前不会释放
-            if let Err(e) = acquire_permit_with_retry(sem).await {
-                error!("初始化spot kline的获取锁出错: {}", e);
-            }
-
-            let spot_kline_fetch = match initial_symbol_type {
-                InstrumentType::Spot => HistoryFetcherImpl::kline(&SPOT_KLINE_HISTORY_COMMAND),
-                InstrumentType::Swap => HistoryFetcherImpl::kline(&SWAP_KLINE_HISTORY_COMMAND),
-                _ => return Err(YueError::new("类型不支持")),
-            };
-
-            let base_param = CommonRequestBuilder::new(inst.symbol, 1000, query_interval.clone());
-
-            spot_kline_fetch
-                .get_all_kline_data(base_param, Some(query_interval), Some(start_ts), Some(end_ts), Some(saver_clone), true)
-                .await
-        });
-    }
-
-    // 等待所有任务完成，若有任务返回错误则提前返回错误
+    let mut last_progress_log = tokio::time::Instant::now();
     let mut completed = 0;
-    let mut progress_interval = tokio::time::interval_at(tokio::time::Instant::now() + Duration::from_mins(1), Duration::from_mins(5));
-    while completed < total {
-        tokio::select! {
-            result = handles.join_next(), if !handles.is_empty() => {
-                let Some(result) = result else {
-                    continue;
-                };
-                match result {
-                    Ok(Ok(_)) => {}
-                    // 将内部的 yue::errors::YueError 转换为 crate::errors::YuError（实现了 From）
-                    Ok(Err(e)) => {
-                        error!("{}", e);
-                    }
-                    // join error => 转为 YuError
-                    Err(join_err) => {
-                        error!("{}", join_err);
-                    }
-                }
+    for instrument in instruments {
+        let fetcher = match &symbol_type {
+            InstrumentType::Spot => HistoryFetcherImpl::kline(&SPOT_KLINE_HISTORY_COMMAND),
+            InstrumentType::Swap => HistoryFetcherImpl::kline(&SWAP_KLINE_HISTORY_COMMAND),
+            _ => {
+                error!("binance {} kline 初始化不支持的交易类型", symbol_type);
                 completed += 1;
+                continue;
             }
-            _ = progress_interval.tick() => {
-                info!("binance {} kline 初始化进度：{}/{} 个交易对已完成", symbol_type, completed, total);
-            }
+        };
+        let request = CommonRequestBuilder::new(instrument.symbol, 1000, interval.clone());
+        if let Err(error) = fetcher
+            .get_all_kline_data(request, Some(interval.clone()), Some(start), Some(end), Some(saver.clone()), true)
+            .await
+        {
+            error!("{}", error);
+        }
+        completed += 1;
+
+        if last_progress_log.elapsed() >= INITIAL_HISTORY_PROGRESS_LOG_INTERVAL {
+            info!("binance {} kline 初始化进度：{}/{} 个交易对已完成", symbol_type, completed, total);
+            last_progress_log = tokio::time::Instant::now();
         }
     }
     info!("binance {} kilin初始化完成", symbol_type);
@@ -307,48 +239,15 @@ pub async fn start_sync_funding_rate(
 
 pub async fn sync_funding_rate(symbols: Vec<String>, start: u64, end: u64, interval: HistoryInterval) -> Result<(), YuError> {
     let db = get_swap_funding_rate_table();
-    // 使用并发任务来处理多个交易对的历史数据下载，但使用 Semaphore 限制最大并发数，
-    // 等待所有任务完成后再返回。这样在低配机器上也能控制资源使用。
-    let sem = Arc::new(Semaphore::new(5));
     let saver = FundingRateSaver::new(db);
-    let mut handles = Vec::with_capacity(symbols.len());
-    for spot_symbol in symbols {
-        let sem = sem.clone();
-        let symbol = spot_symbol.clone();
-        // 拷贝需要的值到任务里（start/end 是 Copy）
-        let start_ts = start;
-        let end_ts = end;
-        let saver_clone = saver.clone();
-        let interval_clone = interval.clone();
-        let handle = tokio::spawn(async move {
-            // 获取一个 OwnedPermit，保证在任务完成前不会释放
-            if let Err(e) = acquire_permit_with_retry(sem).await {
-                error!("初始化funding rate 的获取锁出错: {}", e);
-            }
-
-            let spot_kline_fetch = HistoryFetcherImpl::swap_funding_rate();
-            let base_param = CommonRequestBuilder::new(symbol.to_string(), 1000, interval_clone.clone());
-
-            spot_kline_fetch
-                .get_all_kline_data(base_param, Some(interval_clone), Some(start_ts), Some(end_ts), Some(saver_clone), true)
-                .await
-        });
-
-        handles.push(handle);
-    }
-
-    // 等待所有任务完成，若有任务返回错误则提前返回错误
-    for h in handles {
-        match h.await {
-            Ok(Ok(_)) => {}
-            // 将内部的 yue::errors::YueError 转换为 crate::errors::YuError（实现了 From）
-            Ok(Err(e)) => {
-                error!("{}", e);
-            }
-            // join error => 转为 YuError
-            Err(join_err) => {
-                error!("{}", join_err);
-            }
+    for symbol in symbols {
+        let fetcher = HistoryFetcherImpl::swap_funding_rate();
+        let request = CommonRequestBuilder::new(symbol, 1000, interval.clone());
+        if let Err(error) = fetcher
+            .get_all_kline_data(request, Some(interval.clone()), Some(start), Some(end), Some(saver.clone()), true)
+            .await
+        {
+            error!("{}", error);
         }
     }
 
