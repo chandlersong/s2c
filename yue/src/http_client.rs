@@ -114,7 +114,7 @@ impl CommonPublicRestfulClient {
         // 2) 发送请求阶段（失败或限流会消耗共享重试预算）
         loop {
             //估计应该出现这种情况的时候应该是最后，所以等个5s左右，随机散开
-            if request_info.host.check_slow_down().await {
+            if request_info.host.check_slow_down(None).await {
                 let jitter = Jitter::up_to(Duration::from_secs(5));
                 tokio::time::sleep(jitter + Duration::ZERO).await;
             }

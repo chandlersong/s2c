@@ -188,7 +188,23 @@ impl<'a> From<&'a HostInfo> for &'a str {
 
 impl HostInfo {
     pub fn new<S: AsRef<str>>(host: S, max_limit: u32, limiter: Arc<RwLock<Arc<DefaultRateLimiter>>>) -> Self {
-        let decelerate_token = (max_limit as f64 * 0.8).floor() as u32;
+        let decelerate_token = (max_limit as f64 * 0.95).floor() as u32;
+        Self {
+            host: host.as_ref().to_string(),
+            max_limit: Arc::new(AtomicU32::new(max_limit)),
+            disable_before: Arc::new(AtomicU64::new(0)),
+            limiter,
+            used_limit: Arc::new(AtomicU32::new(0)),
+            decelerate_token,
+        }
+    }
+
+    pub fn new_with_decelerate_token<S: AsRef<str>>(
+        host: S,
+        max_limit: u32,
+        limiter: Arc<RwLock<Arc<DefaultRateLimiter>>>,
+        decelerate_token: u32,
+    ) -> Self {
         Self {
             host: host.as_ref().to_string(),
             max_limit: Arc::new(AtomicU32::new(max_limit)),
@@ -208,8 +224,14 @@ impl HostInfo {
     }
 
     //以用的是否超过比例，如果超过，就自动等待一段时间
-    pub async fn check_slow_down(&self) -> bool {
-        let used_token = self.used_limit.load(Ordering::Relaxed);
+    pub async fn check_slow_down(&self, used_token: Option<u32>) -> bool {
+        let used_token = match used_token {
+            Some(v) => {
+                self.set_used_limit(v).await;
+                v
+            }
+            None => self.used_limit.load(Ordering::Relaxed),
+        };
         used_token > self.decelerate_token
     }
 

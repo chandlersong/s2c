@@ -15,7 +15,7 @@ use std::sync::{Arc, LazyLock};
 /// 然后经过测试，发觉比上限低一点，如果定格，容易被封
 pub static SPOT_RATE_PER_MINUTE: u32 = 2000;
 pub static SWAP_LIMITER_PER_MINUTE: u32 = 2000;
-pub static SWAP_FUNDING_PER_MINUTE: u32 = 95;
+pub static SWAP_FUNDING_PER_MINUTE: u32 = 100;
 
 //已知最大的token是获取盘后深度的50
 pub static BURST_NUM: u32 = 58;
@@ -83,10 +83,11 @@ pub const BINANCE_FUNDING_RATE_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| 
 });
 #[cfg(all(feature = "binance-testnet", not(test)))]
 pub const BINANCE_FUNDING_RATE_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
-    Arc::new(HostInfo::new(
+    Arc::new(HostInfo::new_with_decelerate_token(
         "https://testnet.binance.vision",
         SWAP_FUNDING_PER_MINUTE,
         create_share_rate_limiter(SWAP_FUNDING_PER_MINUTE, Some(3)),
+        95,
     ))
 });
 

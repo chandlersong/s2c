@@ -45,8 +45,8 @@ fn retry_wait_ms(kind: RetryWaitKind, attempt: usize) -> u64 {
         }
         RetryWaitKind::TooManyWeight => {
             // 报这个的时候，应该很晚了。
-            let interval = 3 + 2 * attempt;
-            Jitter::new(Duration::from_secs(3), Duration::from_secs(interval as u64))
+            let interval = 2 + 1 * attempt;
+            Jitter::new(Duration::from_secs(2), Duration::from_secs(interval as u64))
         }
     };
     (jitter + Duration::ZERO).as_millis() as u64
@@ -151,7 +151,7 @@ impl BinanceRestfulClient {
         // 2) 发送请求阶段（失败或限流会消耗共享重试预算）
         loop {
             //估计应该出现这种情况的时候应该是最后，所以等个5s左右，随机散开
-            if request_info.host.check_slow_down().await {
+            if request_info.host.check_slow_down(None).await {
                 let jitter = Jitter::up_to(Duration::from_secs(5));
                 tokio::time::sleep(jitter + Duration::ZERO).await;
             }
@@ -472,17 +472,7 @@ async fn rate_limit_wait_ms(
         .or_else(|| resp.headers().get("x-mbx-used-weight"))
         .and_then(|v| v.to_str().ok().and_then(|s| s.parse::<u32>().ok()));
 
-    let is_weight_limit = match weight_hdr {
-        Some(val) => {
-            let max_limit = host.get_max_limit();
-            // 使用 max_limit 的 10% 作为阈值，至少为 1
-            let margin = std::cmp::max(1, (max_limit as f32 * 0.9) as u32);
-            // 触发逻辑：当已用权重 val 小于 margin（即超过 max_limit 的 10%）时视为权重限制
-            host.set_used_limit(val).await;
-            val >= margin
-        }
-        None => false,
-    };
+    let is_weight_limit = host.check_slow_down(weight_hdr).await;
 
     let is_429 = status == 429;
     let is_418 = status == 418;
