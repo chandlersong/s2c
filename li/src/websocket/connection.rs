@@ -249,7 +249,7 @@ impl WebSocketConnection {
         tokio::spawn(async move {
             let mut message_cache = vec![];
             loop {
-                info!("正在连接到 WebSocket: {}", take_or_all_cow_with_ellipsis(url.as_str(), 50));
+                debug!("正在连接到 WebSocket: {}", take_or_all_cow_with_ellipsis(url.as_str(), 50));
                 Self::broadcast_event(&event_tx, WebSocketEvent::Reconnecting);
 
                 match Self::connect_and_run(
