@@ -3,7 +3,7 @@
 ///
 use crate::binance::bn_models::common::{ExchangeInfoTrait, HistoryVo, SymbolInfo, SymbolInfoTrait};
 use crate::binance::bn_models::spot_restful::ExchangeInfo;
-use crate::binance::bn_models::swap_restful::SwapExchangeInfo;
+use crate::binance::bn_models::swap_restful::{FundingRate, SwapExchangeInfo};
 use crate::binance::bn_restful_commands::{PING_COMMAND, SWAP_FUNDING_RATE_COMMAND, execute_json_request};
 use crate::errors::YueError;
 use crate::http_client::{HTTP_CLIENT, ToRequestBuilder, get_http_client};
@@ -120,6 +120,12 @@ pub async fn execute_ping() -> Result<(), YueError> {
     let rb = client.get(PING_COMMAND.as_ref().as_str());
     let _ = execute_json_request::<EmptyObject>(&PING_COMMAND, rb, None).await?;
     Ok(())
+}
+
+pub async fn get_funding_rates() -> Result<Vec<FundingRate>, YueError> {
+    let rb = get_http_client().get(SWAP_FUNDING_RATE_COMMAND.as_ref().as_str());
+    let res = execute_json_request::<Vec<FundingRate>>(&SWAP_FUNDING_RATE_COMMAND, rb, None).await?;
+    Ok(res)
 }
 
 /// 把symbol换成app标准的状态。

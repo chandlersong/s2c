@@ -52,6 +52,8 @@ pub trait BinanceKlineRepositoryTrait {
 #[async_trait]
 pub trait BinanceFundingRateRepositoryTrait {
     async fn find_by_inst_id_between(&self, inst_id: u64, start_ms: u64, end_ms: u64) -> Result<Vec<FundingRatePo>, YuError>;
+
+    async fn insert_funding_rate(&self, funding_rate: FundingRatePo) -> Result<(), YuError>;
 }
 
 #[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
@@ -116,6 +118,21 @@ impl BinanceFundingRateRepositoryTrait for BinanceFundingRateRepositoryImpl {
             funding_rates.push(FundingRatePo::from(row));
         }
         Ok(funding_rates)
+    }
+
+    async fn insert_funding_rate(&self, funding_rate: FundingRatePo) -> Result<(), YuError> {
+        let conn = self.provider.acquire()?;
+        conn.execute(
+            "INSERT INTO bn_swap_funding_rate (id, inst_id, funding_rate, funding_time, mark_price) VALUES (?, ?, ?, ?, ?)",
+            duckdb::params![
+                funding_rate.id as i64,
+                funding_rate.inst_id as i64,
+                funding_rate.funding_rate,
+                funding_rate.funding_time as i64,
+                funding_rate.mark_price
+            ],
+        )?;
+        Ok(())
     }
 }
 

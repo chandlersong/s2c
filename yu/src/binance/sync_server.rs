@@ -10,13 +10,13 @@ use crate::binance::models::po::{BinanceInstrument, FundingRatePo, KlinePo, Spot
 use crate::data_integrity::check::{BinarySearchDS, DuckDBBinarySearchDataImpl, binary_search_gap};
 use crate::data_integrity::models::ValidationGap;
 use crate::duck_db::DuckDBDSProvider;
-use crate::duck_db_tables::DuckDbTableTrait;
+use crate::duck_db_tables::{DuckDbTableTrait, DuckTableTableChannel};
 use crate::errors::YuError;
 use crate::sync::models::grpc_sync::{HistoryEntry, HistoryType, Instrument, ServerMessage};
 use crate::sync::server::sync_server::{SyncHistoryService, SyncHistoryServiceTrait, SyncInstrumentServiceTrait};
 use async_trait::async_trait;
 use li::tools::time::unix_time_now_u64_utc;
-use log::{debug, info};
+use log::{debug, error, info, warn};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -24,7 +24,9 @@ use tonic::Status;
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_models::swap_restful::FundingRate;
 use yue::binance::bn_restful_commands::{SPOT_KLINE_HISTORY_COMMAND, SWAP_KLINE_HISTORY_COMMAND};
-use yue::binance::restful_func::{CommonRequestBuilder, HistoryBatchHandlerTrait, HistoryFetcherImpl, HistoryFetcherTrait, ShareHistoryBatchHandler};
+use yue::binance::restful_func::{
+    CommonRequestBuilder, HistoryBatchHandlerTrait, HistoryFetcherImpl, HistoryFetcherTrait, ShareHistoryBatchHandler, get_funding_rates,
+};
 use yue::errors::YueError as ExchangeError;
 use yue::models::HistoryInterval;
 use yue::query_message::{BatchInsertPayload, QueryCommand};
@@ -573,17 +575,13 @@ impl BinanceSwapFundingRateSyncHistoryService {
 }
 
 struct BinanceSwapFundingRateGapSaver {
-    db: crate::duck_db_tables::DuckTableTableChannel<FundingRatePo>,
+    db: DuckTableTableChannel<FundingRatePo>,
     history_tx: mpsc::Sender<HistoryEntry>,
     inst_id: u64,
 }
 
 impl BinanceSwapFundingRateGapSaver {
-    fn new(
-        db: crate::duck_db_tables::DuckTableTableChannel<FundingRatePo>,
-        history_tx: mpsc::Sender<HistoryEntry>,
-        inst_id: u64,
-    ) -> ShareHistoryBatchHandler<FundingRate> {
+    fn new(db: DuckTableTableChannel<FundingRatePo>, history_tx: mpsc::Sender<HistoryEntry>, inst_id: u64) -> ShareHistoryBatchHandler<FundingRate> {
         Arc::new(Self { db, history_tx, inst_id }) as Arc<dyn HistoryBatchHandlerTrait<FundingRate> + Send>
     }
 }
@@ -718,6 +716,20 @@ impl SyncHistoryServiceTrait for BinanceSwapFundingRateSyncHistoryService {
 
     async fn sync_all(&self) -> Result<(), YuError> {
         let interval = HistoryInterval::OneHour;
+        let funding_rates = get_funding_rates().await?;
+        for rate in funding_rates {
+            let inst_id = if let Some(inst) = self.inst_provider.get_instrument(rate.symbol.as_str()) {
+                inst.id as u64
+            } else {
+                warn!("Binance Swap instrument {} is unavailable for Funding Rate sync", rate.symbol);
+                continue;
+            };
+            let funding_rate_po = FundingRatePo::from_funding_rate(rate, inst_id);
+            self.funding_rate_repo.insert_funding_rate(funding_rate_po.clone()).await?;
+            if let Err(e) = self.history_tx.send(funding_rate_po.to_swap_history_entry()).await {
+                error!("Error sending funding rate history entry: {}", e);
+            }
+        }
         let start = interval.get_now_close_unix_ms_utc() - interval.to_milliseconds() + 1;
         let end = interval.get_now_close_unix_ms_utc() + 30 * 1000;
         let instruments = self.inst_provider.instruments(None);

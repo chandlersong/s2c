@@ -87,7 +87,7 @@ pub const BINANCE_FUNDING_RATE_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| 
         "https://testnet.binance.vision",
         SWAP_FUNDING_PER_MINUTE,
         create_share_rate_limiter(SWAP_FUNDING_PER_MINUTE, Some(3)),
-        95,
+        90,
     ))
 });
 

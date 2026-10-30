@@ -188,7 +188,7 @@ impl<'a> From<&'a HostInfo> for &'a str {
 
 impl HostInfo {
     pub fn new<S: AsRef<str>>(host: S, max_limit: u32, limiter: Arc<RwLock<Arc<DefaultRateLimiter>>>) -> Self {
-        let decelerate_token = (max_limit as f64 * 0.95).floor() as u32;
+        let decelerate_token = ((max_limit as f64 * 0.95).floor() as u32).max(max_limit.saturating_sub(50));
         Self {
             host: host.as_ref().to_string(),
             max_limit: Arc::new(AtomicU32::new(max_limit)),
