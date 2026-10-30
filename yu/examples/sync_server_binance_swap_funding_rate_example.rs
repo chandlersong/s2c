@@ -32,7 +32,7 @@ async fn main() -> Result<(), YuError> {
     let (history_tx, mut history_rx) = mpsc::channel::<HistoryEntry>(1000);
     tokio::spawn(async move {
         while let Some(entry) = history_rx.recv().await {
-            info!("received Binance Swap Funding Rate history entry: {:?}", entry);
+            // info!("received Binance Swap Funding Rate history entry: {:?}", entry);
         }
     });
 
