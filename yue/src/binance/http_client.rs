@@ -4,7 +4,7 @@ use crate::tools::{load_ed25519_signing_key, sign_hmac};
 use governor::Jitter;
 use governor::middleware::StateSnapshot;
 use li::tools::time::{unix_2_readable, unix_time_now_u64_utc};
-use log::error;
+use log::{error, info};
 use reqwest::{RequestBuilder, Response};
 use serde::Deserialize;
 use std::sync::Arc;
@@ -153,7 +153,13 @@ impl BinanceRestfulClient {
             //估计应该出现这种情况的时候应该是最后，所以等个5s左右，随机散开
             if request_info.host.check_slow_down(None).await {
                 let jitter = Jitter::up_to(Duration::from_secs(5));
-                tokio::time::sleep(jitter + Duration::ZERO).await;
+                let sleep_duration = jitter + Duration::ZERO;
+                info!(
+                    "Host {} is in slow down mode, waiting for {:?} seconds before retrying",
+                    request_info.host.host_as_str(),
+                    sleep_duration.as_secs()
+                );
+                tokio::time::sleep(sleep_duration).await;
             }
             // 在调用 acquire_limit_token 前记录时间，获取后把该耗时从总计等待时间中剔除。
             let t_acquire_start = Instant::now();
