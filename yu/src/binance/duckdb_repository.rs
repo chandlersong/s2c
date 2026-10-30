@@ -1,12 +1,14 @@
+use crate::binance::bn_backend_service::{get_spot_kline_table, get_swap_funding_rate_table, get_swap_kline_table};
 use crate::binance::bn_consts::{BN_SYMBOL_STATUS_NOT_TRADING, BN_SYMBOL_STATUS_TRADING};
 use crate::binance::models::po::{BinanceInstrument, FundingRatePo, KlinePo, SpotStreamTradeRecordPo};
 use crate::duck_db::DuckDBDSProvider;
+use crate::duck_db_tables::DuckTableTableChannel;
 use crate::errors::YuError;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
 use yue::models::InstrumentType;
-use yue::query_message::DataSourceProviderTrait;
+use yue::query_message::{BatchInsertPayload, DataSourceProviderTrait, QueryCommand};
 
 fn read_order_types(value: duckdb::types::Value) -> Result<Vec<String>, YuError> {
     let values = match value {
@@ -46,6 +48,8 @@ pub trait BNInstrumentRepositoryTrait {
 #[async_trait]
 pub trait BinanceKlineRepositoryTrait {
     async fn find_by_inst_id_between(&self, inst_id: u64, start_ms: u64, end_ms: u64) -> Result<Vec<KlinePo>, YuError>;
+
+    async fn insert_kline(&self, kline: KlinePo) -> Result<(), YuError>;
 }
 
 #[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
@@ -77,6 +81,7 @@ pub fn get_default_spot_kline_repo(provider: Option<DuckDBDSProvider>) -> Binanc
     Arc::new(BinanceKlineRepositoryImpl {
         provider: provider.unwrap_or_default(),
         table_name: "bn_spot_kline",
+        db: get_spot_kline_table(),
     })
 }
 
@@ -84,12 +89,14 @@ pub fn get_default_swap_kline_repo(provider: Option<DuckDBDSProvider>) -> Binanc
     Arc::new(BinanceKlineRepositoryImpl {
         provider: provider.unwrap_or_default(),
         table_name: "bn_swap_kline",
+        db: get_swap_kline_table(),
     })
 }
 
 pub fn get_default_funding_rate_repo(provider: Option<DuckDBDSProvider>) -> BinanceFundingRateRepository {
     Arc::new(BinanceFundingRateRepositoryImpl {
         provider: provider.unwrap_or_default(),
+        db: get_swap_funding_rate_table(),
     })
 }
 
@@ -101,6 +108,7 @@ pub fn get_default_spot_trade_repo(provider: Option<DuckDBDSProvider>) -> Binanc
 
 struct BinanceFundingRateRepositoryImpl {
     provider: DuckDBDSProvider,
+    db: DuckTableTableChannel<FundingRatePo>,
 }
 
 #[async_trait]
@@ -121,17 +129,10 @@ impl BinanceFundingRateRepositoryTrait for BinanceFundingRateRepositoryImpl {
     }
 
     async fn insert_funding_rate(&self, funding_rate: FundingRatePo) -> Result<(), YuError> {
-        let conn = self.provider.acquire()?;
-        conn.execute(
-            "INSERT INTO bn_swap_funding_rate (id, inst_id, funding_rate, funding_time, mark_price) VALUES (?, ?, ?, ?, ?)",
-            duckdb::params![
-                funding_rate.id as i64,
-                funding_rate.inst_id as i64,
-                funding_rate.funding_rate,
-                funding_rate.funding_time as i64,
-                funding_rate.mark_price
-            ],
-        )?;
+        self.db
+            .send(QueryCommand::BatchInsert(BatchInsertPayload::new_no_replay(vec![funding_rate])))
+            .await
+            .map_err(|error| YuError::CustomError(format!("failed insert binance rate: {error}")))?;
         Ok(())
     }
 }
@@ -171,6 +172,7 @@ impl BinanceTradeRepositoryTrait for BinanceTradeRepositoryImpl {
 struct BinanceKlineRepositoryImpl {
     provider: DuckDBDSProvider,
     table_name: &'static str,
+    db: DuckTableTableChannel<KlinePo>,
 }
 
 #[async_trait]
@@ -191,6 +193,14 @@ impl BinanceKlineRepositoryTrait for BinanceKlineRepositoryImpl {
             klines.push(KlinePo::from(row));
         }
         Ok(klines)
+    }
+
+    async fn insert_kline(&self, kline: KlinePo) -> Result<(), YuError> {
+        self.db
+            .send(QueryCommand::BatchInsert(BatchInsertPayload::new_no_replay(vec![kline])))
+            .await
+            .map_err(|error| YuError::CustomError(format!("failed insert binance kline: {error}")))?;
+        Ok(())
     }
 }
 

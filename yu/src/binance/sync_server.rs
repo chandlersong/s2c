@@ -1,4 +1,4 @@
-use crate::binance::bn_backend_service::{get_spot_kline_table, get_swap_funding_rate_table, get_swap_kline_table};
+use crate::binance::bn_backend_service::{get_spot_kline_table, get_swap_kline_table};
 use crate::binance::bn_dashboard::{BinanceDashboard, InstrumentProvider, SpotInstrumentProvider, SwapInstrumentProvider};
 use crate::binance::db_consts::BinanceTables;
 use crate::binance::duckdb_repository::{
@@ -10,7 +10,7 @@ use crate::binance::models::po::{BinanceInstrument, FundingRatePo, KlinePo, Spot
 use crate::data_integrity::check::{BinarySearchDS, DuckDBBinarySearchDataImpl, binary_search_gap};
 use crate::data_integrity::models::ValidationGap;
 use crate::duck_db::DuckDBDSProvider;
-use crate::duck_db_tables::{DuckDbTableTrait, DuckTableTableChannel};
+use crate::duck_db_tables::DuckDbTableTrait;
 use crate::errors::YuError;
 use crate::sync::models::grpc_sync::{HistoryEntry, HistoryType, Instrument, ServerMessage};
 use crate::sync::server::sync_server::{SyncHistoryService, SyncHistoryServiceTrait, SyncInstrumentServiceTrait};
@@ -29,7 +29,6 @@ use yue::binance::restful_func::{
 };
 use yue::errors::YueError as ExchangeError;
 use yue::models::HistoryInterval;
-use yue::query_message::{BatchInsertPayload, QueryCommand};
 
 #[cfg(test)]
 mod tests {
@@ -199,18 +198,14 @@ impl SyncHistoryServiceTrait for BinanceSpotTradeSyncHistoryService {
 }
 
 struct BinanceGapKlineSaver {
-    db: crate::duck_db_tables::DuckTableTableChannel<KlinePo>,
+    repo: BinanceKlineRepository,
     history_tx: mpsc::Sender<HistoryEntry>,
     inst_id: u64,
 }
 
 impl BinanceGapKlineSaver {
-    fn new(
-        db: crate::duck_db_tables::DuckTableTableChannel<KlinePo>,
-        history_tx: mpsc::Sender<HistoryEntry>,
-        inst_id: u64,
-    ) -> ShareHistoryBatchHandler<BinanceKline> {
-        Arc::new(Self { db, history_tx, inst_id }) as Arc<dyn HistoryBatchHandlerTrait<BinanceKline> + Send>
+    fn new(repo: BinanceKlineRepository, history_tx: mpsc::Sender<HistoryEntry>, inst_id: u64) -> ShareHistoryBatchHandler<BinanceKline> {
+        Arc::new(Self { repo, history_tx, inst_id }) as Arc<dyn HistoryBatchHandlerTrait<BinanceKline> + Send>
     }
 }
 
@@ -221,15 +216,13 @@ impl HistoryBatchHandlerTrait<BinanceKline> for BinanceGapKlineSaver {
             .into_iter()
             .map(|kline| KlinePo::from_binance_kline(kline, self.inst_id))
             .collect::<Vec<_>>();
-        self.db
-            .send(QueryCommand::BatchInsert(BatchInsertPayload::new_no_replay(klines.clone())))
-            .await
-            .map_err(|error| ExchangeError::CustomError(format!("failed to enqueue Binance gap Kline batch: {error}")))?;
         for kline in klines {
-            self.history_tx
-                .send(kline.to_spot_history_entry())
-                .await
-                .map_err(|error| ExchangeError::CustomError(format!("failed to broadcast Binance gap Kline: {error}")))?;
+            if let Err(error) = self.repo.insert_kline(kline.clone()).await {
+                error!("Error inserting Binance Spot Kline into repository: {}", error);
+            }
+            if let Err(error) = self.history_tx.send(kline.to_spot_history_entry()).await {
+                error!("Error sending Binance Spot Kline history entry: {}", error);
+            }
         }
         Ok(())
     }
@@ -327,7 +320,7 @@ impl SyncHistoryServiceTrait for BinanceSpotSyncHistoryService {
                     ValidationGap::MissingData { start_time, end_time, .. } => {
                         let fetcher = HistoryFetcherImpl::kline(&SPOT_KLINE_HISTORY_COMMAND);
                         let request = CommonRequestBuilder::new(instrument.symbol.clone(), 1000, interval.clone());
-                        let saver = BinanceGapKlineSaver::new(get_spot_kline_table(), self.history_tx.clone(), instrument.id as u64);
+                        let saver = BinanceGapKlineSaver::new(self.kline_repo.clone(), self.history_tx.clone(), instrument.id as u64);
                         fetcher
                             .get_all_kline_data(request, Some(interval.clone()), Some(start_time), Some(end_time), Some(saver), true)
                             .await?;
@@ -363,18 +356,14 @@ impl SyncHistoryServiceTrait for BinanceSpotSyncHistoryService {
 }
 
 struct BinanceSwapGapKlineSaver {
-    db: crate::duck_db_tables::DuckTableTableChannel<KlinePo>,
+    repo: BinanceKlineRepository,
     history_tx: mpsc::Sender<HistoryEntry>,
     inst_id: u64,
 }
 
 impl BinanceSwapGapKlineSaver {
-    fn new(
-        db: crate::duck_db_tables::DuckTableTableChannel<KlinePo>,
-        history_tx: mpsc::Sender<HistoryEntry>,
-        inst_id: u64,
-    ) -> ShareHistoryBatchHandler<BinanceKline> {
-        Arc::new(Self { db, history_tx, inst_id }) as Arc<dyn HistoryBatchHandlerTrait<BinanceKline> + Send>
+    fn new(repo: BinanceKlineRepository, history_tx: mpsc::Sender<HistoryEntry>, inst_id: u64) -> ShareHistoryBatchHandler<BinanceKline> {
+        Arc::new(Self { repo, history_tx, inst_id }) as Arc<dyn HistoryBatchHandlerTrait<BinanceKline> + Send>
     }
 }
 
@@ -385,15 +374,13 @@ impl HistoryBatchHandlerTrait<BinanceKline> for BinanceSwapGapKlineSaver {
             .into_iter()
             .map(|kline| KlinePo::from_binance_kline(kline, self.inst_id))
             .collect::<Vec<_>>();
-        self.db
-            .send(QueryCommand::BatchInsert(BatchInsertPayload::new_no_replay(klines.clone())))
-            .await
-            .map_err(|error| ExchangeError::CustomError(format!("failed to enqueue Binance Swap gap Kline batch: {error}")))?;
         for kline in klines {
-            self.history_tx
-                .send(kline.to_swap_history_entry())
-                .await
-                .map_err(|error| ExchangeError::CustomError(format!("failed to broadcast Binance Swap gap Kline: {error}")))?;
+            if let Err(error) = self.repo.insert_kline(kline.clone()).await {
+                error!("Error inserting Binance Swap Kline into repository: {}", error);
+            }
+            if let Err(error) = self.history_tx.send(kline.to_swap_history_entry()).await {
+                error!("Error sending Binance Swap Kline history entry: {}", error);
+            }
         }
         Ok(())
     }
@@ -492,7 +479,7 @@ impl SyncHistoryServiceTrait for BinanceSwapSyncHistoryService {
                         ValidationGap::MissingData { start_time, end_time, .. } => {
                             let fetcher = HistoryFetcherImpl::kline(&SWAP_KLINE_HISTORY_COMMAND);
                             let request = CommonRequestBuilder::new(instrument.symbol.clone(), 1000, interval.clone());
-                            let saver = BinanceSwapGapKlineSaver::new(get_swap_kline_table(), self.history_tx.clone(), instrument.id as u64);
+                            let saver = BinanceSwapGapKlineSaver::new(self.kline_repo.clone(), self.history_tx.clone(), instrument.id as u64);
                             fetcher
                                 .get_all_kline_data(request, Some(interval.clone()), Some(start_time), Some(end_time), Some(saver), true)
                                 .await?;
@@ -533,6 +520,37 @@ impl SyncHistoryServiceTrait for BinanceSwapSyncHistoryService {
     }
 }
 
+struct BinanceSwapFundingRateGapSaver {
+    repo: BinanceFundingRateRepository,
+    history_tx: mpsc::Sender<HistoryEntry>,
+    inst_id: u64,
+}
+
+impl BinanceSwapFundingRateGapSaver {
+    fn new(repo: BinanceFundingRateRepository, history_tx: mpsc::Sender<HistoryEntry>, inst_id: u64) -> ShareHistoryBatchHandler<FundingRate> {
+        Arc::new(Self { repo, history_tx, inst_id }) as Arc<dyn HistoryBatchHandlerTrait<FundingRate> + Send>
+    }
+}
+
+#[async_trait]
+impl HistoryBatchHandlerTrait<FundingRate> for BinanceSwapFundingRateGapSaver {
+    async fn handle(&self, batch_data: Vec<FundingRate>) -> Result<(), ExchangeError> {
+        let funding_rates = batch_data
+            .into_iter()
+            .map(|rate| FundingRatePo::from_funding_rate(rate, self.inst_id))
+            .collect::<Vec<_>>();
+        for funding_rate in funding_rates {
+            if let Err(e) = self.repo.insert_funding_rate(funding_rate.clone()).await {
+                error!("Error inserting funding rate into repository: {}", e);
+            }
+            if let Err(e) = self.history_tx.send(funding_rate.to_swap_history_entry()).await {
+                error!("Error sending funding rate history entry: {}", e);
+            }
+        }
+        Ok(())
+    }
+}
+
 pub struct BinanceSwapFundingRateSyncHistoryService {
     funding_rate_repo: BinanceFundingRateRepository,
     inst_provider: InstrumentProvider,
@@ -566,43 +584,10 @@ impl BinanceSwapFundingRateSyncHistoryService {
             .find(|instrument| u64::try_from(instrument.id).ok() == Some(inst_id))
             .ok_or_else(|| YuError::new(&format!("Binance Swap instrument {inst_id} is unavailable for Funding Rate sync")))?;
         let request = CommonRequestBuilder::new(instrument.symbol, 1000, interval.clone());
-        let saver = BinanceSwapFundingRateGapSaver::new(get_swap_funding_rate_table(), self.history_tx.clone(), inst_id);
+        let saver = BinanceSwapFundingRateGapSaver::new(self.funding_rate_repo.clone(), self.history_tx.clone(), inst_id);
         HistoryFetcherImpl::swap_funding_rate()
             .get_all_kline_data(request, Some(interval), Some(start_ms), Some(end_ms), Some(saver), true)
             .await?;
-        Ok(())
-    }
-}
-
-struct BinanceSwapFundingRateGapSaver {
-    db: DuckTableTableChannel<FundingRatePo>,
-    history_tx: mpsc::Sender<HistoryEntry>,
-    inst_id: u64,
-}
-
-impl BinanceSwapFundingRateGapSaver {
-    fn new(db: DuckTableTableChannel<FundingRatePo>, history_tx: mpsc::Sender<HistoryEntry>, inst_id: u64) -> ShareHistoryBatchHandler<FundingRate> {
-        Arc::new(Self { db, history_tx, inst_id }) as Arc<dyn HistoryBatchHandlerTrait<FundingRate> + Send>
-    }
-}
-
-#[async_trait]
-impl HistoryBatchHandlerTrait<FundingRate> for BinanceSwapFundingRateGapSaver {
-    async fn handle(&self, batch_data: Vec<FundingRate>) -> Result<(), ExchangeError> {
-        let funding_rates = batch_data
-            .into_iter()
-            .map(|rate| FundingRatePo::from_funding_rate(rate, self.inst_id))
-            .collect::<Vec<_>>();
-        self.db
-            .send(QueryCommand::BatchInsert(BatchInsertPayload::new_no_replay(funding_rates.clone())))
-            .await
-            .map_err(|error| ExchangeError::CustomError(format!("failed to enqueue Binance Swap Funding Rate batch: {error}")))?;
-        for funding_rate in funding_rates {
-            self.history_tx
-                .send(funding_rate.to_swap_history_entry())
-                .await
-                .map_err(|error| ExchangeError::CustomError(format!("failed to broadcast Binance Swap Funding Rate: {error}")))?;
-        }
         Ok(())
     }
 }
@@ -715,7 +700,6 @@ impl SyncHistoryServiceTrait for BinanceSwapFundingRateSyncHistoryService {
     }
 
     async fn sync_all(&self) -> Result<(), YuError> {
-        let interval = HistoryInterval::OneHour;
         let funding_rates = get_funding_rates().await?;
         for rate in funding_rates {
             let inst_id = if let Some(inst) = self.inst_provider.get_instrument(rate.symbol.as_str()) {
@@ -729,12 +713,6 @@ impl SyncHistoryServiceTrait for BinanceSwapFundingRateSyncHistoryService {
             if let Err(e) = self.history_tx.send(funding_rate_po.to_swap_history_entry()).await {
                 error!("Error sending funding rate history entry: {}", e);
             }
-        }
-        let start = interval.get_now_close_unix_ms_utc() - interval.to_milliseconds() + 1;
-        let end = interval.get_now_close_unix_ms_utc() + 30 * 1000;
-        let instruments = self.inst_provider.instruments(None);
-        for instrument in instruments {
-            self.sync_funding_rate(instrument.id as u64, start, end, interval.clone()).await?;
         }
         Ok(())
     }
