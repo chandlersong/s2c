@@ -44,8 +44,8 @@ fn retry_wait_ms(kind: RetryWaitKind, attempt: usize) -> u64 {
             Jitter::new(Duration::from_secs(30), Duration::from_millis(interval as u64))
         }
         RetryWaitKind::TooManyWeight => {
-            let interval = 1 * attempt;
-            Jitter::new(Duration::from_secs(2), Duration::from_secs(interval as u64))
+            let interval = 5 + 1 * attempt;
+            Jitter::new(Duration::from_secs(5), Duration::from_secs(interval as u64))
         }
     };
     (jitter + Duration::ZERO).as_millis() as u64
@@ -528,7 +528,7 @@ async fn rate_limit_wait_ms(
         );
     }
     //为了等待的久一点。
-    let jitter = reopen_jitter.unwrap_or(Jitter::up_to(Duration::from_secs(90)));
+    let jitter = reopen_jitter.unwrap_or(Jitter::up_to(Duration::from_millis(1000)));
     request_info.host.waiting_for_open(Some(reopen_timestamp), Some(jitter)).await;
     // If we can retry, return wait_ms; otherwise return error indicating the limit
     if attempt < max_retries {
