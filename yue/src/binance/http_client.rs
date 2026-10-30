@@ -40,8 +40,8 @@ fn retry_wait_ms(kind: RetryWaitKind, attempt: usize) -> u64 {
         RetryWaitKind::FundingRate => {
             // 从 60s 开始，每次重试增加 30s，并加上 0..5s 随机抖动
             // 计算：10_000 ms + attempt*5_000 ms + jitter(0..5_000)
-            let interval = 5_000 * attempt;
-            Jitter::new(Duration::from_secs(30), Duration::from_millis(interval as u64))
+            let interval = 10 + 2 * attempt;
+            Jitter::new(Duration::from_secs(10), Duration::from_secs(interval as u64))
         }
         RetryWaitKind::TooManyWeight => {
             // 报这个的时候，应该很晚了。
