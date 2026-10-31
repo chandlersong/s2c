@@ -5,6 +5,7 @@ use crate::binance::models::po::{FundingRatePo, KlinePo};
 use crate::config::get_config;
 use crate::duck_db_tables::{DuckDBOneTable, DuckTableTableChannel};
 use std::sync::OnceLock;
+use std::time::Duration;
 use tokio::sync::OnceCell;
 use yue::binance::order_book::OrderBookService;
 
@@ -34,24 +35,42 @@ async fn init_spot_order_book_service() -> OrderBookService {
 
 pub fn get_spot_kline_table() -> DuckTableTableChannel<KlinePo> {
     SPOT_BINANCE_KLINE_TABLE
-        .get_or_init(|| DuckDBOneTable::<KlinePo, BinanceTables>::start_new(BinanceTables::SpotKline, None))
+        .get_or_init(|| {
+            DuckDBOneTable::<KlinePo, BinanceTables>::start_new_with_flush_config(BinanceTables::SpotKline, None, Duration::from_secs(1), 600)
+        })
         .clone()
 }
 
 pub fn get_spot_trading_table() -> DuckTableTableChannel<SpotStreamTradeRecordPo> {
     SPOT_TRADE_TABLE
-        .get_or_init(|| DuckDBOneTable::<SpotStreamTradeRecordPo, BinanceTables>::start_new(BinanceTables::SpotTrade, None))
+        .get_or_init(|| {
+            DuckDBOneTable::<SpotStreamTradeRecordPo, BinanceTables>::start_new_with_flush_config(
+                BinanceTables::SpotTrade,
+                None,
+                Duration::from_secs(30),
+                1000,
+            )
+        })
         .clone()
 }
 
 pub fn get_swap_kline_table() -> DuckTableTableChannel<KlinePo> {
     SWAP_BINANCE_KLINE_TABLE
-        .get_or_init(|| DuckDBOneTable::<KlinePo, BinanceTables>::start_new(BinanceTables::SwapKline, None))
+        .get_or_init(|| {
+            DuckDBOneTable::<KlinePo, BinanceTables>::start_new_with_flush_config(BinanceTables::SwapKline, None, Duration::from_secs(1), 600)
+        })
         .clone()
 }
 
 pub fn get_swap_funding_rate_table() -> DuckTableTableChannel<FundingRatePo> {
     SWAP_FUNDING_RATE_TABLE
-        .get_or_init(|| DuckDBOneTable::<FundingRatePo, BinanceTables>::start_new(BinanceTables::SwapFundingRate, None))
+        .get_or_init(|| {
+            DuckDBOneTable::<FundingRatePo, BinanceTables>::start_new_with_flush_config(
+                BinanceTables::SwapFundingRate,
+                None,
+                Duration::from_secs(5),
+                600,
+            )
+        })
         .clone()
 }

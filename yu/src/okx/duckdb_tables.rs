@@ -5,6 +5,7 @@ use crate::okx::duck_po::{OkxKlinePo, OkxOptionSummaryPo};
 use crate::okx::duckdb_consts::{ALL_OKX_TABLES, OkxTables};
 use log::info;
 use std::sync::OnceLock;
+use std::time::Duration;
 use yue::query_message::DataSourceProviderTrait;
 
 pub fn initial_okx_tables(provider: Option<DuckDBDSProvider>) -> Result<(), YuError> {
@@ -29,7 +30,7 @@ pub(crate) static OKX_OPTION_SUMMARY: OnceLock<DuckTableTableChannel<OkxOptionSu
 
 pub fn get_okx_kline_table() -> DuckTableTableChannel<OkxKlinePo> {
     OKX_KLINE
-        .get_or_init(|| DuckDBOneTable::<OkxKlinePo, OkxTables>::start_new(OkxTables::Kline, None))
+        .get_or_init(|| DuckDBOneTable::<OkxKlinePo, OkxTables>::start_new_with_flush_config(OkxTables::Kline, None, Duration::from_secs(1), 600))
         .clone()
 }
 

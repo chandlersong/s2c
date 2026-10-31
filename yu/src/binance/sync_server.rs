@@ -134,6 +134,7 @@ mod tests {
 ///
 /// FUTURE:
 /// 实际当中，这个会把所有的服务给卡死，以后研究一下再加吧。
+/// 估计是数据库操作太频繁。
 ///
 pub struct BinanceSpotTradeSyncHistoryService {
     trade_repo: BinanceTradeRepository,

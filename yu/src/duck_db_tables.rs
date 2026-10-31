@@ -1,6 +1,7 @@
 use crate::duck_db::{DuckDBDSProvider, DuckDBPO, DuckDbConnection};
 use crate::errors::YuError;
 use duckdb::DropBehavior;
+use governor::Jitter;
 use li::tools::time::unix_time_now_u64_utc;
 use log::error;
 use std::format;
@@ -43,10 +44,29 @@ const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 impl<P: DuckDBPO, T: DuckDbTableTrait> DuckDBOneTable<P, T> {
     pub fn start_new(table: T, db_provider: Option<DuckDBDSProvider>) -> DuckTableTableChannel<P> {
         let provider = db_provider.unwrap_or_else(|| DuckDBDSProvider::default());
+        // 增加随机抖动。防止多个表同时flush，导致数据库压力过大。
+        let jitter = Jitter::up_to(Duration::from_millis(2000)) + FLUSH_INTERVAL;
         DuckDBOneTable {
             table,
-            flush_interval: FLUSH_INTERVAL,
+            flush_interval: jitter,
             flush_count: 600, //主要对应的是kline的根数。
+            _marker: PhantomData::<P>,
+            db_provider: provider,
+        }
+        .start_listen()
+    }
+
+    pub fn start_new_with_flush_config(
+        table: T,
+        db_provider: Option<DuckDBDSProvider>,
+        flush_interval: Duration,
+        flush_count: usize,
+    ) -> DuckTableTableChannel<P> {
+        let provider = db_provider.unwrap_or_else(|| DuckDBDSProvider::default());
+        DuckDBOneTable {
+            table,
+            flush_interval,
+            flush_count,
             _marker: PhantomData::<P>,
             db_provider: provider,
         }
