@@ -690,7 +690,7 @@ impl SyncHistoryServiceTrait for BinanceSwapFundingRateSyncHistoryService {
         let mut completed = 0;
         let latest_timestamps = self.funding_rate_repo.inst_id_with_lastest_timestamp_before(end).await?;
         for instrument in instruments {
-            let inst_start = latest_timestamps.get(&(instrument.id as u64)).cloned().unwrap_or(start);
+            let inst_start = latest_timestamps.get(&(instrument.id as u64)).cloned().unwrap_or(start) + 1;
             if inst_start >= end {
                 debug!(
                     "Binance Swap Funding Rate for instrument {} (id: {}) is already up-to-date; skipping initial sync",
