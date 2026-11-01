@@ -1,4 +1,3 @@
-use crate::binance::bn_backend_service::get_spot_trading_table;
 use crate::binance::bn_dashboard::{BinanceDashboard, InstrumentProvider, SpotInstrumentProvider, SwapInstrumentProvider};
 use crate::binance::models::po::{BinanceInstrument, KlinePo, SpotStreamTradeRecordPo};
 use crate::duck_db_tables::DuckTableTableChannel;
@@ -77,19 +76,16 @@ impl MessageHandlerTrait<BinanceSpotWebSocketStreamWrapper> for SpotKlineSaver {
 }
 
 pub struct SpotTradeSaver {
-    db: DuckTableTableChannel<SpotStreamTradeRecordPo>,
     instrument_provider: InstrumentProvider,
     sync_broadcast: mpsc::Sender<HistoryEntry>,
 }
 
 impl SpotTradeSaver {
     pub fn new(
-        db: DuckTableTableChannel<SpotStreamTradeRecordPo>,
         instrument_provider: InstrumentProvider,
         sync_broadcast: mpsc::Sender<HistoryEntry>,
     ) -> ShareMessageHandler<BinanceSpotWebSocketStreamWrapper> {
         Arc::new(SpotTradeSaver {
-            db,
             instrument_provider,
             sync_broadcast,
         })
@@ -100,8 +96,7 @@ impl SpotTradeSaver {
         sync_broadcast: mpsc::Sender<HistoryEntry>,
     ) -> ShareMessageHandler<BinanceSpotWebSocketStreamWrapper> {
         let instrument_provider = SpotInstrumentProvider::new_provider(dashboard);
-        let db = get_spot_trading_table();
-        Self::new(db, instrument_provider, sync_broadcast)
+        Self::new(instrument_provider, sync_broadcast)
     }
 }
 
@@ -114,9 +109,6 @@ impl MessageHandlerTrait<BinanceSpotWebSocketStreamWrapper> for SpotTradeSaver {
                 return;
             };
             let trade = SpotStreamTradeRecordPo::from_trade_stream_payload(payload.clone(), instrument.id as u64);
-            if let Err(error) = self.db.send(QueryCommand::Insert(InsertPayload::new_no_replay(trade.clone()))).await {
-                error!("Error save spot trade: {}", error);
-            }
             if let Err(error) = self.sync_broadcast.send(trade.to_spot_history_entry()).await {
                 error!("failed to broadcast live Binance Spot trade {}: {}", payload.symbol, error);
             }

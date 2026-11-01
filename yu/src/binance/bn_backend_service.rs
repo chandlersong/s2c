@@ -1,6 +1,5 @@
 use crate::binance::db_consts::BinanceTables;
 
-use crate::binance::models::SpotStreamTradeRecordPo;
 use crate::binance::models::po::{FundingRatePo, KlinePo};
 use crate::config::get_config;
 use crate::duck_db_tables::{DuckDBOneTable, DuckTableTableChannel};
@@ -18,7 +17,6 @@ pub(crate) static SPOT_BINANCE_KLINE_TABLE: OnceLock<DuckTableTableChannel<Kline
 pub(crate) static SWAP_BINANCE_KLINE_TABLE: OnceLock<DuckTableTableChannel<KlinePo>> = OnceLock::new();
 
 pub(crate) static SWAP_FUNDING_RATE_TABLE: OnceLock<DuckTableTableChannel<FundingRatePo>> = OnceLock::new();
-pub(crate) static SPOT_TRADE_TABLE: OnceLock<DuckTableTableChannel<SpotStreamTradeRecordPo>> = OnceLock::new();
 pub(crate) static SPOT_ORDER_BOOK: OnceCell<OrderBookService> = OnceCell::const_new();
 
 pub async fn get_spot_order_book_service() -> &'static OrderBookService {
@@ -37,19 +35,6 @@ pub fn get_spot_kline_table() -> DuckTableTableChannel<KlinePo> {
     SPOT_BINANCE_KLINE_TABLE
         .get_or_init(|| {
             DuckDBOneTable::<KlinePo, BinanceTables>::start_new_with_flush_config(BinanceTables::SpotKline, None, Duration::from_secs(1), 600)
-        })
-        .clone()
-}
-
-pub fn get_spot_trading_table() -> DuckTableTableChannel<SpotStreamTradeRecordPo> {
-    SPOT_TRADE_TABLE
-        .get_or_init(|| {
-            DuckDBOneTable::<SpotStreamTradeRecordPo, BinanceTables>::start_new_with_flush_config(
-                BinanceTables::SpotTrade,
-                None,
-                Duration::from_secs(30),
-                1000,
-            )
         })
         .clone()
 }
