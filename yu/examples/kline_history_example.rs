@@ -1,5 +1,4 @@
 use li::tools::logs::setup_logger;
-use li::tools::time::unix_time_now_u64_utc;
 use log::{LevelFilter, info, warn};
 use std::collections::HashMap;
 use std::sync::Arc;

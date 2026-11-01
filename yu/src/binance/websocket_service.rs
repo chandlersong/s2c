@@ -9,7 +9,7 @@ use li::websocket::connection::{
     CommandMessage, ConnectionAction, MessageHandlerTrait, ShareMessageHandler, WebSocketConnection, WebSocketInterface,
 };
 use li::websocket::models::WebSocketMessage;
-use log::{debug, error, info};
+use log::{debug, error};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;

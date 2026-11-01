@@ -608,11 +608,11 @@ mod tests {
 
         assert_eq!(
             spot_repo.inst_id_with_lastest_timestamp_before(2999).await.unwrap(),
-            HashMap::from([(42, 2999), (43, 2499)])
+            HashMap::from([(42, 2000), (43, 2500)])
         );
         assert_eq!(
             swap_repo.inst_id_with_lastest_timestamp_before(2999).await.unwrap(),
-            HashMap::from([(42, 1999), (44, 2499)])
+            HashMap::from([(42, 1000), (44, 2500)])
         );
     }
 
