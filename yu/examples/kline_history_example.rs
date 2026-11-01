@@ -1,4 +1,5 @@
 use li::tools::logs::setup_logger;
+use li::tools::time::unix_time_now_u64_utc;
 use log::{LevelFilter, info, warn};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -39,12 +40,14 @@ async fn main() -> Result<(), YuError> {
     let swap_db = get_swap_kline_table();
 
     let shared_dash_board = Arc::new(dash_board);
+    // 这里lastest_timestamps为空是为了处理方便，实际应该是从数据库里面获取每个symbol的最新时间戳，然后传入initial_kline函数里面
     initial_kline(
         SpotInstrumentProvider::new_provider(shared_dash_board.clone()),
         app_config.get_data_retention_ms(),
         HistoryInterval::OneHour,
         spot_db,
         None,
+        HashMap::new(),
     )
     .await?;
     initial_kline(
@@ -53,6 +56,7 @@ async fn main() -> Result<(), YuError> {
         HistoryInterval::OneHour,
         swap_db,
         None,
+        HashMap::new(),
     )
     .await?;
 

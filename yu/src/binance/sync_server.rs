@@ -337,13 +337,15 @@ impl SyncHistoryServiceTrait for BinanceSpotSyncHistoryService {
 
     async fn initial_history_data(&self, end_ms: Option<u64>) -> Result<(), YuError> {
         let instrument_provider = SpotInstrumentProvider::new_provider(self.dashboard.clone());
-
+        let before = end_ms.unwrap_or_else(|| unix_time_now_u64_utc());
+        let latest_timestamps = self.kline_repo.inst_id_with_lastest_timestamp_before(before).await?;
         initial_kline(
             instrument_provider,
             self.data_retention_ms,
             self.interval.clone(),
             get_spot_kline_table(),
             end_ms,
+            latest_timestamps,
         )
         .await
     }
@@ -436,7 +438,7 @@ impl SyncHistoryServiceTrait for BinanceSwapSyncHistoryService {
         if klines.is_empty() {
             let message = ServerMessage {
                 history: vec![],
-                server_timestamp: li::tools::time::unix_time_now_u64_utc(),
+                server_timestamp: unix_time_now_u64_utc(),
             };
             let _ = tx.send(Ok(message)).await;
             return Ok(());
@@ -445,7 +447,7 @@ impl SyncHistoryServiceTrait for BinanceSwapSyncHistoryService {
         for batch in klines.chunks(batch_size.max(1)) {
             let message = ServerMessage {
                 history: batch.iter().map(|kline| kline.to_swap_history_entry()).collect(),
-                server_timestamp: li::tools::time::unix_time_now_u64_utc(),
+                server_timestamp: unix_time_now_u64_utc(),
             };
             if tx.send(Ok(message)).await.is_err() {
                 break;
@@ -501,14 +503,17 @@ impl SyncHistoryServiceTrait for BinanceSwapSyncHistoryService {
         Ok(())
     }
 
-    async fn initial_history_data(&self, start_initial_ms: Option<u64>) -> Result<(), YuError> {
+    async fn initial_history_data(&self, initial_before_ms: Option<u64>) -> Result<(), YuError> {
         let instrument_provider = SwapInstrumentProvider::new_provider(self.dashboard.clone());
+        let before = initial_before_ms.unwrap_or_else(|| unix_time_now_u64_utc());
+        let latest_timestamps = self.kline_repo.inst_id_with_lastest_timestamp_before(before).await?;
         initial_kline(
             instrument_provider,
             self.data_retention_ms,
             self.interval.clone(),
             get_swap_kline_table(),
-            start_initial_ms,
+            initial_before_ms,
+            latest_timestamps,
         )
         .await
     }
@@ -683,8 +688,18 @@ impl SyncHistoryServiceTrait for BinanceSwapFundingRateSyncHistoryService {
         let end = end_ms.unwrap_or_else(|| unix_time_now_u64_utc());
         let mut last_progress_log = tokio::time::Instant::now();
         let mut completed = 0;
+        let latest_timestamps = self.funding_rate_repo.inst_id_with_lastest_timestamp_before(end).await?;
         for instrument in instruments {
-            self.sync_funding_rate(instrument.id as u64, start, end, interval.clone()).await?;
+            let inst_start = latest_timestamps.get(&(instrument.id as u64)).cloned().unwrap_or(start);
+            if inst_start >= end {
+                debug!(
+                    "Binance Swap Funding Rate for instrument {} (id: {}) is already up-to-date; skipping initial sync",
+                    instrument.symbol, instrument.id
+                );
+                completed += 1;
+                continue;
+            }
+            self.sync_funding_rate(instrument.id as u64, inst_start, end, interval.clone()).await?;
             completed += 1;
 
             if last_progress_log.elapsed() >= INITIAL_HISTORY_PROGRESS_LOG_INTERVAL {

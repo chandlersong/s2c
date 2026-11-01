@@ -7,6 +7,8 @@ use crate::errors::YuError;
 use async_trait::async_trait;
 use li::tools::time::{unix_2_readable, unix_time_now_u64_utc};
 use log::{debug, error, info};
+use std::cmp::max;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::oneshot;
@@ -107,26 +109,9 @@ pub async fn initial_kline(
     interval: HistoryInterval,
     db: DuckTableTableChannel<KlinePo>,
     end_ms: Option<u64>,
+    lastest_timestamps: HashMap<u64, u64>,
 ) -> Result<(), YuError> {
     let symbol_type = instrument_provider.instrument_type();
-    let (tx, rx) = oneshot::channel();
-    if let Err(e) = db.send(QueryCommand::GetCount(tx)).await {
-        error!("binance {} HistoryKline query count error {:?}", symbol_type, e);
-    }
-
-    match rx.await {
-        Ok(Ok(count)) => {
-            if count > 0 {
-                info!("binance {} kline table非空，现存{}，跳过初始化", symbol_type, count);
-                return Ok(());
-            }
-        }
-        _ => {
-            let error_msg = format!("binance {} HistoryKline query count error", symbol_type);
-            return Err(YuError::new(error_msg.as_str()));
-        }
-    }
-
     let now = end_ms.unwrap_or_else(unix_time_now_u64_utc);
     let instruments = instrument_provider.instruments(None);
     //kline会有一个会取到未闭合K线的问题。所以我这里也就去取上一根K线的之前的一毫秒。
@@ -144,6 +129,7 @@ pub async fn initial_kline(
     let mut last_progress_log = tokio::time::Instant::now();
     let mut completed = 0;
     for instrument in instruments {
+        let latest_ts_in_db = lastest_timestamps.get(&now);
         let fetcher = match &symbol_type {
             InstrumentType::Spot => HistoryFetcherImpl::kline(&SPOT_KLINE_HISTORY_COMMAND),
             InstrumentType::Swap => HistoryFetcherImpl::kline(&SWAP_KLINE_HISTORY_COMMAND),
@@ -153,9 +139,17 @@ pub async fn initial_kline(
                 continue;
             }
         };
+        let inst_start = match latest_ts_in_db {
+            None => start,
+            Some(v) => max(*v, start),
+        };
+        // 如果开始时间大于结束时间，说明不需要初始化
+        if inst_start > end {
+            continue;
+        }
         let request = CommonRequestBuilder::new(instrument.symbol, 1000, interval.clone());
         if let Err(error) = fetcher
-            .get_all_kline_data(request, Some(interval.clone()), Some(start), Some(end), Some(saver.clone()), true)
+            .get_all_kline_data(request, Some(interval.clone()), Some(inst_start), Some(end), Some(saver.clone()), true)
             .await
         {
             error!("{}", error);

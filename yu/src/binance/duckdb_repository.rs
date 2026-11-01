@@ -49,6 +49,13 @@ pub trait BNInstrumentRepositoryTrait {
 pub trait BinanceKlineRepositoryTrait {
     async fn find_by_inst_id_between(&self, inst_id: u64, start_ms: u64, end_ms: u64) -> Result<Vec<KlinePo>, YuError>;
 
+    ///
+    /// 小于的每个instrument最新的kline时间戳，返回map，key是inst_id，value是最新的kline时间戳
+    /// 1. 如果instrument在before_ms不存在，返回没有这个instrument的记录。
+    /// 2. 如果instrument存在，则返回最大的，且小于等于before_ms的kline时间戳。
+    ///
+    async fn inst_id_with_lastest_timestamp_before(&self, before_ms: u64) -> Result<HashMap<u64, u64>, YuError>;
+
     async fn insert_kline(&self, kline: KlinePo) -> Result<(), YuError>;
 }
 
@@ -56,6 +63,12 @@ pub trait BinanceKlineRepositoryTrait {
 #[async_trait]
 pub trait BinanceFundingRateRepositoryTrait {
     async fn find_by_inst_id_between(&self, inst_id: u64, start_ms: u64, end_ms: u64) -> Result<Vec<FundingRatePo>, YuError>;
+
+    ///
+    /// 获得每个 instrument 在 before_ms 之前最新的资金费率时间戳。
+    /// 如果 instrument 在 before_ms 之前没有记录，则不包含在返回 map 中。
+    ///
+    async fn inst_id_with_lastest_timestamp_before(&self, before_ms: u64) -> Result<HashMap<u64, u64>, YuError>;
 
     async fn insert_funding_rate(&self, funding_rate: FundingRatePo) -> Result<(), YuError>;
 }
@@ -131,6 +144,24 @@ impl BinanceFundingRateRepositoryTrait for BinanceFundingRateRepositoryImpl {
         Ok(funding_rates)
     }
 
+    async fn inst_id_with_lastest_timestamp_before(&self, before_ms: u64) -> Result<HashMap<u64, u64>, YuError> {
+        let conn = self.provider.acquire()?;
+        let before_ms = i64::try_from(before_ms).map_err(|_| YuError::new("before_ms exceeds DuckDB BIGINT range"))?;
+        let mut stmt = conn.prepare("SELECT inst_id, MAX(funding_time) FROM bn_swap_funding_rate WHERE funding_time <= ? GROUP BY inst_id")?;
+        let mut rows = stmt.query(duckdb::params![before_ms])?;
+        let mut timestamps = HashMap::new();
+
+        while let Some(row) = rows.next()? {
+            let inst_id: i64 = row.get(0)?;
+            let timestamp: i64 = row.get(1)?;
+            let inst_id = u64::try_from(inst_id).map_err(|_| YuError::new("negative instrument ID in funding rate table"))?;
+            let timestamp = u64::try_from(timestamp).map_err(|_| YuError::new("negative funding_time in funding rate table"))?;
+            timestamps.insert(inst_id, timestamp);
+        }
+
+        Ok(timestamps)
+    }
+
     async fn insert_funding_rate(&self, funding_rate: FundingRatePo) -> Result<(), YuError> {
         self.db
             .send(QueryCommand::BatchInsert(BatchInsertPayload::new_no_replay(vec![funding_rate])))
@@ -196,6 +227,28 @@ impl BinanceKlineRepositoryTrait for BinanceKlineRepositoryImpl {
             klines.push(KlinePo::from(row));
         }
         Ok(klines)
+    }
+
+    async fn inst_id_with_lastest_timestamp_before(&self, before_ms: u64) -> Result<HashMap<u64, u64>, YuError> {
+        let conn = self.provider.acquire()?;
+        let before_ms = i64::try_from(before_ms).map_err(|_| YuError::new("before_ms exceeds DuckDB BIGINT range"))?;
+        let sql = format!(
+            "SELECT inst_id, MAX(candle_begin_time) FROM {} WHERE candle_begin_time <= ? GROUP BY inst_id",
+            self.table_name
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = stmt.query(duckdb::params![before_ms])?;
+        let mut timestamps = HashMap::new();
+
+        while let Some(row) = rows.next()? {
+            let inst_id: i64 = row.get(0)?;
+            let timestamp: i64 = row.get(1)?;
+            let inst_id = u64::try_from(inst_id).map_err(|_| YuError::new("negative instrument ID in kline table"))?;
+            let timestamp = u64::try_from(timestamp).map_err(|_| YuError::new("negative close_time in kline table"))?;
+            timestamps.insert(inst_id, timestamp);
+        }
+
+        Ok(timestamps)
     }
 
     async fn insert_kline(&self, kline: KlinePo) -> Result<(), YuError> {
@@ -378,7 +431,7 @@ impl BNInstrumentRepositoryImpl {
 mod tests {
     use super::*;
     use crate::binance::bn_consts::{BN_SYMBOL_STATUS_BREAK, BN_SYMBOL_STATUS_TRADING};
-    use crate::binance::db_consts::{CREATE_BINANCE_INSTRUMENTS_TABLE, CREATE_FUNDING_RATE_TABLE, CREATE_SWAP_KLINE_TABLE};
+    use crate::binance::db_consts::{CREATE_BINANCE_INSTRUMENTS_TABLE, CREATE_FUNDING_RATE_TABLE, CREATE_SPOT_KLINE_TABLE, CREATE_SWAP_KLINE_TABLE};
     use crate::test_utils::create_memory_db_provider;
     use tokio::sync::mpsc;
 
@@ -517,6 +570,79 @@ mod tests {
         assert_eq!(klines[0].close, 105.0);
     }
 
+    // 测试目的：验证 Spot 和 Swap repository 返回 before_ms 之前每个 instrument 的最新 close_time。
+    // 准备数据/过程：在内存 DuckDB 创建两张 Kline 表，为多 instrument 插入 before_ms 前后的记录，再调用两个 repository。
+    // 预期结果：仅返回 close_time 小于等于 before_ms 的 instrument 记录，并选择其中最大的 close_time。
+    #[tokio::test]
+    async fn kline_repository_returns_latest_close_time_before_timestamp_per_instrument() {
+        let (spot_tx, _) = mpsc::channel(1);
+        let (swap_tx, _) = mpsc::channel(1);
+        let provider = create_memory_db_provider();
+        let conn = provider.acquire().unwrap();
+        for statement in CREATE_SPOT_KLINE_TABLE
+            .split(';')
+            .map(str::trim)
+            .filter(|sql| !sql.is_empty())
+            .chain(CREATE_SWAP_KLINE_TABLE.split(';').map(str::trim).filter(|sql| !sql.is_empty()))
+        {
+            conn.execute(statement, []).unwrap();
+        }
+        conn.execute(
+            "INSERT INTO bn_spot_kline (id, inst_id, candle_begin_time, close_time) VALUES \
+             (1, 42, 1000, 1999), (2, 42, 2000, 2999), (3, 43, 1500, 2499), \
+             (7, 43, 2500, 3499), (8, 45, 4000, 4999)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO bn_swap_kline (id, inst_id, candle_begin_time, close_time) VALUES \
+             (4, 42, 1000, 1999), (5, 42, 3000, 3999), (6, 44, 2500, 2499), \
+             (7, 44, 3500, 4499), (8, 46, 5000, 5999)",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        let spot_repo = get_default_spot_kline_repo(Some(provider.clone()), Some(spot_tx));
+        let swap_repo = get_default_swap_kline_repo(Some(provider), Some(swap_tx));
+
+        assert_eq!(
+            spot_repo.inst_id_with_lastest_timestamp_before(2999).await.unwrap(),
+            HashMap::from([(42, 2999), (43, 2499)])
+        );
+        assert_eq!(
+            swap_repo.inst_id_with_lastest_timestamp_before(2999).await.unwrap(),
+            HashMap::from([(42, 1999), (44, 2499)])
+        );
+    }
+
+    // 测试目的：验证已创建但无 Kline 数据的表会得到空结果。
+    // 准备数据/过程：创建空的 Spot Kline 表并调用 repository 查询最新时间戳。
+    // 预期结果：查询成功并返回空 HashMap。
+    #[tokio::test]
+    async fn kline_repository_returns_empty_map_for_empty_table() {
+        let (tx, _) = mpsc::channel(1);
+        let provider = create_memory_db_provider();
+        let conn = provider.acquire().unwrap();
+        conn.execute(CREATE_SPOT_KLINE_TABLE.split(';').next().unwrap(), []).unwrap();
+        drop(conn);
+
+        let repo = get_default_spot_kline_repo(Some(provider), Some(tx));
+
+        assert!(repo.inst_id_with_lastest_timestamp_before(2999).await.unwrap().is_empty());
+    }
+
+    // 测试目的：验证查询 Kline 表失败时 repository 会返回错误。
+    // 准备数据/过程：不创建 bn_spot_kline 表，直接查询最新时间戳。
+    // 预期结果：查询返回 Err，而不是伪装成空结果。
+    #[tokio::test]
+    async fn kline_repository_propagates_latest_timestamp_query_errors() {
+        let (tx, _) = mpsc::channel(1);
+        let repo = get_default_spot_kline_repo(Some(create_memory_db_provider()), Some(tx));
+
+        assert!(repo.inst_id_with_lastest_timestamp_before(2999).await.is_err());
+    }
+
     // 测试目的：验证 Spot Kline repository 使用调用方提供的写入 channel。
     // 准备数据/过程：创建内存 channel，将其注入 Spot Kline repository，再插入一条 Kline。
     // 预期结果：插入命令通过注入的 channel 发出，且 batch 中包含该 Kline。
@@ -599,5 +725,60 @@ mod tests {
             }
             _ => panic!("expected batch insert command"),
         }
+    }
+
+    // 测试目的：验证 Funding Rate repository 返回 before_ms 之前每个 instrument 的最新 funding_time。
+    // 准备数据/过程：在内存 DuckDB 创建资金费率表，为多个 instrument 插入 before_ms 前后的记录，再查询最新时间戳。
+    // 预期结果：仅返回 funding_time 小于等于 before_ms 的 instrument 记录，并选择其中最大的 funding_time。
+    #[tokio::test]
+    async fn funding_rate_repository_returns_latest_timestamp_before_timestamp_per_instrument() {
+        let provider = create_memory_db_provider();
+        let conn = provider.acquire().unwrap();
+        for statement in CREATE_FUNDING_RATE_TABLE.split(';').map(str::trim).filter(|sql| !sql.is_empty()) {
+            conn.execute(statement, []).unwrap();
+        }
+        conn.execute(
+            "INSERT INTO bn_swap_funding_rate VALUES \
+             (1, 42, 0.0001, 1000, NULL), (2, 42, 0.0002, 3000, 100.5), \
+             (3, 43, 0.0003, 2000, 100.0), (4, 44, 0.0004, 5000, 101.0)",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        let (tx, _) = mpsc::channel(1);
+        let repo = get_default_funding_rate_repo(Some(provider), Some(tx));
+
+        assert_eq!(
+            repo.inst_id_with_lastest_timestamp_before(3000).await.unwrap(),
+            HashMap::from([(42, 3000), (43, 2000)])
+        );
+    }
+
+    // 测试目的：验证空资金费率表返回空结果。
+    // 准备数据/过程：创建空的资金费率表并调用 repository 查询最新时间戳。
+    // 预期结果：查询成功并返回空 HashMap。
+    #[tokio::test]
+    async fn funding_rate_repository_returns_empty_map_for_empty_table() {
+        let provider = create_memory_db_provider();
+        let conn = provider.acquire().unwrap();
+        conn.execute(CREATE_FUNDING_RATE_TABLE.split(';').next().unwrap(), []).unwrap();
+        drop(conn);
+
+        let (tx, _) = mpsc::channel(1);
+        let repo = get_default_funding_rate_repo(Some(provider), Some(tx));
+
+        assert!(repo.inst_id_with_lastest_timestamp_before(3000).await.unwrap().is_empty());
+    }
+
+    // 测试目的：验证查询资金费率表失败时 repository 会返回错误。
+    // 准备数据/过程：不创建 bn_swap_funding_rate 表，直接查询最新时间戳。
+    // 预期结果：查询返回 Err，而不是伪装成空结果。
+    #[tokio::test]
+    async fn funding_rate_repository_propagates_latest_timestamp_query_errors() {
+        let (tx, _) = mpsc::channel(1);
+        let repo = get_default_funding_rate_repo(Some(create_memory_db_provider()), Some(tx));
+
+        assert!(repo.inst_id_with_lastest_timestamp_before(3000).await.is_err());
     }
 }
