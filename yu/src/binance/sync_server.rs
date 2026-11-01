@@ -256,7 +256,7 @@ impl BinanceSpotSyncHistoryService {
         Arc::new(Self {
             data_retention_ms,
             dashboard,
-            kline_repo: get_default_spot_kline_repo(None),
+            kline_repo: get_default_spot_kline_repo(None, None),
             binary_search_ds,
             history_tx,
             interval,
@@ -414,7 +414,7 @@ impl BinanceSwapSyncHistoryService {
         Arc::new(Self {
             data_retention_ms,
             dashboard,
-            kline_repo: get_default_swap_kline_repo(None),
+            kline_repo: get_default_swap_kline_repo(None, None),
             binary_search_ds,
             history_tx,
             interval,
@@ -571,7 +571,7 @@ impl BinanceSwapFundingRateSyncHistoryService {
             "inst_id".to_string(),
         );
         Arc::new(Self {
-            funding_rate_repo: get_default_funding_rate_repo(None),
+            funding_rate_repo: get_default_funding_rate_repo(None, None),
             inst_provider: SwapInstrumentProvider::new_provider(dash_board),
             binary_search_ds,
             data_retention_ms,

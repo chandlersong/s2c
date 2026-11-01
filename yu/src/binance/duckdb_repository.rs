@@ -77,26 +77,29 @@ pub fn get_instrument_repo_for_production(provider: Option<DuckDBDSProvider>) ->
     })
 }
 
-pub fn get_default_spot_kline_repo(provider: Option<DuckDBDSProvider>) -> BinanceKlineRepository {
+pub fn get_default_spot_kline_repo(provider: Option<DuckDBDSProvider>, channel: Option<DuckTableTableChannel<KlinePo>>) -> BinanceKlineRepository {
     Arc::new(BinanceKlineRepositoryImpl {
         provider: provider.unwrap_or_default(),
         table_name: "bn_spot_kline",
-        db: get_spot_kline_table(),
+        db: channel.unwrap_or_else(get_spot_kline_table),
     })
 }
 
-pub fn get_default_swap_kline_repo(provider: Option<DuckDBDSProvider>) -> BinanceKlineRepository {
+pub fn get_default_swap_kline_repo(provider: Option<DuckDBDSProvider>, channel: Option<DuckTableTableChannel<KlinePo>>) -> BinanceKlineRepository {
     Arc::new(BinanceKlineRepositoryImpl {
         provider: provider.unwrap_or_default(),
         table_name: "bn_swap_kline",
-        db: get_swap_kline_table(),
+        db: channel.unwrap_or_else(get_swap_kline_table),
     })
 }
 
-pub fn get_default_funding_rate_repo(provider: Option<DuckDBDSProvider>) -> BinanceFundingRateRepository {
+pub fn get_default_funding_rate_repo(
+    provider: Option<DuckDBDSProvider>,
+    channel: Option<DuckTableTableChannel<FundingRatePo>>,
+) -> BinanceFundingRateRepository {
     Arc::new(BinanceFundingRateRepositoryImpl {
         provider: provider.unwrap_or_default(),
-        db: get_swap_funding_rate_table(),
+        db: channel.unwrap_or_else(get_swap_funding_rate_table),
     })
 }
 
@@ -377,6 +380,7 @@ mod tests {
     use crate::binance::bn_consts::{BN_SYMBOL_STATUS_BREAK, BN_SYMBOL_STATUS_TRADING};
     use crate::binance::db_consts::{CREATE_BINANCE_INSTRUMENTS_TABLE, CREATE_FUNDING_RATE_TABLE, CREATE_SWAP_KLINE_TABLE};
     use crate::test_utils::create_memory_db_provider;
+    use tokio::sync::mpsc;
 
     // 测试目的：验证 instrument 的全量查询和交易中查询会按 status 正确区分。
     // 准备数据/过程：插入 BTCUSDT Spot，先查询交易中列表，再将其更新为 BREAK 后重新查询。
@@ -491,6 +495,7 @@ mod tests {
     // 预期结果：查询返回唯一记录，且 instrument ID、毫秒开盘时间和收盘价保持正确。
     #[tokio::test]
     async fn swap_kline_repository_reads_swap_table() {
+        let (tx, _) = mpsc::channel(1);
         let provider = create_memory_db_provider();
         let conn = provider.acquire().unwrap();
         for statement in CREATE_SWAP_KLINE_TABLE.split(';').map(str::trim).filter(|sql| !sql.is_empty()) {
@@ -503,7 +508,7 @@ mod tests {
         .unwrap();
         drop(conn);
 
-        let repo = get_default_swap_kline_repo(Some(provider));
+        let repo = get_default_swap_kline_repo(Some(provider), Some(tx));
         let klines = repo.find_by_inst_id_between(42, 1_700_000_000_000, 1_700_000_000_000).await.unwrap();
 
         assert_eq!(klines.len(), 1);
@@ -512,9 +517,47 @@ mod tests {
         assert_eq!(klines[0].close, 105.0);
     }
 
-    // 测试目的：验证 Funding Rate repository 按 instrument 和含端点的毫秒时间范围读取，并按 funding_time 稳定排序。
-    // 准备数据/过程：在内存 DuckDB 创建资金费率表，插入不同 instrument 和时间的记录，再查询指定范围。
-    // 预期结果：只返回目标 instrument 的范围内记录，顺序正确且 nullable mark_price 保持 None。
+    // 测试目的：验证 Spot Kline repository 使用调用方提供的写入 channel。
+    // 准备数据/过程：创建内存 channel，将其注入 Spot Kline repository，再插入一条 Kline。
+    // 预期结果：插入命令通过注入的 channel 发出，且 batch 中包含该 Kline。
+    #[tokio::test]
+    async fn spot_kline_repository_uses_injected_channel() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let repo = get_default_spot_kline_repo(Some(create_memory_db_provider()), Some(tx));
+        let kline = KlinePo {
+            id: 1,
+            inst_id: 42,
+            candle_begin_time: 1_700_000_000_000,
+            open: 100.0,
+            high: 110.0,
+            low: 90.0,
+            close: 105.0,
+            volume: 2.0,
+            quote_volume: 210.0,
+            number_of_trades: 20,
+            taker_buy_base_asset_volume: 1.0,
+            taker_buy_quote_asset_volume: 105.0,
+            close_time: 1_700_000_059_999,
+            interval: 0,
+            first_trade_id: None,
+            last_trade_id: None,
+        };
+
+        repo.insert_kline(kline.clone()).await.unwrap();
+
+        match rx.recv().await.unwrap() {
+            QueryCommand::BatchInsert(payload) => {
+                assert_eq!(payload.data.len(), 1);
+                assert_eq!(payload.data[0].id, kline.id);
+                assert_eq!(payload.data[0].inst_id, kline.inst_id);
+            }
+            _ => panic!("expected batch insert command"),
+        }
+    }
+
+    // 测试目的：验证 Funding Rate repository 按 instrument 和含端点的毫秒时间范围读取，并通过注入的 channel 写入记录。
+    // 准备数据/过程：在内存 DuckDB 创建资金费率表并插入多条记录，查询指定范围，再将新记录插入 channel 并接收 batch 命令。
+    // 预期结果：查询按 funding_time 排序且 nullable mark_price 保持 None；新增记录通过注入 channel 发出。
     #[tokio::test]
     async fn funding_rate_repository_reads_inclusive_time_range_in_order() {
         let provider = create_memory_db_provider();
@@ -529,7 +572,8 @@ mod tests {
         .unwrap();
         drop(conn);
 
-        let repo = get_default_funding_rate_repo(Some(provider));
+        let (tx, mut rx) = mpsc::channel(1);
+        let repo = get_default_funding_rate_repo(Some(provider), Some(tx));
         let funding_rates = repo.find_by_inst_id_between(42, 1000, 2000).await.unwrap();
 
         assert_eq!(funding_rates.len(), 2);
@@ -537,5 +581,23 @@ mod tests {
         assert_eq!(funding_rates[0].mark_price, None);
         assert_eq!(funding_rates[1].funding_time, 2000);
         assert_eq!(funding_rates[1].mark_price, Some(100.5));
+
+        let funding_rate = FundingRatePo {
+            id: 4,
+            inst_id: 42,
+            funding_rate: 0.0004,
+            funding_time: 3000,
+            mark_price: Some(101.0),
+        };
+        repo.insert_funding_rate(funding_rate.clone()).await.unwrap();
+
+        match rx.recv().await.unwrap() {
+            QueryCommand::BatchInsert(payload) => {
+                assert_eq!(payload.data.len(), 1);
+                assert_eq!(payload.data[0].id, funding_rate.id);
+                assert_eq!(payload.data[0].funding_time, funding_rate.funding_time);
+            }
+            _ => panic!("expected batch insert command"),
+        }
     }
 }
