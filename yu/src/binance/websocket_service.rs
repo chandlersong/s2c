@@ -315,7 +315,7 @@ impl KlineSubscribeService {
         debug!("Connecting to {}", final_url);
         let interface = WebSocketConnection::run::<M>(final_url, None, proxy, Some(handler)).await;
 
-        info!(
+        debug!(
             "initial subscribe {:?} symbols num: {:?}",
             instrument_provider.instrument_type(),
             symbols.len()
