@@ -54,7 +54,7 @@ pub trait BinanceKlineRepositoryTrait {
     /// 1. 如果instrument在before_ms不存在，返回没有这个instrument的记录。
     /// 2. 如果instrument存在，则返回最大的，且小于等于before_ms的kline时间戳。
     ///
-    async fn inst_id_with_lastest_timestamp_before(&self, before_ms: u64) -> Result<HashMap<u64, u64>, YuError>;
+    async fn inst_id_with_lastest_timestamp_before(&self, before_ms: u64) -> Result<HashMap<i64, u64>, YuError>;
 
     async fn insert_kline(&self, kline: KlinePo) -> Result<(), YuError>;
 }
@@ -68,7 +68,7 @@ pub trait BinanceFundingRateRepositoryTrait {
     /// 获得每个 instrument 在 before_ms 之前最新的资金费率时间戳。
     /// 如果 instrument 在 before_ms 之前没有记录，则不包含在返回 map 中。
     ///
-    async fn inst_id_with_lastest_timestamp_before(&self, before_ms: u64) -> Result<HashMap<u64, u64>, YuError>;
+    async fn inst_id_with_lastest_timestamp_before(&self, before_ms: u64) -> Result<HashMap<i64, u64>, YuError>;
 
     async fn insert_funding_rate(&self, funding_rate: FundingRatePo) -> Result<(), YuError>;
 }
@@ -144,7 +144,7 @@ impl BinanceFundingRateRepositoryTrait for BinanceFundingRateRepositoryImpl {
         Ok(funding_rates)
     }
 
-    async fn inst_id_with_lastest_timestamp_before(&self, before_ms: u64) -> Result<HashMap<u64, u64>, YuError> {
+    async fn inst_id_with_lastest_timestamp_before(&self, before_ms: u64) -> Result<HashMap<i64, u64>, YuError> {
         let conn = self.provider.acquire()?;
         let before_ms = i64::try_from(before_ms).map_err(|_| YuError::new("before_ms exceeds DuckDB BIGINT range"))?;
         let mut stmt = conn.prepare("SELECT inst_id, MAX(funding_time) FROM bn_swap_funding_rate WHERE funding_time <= ? GROUP BY inst_id")?;
@@ -154,7 +154,6 @@ impl BinanceFundingRateRepositoryTrait for BinanceFundingRateRepositoryImpl {
         while let Some(row) = rows.next()? {
             let inst_id: i64 = row.get(0)?;
             let timestamp: i64 = row.get(1)?;
-            let inst_id = u64::try_from(inst_id).map_err(|_| YuError::new("negative instrument ID in funding rate table"))?;
             let timestamp = u64::try_from(timestamp).map_err(|_| YuError::new("negative funding_time in funding rate table"))?;
             timestamps.insert(inst_id, timestamp);
         }
@@ -229,7 +228,7 @@ impl BinanceKlineRepositoryTrait for BinanceKlineRepositoryImpl {
         Ok(klines)
     }
 
-    async fn inst_id_with_lastest_timestamp_before(&self, before_ms: u64) -> Result<HashMap<u64, u64>, YuError> {
+    async fn inst_id_with_lastest_timestamp_before(&self, before_ms: u64) -> Result<HashMap<i64, u64>, YuError> {
         let conn = self.provider.acquire()?;
         let before_ms = i64::try_from(before_ms).map_err(|_| YuError::new("before_ms exceeds DuckDB BIGINT range"))?;
         let sql = format!(
@@ -243,7 +242,6 @@ impl BinanceKlineRepositoryTrait for BinanceKlineRepositoryImpl {
         while let Some(row) = rows.next()? {
             let inst_id: i64 = row.get(0)?;
             let timestamp: i64 = row.get(1)?;
-            let inst_id = u64::try_from(inst_id).map_err(|_| YuError::new("negative instrument ID in kline table"))?;
             let timestamp = u64::try_from(timestamp).map_err(|_| YuError::new("negative close_time in kline table"))?;
             timestamps.insert(inst_id, timestamp);
         }

@@ -109,7 +109,7 @@ pub async fn initial_kline(
     interval: HistoryInterval,
     db: DuckTableTableChannel<KlinePo>,
     end_ms: Option<u64>,
-    lastest_timestamps: HashMap<u64, u64>,
+    lastest_timestamps: HashMap<i64, u64>,
 ) -> Result<(), YuError> {
     let symbol_type = instrument_provider.instrument_type();
     let now = end_ms.unwrap_or_else(unix_time_now_u64_utc);
@@ -129,7 +129,7 @@ pub async fn initial_kline(
     let mut last_progress_log = tokio::time::Instant::now();
     let mut completed = 0;
     for instrument in instruments {
-        let latest_ts_in_db = lastest_timestamps.get(&now);
+        let latest_ts_in_db = lastest_timestamps.get(&instrument.id);
         let fetcher = match &symbol_type {
             InstrumentType::Spot => HistoryFetcherImpl::kline(&SPOT_KLINE_HISTORY_COMMAND),
             InstrumentType::Swap => HistoryFetcherImpl::kline(&SWAP_KLINE_HISTORY_COMMAND),
