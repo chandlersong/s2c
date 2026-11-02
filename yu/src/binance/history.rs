@@ -141,13 +141,15 @@ pub async fn initial_kline(
         };
         let inst_start = match latest_ts_in_db {
             None => start,
-            Some(v) => max(*v, start),
+            // 如果数据库里面有数据，那么就从数据库里面的最新时间的下一个周期开始
+            Some(v) => max(*v + interval.to_milliseconds(), start),
         };
         // 如果开始时间大于结束时间，说明不需要初始化
         if inst_start > end {
             continue;
         }
-        let inst_start = interval.get_close_unix_ms(inst_start) + 1;
+        //要从下一个周期开始。而不是这个周期，
+        let inst_start = interval.get_close_unix_ms(inst_start);
         let request = CommonRequestBuilder::new(instrument.symbol, 1000, interval.clone());
         if let Err(error) = fetcher
             .get_all_kline_data(request, Some(interval.clone()), Some(inst_start), Some(end), Some(saver.clone()), true)
