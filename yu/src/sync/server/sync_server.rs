@@ -239,7 +239,7 @@ impl YuSyncServer {
                     result = history_rx.recv(), if history_channel_open => {
                         match result {
                             Some(entry) => {
-                                debug!("Received history entry with instrument type: {}", entry.instrument_type);
+                                trace!("Received history entry with instrument type: {}", entry.instrument_type);
                                 history_buffer.push(entry);
                                 history_buffer.len() >= max_cache_size
                             }
