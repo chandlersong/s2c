@@ -4,7 +4,7 @@ use crate::tools::{load_ed25519_signing_key, sign_hmac};
 use governor::Jitter;
 use governor::middleware::StateSnapshot;
 use li::tools::time::{unix_2_readable, unix_time_now_u64_utc};
-use log::{error, info};
+use log::{debug, error, info};
 use reqwest::{RequestBuilder, Response};
 use serde::Deserialize;
 use std::sync::Arc;
@@ -154,7 +154,7 @@ impl BinanceRestfulClient {
             if request_info.host.check_slow_down(None).await {
                 let jitter = Jitter::up_to(Duration::from_secs(5));
                 let sleep_duration = jitter + Duration::ZERO;
-                info!(
+                debug!(
                     "Host {} is in slow down mode, waiting for {:?} seconds before retrying",
                     request_info.host.host_as_str(),
                     sleep_duration.as_secs()
