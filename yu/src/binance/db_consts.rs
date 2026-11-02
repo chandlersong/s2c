@@ -205,10 +205,11 @@ pub(crate) const ALL_BINANCE_TABLES: &[BinanceTables] = &[
     BinanceTables::SpotOrderBookSnapshot,
 ];
 
-pub fn drop_tables(provider: Option<DuckDBDSProvider>) -> Result<(), YuError> {
+pub fn drop_tables(provider: Option<DuckDBDSProvider>, tables: Option<&[BinanceTables]>) -> Result<(), YuError> {
     let db_provider = provider.unwrap_or_else(|| DuckDBDSProvider::default());
     let conn = db_provider.acquire()?;
-    for table in ALL_BINANCE_TABLES {
+    let tables_to_drop = tables.unwrap_or(ALL_BINANCE_TABLES);
+    for table in tables_to_drop {
         conn.execute(&format!("DROP TABLE IF EXISTS {}", table.table_name()), [])?;
     }
 
@@ -321,7 +322,7 @@ mod tests {
             }
         }
 
-        drop_tables(Some(db_provider)).unwrap();
+        drop_tables(Some(db_provider), None).unwrap();
 
         for table in ALL_BINANCE_TABLES {
             let table_count: i64 = conn
