@@ -116,7 +116,7 @@ pub async fn initial_kline(
     let instruments = instrument_provider.instruments(None);
     //kline会有一个会取到未闭合K线的问题。所以我这里也就去取上一根K线的之前的一毫秒。
     //例如现在是36分，通过restful能够取到35～39的K线，但是未闭合。所以我直接取34.59.59.999这个时间点的K线。所以就规避了。
-    let start = interval.get_close_unix_ms(now - data_retention_ms);
+    let start = now - data_retention_ms;
     let end = interval.get_close_unix_ms(now).saturating_sub(1);
     info!(
         "开始 {} kline 初始化数据，from {} to {}",
@@ -140,13 +140,14 @@ pub async fn initial_kline(
             }
         };
         let inst_start = match latest_ts_in_db {
-            None => start + 1,
-            Some(v) => max(*v + 1, start),
+            None => start,
+            Some(v) => max(*v, start),
         };
         // 如果开始时间大于结束时间，说明不需要初始化
         if inst_start > end {
             continue;
         }
+        let inst_start = interval.get_close_unix_ms(inst_start) + 1;
         let request = CommonRequestBuilder::new(instrument.symbol, 1000, interval.clone());
         if let Err(error) = fetcher
             .get_all_kline_data(request, Some(interval.clone()), Some(inst_start), Some(end), Some(saver.clone()), true)
