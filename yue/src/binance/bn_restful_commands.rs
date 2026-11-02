@@ -86,8 +86,8 @@ pub const BINANCE_FUNDING_RATE_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| 
     Arc::new(HostInfo::new_with_decelerate_token(
         "https://testnet.binance.vision",
         SWAP_FUNDING_PER_MINUTE,
-        create_share_rate_limiter(SWAP_FUNDING_PER_MINUTE, Some(2)),
-        85,
+        create_share_rate_limiter(SWAP_FUNDING_PER_MINUTE, Some(1)),
+        90,
     ))
 });
 
@@ -96,8 +96,8 @@ pub const BINANCE_FUNDING_RATE_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| 
     Arc::new(HostInfo::new_with_decelerate_token(
         "https://fapi.binance.com",
         SWAP_FUNDING_PER_MINUTE,
-        create_share_rate_limiter(SWAP_FUNDING_PER_MINUTE, Some(2)),
-        85,
+        create_share_rate_limiter(SWAP_FUNDING_PER_MINUTE, Some(1)),
+        90,
     ))
 });
 
