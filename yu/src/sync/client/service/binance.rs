@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use futures::executor::block_on;
 use li::tools::time::UnixTimeStamp;
-use log::warn;
+use log::{info, warn};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -69,6 +69,7 @@ impl ClientInstrumentServiceTrait for BinanceSpotClientInstrumentService {
         let Some(instrument::Payload::Binance(binance_instrument)) = instrument.payload.as_ref() else {
             return Err(YuError::new("instrument payload is not a Binance instrument"));
         };
+        //这里其实主要更新的是kline历史数据。funding rate是swap的，暂时不管
         let history_type = match BinanceInstrumentType::from_symbol_type(&binance_instrument.symbol_type) {
             Some(BinanceInstrumentType::Spot) => HistoryType::BinanceSpot,
             Some(BinanceInstrumentType::Swap) => HistoryType::BinanceSwap,
@@ -79,6 +80,16 @@ impl ClientInstrumentServiceTrait for BinanceSpotClientInstrumentService {
             .ok_or_else(|| YuError::new("Binance history service is not configured"))?
             .initial_data(instrument.clone(), end_ms)
             .await?;
+
+        //swap还要更新一下funding rate
+        if history_type == HistoryType::BinanceSwap {
+            self.history_services
+                .get(&HistoryType::BinanceSwapFundingRate)
+                .ok_or_else(|| YuError::new("Binance swap funding rate history service is not configured"))?
+                .initial_data(instrument, end_ms)
+                .await?;
+        }
+
         // FUTURE：
         // trade这类初始化的逻辑，就很难，因为他不是全集,需要服务器把这类信息发过来。所以就暂时先不管了。。
         Ok(())
@@ -694,43 +705,8 @@ impl BinanceSpotTradeClientHistoryService {
 #[async_trait]
 impl ClientHistoryServiceTrait for BinanceSpotTradeClientHistoryService {
     async fn initial_data(&self, instrument: Instrument, end_ms: UnixTimeStamp) -> Result<(), YuError> {
-        if instrument.instrument_type != InstrumentType::Binance as i32 {
-            return Err(YuError::new("instrument exchange is not Binance"));
-        }
-        let Some(instrument::Payload::Binance(binance_instrument)) = instrument.payload else {
-            return Err(YuError::new("instrument payload is not Binance"));
-        };
-        if BinanceInstrumentType::from_symbol_type(&binance_instrument.symbol_type) != Some(BinanceInstrumentType::Spot) {
-            return Err(YuError::new("instrument is not a Binance spot instrument"));
-        }
-
-        let cached_local_inst_id = self.id_maps.read().await.get(&binance_instrument.server_id).copied();
-        let local_inst_id = match cached_local_inst_id {
-            Some(local_inst_id) => local_inst_id,
-            None => {
-                let local_inst_id = match self.repository.find_instrument_id_by_server_id(binance_instrument.server_id).await? {
-                    Some(local_inst_id) => local_inst_id,
-                    None => {
-                        self.repository
-                            .create_instrument(LocalBinanceInstrumentPo::from_proto(binance_instrument.clone()))
-                            .await?
-                    }
-                };
-                self.id_maps.write().await.insert(binance_instrument.server_id, local_inst_id);
-                local_inst_id
-            }
-        };
-
-        let cursor = self
-            .repository
-            .find_latest_spot_trade_cursor_by_server_id(binance_instrument.server_id)
-            .await?;
-        let start_ms = match cursor {
-            Some((event_time, _)) => event_time,
-            None => binance_instrument.on_board_time.unwrap_or(DEFAULT_START_TIMESTAMP),
-        };
-        self.backfill_history(binance_instrument.server_id, local_inst_id, start_ms, end_ms, cursor)
-            .await
+        // FUTURE: Binance spot trade history恢复保存到数据库的时候再说吧。.
+        Ok(())
     }
 
     async fn reconcile_living_instrument_with_server(&self, _end_ms: UnixTimeStamp) -> Result<(), YuError> {

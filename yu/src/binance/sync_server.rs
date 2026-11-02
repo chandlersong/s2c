@@ -16,6 +16,7 @@ use crate::sync::models::grpc_sync::{HistoryEntry, HistoryType, Instrument, Serv
 use crate::sync::server::sync_server::{SyncHistoryService, SyncHistoryServiceTrait, SyncInstrumentServiceTrait};
 use async_trait::async_trait;
 use li::tools::time::unix_time_now_u64_utc;
+use li::websocket::connection::BroadcastMessageHandler;
 use log::{debug, error, info};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -278,7 +279,7 @@ impl SyncHistoryServiceTrait for BinanceSpotSyncHistoryService {
         if klines.is_empty() {
             let message = ServerMessage {
                 history: vec![],
-                server_timestamp: li::tools::time::unix_time_now_u64_utc(),
+                server_timestamp: unix_time_now_u64_utc(),
             };
             let _ = tx.send(Ok(message)).await;
             return Ok(());
@@ -287,7 +288,7 @@ impl SyncHistoryServiceTrait for BinanceSpotSyncHistoryService {
         for batch in klines.chunks(batch_size.max(1)) {
             let message = ServerMessage {
                 history: batch.iter().map(|kline| kline.to_spot_history_entry()).collect(),
-                server_timestamp: li::tools::time::unix_time_now_u64_utc(),
+                server_timestamp: unix_time_now_u64_utc(),
             };
             if tx.send(Ok(message)).await.is_err() {
                 break;
@@ -532,11 +533,22 @@ struct BinanceSwapFundingRateGapSaver {
     repo: BinanceFundingRateRepository,
     history_tx: mpsc::Sender<HistoryEntry>,
     inst_id: u64,
+    broadcast: bool,
 }
 
 impl BinanceSwapFundingRateGapSaver {
-    fn new(repo: BinanceFundingRateRepository, history_tx: mpsc::Sender<HistoryEntry>, inst_id: u64) -> ShareHistoryBatchHandler<FundingRate> {
-        Arc::new(Self { repo, history_tx, inst_id }) as Arc<dyn HistoryBatchHandlerTrait<FundingRate> + Send>
+    fn new(
+        repo: BinanceFundingRateRepository,
+        history_tx: mpsc::Sender<HistoryEntry>,
+        inst_id: u64,
+        broadcast: bool,
+    ) -> ShareHistoryBatchHandler<FundingRate> {
+        Arc::new(Self {
+            repo,
+            history_tx,
+            inst_id,
+            broadcast,
+        }) as Arc<dyn HistoryBatchHandlerTrait<FundingRate> + Send>
     }
 }
 
@@ -550,9 +562,11 @@ impl HistoryBatchHandlerTrait<FundingRate> for BinanceSwapFundingRateGapSaver {
         if let Err(error) = self.repo.batch_insert_funding_rate(funding_rates.clone()).await {
             error!("Error inserting Binance Swap Funding Rate into repository: {}", error);
         }
-        for funding_rate in funding_rates {
-            if let Err(error) = self.history_tx.send(funding_rate.to_swap_history_entry()).await {
-                error!("Error sending Binance Swap Funding Rate history entry: {}", error);
+        if self.broadcast {
+            for funding_rate in &funding_rates {
+                if let Err(error) = self.history_tx.send(funding_rate.to_swap_history_entry()).await {
+                    error!("Error broadcasting Binance Swap Funding Rate history entry: {}", error);
+                }
             }
         }
         Ok(())
@@ -584,7 +598,7 @@ impl BinanceSwapFundingRateSyncHistoryService {
         })
     }
 
-    async fn sync_funding_rate(&self, inst_id: u64, start_ms: u64, end_ms: u64, interval: HistoryInterval) -> Result<(), YuError> {
+    async fn sync_funding_rate(&self, inst_id: u64, start_ms: u64, end_ms: u64, interval: HistoryInterval, broadcast: bool) -> Result<(), YuError> {
         let instrument = self
             .inst_provider
             .instruments(None)
@@ -592,7 +606,7 @@ impl BinanceSwapFundingRateSyncHistoryService {
             .find(|instrument| u64::try_from(instrument.id).ok() == Some(inst_id))
             .ok_or_else(|| YuError::new(&format!("Binance Swap instrument {inst_id} is unavailable for Funding Rate sync")))?;
         let request = CommonRequestBuilder::new(instrument.symbol, 1000, interval.clone());
-        let saver = BinanceSwapFundingRateGapSaver::new(self.funding_rate_repo.clone(), self.history_tx.clone(), inst_id);
+        let saver = BinanceSwapFundingRateGapSaver::new(self.funding_rate_repo.clone(), self.history_tx.clone(), inst_id, broadcast);
         HistoryFetcherImpl::swap_funding_rate()
             .get_all_kline_data(request, Some(interval), Some(start_ms), Some(end_ms), Some(saver), true)
             .await?;
@@ -659,7 +673,7 @@ impl SyncHistoryServiceTrait for BinanceSwapFundingRateSyncHistoryService {
                 for gap in gaps {
                     match gap {
                         ValidationGap::MissingData { start_time, end_time, .. } => {
-                            self.sync_funding_rate(instrument.id as u64, start_time, end_time, HistoryInterval::OneHour)
+                            self.sync_funding_rate(instrument.id as u64, start_time, end_time, HistoryInterval::OneHour, true)
                                 .await?;
                         }
                         other => debug!("skip unsupported Binance Swap history gap: {:?}", other),
@@ -699,7 +713,8 @@ impl SyncHistoryServiceTrait for BinanceSwapFundingRateSyncHistoryService {
                 completed += 1;
                 continue;
             }
-            self.sync_funding_rate(instrument.id as u64, inst_start, end, interval.clone()).await?;
+            self.sync_funding_rate(instrument.id as u64, inst_start, end, interval.clone(), false)
+                .await?;
             completed += 1;
 
             if last_progress_log.elapsed() >= INITIAL_HISTORY_PROGRESS_LOG_INTERVAL {
@@ -723,7 +738,7 @@ impl SyncHistoryServiceTrait for BinanceSwapFundingRateSyncHistoryService {
         let end = interval.get_now_close_unix_ms_utc() + 30 * 1000;
         let instruments = self.inst_provider.instruments(None);
         for instrument in instruments {
-            self.sync_funding_rate(instrument.id as u64, start, end, interval.clone()).await?;
+            self.sync_funding_rate(instrument.id as u64, start, end, interval.clone(), true).await?;
         }
         Ok(())
     }
