@@ -141,7 +141,7 @@ pub async fn initial_kline(
         };
         let inst_start = match latest_ts_in_db {
             None => start + 1,
-            Some(v) => max(*v, start + 1),
+            Some(v) => max(*v + 1, start),
         };
         // 如果开始时间大于结束时间，说明不需要初始化
         if inst_start > end {
