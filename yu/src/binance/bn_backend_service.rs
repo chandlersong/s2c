@@ -54,7 +54,7 @@ pub fn get_swap_funding_rate_table() -> DuckTableTableChannel<FundingRatePo> {
                 BinanceTables::SwapFundingRate,
                 None,
                 Duration::from_secs(5),
-                600,
+                10000,
             )
         })
         .clone()

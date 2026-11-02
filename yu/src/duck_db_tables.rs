@@ -223,8 +223,6 @@ impl<P: DuckDBPO, T: DuckDbTableTrait> DuckDBOneTable<P, T> {
                                                           error!("Failed to to get connection when insert,table is {},error is {}",table.table_name(),e);
                                                     }
                                                 };
-
-
                                             }
                                         };
                                     }QueryCommand::GetDataSourceProvider(payload) => {

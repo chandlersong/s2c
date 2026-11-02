@@ -69,7 +69,8 @@ pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: m
     info!("finished initial Binance Spot and Swap instruments data");
     trade_history_service.initial_history_data(None).await?;
 
-    let start_initial_ms = unix_time_now_u64_utc();
+    //加上一个周期的时间。因为后续处理，会减去当前周期。
+    let start_initial_ms = unix_time_now_u64_utc() + interval.to_milliseconds();
     info!(
         "started initial Binance Spot kline history data,end time: {}",
         unix_2_readable(&start_initial_ms)

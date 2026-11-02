@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
 use yue::models::InstrumentType;
-use yue::query_message::{BatchInsertPayload, DataSourceProviderTrait, QueryCommand};
+use yue::query_message::{BatchInsertPayload, DataSourceProviderTrait, InsertPayload, QueryCommand};
 
 fn read_order_types(value: duckdb::types::Value) -> Result<Vec<String>, YuError> {
     let values = match value {
@@ -57,6 +57,8 @@ pub trait BinanceKlineRepositoryTrait {
     async fn inst_id_with_lastest_timestamp_before(&self, before_ms: u64) -> Result<HashMap<i64, u64>, YuError>;
 
     async fn insert_kline(&self, kline: KlinePo) -> Result<(), YuError>;
+
+    async fn batch_insert_kline(&self, klines: Vec<KlinePo>) -> Result<(), YuError>;
 }
 
 #[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
@@ -71,6 +73,8 @@ pub trait BinanceFundingRateRepositoryTrait {
     async fn inst_id_with_lastest_timestamp_before(&self, before_ms: u64) -> Result<HashMap<i64, u64>, YuError>;
 
     async fn insert_funding_rate(&self, funding_rate: FundingRatePo) -> Result<(), YuError>;
+
+    async fn batch_insert_funding_rate(&self, funding_rates: Vec<FundingRatePo>) -> Result<(), YuError>;
 }
 
 #[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
@@ -163,7 +167,15 @@ impl BinanceFundingRateRepositoryTrait for BinanceFundingRateRepositoryImpl {
 
     async fn insert_funding_rate(&self, funding_rate: FundingRatePo) -> Result<(), YuError> {
         self.db
-            .send(QueryCommand::BatchInsert(BatchInsertPayload::new_no_replay(vec![funding_rate])))
+            .send(QueryCommand::Insert(InsertPayload::new_no_replay(funding_rate)))
+            .await
+            .map_err(|error| YuError::CustomError(format!("failed insert binance rate: {error}")))?;
+        Ok(())
+    }
+
+    async fn batch_insert_funding_rate(&self, funding_rates: Vec<FundingRatePo>) -> Result<(), YuError> {
+        self.db
+            .send(QueryCommand::BatchInsert(BatchInsertPayload::new_no_replay(funding_rates)))
             .await
             .map_err(|error| YuError::CustomError(format!("failed insert binance rate: {error}")))?;
         Ok(())
@@ -251,7 +263,15 @@ impl BinanceKlineRepositoryTrait for BinanceKlineRepositoryImpl {
 
     async fn insert_kline(&self, kline: KlinePo) -> Result<(), YuError> {
         self.db
-            .send(QueryCommand::BatchInsert(BatchInsertPayload::new_no_replay(vec![kline])))
+            .send(QueryCommand::Insert(InsertPayload::new_no_replay(kline)))
+            .await
+            .map_err(|error| YuError::CustomError(format!("failed insert binance kline: {error}")))?;
+        Ok(())
+    }
+
+    async fn batch_insert_kline(&self, klines: Vec<KlinePo>) -> Result<(), YuError> {
+        self.db
+            .send(QueryCommand::BatchInsert(BatchInsertPayload::new_no_replay(klines)))
             .await
             .map_err(|error| YuError::CustomError(format!("failed insert binance kline: {error}")))?;
         Ok(())
