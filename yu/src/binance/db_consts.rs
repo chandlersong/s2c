@@ -18,6 +18,7 @@ pub enum BinanceTables {
     SwapKline,
     SwapFundingRate,
     SpotTrade,
+    SpotOrderBookSnapshot,
     SpotOrderEvents,
     SwapOrderEvents,
 }
@@ -30,6 +31,7 @@ impl DuckDbTableTrait for BinanceTables {
             BinanceTables::SwapKline => String::from("bn_swap_kline"),
             BinanceTables::SwapFundingRate => String::from("bn_swap_funding_rate"),
             BinanceTables::SpotTrade => String::from("bn_spot_trade"),
+            BinanceTables::SpotOrderBookSnapshot => String::from("bn_spot_order_book_snapshot"),
             BinanceTables::SpotOrderEvents => String::from("bn_order_events_spot"),
             BinanceTables::SwapOrderEvents => String::from("bn_order_events_swap"),
         }
@@ -42,6 +44,7 @@ impl DuckDbTableTrait for BinanceTables {
             BinanceTables::SwapKline => String::from(CREATE_SWAP_KLINE_TABLE),
             BinanceTables::SwapFundingRate => String::from(CREATE_FUNDING_RATE_TABLE),
             BinanceTables::SpotTrade => String::from(BN_SPOT_TRADE_TABLE),
+            BinanceTables::SpotOrderBookSnapshot => String::from(CREATE_BN_SPOT_ORDER_BOOK_SNAPSHOT_TABLE),
             BinanceTables::SpotOrderEvents => String::from(CREATE_BN_ORDER_EVENTS_SPOT_TABLE),
             BinanceTables::SwapOrderEvents => String::from(CREATE_BN_ORDER_EVENTS_SWAP_TABLE),
         }
@@ -179,6 +182,17 @@ const BN_SPOT_TRADE_TABLE: &str = r#"
     CREATE INDEX IF NOT EXISTS idx_bn_spot_trade_symbol_time ON bn_spot_trade(inst_id, created_at DESC);
     "#;
 
+const CREATE_BN_SPOT_ORDER_BOOK_SNAPSHOT_TABLE: &str = r#"
+    CREATE TABLE IF NOT EXISTS bn_spot_order_book_snapshot (
+        id BIGINT PRIMARY KEY,
+        inst_id BIGINT NOT NULL,
+        snapshot_time BIGINT NOT NULL,
+        local_update_id BIGINT NOT NULL,
+        bids JSON NOT NULL,
+        asks JSON NOT NULL
+    );
+    "#;
+
 // 原生方式：维护一个静态数组，便于遍历所有表类型
 pub(crate) const ALL_BINANCE_TABLES: &[BinanceTables] = &[
     BinanceTables::Instrument,
@@ -188,6 +202,7 @@ pub(crate) const ALL_BINANCE_TABLES: &[BinanceTables] = &[
     BinanceTables::SpotOrderEvents,
     BinanceTables::SwapOrderEvents,
     BinanceTables::SpotTrade,
+    BinanceTables::SpotOrderBookSnapshot,
 ];
 
 pub fn drop_tables(provider: Option<DuckDBDSProvider>) -> Result<(), YuError> {
@@ -269,6 +284,27 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM pragma_table_info('bn_instruments')", [], |row| row.get(0))
             .unwrap();
         assert_eq!(column_count, 9);
+    }
+
+    // 测试目的：验证订单簿快照表已注册到 Binance 表集合且 DDL 包含完整快照字段。
+    // 准备数据/过程：通过 BinanceTables 获取表名和建表语句，在内存 DuckDB 中执行后读取列定义。
+    // 预期结果：注册表名正确，价量档位为 JSON，instrument、毫秒快照时间和更新 ID 均存在。
+    #[test]
+    fn binance_order_book_snapshot_table_ddl_executes() {
+        let table = BinanceTables::SpotOrderBookSnapshot;
+        assert_eq!(table.table_name(), "bn_spot_order_book_snapshot");
+
+        let conn = duckdb::Connection::open_in_memory().unwrap();
+        for statement in table.create_table_statement().split(';').map(str::trim).filter(|sql| !sql.is_empty()) {
+            conn.execute(statement, []).unwrap();
+        }
+
+        let column_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM pragma_table_info('bn_spot_order_book_snapshot')", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(column_count, 6);
     }
 
     // 测试目的：验证 drop_tables 会删除 BinanceTables 中定义的全部数据表。

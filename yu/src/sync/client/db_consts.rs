@@ -13,6 +13,7 @@ pub enum ClientsTables {
     BinanceSwapKline,
     BinanceSwapTrade,
     BinanceSwapFundingRate,
+    BinanceOrderBookSnapshot,
 }
 
 impl PostgresqlTableTrait for ClientsTables {
@@ -29,6 +30,7 @@ impl PostgresqlTableTrait for ClientsTables {
             ClientsTables::BinanceSwapKline => "binance_swap_kline_history",
             ClientsTables::BinanceSwapTrade => "binance_swap_trade_history",
             ClientsTables::BinanceSwapFundingRate => "binance_swap_funding_rate_history",
+            ClientsTables::BinanceOrderBookSnapshot => "binance_order_book_snapshot_history",
         }
     }
 
@@ -45,6 +47,7 @@ impl PostgresqlTableTrait for ClientsTables {
             ClientsTables::BinanceSwapKline => CREATE_BINANCE_SWAP_KLINE_TABLE,
             ClientsTables::BinanceSwapTrade => CREATE_BINANCE_SWAP_TRADE_TABLE,
             ClientsTables::BinanceSwapFundingRate => CREATE_BINANCE_SWAP_FUNDING_RATE_TABLE,
+            ClientsTables::BinanceOrderBookSnapshot => CREATE_BINANCE_ORDER_BOOK_SNAPSHOT_TABLE,
         }
     }
 }
@@ -344,6 +347,19 @@ ALTER TABLE binance_swap_funding_rate_history SET (
 SELECT add_compression_policy('binance_swap_funding_rate_history', INTERVAL '30 days');
 "#;
 
+pub const CREATE_BINANCE_ORDER_BOOK_SNAPSHOT_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS binance_order_book_snapshot_history (
+    id BIGINT PRIMARY KEY,
+    server_id BIGINT NOT NULL,
+    inst_id BIGINT NOT NULL,
+    snapshot_time BIGINT NOT NULL,
+    local_update_id BIGINT NOT NULL,
+    bids JSONB NOT NULL,
+    asks JSONB NOT NULL,
+    batch_timestamp BIGINT NOT NULL
+);
+"#;
+
 pub(crate) const ALL_CLIENT_TABLES: &[ClientsTables] = &[
     ClientsTables::PolymarketPriceHistory,
     ClientsTables::PolyMarketInstruments,
@@ -356,4 +372,35 @@ pub(crate) const ALL_CLIENT_TABLES: &[ClientsTables] = &[
     ClientsTables::BinanceSwapKline,
     ClientsTables::BinanceSwapTrade,
     ClientsTables::BinanceSwapFundingRate,
+    ClientsTables::BinanceOrderBookSnapshot,
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::postgresql_db::PostgresqlTableTrait;
+
+    // 测试目的：验证订单簿快照客户端表已加入初始化列表，且 schema 字段与本地快照 PO 的列一致。
+    // 准备数据/过程：读取表注册项和 DDL，检查主键、instrument、快照元数据、档位 JSONB 及批次时间列。
+    // 预期结果：表名正确、初始化列表可发现该表，并声明全部八个本地 PO 字段。
+    #[test]
+    fn binance_order_book_snapshot_client_table_is_registered() {
+        let table = ClientsTables::BinanceOrderBookSnapshot;
+        let columns = [
+            "id BIGINT PRIMARY KEY",
+            "server_id BIGINT NOT NULL",
+            "inst_id BIGINT NOT NULL",
+            "snapshot_time BIGINT NOT NULL",
+            "local_update_id BIGINT NOT NULL",
+            "bids JSONB NOT NULL",
+            "asks JSONB NOT NULL",
+            "batch_timestamp BIGINT NOT NULL",
+        ];
+
+        assert_eq!(table.table_name(), "binance_order_book_snapshot_history");
+        assert!(ALL_CLIENT_TABLES.iter().any(|registered| registered.table_name() == table.table_name()));
+        for column in columns {
+            assert!(table.create_table_statement().contains(column));
+        }
+    }
+}

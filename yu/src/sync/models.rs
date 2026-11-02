@@ -29,6 +29,7 @@ pub mod grpc_sync {
                 Self::BinanceSwap => "Binance Swap",
                 Self::BinanceSwapTrade => "Binance Swap Trade",
                 Self::BinanceSwapFundingRate => "Binance Swap Funding Rate",
+                Self::BinanceOrderBookSnapshot => "Binance Order Book Snapshot",
             }
         }
     }
@@ -139,13 +140,44 @@ pub mod grpc_sync {
             }
         }
     }
+
+    impl From<crate::binance::models::po::BinanceOrderBookSnapshotPo> for BinanceOrderBookSnapshot {
+        fn from(value: crate::binance::models::po::BinanceOrderBookSnapshotPo) -> Self {
+            Self {
+                server_id: value.id as u64,
+                snapshot_time: value.snapshot_time,
+                local_update_id: value.local_update_id,
+                bids: value
+                    .bids
+                    .into_iter()
+                    .map(|level| BinanceOrderBookLevel {
+                        price: level.price,
+                        quantity: level.quantity,
+                    })
+                    .collect(),
+                asks: value
+                    .asks
+                    .into_iter()
+                    .map(|level| BinanceOrderBookLevel {
+                        price: level.price,
+                        quantity: level.quantity,
+                    })
+                    .collect(),
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::grpc_sync::{BinanceFundingRate, BinanceKline, BinanceTrade, HistoryType, InstrumentType as GrpcInstrumentType};
+    use crate::binance::models::po::BinanceOrderBookSnapshotPo;
     use crate::binance::models::po::{BinanceInstrument as BinanceInstrumentPo, KlinePo, SpotStreamTradeRecordPo};
+    use crate::sync::client::po::binance::LocalBinanceOrderBookSnapshotPo;
     use crate::sync::client::po::binance::{LocalBinanceKlinePo, LocalBinanceTradePo};
+    use rust_decimal::Decimal;
+    use yue::binance::bn_models::spot_restful::Depth;
+    use yue::binance::order_book::OrderBook;
     use yue::models::InstrumentType;
 
     #[test]
@@ -261,5 +293,64 @@ mod tests {
         assert_eq!(proto.funding_time, 1_700_000_000_123);
         assert_eq!(proto.funding_rate, 0.0001);
         assert_eq!(proto.mark_price, Some(100.25));
+    }
+
+    // 测试目的：验证 OrderBook 完整快照从服务端模型经 protobuf 转为客户端 PO 时保留档位精度、顺序、instrument 关联和毫秒时间。
+    // 准备数据/过程：构造包含多个买卖档位的 OrderBook，转为服务端 PO、HistoryEntry，再由客户端 PO 解码并生成 COPY 行。
+    // 预期结果：更新时间、更新 ID、买卖档位价格/数量字符串及 instrument ID 均一致，JSONB 列数据可用且 CSV 列数匹配。
+    #[test]
+    fn binance_order_book_snapshot_maps_full_depth_without_precision_loss() {
+        use crate::postgresql_db::CopyInsertable;
+        use rust_decimal::prelude::FromStr;
+
+        let order_book = OrderBook::new(
+            "BTCUSDT",
+            Depth {
+                last_update_id: 1234,
+                bids: vec![
+                    (Decimal::from_str("100.00000001").unwrap(), Decimal::from_str("0.12345678").unwrap()),
+                    (Decimal::from_str("99.5").unwrap(), Decimal::from_str("2.0").unwrap()),
+                ],
+                asks: vec![
+                    (Decimal::from_str("100.5").unwrap(), Decimal::from_str("3.00000001").unwrap()),
+                    (Decimal::from_str("101.0").unwrap(), Decimal::from_str("4").unwrap()),
+                ],
+            },
+        )
+        .unwrap();
+        let snapshot_time = order_book.last_update_time;
+        let server_po = BinanceOrderBookSnapshotPo::from_order_book(&order_book, 42);
+        let entry = server_po.to_history_entry();
+        let client_po = LocalBinanceOrderBookSnapshotPo::from_history_entry(&entry, 77);
+        let csv_row = client_po.to_csv_row();
+        let columns = <LocalBinanceOrderBookSnapshotPo as CopyInsertable>::columns();
+
+        assert_eq!(entry.inst_id, 42);
+        assert_eq!(HistoryType::try_from(entry.history_type).unwrap(), HistoryType::BinanceOrderBookSnapshot);
+        assert_eq!(client_po.inst_id, 77);
+        assert_eq!(client_po.server_id, server_po.id as u64);
+        assert_eq!(client_po.snapshot_time, snapshot_time);
+        assert_eq!(client_po.local_update_id, 1234);
+        assert_eq!(client_po.bids[0].price, "100.00000001");
+        assert_eq!(client_po.bids[0].quantity, "0.12345678");
+        assert_eq!(client_po.bids[1].price, "99.5");
+        assert_eq!(client_po.asks[0].price, "100.5");
+        assert_eq!(client_po.asks[0].quantity, "3.00000001");
+        let mut in_quotes = false;
+        let mut fields = 1;
+        let mut characters = csv_row.chars().peekable();
+        while let Some(character) = characters.next() {
+            match character {
+                '"' if in_quotes && characters.peek() == Some(&'"') => {
+                    characters.next();
+                }
+                '"' => in_quotes = !in_quotes,
+                ',' if !in_quotes => fields += 1,
+                _ => {}
+            }
+        }
+
+        assert_eq!(fields, columns.split(',').count());
+        assert!(csv_row.contains(r#"[{""price"":""100.00000001"",""quantity"":""0.12345678""}"#));
     }
 }

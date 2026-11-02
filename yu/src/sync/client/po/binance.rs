@@ -1,5 +1,7 @@
 use crate::postgresql_db::CopyInsertable;
-use crate::sync::models::grpc_sync::{BinanceFundingRate, BinanceInstrument, BinanceKline, BinanceTrade, HistoryEntry, history_entry::Payload};
+use crate::sync::models::grpc_sync::{
+    BinanceFundingRate, BinanceInstrument, BinanceKline, BinanceOrderBookSnapshot, BinanceTrade, HistoryEntry, history_entry::Payload,
+};
 use li::tools::time::{format_timestamp_millis, unix_time_now_u64_utc};
 use sqlx::Row;
 use yue::tools::get_snow_flake_id_u64;
@@ -275,6 +277,85 @@ impl CopyInsertable for LocalBinanceFundingRatePo {
     }
 }
 
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct LocalBinanceOrderBookLevelPo {
+    pub price: String,
+    pub quantity: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct LocalBinanceOrderBookSnapshotPo {
+    pub id: u64,
+    pub server_id: u64,
+    pub inst_id: u64,
+    pub snapshot_time: u64,
+    pub local_update_id: u64,
+    pub bids: Vec<LocalBinanceOrderBookLevelPo>,
+    pub asks: Vec<LocalBinanceOrderBookLevelPo>,
+    pub batch_timestamp: u64,
+}
+
+impl LocalBinanceOrderBookSnapshotPo {
+    pub fn from_proto(snapshot: BinanceOrderBookSnapshot, inst_id: u64, batch_timestamp: u64) -> Self {
+        Self {
+            id: get_snow_flake_id_u64(),
+            server_id: snapshot.server_id,
+            inst_id,
+            snapshot_time: snapshot.snapshot_time,
+            local_update_id: snapshot.local_update_id,
+            bids: snapshot
+                .bids
+                .into_iter()
+                .map(|level| LocalBinanceOrderBookLevelPo {
+                    price: level.price,
+                    quantity: level.quantity,
+                })
+                .collect(),
+            asks: snapshot
+                .asks
+                .into_iter()
+                .map(|level| LocalBinanceOrderBookLevelPo {
+                    price: level.price,
+                    quantity: level.quantity,
+                })
+                .collect(),
+            batch_timestamp,
+        }
+    }
+}
+
+impl CopyInsertable for LocalBinanceOrderBookSnapshotPo {
+    fn columns() -> &'static str {
+        "id,server_id,inst_id,snapshot_time,local_update_id,bids,asks,batch_timestamp"
+    }
+
+    fn to_csv_row(&self) -> String {
+        let bids = serde_json::to_string(&self.bids).expect("serializing order book bids cannot fail");
+        let asks = serde_json::to_string(&self.asks).expect("serializing order book asks cannot fail");
+        let csv_quote = |value: String| format!("\"{}\"", value.replace('"', "\"\""));
+
+        format!(
+            "{},{},{},{},{},{},{},{}",
+            self.id,
+            self.server_id,
+            self.inst_id,
+            self.snapshot_time,
+            self.local_update_id,
+            csv_quote(bids),
+            csv_quote(asks),
+            self.batch_timestamp
+        )
+    }
+
+    fn from_history_entry(history_entry: &HistoryEntry, local_inst_id: u64) -> Self {
+        let Some(Payload::BinanceOrderBookSnapshot(snapshot)) = history_entry.payload.as_ref() else {
+            panic!("HistoryEntry payload is not a BinanceOrderBookSnapshot");
+        };
+
+        Self::from_proto(snapshot.clone(), local_inst_id, unix_time_now_u64_utc())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -472,5 +553,21 @@ mod tests {
         assert_eq!(values[3], "0.0001");
         assert_eq!(values[4], "42500.25");
         assert_eq!(values[5], "1700000300000");
+    }
+
+    // 测试目的：验证从错误 payload 的 HistoryEntry 创建订单簿快照客户端 PO 时明确失败。
+    // 准备数据/过程：构造 payload 为空的 HistoryEntry，并调用 CopyInsertable::from_history_entry。
+    // 预期结果：触发 payload 类型不匹配的 panic，而不是返回缺字段的客户端实体。
+    #[test]
+    #[should_panic(expected = "HistoryEntry payload is not a BinanceOrderBookSnapshot")]
+    fn binance_order_book_snapshot_rejects_missing_history_payload() {
+        let entry = HistoryEntry {
+            history_type: 0,
+            instrument_type: 0,
+            inst_id: 42,
+            payload: None,
+        };
+
+        LocalBinanceOrderBookSnapshotPo::from_history_entry(&entry, 77);
     }
 }

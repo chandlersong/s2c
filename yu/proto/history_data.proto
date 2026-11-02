@@ -33,6 +33,7 @@ enum HistoryType {
   BINANCE_SWAP = 6;
   BINANCE_SWAP_TRADE = 7;
   BINANCE_SWAP_FUNDING_RATE = 8;
+  BINANCE_ORDER_BOOK_SNAPSHOT = 9;
 }
 
 message PolymarketInstrument{
@@ -140,6 +141,7 @@ message HistoryEntry{
     BinanceKline binance_kline = 7;
     BinanceTrade binance_trade = 8;
     BinanceFundingRate binance_funding_rate = 9;
+    BinanceOrderBookSnapshot binance_order_book_snapshot = 10;
   }
 }
 
@@ -237,4 +239,17 @@ message BinanceFundingRate {
   uint64 funding_time = 2;
   double funding_rate = 3;
   optional double mark_price = 4;
+}
+
+message BinanceOrderBookLevel {
+  string price = 1;
+  string quantity = 2;
+}
+
+message BinanceOrderBookSnapshot {
+  uint64 server_id = 1;
+  uint64 snapshot_time = 2;
+  uint64 local_update_id = 3;
+  repeated BinanceOrderBookLevel bids = 4;
+  repeated BinanceOrderBookLevel asks = 5;
 }

@@ -10,6 +10,7 @@ use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_models::spot_websocket_stream::{KlineStreamPayload, SpotKlineData, TradeStreamPayload};
 use yue::binance::bn_models::swap_restful::FundingRate;
 use yue::binance::bn_models::swap_websocket_stream::SwapWebsocketKlineData;
+use yue::binance::order_book::OrderBook;
 use yue::models::InstrumentType;
 use yue::tools::{SnowyFlakeWrapper, get_snow_flake_id_u64};
 
@@ -581,6 +582,62 @@ impl DuckDBPO for FundingRatePo {
             &self.funding_time as &dyn duckdb::ToSql,
             &self.mark_price as &dyn duckdb::ToSql,
         ])
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinanceOrderBookLevelPo {
+    pub price: String,
+    pub quantity: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinanceOrderBookSnapshotPo {
+    pub id: i64,
+    pub inst_id: u64,
+    pub snapshot_time: u64,
+    pub local_update_id: u64,
+    pub bids: Vec<BinanceOrderBookLevelPo>,
+    pub asks: Vec<BinanceOrderBookLevelPo>,
+}
+
+impl BinanceOrderBookSnapshotPo {
+    pub fn from_order_book(order_book: &OrderBook, inst_id: u64) -> Self {
+        Self {
+            id: get_snow_flake_id_u64() as i64,
+            inst_id,
+            snapshot_time: order_book.last_update_time,
+            local_update_id: order_book.local_update_id,
+            bids: order_book
+                .bids()
+                .iter()
+                .rev()
+                .map(|(price, quantity)| BinanceOrderBookLevelPo {
+                    price: price.to_string(),
+                    quantity: quantity.to_string(),
+                })
+                .collect(),
+            asks: order_book
+                .asks()
+                .iter()
+                .map(|(price, quantity)| BinanceOrderBookLevelPo {
+                    price: price.to_string(),
+                    quantity: quantity.to_string(),
+                })
+                .collect(),
+        }
+    }
+
+    pub fn to_history_entry(&self) -> crate::sync::models::grpc_sync::HistoryEntry {
+        use crate::sync::models::grpc_sync::{HistoryType, InstrumentType, history_entry};
+        crate::sync::models::grpc_sync::HistoryEntry {
+            history_type: HistoryType::BinanceOrderBookSnapshot.into(),
+            instrument_type: InstrumentType::Binance.into(),
+            inst_id: self.inst_id,
+            payload: Some(history_entry::Payload::BinanceOrderBookSnapshot(
+                crate::sync::models::grpc_sync::BinanceOrderBookSnapshot::from(self.clone()),
+            )),
+        }
     }
 }
 
