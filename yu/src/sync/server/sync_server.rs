@@ -151,18 +151,18 @@ pub async fn get_asset_timestamp(provider: DuckDBDSProvider) -> HashMap<String, 
     res
 }
 
-enum SyncInternalCommand {
+pub enum SyncServerCommand {
     Subscribe(SubscribePayload),
 }
 
-struct SubscribePayload {
+pub struct SubscribePayload {
     id: u64,
     tx: Sender<Result<ServerMessage, Status>>,
 }
 
 pub struct YuSyncServer {
     batch_size: usize,
-    command_channel: Sender<SyncInternalCommand>,
+    command_channel: Sender<SyncServerCommand>,
 
     //TODO: 简化扩展
     instruments_services: Vec<SyncInstrumentService>,
@@ -172,12 +172,8 @@ pub struct YuSyncServer {
 impl YuSyncServer {
     pub async fn create_and_start(
         instruments_services: Vec<SyncInstrumentService>,
-        history_rx: mpsc::Receiver<HistoryEntry>,
+        command_channel: Sender<SyncServerCommand>,
     ) -> Result<Self, YuError> {
-        let (command_channel, command_rx) = mpsc::channel::<SyncInternalCommand>(100);
-        // FUTURE: 这里的参数可以放到配置文件中
-        YuSyncServer::start_broadcast_history(command_rx, history_rx, 500, 1000).await?;
-
         let mut history_services = HashMap::new();
         for service in &instruments_services {
             history_services.extend(service.support_history_list()?)
@@ -211,7 +207,7 @@ impl YuSyncServer {
     /// - `max_loop_mill_seconds`: 达到此时间（毫秒）时触发发送
 
     pub async fn start_broadcast_history(
-        mut command_rx: mpsc::Receiver<SyncInternalCommand>,
+        mut command_rx: mpsc::Receiver<SyncServerCommand>,
         mut history_rx: mpsc::Receiver<HistoryEntry>,
         max_cache_size: usize,
         max_loop_mill_seconds: usize,
@@ -232,7 +228,7 @@ impl YuSyncServer {
                 let should_flush = tokio::select! {
                     command = command_rx.recv(), if command_channel_open => {
                         match command {
-                            Some(SyncInternalCommand::Subscribe(payload)) => {
+                            Some(SyncServerCommand::Subscribe(payload)) => {
                                 info!("Received subscribe command with id: {}", payload.id);
                                 history_tx_map.insert(payload.id, payload.tx);
                             }
@@ -369,7 +365,7 @@ impl SyncInterface for YuSyncServer {
             tx,
         };
 
-        if let Err(e) = self.command_channel.send(SyncInternalCommand::Subscribe(payload)).await {
+        if let Err(e) = self.command_channel.send(SyncServerCommand::Subscribe(payload)).await {
             error!("Failed to send subscribe command: {:?}", e);
             return Err(Status::internal("Failed to subscribe"));
         }
@@ -542,7 +538,7 @@ mod tests {
         let (client_tx, mut client_rx) = mpsc::channel(4);
         YuSyncServer::start_broadcast_history(command_rx, history_rx, 2, 60_000).await.unwrap();
         command_tx
-            .send(SyncInternalCommand::Subscribe(SubscribePayload { id: 1, tx: client_tx }))
+            .send(SyncServerCommand::Subscribe(SubscribePayload { id: 1, tx: client_tx }))
             .await
             .unwrap();
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -567,7 +563,7 @@ mod tests {
         let (client_tx, mut client_rx) = mpsc::channel(4);
         YuSyncServer::start_broadcast_history(command_rx, history_rx, 10, 30).await.unwrap();
         command_tx
-            .send(SyncInternalCommand::Subscribe(SubscribePayload { id: 2, tx: client_tx }))
+            .send(SyncServerCommand::Subscribe(SubscribePayload { id: 2, tx: client_tx }))
             .await
             .unwrap();
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -590,11 +586,11 @@ mod tests {
         let (active_client_tx, mut active_client_rx) = mpsc::channel(4);
         YuSyncServer::start_broadcast_history(command_rx, history_rx, 1, 60_000).await.unwrap();
         command_tx
-            .send(SyncInternalCommand::Subscribe(SubscribePayload { id: 3, tx: closed_client_tx }))
+            .send(SyncServerCommand::Subscribe(SubscribePayload { id: 3, tx: closed_client_tx }))
             .await
             .unwrap();
         command_tx
-            .send(SyncInternalCommand::Subscribe(SubscribePayload { id: 4, tx: active_client_tx }))
+            .send(SyncServerCommand::Subscribe(SubscribePayload { id: 4, tx: active_client_tx }))
             .await
             .unwrap();
         drop(closed_client_rx);
