@@ -547,14 +547,18 @@ impl HistoryBatchHandlerTrait<FundingRate> for BinanceSwapFundingRateGapSaver {
             .into_iter()
             .map(|rate| FundingRatePo::from_funding_rate(rate, self.inst_id))
             .collect::<Vec<_>>();
+        info!("start to save to db");
         if let Err(error) = self.repo.batch_insert_funding_rate(funding_rates.clone()).await {
             error!("Error inserting Binance Swap Funding Rate into repository: {}", error);
         }
+        info!("save to db done");
+        info!("start to send to remote");
         for funding_rate in funding_rates {
             if let Err(error) = self.history_tx.send(funding_rate.to_swap_history_entry()).await {
                 error!("Error sending Binance Swap Funding Rate history entry: {}", error);
             }
         }
+        info!("send to remote done");
         Ok(())
     }
 }

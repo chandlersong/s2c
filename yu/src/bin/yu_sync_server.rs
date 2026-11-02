@@ -11,7 +11,7 @@ use yu::polymarket::database::initial_polymarket_tables;
 use yu::polymarket::sync_job::start_polymarket_sync_series_job;
 use yu::sync::models::grpc_sync::HistoryEntry;
 use yu::sync::models::grpc_sync::sync_interface_server::SyncInterfaceServer;
-use yu::sync::server::sync_server::{SyncInstrumentService, YuSyncServer};
+use yu::sync::server::sync_server::{SyncInstrumentService, SyncServerCommand, YuSyncServer};
 use yue::http_client::init_http_client;
 
 #[tokio::main]
@@ -48,6 +48,10 @@ async fn main() -> Result<(), YuError> {
 
     let mut instrument_services: Vec<SyncInstrumentService> = vec![];
     let (history_tx, history_rx) = mpsc::channel::<HistoryEntry>(10000);
+    let (command_channel, command_rx) = mpsc::channel::<SyncServerCommand>(100);
+    // FUTURE: 这里的参数可以放到配置文件中
+    YuSyncServer::start_broadcast_history(command_rx, history_rx, 500, 1000).await?;
+
     if app_config.binance.as_ref().is_some_and(|config| config.enable()) {
         let binance_sync_service = start_binance_sync_server_job(&app_config, history_tx.clone()).await?;
         instrument_services.push(binance_sync_service);
@@ -68,7 +72,7 @@ async fn main() -> Result<(), YuError> {
         info!("Started polymarket sync job");
     }
 
-    let server = YuSyncServer::create_and_start(instrument_services, history_rx).await?;
+    let server = YuSyncServer::create_and_start(instrument_services, command_channel).await?;
     info!("sync server start at  → {}", addr);
     Server::builder()
         .add_service(SyncInterfaceServer::new(server))
