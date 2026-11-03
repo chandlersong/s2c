@@ -690,12 +690,11 @@ mod tests {
         repo.insert_kline(kline.clone()).await.unwrap();
 
         match rx.recv().await.unwrap() {
-            QueryCommand::BatchInsert(payload) => {
-                assert_eq!(payload.data.len(), 1);
-                assert_eq!(payload.data[0].id, kline.id);
-                assert_eq!(payload.data[0].inst_id, kline.inst_id);
+            QueryCommand::Insert(payload) => {
+                assert_eq!(payload.data.id, kline.id);
+                assert_eq!(payload.data.inst_id, kline.inst_id);
             }
-            _ => panic!("expected batch insert command"),
+            _ => panic!("expected insert command"),
         }
     }
 
@@ -736,12 +735,11 @@ mod tests {
         repo.insert_funding_rate(funding_rate.clone()).await.unwrap();
 
         match rx.recv().await.unwrap() {
-            QueryCommand::BatchInsert(payload) => {
-                assert_eq!(payload.data.len(), 1);
-                assert_eq!(payload.data[0].id, funding_rate.id);
-                assert_eq!(payload.data[0].funding_time, funding_rate.funding_time);
+            QueryCommand::Insert(payload) => {
+                assert_eq!(payload.data.id, funding_rate.id);
+                assert_eq!(payload.data.funding_time, funding_rate.funding_time);
             }
-            _ => panic!("expected batch insert command"),
+            _ => panic!("expected insert command"),
         }
     }
 

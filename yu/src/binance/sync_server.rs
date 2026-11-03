@@ -16,7 +16,6 @@ use crate::sync::models::grpc_sync::{HistoryEntry, HistoryType, Instrument, Serv
 use crate::sync::server::sync_server::{SyncHistoryService, SyncHistoryServiceTrait, SyncInstrumentServiceTrait};
 use async_trait::async_trait;
 use li::tools::time::unix_time_now_u64_utc;
-use li::websocket::connection::BroadcastMessageHandler;
 use log::{debug, error, info};
 use std::collections::HashMap;
 use std::sync::Arc;

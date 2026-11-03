@@ -4,7 +4,7 @@ use crate::tools::{load_ed25519_signing_key, sign_hmac};
 use governor::Jitter;
 use governor::middleware::StateSnapshot;
 use li::tools::time::{unix_2_readable, unix_time_now_u64_utc};
-use log::{debug, error, info};
+use log::{debug, error};
 use reqwest::{RequestBuilder, Response};
 use serde::Deserialize;
 use std::sync::Arc;

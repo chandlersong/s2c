@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use futures::executor::block_on;
 use li::tools::time::UnixTimeStamp;
-use log::{info, warn};
+use log::warn;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -83,11 +83,10 @@ impl ClientInstrumentServiceTrait for BinanceSpotClientInstrumentService {
 
         //swap还要更新一下funding rate
         if history_type == HistoryType::BinanceSwap {
-            self.history_services
-                .get(&HistoryType::BinanceSwapFundingRate)
-                .ok_or_else(|| YuError::new("Binance swap funding rate history service is not configured"))?
-                .initial_data(instrument, end_ms)
-                .await?;
+            let funding_rate_service = self.history_services.get(&HistoryType::BinanceSwapFundingRate);
+            if let Some(fr_service) = funding_rate_service {
+                fr_service.initial_data(instrument, end_ms).await?;
+            }
         }
 
         // FUTURE：
@@ -643,7 +642,6 @@ impl ClientHistoryServiceTrait for BinanceSpotKlineClientHistoryService {
 pub struct BinanceSpotTradeClientHistoryService {
     history_batch_insert: PostgresqlBatchInsert<LocalBinanceTradePo>,
     repository: ClientBinanceRepository,
-    grpc_manager: GrpcChannelManager,
     id_maps: ServerIdToLocalId,
 }
 
@@ -652,59 +650,14 @@ impl BinanceSpotTradeClientHistoryService {
         Arc::new(Self {
             history_batch_insert: get_binance_trade_batch_insert(),
             repository,
-            grpc_manager: get_grpc_manager_from_config(),
             id_maps,
         })
-    }
-
-    async fn backfill_history(
-        &self,
-        server_inst_id: u64,
-        local_inst_id: u64,
-        start_ms: u64,
-        end_ms: u64,
-        cursor: Option<(u64, i64)>,
-    ) -> Result<(), YuError> {
-        if start_ms > end_ms {
-            return Ok(());
-        }
-
-        let mut history_stream = self
-            .grpc_manager
-            .sync_history(SyncRequest {
-                inst_id: server_inst_id,
-                start_ms,
-                end_ms,
-                history_type: HistoryType::BinanceTrade as i32,
-            })
-            .await?;
-
-        while let Some(message) = history_stream.next().await {
-            for entry in message?.history {
-                if entry.history_type != HistoryType::BinanceTrade as i32
-                    || entry.instrument_type != InstrumentType::Binance as i32
-                    || entry.inst_id != server_inst_id
-                {
-                    return Err(YuError::new("received invalid Binance spot trade history entry"));
-                }
-                let Some(Payload::BinanceTrade(trade)) = entry.payload.as_ref() else {
-                    return Err(YuError::new("received invalid Binance spot trade history entry"));
-                };
-                let event_time = u64::try_from(trade.event_time).map_err(|_| YuError::new("received Binance spot trade with negative event time"))?;
-                if cursor.is_some_and(|cursor| (event_time, trade.trade_id) <= cursor) {
-                    continue;
-                }
-                self.history_batch_insert.insert_data(entry, local_inst_id).await;
-            }
-        }
-
-        Ok(())
     }
 }
 
 #[async_trait]
 impl ClientHistoryServiceTrait for BinanceSpotTradeClientHistoryService {
-    async fn initial_data(&self, instrument: Instrument, end_ms: UnixTimeStamp) -> Result<(), YuError> {
+    async fn initial_data(&self, _instrument: Instrument, _end_ms: UnixTimeStamp) -> Result<(), YuError> {
         // FUTURE: Binance spot trade history恢复保存到数据库的时候再说吧。.
         Ok(())
     }
@@ -745,6 +698,7 @@ mod tests {
     use crate::postgresql_db_tables::MockPostgresqlBatchInsertTrait;
     use crate::sync::client::grpc_manager::MockGrpcChannelManagerTrait;
     use crate::sync::client::repository::binance::MockClientBinanceRepositoryTrait;
+    use crate::sync::client::sync_client_service::MockClientHistoryServiceTrait;
     use crate::sync::models::grpc_sync::{BinanceFundingRate, BinanceKline, BinanceTrade, HistoryType, InstrumentType};
 
     fn mock_binary_search() -> BinarySearchDS {
@@ -1009,7 +963,6 @@ mod tests {
         let service = BinanceSpotTradeClientHistoryService {
             history_batch_insert: Arc::new(batch_insert),
             repository: Arc::new(repository),
-            grpc_manager: Arc::new(MockGrpcChannelManagerTrait::new()),
             id_maps: Arc::new(RwLock::new(HashMap::from([(42, 7)]))),
         };
         service
@@ -1032,147 +985,12 @@ mod tests {
             .unwrap();
     }
 
-    // 测试目的：验证 Spot Trade 回补会从最新时间戳重叠查询并跳过已存在的 cursor 及之前交易。
-    // 准备数据/过程：服务端返回 cursor 前、cursor 本身及其后的交易，mock 批量写入与 gRPC 请求。
-    // 预期结果：请求使用 BinanceTrade 类型和包含 cursor 的时间范围，只将 cursor 后的两笔交易写入本地 ID 7。
-    #[tokio::test]
-    async fn spot_trade_backfill_overlaps_cursor_and_skips_existing_trades() {
-        let cursor = (1_700_000_000_000, 42);
-        let mut grpc_manager = MockGrpcChannelManagerTrait::new();
-        grpc_manager
-            .expect_sync_history()
-            .withf(move |request| {
-                request.inst_id == 42
-                    && request.start_ms == cursor.0
-                    && request.end_ms == 1_700_000_001_000
-                    && request.history_type == HistoryType::BinanceTrade as i32
-            })
-            .times(1)
-            .returning(move |_| {
-                Ok(Box::pin(futures::stream::iter(vec![Ok(crate::sync::models::grpc_sync::ServerMessage {
-                    history: vec![(cursor.0, 41), cursor, (cursor.0, 43), (cursor.0 + 1, 44)]
-                        .into_iter()
-                        .enumerate()
-                        .map(|(index, (event_time, trade_id))| HistoryEntry {
-                            history_type: HistoryType::BinanceTrade as i32,
-                            instrument_type: InstrumentType::Binance as i32,
-                            inst_id: 42,
-                            payload: Some(Payload::BinanceTrade(BinanceTrade {
-                                id: index as u64,
-                                event_time: event_time as i64,
-                                trade_id,
-                                price: 100.0,
-                                qty: 0.5,
-                                trade_time: None,
-                                is_buyer_maker: None,
-                                created_at: 1_700_000_000_002,
-                            })),
-                        })
-                        .collect(),
-                    server_timestamp: 1_700_000_001_000,
-                })])) as crate::sync::client::grpc_manager::GrpcServerMessageStream)
-            });
-        let mut batch_insert = MockPostgresqlBatchInsertTrait::<LocalBinanceTradePo>::new();
-        batch_insert
-            .expect_insert_data()
-            .withf(|entry, local_inst_id| {
-                *local_inst_id == 7
-                    && matches!(entry.payload.as_ref(), Some(Payload::BinanceTrade(trade)) if trade.trade_id == 43 || trade.trade_id == 44)
-            })
-            .times(2)
-            .returning(|_, _| ());
-
-        let service = BinanceSpotTradeClientHistoryService {
-            history_batch_insert: Arc::new(batch_insert),
-            repository: Arc::new(MockClientBinanceRepositoryTrait::new()),
-            grpc_manager: Arc::new(grpc_manager),
-            id_maps: Arc::new(RwLock::new(HashMap::new())),
-        };
-        service.backfill_history(42, 7, cursor.0, 1_700_000_001_000, Some(cursor)).await.unwrap();
-    }
-
-    // 测试目的：验证 Spot Trade 初始同步以本地最新交易 cursor 恢复，并传入本地 instrument ID。
-    // 准备数据/过程：mock 最新 cursor、服务端同步流和批量写入，提交 server ID 42 的 SPOT instrument。
-    // 预期结果：SyncRequest 从 cursor 时间开始，之后的新交易写入本地 ID 7，初始化成功。
-    #[tokio::test]
-    async fn spot_trade_initial_data_resumes_from_latest_cursor() {
-        let cursor = (1_700_000_000_000, 42);
-        let mut repository = MockClientBinanceRepositoryTrait::new();
-        repository
-            .expect_find_latest_spot_trade_cursor_by_server_id()
-            .with(mockall::predicate::eq(42))
-            .times(1)
-            .returning(move |_| Ok(Some(cursor)));
-
-        let mut grpc_manager = MockGrpcChannelManagerTrait::new();
-        grpc_manager
-            .expect_sync_history()
-            .withf(move |request| {
-                request.inst_id == 42
-                    && request.start_ms == cursor.0
-                    && request.end_ms == 1_700_000_001_000
-                    && request.history_type == HistoryType::BinanceTrade as i32
-            })
-            .times(1)
-            .returning(move |_| {
-                Ok(Box::pin(futures::stream::iter(vec![Ok(crate::sync::models::grpc_sync::ServerMessage {
-                    history: vec![HistoryEntry {
-                        history_type: HistoryType::BinanceTrade as i32,
-                        instrument_type: InstrumentType::Binance as i32,
-                        inst_id: 42,
-                        payload: Some(Payload::BinanceTrade(BinanceTrade {
-                            id: 2,
-                            event_time: cursor.0 as i64,
-                            trade_id: 43,
-                            price: 100.0,
-                            qty: 0.5,
-                            trade_time: None,
-                            is_buyer_maker: None,
-                            created_at: 1_700_000_000_001,
-                        })),
-                    }],
-                    server_timestamp: 1_700_000_001_000,
-                })])) as crate::sync::client::grpc_manager::GrpcServerMessageStream)
-            });
-        let mut batch_insert = MockPostgresqlBatchInsertTrait::<LocalBinanceTradePo>::new();
-        batch_insert
-            .expect_insert_data()
-            .withf(|entry, local_inst_id| {
-                *local_inst_id == 7 && matches!(entry.payload.as_ref(), Some(Payload::BinanceTrade(trade)) if trade.trade_id == 43)
-            })
-            .times(1)
-            .returning(|_, _| ());
-
-        let service = BinanceSpotTradeClientHistoryService {
-            history_batch_insert: Arc::new(batch_insert),
-            repository: Arc::new(repository),
-            grpc_manager: Arc::new(grpc_manager),
-            id_maps: Arc::new(RwLock::new(HashMap::from([(42, 7)]))),
-        };
-        let instrument = Instrument {
-            instrument_type: InstrumentType::Binance as i32,
-            payload: Some(instrument::Payload::Binance(crate::sync::models::grpc_sync::BinanceInstrument {
-                server_id: 42,
-                symbol: "BTCUSDT".to_string(),
-                status: "TRADING".to_string(),
-                base_asset: "BTC".to_string(),
-                quote_asset: "USDT".to_string(),
-                quote_asset_precision: 8,
-                order_types: vec!["LIMIT".to_string()],
-                symbol_type: "SPOT".to_string(),
-                on_board_time: None,
-            })),
-        };
-
-        service.initial_data(instrument, 1_700_000_001_000).await.unwrap();
-    }
-
     // 测试目的：验证 Binance Swap instrument 被路由到 Swap history service，而不误调 Spot service。
     // 准备数据/过程：仅注册 Swap mock service，并向 instrument service 提交 symbol_type 为 SWAP 的 Binance instrument。
     // 预期结果：Swap service 收到一次该 instrument，调用成功。
     #[tokio::test]
     async fn initial_data_routes_swap_instrument_to_swap_service() {
-        let mut swap_history_service = crate::sync::client::sync_client_service::MockClientHistoryServiceTrait::new();
+        let mut swap_history_service = MockClientHistoryServiceTrait::new();
         swap_history_service
             .expect_initial_data()
             .withf(|instrument, _| {
