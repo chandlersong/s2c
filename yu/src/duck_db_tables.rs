@@ -208,7 +208,7 @@ impl<P: DuckDBPO, T: DuckDbTableTrait> DuckDBOneTable<P, T> {
                                         }
                                         let now = unix_time_now_u64_utc();
                                         cache_count = cache_count +1;
-                                        let cond1 = (now - last_flush_time) < flush_interval.as_millis() as u64;
+                                        let cond1 = (now - last_flush_time) > flush_interval.as_millis() as u64;
                                         let cond2 = cache_count >= flush_count;
                                         if cond1||cond2 {
                                             if single_cache.len() > 0 {

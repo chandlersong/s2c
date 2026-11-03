@@ -21,7 +21,7 @@ use yue::models::{HistoryInterval, InstrumentType};
 use yue::query_message::{BatchInsertPayload, QueryCommand};
 
 //只有初始化的时候，可以打的平凡点。只有第一次初始化的时候会很慢
-pub(crate) const INITIAL_HISTORY_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(1 * 60);
+pub(crate) const INITIAL_HISTORY_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(2 * 60);
 
 pub(crate) struct HistoryKlineSaver {
     db: DuckTableTableChannel<KlinePo>,

@@ -1,6 +1,5 @@
 use crate::binance::bn_backend_service::get_spot_order_book_service;
 use crate::binance::bn_dashboard::{BinanceDashboard, BinanceDashboardWatcher};
-use crate::binance::bn_data_integrity::{KlineGapRepairStrategy, SpotCheckStrategy};
 use crate::binance::db_consts::initial_tables;
 use crate::config::{AccountType, AppConfig, SecurityType, get_config};
 use crate::cron_job;
@@ -54,66 +53,66 @@ pub async fn start_bn_jobs() -> Result<(), YuError> {
     start_refresh_history_data(dash_board.clone(), config, dash_board_watch.clone()).await?;
     // start_monitor_account().await?;
     start_spot_websocket_stream_job(dash_board.clone()).await?;
-    start_data_integrity_jobs(config, dash_board).await?;
+    // start_data_integrity_jobs(config, dash_board).await?;
     Ok(())
 }
 
 //开始数据监控的job
-pub async fn start_data_integrity_jobs(config: &AppConfig, dash_board: Arc<BinanceDashboard>) -> Result<(), YuError> {
-    let data_integrity_config = config.get_data_integrity_config();
-    let data_retention_time = config.get_data_retention_hours();
-    let _ = cron_job!(data_integrity_config.periodic_check_interval_cron, move |_uuid, _locked| {
-        info!("start periodic data integrity check for binance kline data");
-        let dash_board_ref = dash_board.clone();
-        Box::pin(async move {
-            let repair_spot_kline_strategy = KlineGapRepairStrategy::spot(dash_board_ref.clone());
-            let repair_swap_kline_strategy = KlineGapRepairStrategy::swap(dash_board_ref);
-            let check_spot_kline_strategy = SpotCheckStrategy::spot_check_strategy(None, data_retention_time);
-            let check_swap_kline_strategy = SpotCheckStrategy::swap_check_strategy(None, data_retention_time);
-            info!("finish periodic data integrity check for binance spot kline data");
-            match check_spot_kline_strategy.validate().await {
-                Ok(Some(gaps)) => {
-                    for g in &gaps.gaps {
-                        println!("{:?}", g);
-                    }
-
-                    let repair_request = RepairRequest {
-                        id: 0,
-                        strategy: "spot".to_string(),
-                        gaps: gaps.gaps,
-                    };
-                    if let Err(e) = repair_spot_kline_strategy.repair(repair_request).await {
-                        error!("Failed to repair binance swap: {}", e);
-                    }
-                }
-                Err(_) => {}
-                _ => {}
-            }
-            info!("finish periodic data integrity check for binance swap kline data");
-            match check_swap_kline_strategy.validate().await {
-                Ok(Some(gaps)) => {
-                    for g in &gaps.gaps {
-                        println!("{:?}", g);
-                    }
-
-                    let repair_request = RepairRequest {
-                        id: 0,
-                        strategy: "spot".to_string(),
-                        gaps: gaps.gaps,
-                    };
-                    if let Err(e) = repair_swap_kline_strategy.repair(repair_request).await {
-                        error!("Failed to repair binance swap: {}", e);
-                    }
-                }
-                Err(_) => {}
-                _ => {}
-            }
-            info!("finish periodic data integrity check for binance kline data");
-        })
-    });
-
-    Ok(())
-}
+// pub async fn start_data_integrity_jobs(config: &AppConfig, dash_board: Arc<BinanceDashboard>) -> Result<(), YuError> {
+//     let data_integrity_config = config.get_data_integrity_config();
+//     let data_retention_time = config.get_data_retention_hours();
+//     let _ = cron_job!(data_integrity_config.periodic_check_interval_cron, move |_uuid, _locked| {
+//         info!("start periodic data integrity check for binance kline data");
+//         let dash_board_ref = dash_board.clone();
+//         Box::pin(async move {
+//             let repair_spot_kline_strategy = KlineGapRepairStrategy::spot(dash_board_ref.clone());
+//             let repair_swap_kline_strategy = KlineGapRepairStrategy::swap(dash_board_ref);
+//             let check_spot_kline_strategy = SpotCheckStrategy::spot_check_strategy(None, data_retention_time);
+//             let check_swap_kline_strategy = SpotCheckStrategy::swap_check_strategy(None, data_retention_time);
+//             info!("finish periodic data integrity check for binance spot kline data");
+//             match check_spot_kline_strategy.validate().await {
+//                 Ok(Some(gaps)) => {
+//                     for g in &gaps.gaps {
+//                         println!("{:?}", g);
+//                     }
+//
+//                     let repair_request = RepairRequest {
+//                         id: 0,
+//                         strategy: "spot".to_string(),
+//                         gaps: gaps.gaps,
+//                     };
+//                     if let Err(e) = repair_spot_kline_strategy.repair(repair_request).await {
+//                         error!("Failed to repair binance swap: {}", e);
+//                     }
+//                 }
+//                 Err(_) => {}
+//                 _ => {}
+//             }
+//             info!("finish periodic data integrity check for binance swap kline data");
+//             match check_swap_kline_strategy.validate().await {
+//                 Ok(Some(gaps)) => {
+//                     for g in &gaps.gaps {
+//                         println!("{:?}", g);
+//                     }
+//
+//                     let repair_request = RepairRequest {
+//                         id: 0,
+//                         strategy: "spot".to_string(),
+//                         gaps: gaps.gaps,
+//                     };
+//                     if let Err(e) = repair_swap_kline_strategy.repair(repair_request).await {
+//                         error!("Failed to repair binance swap: {}", e);
+//                     }
+//                 }
+//                 Err(_) => {}
+//                 _ => {}
+//             }
+//             info!("finish periodic data integrity check for binance kline data");
+//         })
+//     });
+//
+//     Ok(())
+// }
 
 ///
 /// 开始监控币安的账户。大致分成两大类。
