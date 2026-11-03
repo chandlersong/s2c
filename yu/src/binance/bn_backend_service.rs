@@ -3,7 +3,7 @@ use crate::binance::db_consts::BinanceTables;
 use crate::binance::models::po::{FundingRatePo, KlinePo};
 use crate::config::get_config;
 use crate::duck_db_tables::{DuckDBOneTable, DuckTableTableChannel};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::OnceCell;
 use yue::binance::order_book::OrderBookService;
@@ -17,18 +17,19 @@ pub(crate) static SPOT_BINANCE_KLINE_TABLE: OnceLock<DuckTableTableChannel<Kline
 pub(crate) static SWAP_BINANCE_KLINE_TABLE: OnceLock<DuckTableTableChannel<KlinePo>> = OnceLock::new();
 
 pub(crate) static SWAP_FUNDING_RATE_TABLE: OnceLock<DuckTableTableChannel<FundingRatePo>> = OnceLock::new();
-pub(crate) static SPOT_ORDER_BOOK: OnceCell<OrderBookService> = OnceCell::const_new();
+pub(crate) static SPOT_ORDER_BOOK: OnceCell<Arc<OrderBookService>> = OnceCell::const_new();
 
-pub async fn get_spot_order_book_service() -> &'static OrderBookService {
+pub async fn get_spot_order_book_service() -> Arc<OrderBookService> {
     SPOT_ORDER_BOOK
         .get_or_init(init_spot_order_book_service) // ← 这里会自动异步初始化，只执行一次
         .await
+        .clone()
 }
 
-async fn init_spot_order_book_service() -> OrderBookService {
+async fn init_spot_order_book_service() -> Arc<OrderBookService> {
     let app_config = get_config();
     let proxy = app_config.proxy_url.clone();
-    OrderBookService::spot(proxy).await
+    Arc::new(OrderBookService::spot(proxy).await)
 }
 
 pub fn get_spot_kline_table() -> DuckTableTableChannel<KlinePo> {

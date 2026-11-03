@@ -1,4 +1,4 @@
-use crate::binance::bn_backend_service::{get_spot_kline_table, get_swap_kline_table};
+use crate::binance::bn_backend_service::{get_spot_kline_table, get_spot_order_book_service, get_swap_kline_table};
 use crate::binance::bn_dashboard::{BinanceDashboard, InstrumentProvider, SpotInstrumentProvider, SwapInstrumentProvider};
 use crate::binance::db_consts::BinanceTables;
 use crate::binance::duckdb_repository::{
@@ -7,6 +7,7 @@ use crate::binance::duckdb_repository::{
 };
 use crate::binance::history::{INITIAL_HISTORY_PROGRESS_LOG_INTERVAL, initial_kline};
 use crate::binance::models::po::{BinanceInstrument, FundingRatePo, KlinePo, SpotStreamTradeRecordPo};
+use crate::config::AppConfig;
 use crate::data_integrity::check::{BinarySearchDS, DuckDBBinarySearchDataImpl, binary_search_gap};
 use crate::data_integrity::models::ValidationGap;
 use crate::duck_db::DuckDBDSProvider;
@@ -17,17 +18,20 @@ use crate::sync::server::sync_server::{SyncHistoryService, SyncHistoryServiceTra
 use async_trait::async_trait;
 use li::tools::time::unix_time_now_u64_utc;
 use log::{debug, error, info};
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::Sender;
 use tonic::Status;
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_models::swap_restful::FundingRate;
 use yue::binance::bn_restful_commands::{SPOT_KLINE_HISTORY_COMMAND, SWAP_KLINE_HISTORY_COMMAND};
+use yue::binance::order_book::OrderBookService;
 use yue::binance::restful_func::{CommonRequestBuilder, HistoryBatchHandlerTrait, HistoryFetcherImpl, HistoryFetcherTrait, ShareHistoryBatchHandler};
 use yue::errors::YueError as ExchangeError;
-use yue::models::HistoryInterval;
+use yue::models::{HistoryInterval, InstrumentType};
 
 #[cfg(test)]
 mod tests {
@@ -134,73 +138,75 @@ mod tests {
 
 pub(crate) const CHECK_HISTORY_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
-///
-/// FUTURE:
-/// 实际当中，这个会把所有的服务给卡死，以后研究一下再加吧。
-/// 估计是数据库操作太频繁。
-///
-pub struct BinanceSpotTradeSyncHistoryService {
-    trade_repo: BinanceTradeRepository,
+#[derive(Clone)]
+pub struct SubscribeSpotOrderBookResult {
+    pub level: u16,
+    pub symbols: HashMap<String, BinanceInstrument>,
+    pub order_book_service: Arc<OrderBookService>,
 }
 
-impl BinanceSpotTradeSyncHistoryService {
-    pub fn for_production() -> Arc<Self> {
-        Arc::new(Self {
-            trade_repo: get_default_spot_trade_repo(None),
-        })
-    }
-}
-
-#[async_trait]
-impl SyncHistoryServiceTrait for BinanceSpotTradeSyncHistoryService {
-    async fn query_and_broadcast_history(
-        &self,
-        inst_id: u64,
-        start_ts: u64,
-        end_ts: u64,
-        batch_size: usize,
-        tx: mpsc::Sender<Result<ServerMessage, Status>>,
-    ) -> Result<(), YuError> {
-        let trades = self.trade_repo.find_by_inst_id_between(inst_id, start_ts, end_ts).await?;
-        if trades.is_empty() {
-            let message = ServerMessage {
-                history: vec![],
-                server_timestamp: unix_time_now_u64_utc(),
-            };
-            let _ = tx.send(Ok(message)).await;
-            return Ok(());
+pub async fn subscribe_spot_order_book(app_config: &AppConfig) -> Result<SubscribeSpotOrderBookResult, YuError> {
+    let order_book_service = get_spot_order_book_service().await;
+    let instrument_repo = get_instrument_repo_for_production(None);
+    let ws_config = match &app_config.binance {
+        Some(ws) => ws,
+        None => {
+            info!("binance_websocket 配置未启用，跳过 WebSocket 任务");
+            return Err(YuError::ConfigError("binance_websocket 配置未启用".to_string()));
         }
+    };
 
-        for batch in trades.chunks(batch_size.max(1)) {
-            let message = ServerMessage {
-                history: batch.iter().map(SpotStreamTradeRecordPo::to_spot_history_entry).collect(),
-                server_timestamp: unix_time_now_u64_utc(),
-            };
-            if tx.send(Ok(message)).await.is_err() {
-                break;
+    let spot_config = match &ws_config.spot_stream {
+        Some(spot) => spot,
+        None => {
+            info!("binance_websocket.spot 配置未启用，跳过 Spot WebSocket 任务");
+            return Err(YuError::ConfigError("binance_websocket.spot 配置未启用".to_string()));
+        }
+    };
+    let mut level: u16 = 0;
+    let mut symbols: HashMap<String, BinanceInstrument> = HashMap::new();
+    // 根据配置订阅深度流
+    if let Some(depth_config) = &spot_config.depth {
+        if depth_config.enabled() && !depth_config.symbols.is_empty() {
+            let update_speed = &depth_config.update_speed();
+            for symbol in depth_config.symbols.iter() {
+                if let Ok(Some(inst)) = instrument_repo.get_by_symbol(symbol, InstrumentType::Spot).await {
+                    symbols.insert(symbol.clone(), inst);
+                } else {
+                    error!("在订阅{}的订单簿时，未找到对应的Spot instrument，跳过订阅", symbol);
+                    continue;
+                }
+                if let Err(e) = order_book_service.subscribe_order_book(symbol, update_speed) {
+                    error!("在订阅{},speed:{}的订单簿时出错{}", symbol, update_speed, e);
+                    continue;
+                }
+                info!("订阅{}:{}的订单簿", symbol, update_speed);
             }
+            level = depth_config.levels() as u16;
+        } else {
+            info!("binance_websocket.spot.depth 未启用或没有配置symbols，跳过深度流订阅");
+            return Err(YuError::ConfigError(
+                "binance_websocket.spot.depth 未启用或没有配置symbols，跳过深度流订阅".to_string(),
+            ));
         }
-        Ok(())
+    } else {
+        info!("binance_websocket.spot.depth 配置未启用，跳过深度流订阅");
+        return Err(YuError::ConfigError(
+            "binance_websocket.spot.depth 配置未启用，跳过深度流订阅".to_string(),
+        ));
     }
 
-    async fn check_history_data(&self) -> Result<(), YuError> {
-        debug!("Binance Spot trade history check is not implemented; trade records are live-stream data");
-        Ok(())
+    if symbols.is_empty() {
+        return Err(YuError::ConfigError(
+            "binance_websocket.spot.depth 配置未启用或没有配置symbols，跳过深度流订阅".to_string(),
+        ));
     }
 
-    async fn initial_history_data(&self, _end_ms: Option<u64>) -> Result<(), YuError> {
-        debug!("Binance Spot trade history initialization is not implemented; no historical backfill is configured");
-        Ok(())
-    }
-
-    async fn sync_all(&self) -> Result<(), YuError> {
-        debug!("Binance Spot trade sync is driven by WebSocket");
-        Ok(())
-    }
-
-    async fn sync_period(&self) -> Result<Option<String>, YuError> {
-        Ok(None)
-    }
+    Ok(SubscribeSpotOrderBookResult {
+        order_book_service,
+        level,
+        symbols,
+    })
 }
 
 struct BinanceGapKlineSaver {

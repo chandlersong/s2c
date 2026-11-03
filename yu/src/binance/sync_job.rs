@@ -1,9 +1,10 @@
 use crate::binance::bn_backend_service::{get_spot_kline_table, get_swap_kline_table};
 use crate::binance::bn_dashboard::BinanceDashboard;
 use crate::binance::db_consts::initial_tables;
+use crate::binance::models::po::BinanceOrderBookSnapshotPo;
 use crate::binance::sync_server::{
-    BinanceSpotSyncHistoryService, BinanceSpotTradeSyncHistoryService, BinanceSwapFundingRateSyncHistoryService, BinanceSwapSyncHistoryService,
-    BinanceSyncInstrumentService,
+    BinanceSpotSyncHistoryService, BinanceSwapFundingRateSyncHistoryService, BinanceSwapSyncHistoryService, BinanceSyncInstrumentService,
+    subscribe_spot_order_book,
 };
 use crate::binance::trading_service::TradingService;
 use crate::binance::websocket_service::{KlineSubscribeService, SpotTradeSaver};
@@ -55,20 +56,16 @@ pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: m
     );
     let funding_rate_history_service =
         BinanceSwapFundingRateSyncHistoryService::for_production(dash_board.clone(), app_config.get_data_retention_ms(), history_tx.clone());
-    let trade_history_service = BinanceSpotTradeSyncHistoryService::for_production();
     let mut support_history_service: HashMap<HistoryType, SyncHistoryService> = HashMap::new();
     support_history_service.insert(HistoryType::BinanceSpot, history_service.clone());
     support_history_service.insert(HistoryType::BinanceSwap, swap_history_service.clone());
     support_history_service.insert(HistoryType::BinanceSwapFundingRate, funding_rate_history_service.clone());
-    support_history_service.insert(HistoryType::BinanceTrade, trade_history_service.clone());
     let instrument_service = BinanceSyncInstrumentService::for_production(dash_board.clone(), support_history_service);
     info!("start initial Binance Spot and Swap instruments");
     if let Err(error) = instrument_service.sync_instrument().await {
         error!("failed to sync Binance Spot and Swap instruments: {}", error);
     }
     info!("finished initial Binance Spot and Swap instruments data");
-    trade_history_service.initial_history_data(None).await?;
-
     //加上一个周期的时间。因为后续处理，会减去当前周期。
     let start_initial_ms = unix_time_now_u64_utc() + interval.to_milliseconds();
     info!(
@@ -94,6 +91,8 @@ pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: m
         history_tx.clone(),
     )
     .await?;
+
+    // 订阅交易流
     if let Some(spot_config) = &binance_config.spot_stream {
         if let Some(trade_config) = &spot_config.trade {
             if !trade_config.symbols.is_empty() {
@@ -123,6 +122,36 @@ pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: m
         })
     });
 
+    // 订阅order book流
+    let order_book_subscribe_info = subscribe_spot_order_book(app_config).await;
+    if let Err(e) = order_book_subscribe_info {
+        info!("spot order book not subscribe: {}", e);
+    } else {
+        let order_book_subscribe_info = order_book_subscribe_info.unwrap();
+        let order_book_history_tx = history_tx.clone();
+        let _ = cron_job!("*/30 * * * * *", move |_uuid, _locked| {
+            let subscirbe_info = order_book_subscribe_info.clone();
+            let tx = order_book_history_tx.clone();
+            Box::pin(async move {
+                let level = subscirbe_info.level;
+                let service = subscirbe_info.order_book_service;
+                for (symbol, instrument) in subscirbe_info.symbols.iter() {
+                    let order_book = match service.query_order_book(symbol, level).await {
+                        Ok(order_book) => order_book,
+                        Err(error) => {
+                            error!("failed to query order book for {}: {}", symbol, error);
+                            continue;
+                        }
+                    };
+                    let snapshot = BinanceOrderBookSnapshotPo::from_order_book(&order_book, instrument.id as u64);
+                    if let Err(e) = tx.send(snapshot.to_history_entry()).await {
+                        error!("failed to send order book history for {}: {}", symbol, e);
+                    }
+                }
+            })
+        });
+    }
+
     info!("started initial Binance Spot kline history data");
     history_service.initial_history_data(Some(start_initial_ms)).await?;
     info!("started initial Binance Swap kline history data");
@@ -133,7 +162,6 @@ pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: m
     history_service.check_history_data().await?;
     info!("started checking Binance Swap kline history data");
     swap_history_service.check_history_data().await?;
-    trade_history_service.check_history_data().await?;
 
     let check_history_job = history_service.clone();
     let check_swap_history_job = swap_history_service.clone();

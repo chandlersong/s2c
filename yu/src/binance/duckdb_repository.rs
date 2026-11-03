@@ -42,6 +42,8 @@ pub trait BNInstrumentRepositoryTrait {
     ///
     async fn update_instrument(&self, instrument: BinanceInstrument) -> Result<(), YuError>;
     async fn mark_instruments_not_trading(&self, instrument_ids: Vec<u64>) -> Result<(), YuError>;
+
+    async fn get_by_symbol(&self, symbol: &str, inst_type: InstrumentType) -> Result<Option<BinanceInstrument>, YuError>;
 }
 
 #[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
@@ -403,6 +405,34 @@ impl BNInstrumentRepositoryTrait for BNInstrumentRepositoryImpl {
         conn.execute(&sql, duckdb::params_from_iter(params.iter()))?;
         Ok(())
     }
+
+    async fn get_by_symbol(&self, symbol: &str, inst_type: InstrumentType) -> Result<Option<BinanceInstrument>, YuError> {
+        let conn = self.provider.acquire()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, symbol, status, base_asset, quote_asset, quote_asset_precision, order_types, symbol_type, on_board_time \
+             FROM bn_instruments \
+             WHERE symbol = ? AND (UPPER(symbol_type) = ? OR (? = 'SWAP' AND UPPER(symbol_type) = 'PERPETUAL')) \
+             LIMIT 1;",
+        )?;
+        let inst_type = inst_type.as_str();
+        let mut rows = stmt.query(duckdb::params![symbol, inst_type, inst_type])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+
+        Ok(Some(BinanceInstrument {
+            id: row.get(0)?,
+            symbol: row.get(1)?,
+            status: row.get(2)?,
+            base_asset: row.get(3)?,
+            quote_asset: row.get(4)?,
+            quote_asset_precision: row.get(5)?,
+            order_types: read_order_types(row.get(6)?)?,
+            symbol_type: InstrumentType::from_symbol_type(&row.get::<_, String>(7)?)
+                .ok_or_else(|| YuError::new("unsupported bn_instruments.symbol_type"))?,
+            on_board_time: row.get::<_, Option<i64>>(8)?.map(|time| time as u64),
+        }))
+    }
 }
 
 impl BNInstrumentRepositoryImpl {
@@ -504,6 +534,61 @@ mod tests {
         assert_eq!(fetched.len(), 1);
         assert_eq!(fetched[0].status, updated.status);
         assert!(repo.get_trading_instrument_by_type(InstrumentType::Spot).await.unwrap().is_empty());
+    }
+
+    // 测试目的：验证按 symbol 和类型查询时可区分同名 Spot 与 Swap instrument，并对不存在的记录返回 None。
+    // 准备数据/过程：在内存 DuckDB 创建 instrument 表，插入同名的 Spot 和 Swap instrument，再分别按类型及不存在的 symbol 查询。
+    // 预期结果：Spot 和 Swap 查询分别返回对应记录；不存在的 symbol 返回 None。
+    #[tokio::test]
+    async fn instrument_repository_gets_instrument_by_symbol_and_type() {
+        let provider = create_memory_db_provider();
+        let conn = provider.acquire().unwrap();
+        conn.execute(CREATE_BINANCE_INSTRUMENTS_TABLE.split(';').next().unwrap(), []).unwrap();
+        conn.execute(
+            "CREATE UNIQUE INDEX idx_bn_instruments_symbol_type ON bn_instruments(symbol, symbol_type);",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        let repo = get_instrument_repo_for_production(Some(provider));
+        for (id, symbol_type) in [(42, InstrumentType::Spot), (43, InstrumentType::Swap)] {
+            repo.insert_instrument(BinanceInstrument {
+                id,
+                symbol: "BTCUSDT".to_string(),
+                status: BN_SYMBOL_STATUS_TRADING.to_string(),
+                base_asset: "BTC".to_string(),
+                quote_asset: "USDT".to_string(),
+                quote_asset_precision: 8,
+                order_types: vec!["LIMIT".to_string(), "MARKET".to_string()],
+                symbol_type,
+                on_board_time: Some(1_700_000_000_000),
+            })
+            .await
+            .unwrap();
+        }
+
+        let spot = repo.get_by_symbol("BTCUSDT", InstrumentType::Spot).await.unwrap().unwrap();
+        assert_eq!(spot.id, 42);
+        assert_eq!(spot.symbol_type.to_string(), "SPOT");
+        assert_eq!(spot.order_types, vec!["LIMIT".to_string(), "MARKET".to_string()]);
+
+        let swap = repo.get_by_symbol("BTCUSDT", InstrumentType::Swap).await.unwrap().unwrap();
+        assert_eq!(swap.id, 43);
+        assert_eq!(swap.symbol_type.to_string(), "SWAP");
+        assert_eq!(swap.on_board_time, Some(1_700_000_000_000));
+
+        assert!(repo.get_by_symbol("ETHUSDT", InstrumentType::Spot).await.unwrap().is_none());
+    }
+
+    // 测试目的：验证按 symbol 查询时数据库错误会显式返回。
+    // 准备数据/过程：使用未创建 instrument 表的内存 DuckDB 执行查询。
+    // 预期结果：查询返回 Err，而不是伪装成未找到。
+    #[tokio::test]
+    async fn instrument_repository_propagates_get_by_symbol_query_errors() {
+        let repo = get_instrument_repo_for_production(Some(create_memory_db_provider()));
+
+        assert!(repo.get_by_symbol("BTCUSDT", InstrumentType::Spot).await.is_err());
     }
 
     // 测试目的：验证按类型批量标记非交易和多类型 symbol-id 查询的结果正确。
