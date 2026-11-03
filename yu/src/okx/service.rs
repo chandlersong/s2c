@@ -730,7 +730,9 @@ impl OptionService {
                 now_ms,
                 &self.interval,
                 binary_search_ds.clone(),
-            )?;
+                0,
+            )?
+            .gaps;
             trace!("{} has {} gaps", instrument.inst_identify, gaps.len());
             for g in gaps.iter() {
                 match g {

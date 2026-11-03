@@ -36,7 +36,9 @@ async fn main() -> Result<(), YuError> {
         interval.get_now_close_unix_ms_utc(),
         &interval,
         okx_binary_search_ds.clone(),
-    )?;
+        0,
+    )?
+    .gaps;
     info!("gaps: {:?}", gaps.len());
     for gap in gaps {
         match gap {
