@@ -2,11 +2,11 @@ use crate::binance::bn_backend_service::{get_spot_kline_table, get_spot_order_bo
 use crate::binance::bn_dashboard::{BinanceDashboard, InstrumentProvider, SpotInstrumentProvider, SwapInstrumentProvider};
 use crate::binance::db_consts::BinanceTables;
 use crate::binance::duckdb_repository::{
-    BNInstrumentRepository, BinanceFundingRateRepository, BinanceKlineRepository, BinanceTradeRepository, get_default_funding_rate_repo,
-    get_default_spot_kline_repo, get_default_spot_trade_repo, get_default_swap_kline_repo, get_instrument_repo_for_production,
+    BNInstrumentRepository, BinanceFundingRateRepository, BinanceKlineRepository, get_default_funding_rate_repo, get_default_spot_kline_repo,
+    get_default_swap_kline_repo, get_instrument_repo_for_production,
 };
 use crate::binance::history::{INITIAL_HISTORY_PROGRESS_LOG_INTERVAL, initial_kline};
-use crate::binance::models::po::{BinanceInstrument, FundingRatePo, KlinePo, SpotStreamTradeRecordPo};
+use crate::binance::models::po::{BinanceInstrument, FundingRatePo, KlinePo};
 use crate::config::AppConfig;
 use crate::data_integrity::check::{BinarySearchDS, DuckDBBinarySearchDataImpl, binary_search_gap};
 use crate::data_integrity::models::ValidationGap;
@@ -18,12 +18,10 @@ use crate::sync::server::sync_server::{SyncHistoryService, SyncHistoryServiceTra
 use async_trait::async_trait;
 use li::tools::time::unix_time_now_u64_utc;
 use log::{debug, error, info};
-use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::Sender;
 use tonic::Status;
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_models::swap_restful::FundingRate;
@@ -36,6 +34,7 @@ use yue::models::{HistoryInterval, InstrumentType};
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::binance::models::SpotStreamTradeRecordPo;
     use crate::sync::models::grpc_sync::{HistoryType, InstrumentType, history_entry};
 
     // 测试目的：验证 Spot Trade PO 映射为 Binance Trade 历史条目时保留必要字段。
@@ -163,7 +162,7 @@ pub async fn subscribe_spot_order_book(app_config: &AppConfig) -> Result<Subscri
             return Err(YuError::ConfigError("binance_websocket.spot 配置未启用".to_string()));
         }
     };
-    let mut level: u16 = 0;
+    let level: u16;
     let mut symbols: HashMap<String, BinanceInstrument> = HashMap::new();
     // 根据配置订阅深度流
     if let Some(depth_config) = &spot_config.depth {

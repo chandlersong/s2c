@@ -4,12 +4,14 @@ use crate::errors::YuError;
 use crate::postgresql_db::{PostgresqlTableTrait, get_sync_client_pg_pool_sync};
 use crate::postgresql_db_tables::PostgresqlBatchInsert;
 use crate::sync::client::database::{
-    get_binance_kline_batch_insert, get_binance_swap_funding_rate_batch_insert, get_binance_swap_kline_batch_insert, get_binance_trade_batch_insert,
+    get_binance_kline_batch_insert, get_binance_order_book_snapshot_batch_insert, get_binance_swap_funding_rate_batch_insert,
+    get_binance_swap_kline_batch_insert, get_binance_trade_batch_insert,
 };
 use crate::sync::client::db_consts::ClientsTables;
 use crate::sync::client::grpc_manager::{GrpcChannelManager, get_grpc_manager_from_config};
 use crate::sync::client::po::binance::{
-    BinanceInstrumentType, LocalBinanceFundingRatePo, LocalBinanceInstrumentPo, LocalBinanceKlinePo, LocalBinanceTradePo,
+    BinanceInstrumentType, LocalBinanceFundingRatePo, LocalBinanceInstrumentPo, LocalBinanceKlinePo, LocalBinanceOrderBookSnapshotPo,
+    LocalBinanceTradePo,
 };
 use crate::sync::client::repository::binance::{ClientBinanceRepository, ClientBinanceRepositoryImpl};
 use crate::sync::client::sync_client_service::{
@@ -46,6 +48,7 @@ impl BinanceSpotClientInstrumentService {
         let id_maps = Arc::new(RwLock::new(id_maps));
         let kline_service = BinanceSpotKlineClientHistoryService::for_production(repository.clone(), pool.clone(), id_maps.clone());
         let trade_service = BinanceSpotTradeClientHistoryService::for_production(repository.clone(), id_maps.clone());
+        let order_book_snapshot_service = BinanceOrderBookSnapshotClientHistoryService::for_production(repository.clone(), id_maps.clone());
         let swap_kline_service = BinanceSwapKlineClientHistoryService::for_production(repository.clone(), pool.clone(), id_maps.clone());
         let swap_funding_rate_service = BinanceSwapFundingRateClientHistoryService::for_production(repository, pool.clone(), id_maps);
         let swap_service: ClientHistoryService = Arc::new(BinanceSwapClientHistoryService {
@@ -56,6 +59,7 @@ impl BinanceSpotClientInstrumentService {
             history_services: HashMap::from([
                 (HistoryType::BinanceSpot, kline_service),
                 (HistoryType::BinanceTrade, trade_service),
+                (HistoryType::BinanceOrderBookSnapshot, order_book_snapshot_service),
                 (HistoryType::BinanceSwap, swap_service),
                 (HistoryType::BinanceSwapFundingRate, swap_funding_rate_service),
             ]),
@@ -697,6 +701,60 @@ impl ClientHistoryServiceTrait for BinanceSpotTradeClientHistoryService {
     }
 }
 
+pub struct BinanceOrderBookSnapshotClientHistoryService {
+    history_batch_insert: PostgresqlBatchInsert<LocalBinanceOrderBookSnapshotPo>,
+    repository: ClientBinanceRepository,
+    id_maps: ServerIdToLocalId,
+}
+
+impl BinanceOrderBookSnapshotClientHistoryService {
+    fn for_production(repository: ClientBinanceRepository, id_maps: ServerIdToLocalId) -> ClientHistoryService {
+        Arc::new(Self {
+            history_batch_insert: get_binance_order_book_snapshot_batch_insert(),
+            repository,
+            id_maps,
+        })
+    }
+}
+
+#[async_trait]
+impl ClientHistoryServiceTrait for BinanceOrderBookSnapshotClientHistoryService {
+    async fn initial_data(&self, _instrument: Instrument, _end_ms: UnixTimeStamp) -> Result<(), YuError> {
+        Ok(())
+    }
+
+    async fn reconcile_living_instrument_with_server(&self, _end_ms: UnixTimeStamp) -> Result<(), YuError> {
+        Ok(())
+    }
+
+    async fn insert_history(&self, history_entry: HistoryEntry) -> Result<(), YuError> {
+        if history_entry.history_type != HistoryType::BinanceOrderBookSnapshot as i32
+            || history_entry.instrument_type != InstrumentType::Binance as i32
+            || !matches!(history_entry.payload.as_ref(), Some(Payload::BinanceOrderBookSnapshot(_)))
+        {
+            return Err(YuError::new("received non-Binance order book snapshot history payload"));
+        }
+
+        let cached_local_inst_id = { self.id_maps.read().await.get(&history_entry.inst_id).copied() };
+        let local_inst_id = match cached_local_inst_id {
+            Some(local_inst_id) => local_inst_id,
+            None => {
+                let Some(local_inst_id) = self.repository.find_instrument_id_by_server_id(history_entry.inst_id).await? else {
+                    warn!(
+                        "local Binance instrument {} not found; skipping order book snapshot history",
+                        history_entry.inst_id
+                    );
+                    return Ok(());
+                };
+                self.id_maps.write().await.insert(history_entry.inst_id, local_inst_id);
+                local_inst_id
+            }
+        };
+        self.history_batch_insert.insert_data(history_entry, local_inst_id).await;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -705,10 +763,163 @@ mod tests {
     use crate::sync::client::grpc_manager::MockGrpcChannelManagerTrait;
     use crate::sync::client::repository::binance::MockClientBinanceRepositoryTrait;
     use crate::sync::client::sync_client_service::MockClientHistoryServiceTrait;
-    use crate::sync::models::grpc_sync::{BinanceFundingRate, BinanceKline, BinanceTrade, HistoryType, InstrumentType};
+    use crate::sync::models::grpc_sync::{
+        BinanceFundingRate, BinanceKline, BinanceOrderBookLevel, BinanceOrderBookSnapshot, BinanceTrade, HistoryType, InstrumentType,
+    };
 
     fn mock_binary_search() -> BinarySearchDS {
         Arc::new(MockBinarySearchDSTrait::new())
+    }
+
+    fn order_book_snapshot_entry() -> HistoryEntry {
+        HistoryEntry {
+            history_type: HistoryType::BinanceOrderBookSnapshot as i32,
+            instrument_type: InstrumentType::Binance as i32,
+            inst_id: 42,
+            payload: Some(Payload::BinanceOrderBookSnapshot(BinanceOrderBookSnapshot {
+                server_id: 99,
+                snapshot_time: 1_700_000_000_123,
+                local_update_id: 1234,
+                bids: vec![BinanceOrderBookLevel {
+                    price: "100.00000001".to_string(),
+                    quantity: "2.5".to_string(),
+                }],
+                asks: vec![BinanceOrderBookLevel {
+                    price: "100.00000002".to_string(),
+                    quantity: "1.25".to_string(),
+                }],
+            })),
+        }
+    }
+
+    // 测试目的：验证实时订单簿快照使用缓存的本地 instrument ID 提交批量落库。
+    // 准备数据/过程：缓存 server ID 42 到 local ID 7，并提交含 bid/ask 档位的合法快照。
+    // 预期结果：batch insert 收到原始快照消息一次，且使用本地 instrument ID 7。
+    #[tokio::test]
+    async fn order_book_snapshot_insert_uses_cached_local_instrument_id() {
+        let repository = MockClientBinanceRepositoryTrait::new();
+        let mut batch_insert = MockPostgresqlBatchInsertTrait::<LocalBinanceOrderBookSnapshotPo>::new();
+        batch_insert
+            .expect_insert_data()
+            .withf(|entry, local_inst_id| {
+                entry.inst_id == 42
+                    && *local_inst_id == 7
+                    && matches!(
+                        entry.payload.as_ref(),
+                        Some(Payload::BinanceOrderBookSnapshot(snapshot))
+                            if snapshot.server_id == 99
+                                && snapshot.snapshot_time == 1_700_000_000_123
+                                && snapshot.local_update_id == 1234
+                                && snapshot.bids.first().is_some_and(|level| level.price == "100.00000001" && level.quantity == "2.5")
+                                && snapshot.asks.first().is_some_and(|level| level.price == "100.00000002" && level.quantity == "1.25")
+                    )
+            })
+            .times(1)
+            .returning(|_, _| ());
+        let service = BinanceOrderBookSnapshotClientHistoryService {
+            history_batch_insert: Arc::new(batch_insert),
+            repository: Arc::new(repository),
+            id_maps: Arc::new(RwLock::new(HashMap::from([(42, 7)]))),
+        };
+
+        service.insert_history(order_book_snapshot_entry()).await.unwrap();
+    }
+
+    // 测试目的：验证缓存未命中时按服务端 instrument ID 查询本地 ID，并缓存映射供后续快照复用。
+    // 准备数据/过程：mock repository 返回 local ID 7，连续提交两条相同 instrument 的合法快照。
+    // 预期结果：repository 只查询一次，两个快照都以 local ID 7 提交 batch insert。
+    #[tokio::test]
+    async fn order_book_snapshot_insert_resolves_and_caches_local_instrument_id() {
+        let mut repository = MockClientBinanceRepositoryTrait::new();
+        repository
+            .expect_find_instrument_id_by_server_id()
+            .with(mockall::predicate::eq(42))
+            .times(1)
+            .returning(|_| Ok(Some(7)));
+        let mut batch_insert = MockPostgresqlBatchInsertTrait::<LocalBinanceOrderBookSnapshotPo>::new();
+        batch_insert
+            .expect_insert_data()
+            .withf(|entry, local_inst_id| entry.history_type == HistoryType::BinanceOrderBookSnapshot as i32 && *local_inst_id == 7)
+            .times(2)
+            .returning(|_, _| ());
+        let service = BinanceOrderBookSnapshotClientHistoryService {
+            history_batch_insert: Arc::new(batch_insert),
+            repository: Arc::new(repository),
+            id_maps: Arc::new(RwLock::new(HashMap::new())),
+        };
+
+        service.insert_history(order_book_snapshot_entry()).await.unwrap();
+        service.insert_history(order_book_snapshot_entry()).await.unwrap();
+    }
+
+    // 测试目的：验证本地不存在对应 instrument 时不会把服务端 ID 错当成本地 ID 落库。
+    // 准备数据/过程：mock repository 对 server ID 42 返回 None，并提交一条合法快照。
+    // 预期结果：处理成功跳过该消息，且不调用 batch insert。
+    #[tokio::test]
+    async fn order_book_snapshot_insert_skips_unknown_local_instrument() {
+        let mut repository = MockClientBinanceRepositoryTrait::new();
+        repository
+            .expect_find_instrument_id_by_server_id()
+            .with(mockall::predicate::eq(42))
+            .times(1)
+            .returning(|_| Ok(None));
+        let mut batch_insert = MockPostgresqlBatchInsertTrait::<LocalBinanceOrderBookSnapshotPo>::new();
+        batch_insert.expect_insert_data().times(0);
+        let service = BinanceOrderBookSnapshotClientHistoryService {
+            history_batch_insert: Arc::new(batch_insert),
+            repository: Arc::new(repository),
+            id_maps: Arc::new(RwLock::new(HashMap::new())),
+        };
+
+        service.insert_history(order_book_snapshot_entry()).await.unwrap();
+    }
+
+    // 测试目的：验证错误的 history type 不会进入 instrument 查询或订单簿落库流程。
+    // 准备数据/过程：将合法快照消息的 history type 改为 BinanceTrade 后提交。
+    // 预期结果：返回校验错误，且 repository 和 batch insert 均不被调用。
+    #[tokio::test]
+    async fn order_book_snapshot_insert_rejects_mismatched_history_type() {
+        let mut repository = MockClientBinanceRepositoryTrait::new();
+        repository.expect_find_instrument_id_by_server_id().times(0);
+        let mut batch_insert = MockPostgresqlBatchInsertTrait::<LocalBinanceOrderBookSnapshotPo>::new();
+        batch_insert.expect_insert_data().times(0);
+        let service = BinanceOrderBookSnapshotClientHistoryService {
+            history_batch_insert: Arc::new(batch_insert),
+            repository: Arc::new(repository),
+            id_maps: Arc::new(RwLock::new(HashMap::from([(42, 7)]))),
+        };
+        let mut entry = order_book_snapshot_entry();
+        entry.history_type = HistoryType::BinanceTrade as i32;
+
+        let error = service.insert_history(entry).await.unwrap_err();
+
+        assert!(error.to_string().contains("non-Binance order book snapshot"));
+    }
+
+    // 测试目的：验证订单簿快照服务不执行历史初始化或缺口对账，只负责实时接收与落地。
+    // 准备数据/过程：使用空 repository 调用 initial_data 和 reconcile_living_instrument_with_server。
+    // 预期结果：两个操作均正常返回，不触发远端回补或数据库查询。
+    #[tokio::test]
+    async fn order_book_snapshot_initialization_and_reconciliation_are_noops() {
+        let repository = MockClientBinanceRepositoryTrait::new();
+        let batch_insert = MockPostgresqlBatchInsertTrait::<LocalBinanceOrderBookSnapshotPo>::new();
+        let service = BinanceOrderBookSnapshotClientHistoryService {
+            history_batch_insert: Arc::new(batch_insert),
+            repository: Arc::new(repository),
+            id_maps: Arc::new(RwLock::new(HashMap::new())),
+        };
+
+        service
+            .initial_data(
+                Instrument {
+                    instrument_type: InstrumentType::Binance as i32,
+                    payload: None,
+                },
+                1_700_000_000_000,
+            )
+            .await
+            .unwrap();
+        service.reconcile_living_instrument_with_server(1_700_000_000_000).await.unwrap();
     }
 
     // 测试目的：验证实时 Binance Spot Kline 根据服务端 instrument ID 映射到本地 ID 后提交批量写入。

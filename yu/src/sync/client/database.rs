@@ -41,6 +41,9 @@ pub(crate) static BINANCE_TRADE_BATCH_INSERT: OnceLock<PostgresqlBatchInsert<cra
 pub(crate) static BINANCE_SWAP_FUNDING_RATE_BATCH_INSERT: OnceLock<
     PostgresqlBatchInsert<crate::sync::client::po::binance::LocalBinanceFundingRatePo>,
 > = OnceLock::new();
+pub(crate) static BINANCE_ORDER_BOOK_SNAPSHOT_BATCH_INSERT: OnceLock<
+    PostgresqlBatchInsert<crate::sync::client::po::binance::LocalBinanceOrderBookSnapshotPo>,
+> = OnceLock::new();
 
 pub fn get_polymarket_price_batch_insert() -> PostgresqlBatchInsert<LocalPolyMarketHistoryPo> {
     POLYMARKET_PRICE_BATCH_INSERT
@@ -127,6 +130,17 @@ pub fn get_binance_swap_funding_rate_batch_insert() -> PostgresqlBatchInsert<cra
                     pool,
                 ),
             )
+        })
+        .clone()
+}
+
+pub fn get_binance_order_book_snapshot_batch_insert() -> PostgresqlBatchInsert<crate::sync::client::po::binance::LocalBinanceOrderBookSnapshotPo> {
+    BINANCE_ORDER_BOOK_SNAPSHOT_BATCH_INSERT
+        .get_or_init(|| {
+            let pool = get_sync_client_pg_pool_sync().expect("get_sync_client_pg_pool failed");
+            block_on(PostgresqlBatchInsertImpl::<
+                crate::sync::client::po::binance::LocalBinanceOrderBookSnapshotPo,
+            >::new(ClientsTables::BinanceOrderBookSnapshot.table_name(), pool))
         })
         .clone()
 }

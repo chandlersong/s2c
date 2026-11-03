@@ -1,5 +1,5 @@
 use li::tools::logs::setup_logger;
-use log::{info, LevelFilter};
+use log::{LevelFilter, info};
 use rmcp::transport::sse_server::SseServer;
 use std::collections::HashMap;
 use yu::binance::bn_mcp::BinanceSpot;

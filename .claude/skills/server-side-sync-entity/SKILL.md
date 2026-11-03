@@ -48,8 +48,12 @@ History相关的内容。包括repository、service
 
 - `initial_history_data`方法：初始化历史数据。
     - 默认使用restful API获取历史数据，具体可以在yu和yue包里面查看有没有相应的API，如果没有，就询问用户是否需要自己实现获取历史数据的逻辑。不允许擅自生成
-    - 这里的数据直接进数据库。这里的数据不需要发送到客户端。
+    - 这里生成的数据，需要保存到数据库中。
+    - 这里生成的数据，禁止发送到客户端。
     - 有些如果没有办法活的历史数据的，比如`OkxOptionSummaryPo`，则可以不实现这个方法,如需打印log，打印debug级别的。但是需要写上注释。
+    - 尽量用批量保存，
+        - 发送`QueryCommand::BatchInsert`
+        - 或者repository提供的批量保存方法
 - `sync_all`方法：获取最新的数据。
     - 具体可以在yu和yue包里面查看有没有相应的API，如果没有，就询问用户是否需要自己实现获取历史数据的逻辑。不允许擅自生成
     - `PolyMarketSyncHistoryService`为restful的实现。但是实际可能有其他实现。
@@ -61,8 +65,28 @@ History相关的内容。包括repository、service
             - 不用在组装的地方，加入周期性调用。
 - `check_history_data`方法：检查本地数据。
     - 模仿`PolyMarketSyncHistoryService`中用现有的二分法查找工具来实现这个方法。
+        - BinarySearchDS默认作为struct的变量，然后在`for_production`方法中初始化。
     - 补全数据，模仿自己的initial_history_data方法来实现这个方法。
     - 检查出的缺失数据，在补全后，要发给客户端。
+    - 尽量用单条保存，
+        - 发送`QueryCommand::Insert`
+        - 或者repository提供的单条保存方法
+
+###### 只有实时数据的例子
+
+在一些情况下。只有实时数据，没有历史数据。具体实现有两种。
+
+第一种为需要定时调用的。具体可以参考`yue/src/binance/order_book.rs`中的OrderBookService。
+其需要定期调用`query_order_book`方法来获取最新的order_book数据。
+具体步骤可以参考以下例子：
+
+- `yu/src/binance/sync_server.rs`中的`subscribe_spot_order_book`方法进行一些必要的组装
+- `yu/src/binance/sync_job.rs` 中的start_binance_sync_server_job，来定时调用。
+
+第二种为纯的实时数据流，一般是websocket的方式。具体可以参考`yu/src/binance/trading_service.rs`中的`TradingService`方法。
+
+- `yu/src/binance/sync_job.rs` 中的start_binance_sync_server_job，来组装。
+    - 推荐组装过程为独立方法，写入start_binance_sync_server_job只是作为参考，不是一个好例子。
 
 ###### repository
 
@@ -85,8 +109,9 @@ Instrument相关的内容。包括repository、service。
 - `for_production`方法，用于在生产函数调用
     - 具体参数可以参考`PolyMarketSyncInstrumentService`中的`for_production`方法。
     - 如果业务需要，可以自行添加参数
-- 维护一个`live_instruments`的缓存
-    - 需要能在多个环境中共享，方式方法包括但是不限于`PolyMarketSyncInstrumentService`中的加锁的方法。
+- 维护一个`live_instruments`的缓存，需要能在多个环境中共享
+    - 简单的方式，`yu/src/polymarket/sync_job.rs`中的live_instruments，加锁的方法，因为该交易所只有一种。
+    - 复杂的方式，`yu/src/binance/sync_job.rs`中的BinanceDashboard单独一个类来维护，因为该交易所有多种不同的instrument。
 - `support_history_list`方法：返回支持的历史数据类型列表。
     - 具体可以参考`PolyMarketSyncInstrumentService`中的`support_history_list`方法。
     - 优先使用外部注入的方式。

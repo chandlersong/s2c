@@ -1,4 +1,4 @@
-use duckdb::{params, Connection, Result};
+use duckdb::{Connection, Result, params};
 
 struct Duck {
     id: i32,

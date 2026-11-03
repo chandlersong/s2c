@@ -52,8 +52,8 @@ History相关的内容。包括repository、service
     - 这里生成的数据，禁止发送到客户端。
     - 有些如果没有办法活的历史数据的，比如`OkxOptionSummaryPo`，则可以不实现这个方法,如需打印log，打印debug级别的。但是需要写上注释。
     - 尽量用批量保存，
-      - 发送`QueryCommand::BatchInsert`
-      - 或者repository提供的批量保存方法
+        - 发送`QueryCommand::BatchInsert`
+        - 或者repository提供的批量保存方法
 - `sync_all`方法：获取最新的数据。
     - 具体可以在yu和yue包里面查看有没有相应的API，如果没有，就询问用户是否需要自己实现获取历史数据的逻辑。不允许擅自生成
     - `PolyMarketSyncHistoryService`为restful的实现。但是实际可能有其他实现。
@@ -69,8 +69,24 @@ History相关的内容。包括repository、service
     - 补全数据，模仿自己的initial_history_data方法来实现这个方法。
     - 检查出的缺失数据，在补全后，要发给客户端。
     - 尽量用单条保存，
-      - 发送`QueryCommand::Insert`
-      - 或者repository提供的单条保存方法
+        - 发送`QueryCommand::Insert`
+        - 或者repository提供的单条保存方法
+
+###### 只有实时数据的例子
+
+在一些情况下。只有实时数据，没有历史数据。具体实现有两种。
+
+第一种为需要定时调用的。具体可以参考`yue/src/binance/order_book.rs`中的OrderBookService。
+其需要定期调用`query_order_book`方法来获取最新的order_book数据。
+具体步骤可以参考以下例子：
+
+- `yu/src/binance/sync_server.rs`中的`subscribe_spot_order_book`方法进行一些必要的组装
+- `yu/src/binance/sync_job.rs` 中的start_binance_sync_server_job，来定时调用。
+
+第二种为纯的实时数据流，一般是websocket的方式。具体可以参考`yu/src/binance/trading_service.rs`中的`TradingService`方法。
+
+- `yu/src/binance/sync_job.rs` 中的start_binance_sync_server_job，来组装。
+    - 推荐组装过程为独立方法，写入start_binance_sync_server_job只是作为参考，不是一个好例子。
 
 ###### repository
 
