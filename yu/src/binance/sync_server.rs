@@ -236,7 +236,7 @@ impl HistoryBatchHandlerTrait<BinanceKline> for BinanceGapKlineSaver {
 
 pub struct BinanceSpotSyncHistoryService {
     data_retention_ms: u64,
-    dashboard: Arc<BinanceDashboard>,
+    inst_provider: InstrumentProvider,
     kline_repo: BinanceKlineRepository,
     binary_search_ds: BinarySearchDS,
     history_tx: mpsc::Sender<HistoryEntry>,
@@ -258,7 +258,7 @@ impl BinanceSpotSyncHistoryService {
         );
         Arc::new(Self {
             data_retention_ms,
-            dashboard,
+            inst_provider: SpotInstrumentProvider::new_provider(dashboard),
             kline_repo: get_default_spot_kline_repo(None, None),
             binary_search_ds,
             history_tx,
@@ -303,7 +303,7 @@ impl SyncHistoryServiceTrait for BinanceSpotSyncHistoryService {
         let interval = self.interval.clone();
         let now_ms = interval.get_now_close_unix_ms_utc();
         let retention_floor = now_ms.saturating_sub(self.data_retention_ms);
-        let instruments = self.dashboard.spot_living_symbols();
+        let instruments = self.inst_provider.instruments(None);
         let total = instruments.len();
         let mut completed = 0;
         let mut no_gap_count = 0;
@@ -364,11 +364,10 @@ impl SyncHistoryServiceTrait for BinanceSpotSyncHistoryService {
     }
 
     async fn initial_history_data(&self, end_ms: Option<u64>) -> Result<(), YuError> {
-        let instrument_provider = SpotInstrumentProvider::new_provider(self.dashboard.clone());
         let before = end_ms.unwrap_or_else(|| unix_time_now_u64_utc());
         let latest_timestamps = self.kline_repo.inst_id_with_lastest_timestamp_before(before).await?;
         initial_kline(
-            instrument_provider,
+            self.inst_provider.clone(),
             self.data_retention_ms,
             self.interval.clone(),
             get_spot_kline_table(),
@@ -421,7 +420,7 @@ impl HistoryBatchHandlerTrait<BinanceKline> for BinanceSwapGapKlineSaver {
 
 pub struct BinanceSwapSyncHistoryService {
     data_retention_ms: u64,
-    dashboard: Arc<BinanceDashboard>,
+    inst_provider: InstrumentProvider,
     kline_repo: BinanceKlineRepository,
     binary_search_ds: BinarySearchDS,
     history_tx: mpsc::Sender<HistoryEntry>,
@@ -443,7 +442,7 @@ impl BinanceSwapSyncHistoryService {
         );
         Arc::new(Self {
             data_retention_ms,
-            dashboard,
+            inst_provider: SwapInstrumentProvider::new_provider(dashboard),
             kline_repo: get_default_swap_kline_repo(None, None),
             binary_search_ds,
             history_tx,
@@ -488,7 +487,7 @@ impl SyncHistoryServiceTrait for BinanceSwapSyncHistoryService {
         let interval = self.interval.clone();
         let now_ms = interval.get_now_close_unix_ms_utc();
         let retention_floor = now_ms.saturating_sub(self.data_retention_ms);
-        let instruments = self.dashboard.swap_living_symbols();
+        let instruments = self.inst_provider.instruments(None);
         let total = instruments.len();
         let mut completed = 0;
         let mut no_gap_count = 0;
@@ -550,11 +549,10 @@ impl SyncHistoryServiceTrait for BinanceSwapSyncHistoryService {
     }
 
     async fn initial_history_data(&self, initial_before_ms: Option<u64>) -> Result<(), YuError> {
-        let instrument_provider = SwapInstrumentProvider::new_provider(self.dashboard.clone());
         let before = initial_before_ms.unwrap_or_else(|| unix_time_now_u64_utc());
         let latest_timestamps = self.kline_repo.inst_id_with_lastest_timestamp_before(before).await?;
         initial_kline(
-            instrument_provider,
+            self.inst_provider.clone(),
             self.data_retention_ms,
             self.interval.clone(),
             get_swap_kline_table(),
