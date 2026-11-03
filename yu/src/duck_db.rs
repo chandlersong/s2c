@@ -18,7 +18,7 @@ pub fn get_connection_pool() -> &'static Pool<DuckdbConnectionManager> {
     CONNECTION_POOL.get_or_init(|| {
         let builder = Pool::builder()
             .max_size(100) // 最大连接数
-            .min_idle(Some(5)) // 最小空闲连接数
+            .min_idle(Some(10)) // 最小空闲连接数
             .connection_timeout(std::time::Duration::from_secs(5)); // 连接超时时间
         builder.build(get_duck_connection_manager()).unwrap()
     })
@@ -62,9 +62,17 @@ impl DataSourceProviderTrait for DuckDBDSProvider {
                 Ok(conn) => return Ok(conn),
                 Err(e) => {
                     if attempt + 1 == MAX_RETRIES {
-                        return Err(YueError::new(
-                            format!("failed to acquire connection after {} attempts: {}", MAX_RETRIES, e).as_str(),
-                        ));
+                        let state = self.pool.state();
+                        let message = format!(
+                            "failed to acquire connection after {} attempts (connections={}, idle_connections={}, max_size={}): {}",
+                            MAX_RETRIES,
+                            state.connections,
+                            state.idle_connections,
+                            self.pool.max_size(),
+                            e
+                        );
+                        log::error!("{message}");
+                        return Err(YueError::new(&message));
                     }
                     // 基于当前时间生成一个小的随机抖动，避免同时重试的冲突
                     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_nanos();

@@ -51,6 +51,9 @@ History相关的内容。包括repository、service
     - 这里生成的数据，需要保存到数据库中。
     - 这里生成的数据，禁止发送到客户端。
     - 有些如果没有办法活的历史数据的，比如`OkxOptionSummaryPo`，则可以不实现这个方法,如需打印log，打印debug级别的。但是需要写上注释。
+    - 尽量用批量保存，
+      - 发送`QueryCommand::BatchInsert`
+      - 或者repository提供的批量保存方法
 - `sync_all`方法：获取最新的数据。
     - 具体可以在yu和yue包里面查看有没有相应的API，如果没有，就询问用户是否需要自己实现获取历史数据的逻辑。不允许擅自生成
     - `PolyMarketSyncHistoryService`为restful的实现。但是实际可能有其他实现。
@@ -65,6 +68,9 @@ History相关的内容。包括repository、service
         - BinarySearchDS默认作为struct的变量，然后在`for_production`方法中初始化。
     - 补全数据，模仿自己的initial_history_data方法来实现这个方法。
     - 检查出的缺失数据，在补全后，要发给客户端。
+    - 尽量用单条保存，
+      - 发送`QueryCommand::Insert`
+      - 或者repository提供的单条保存方法
 
 ###### repository
 
