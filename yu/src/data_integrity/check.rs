@@ -211,7 +211,7 @@ impl DuckDBBinarySearchDataImpl {
 impl BinarySearchDSTrait for DuckDBBinarySearchDataImpl {
     fn count_distinct_between(&self, identify: &str, start: u64, end: u64) -> Result<u64, YuError> {
         let sql = format!(
-            "SELECT COUNT(*) FROM {table} {symbol_col} = ? WHERE AND {time_col} >= ? AND {time_col} < ?  ",
+            "SELECT COUNT(*) FROM {table} WHERE {symbol_col} = ? AND {time_col} >= ? AND {time_col} < ?",
             time_col = self.time_column,
             table = self.table_name,
             symbol_col = self.symbol_column,
@@ -221,7 +221,7 @@ impl BinarySearchDSTrait for DuckDBBinarySearchDataImpl {
 
         let timer = Instant::now();
         let mut rows = stmt
-            .query(duckdb::params![start as i64, end as i64, identify])
+            .query(duckdb::params![identify, start as i64, end as i64])
             .map_err(|_| YuError::new(&format!("{}, query gap from {} to {}", identify, start, end)))?;
         let elapsed = timer.elapsed();
         if elapsed > Duration::from_secs(10) {
