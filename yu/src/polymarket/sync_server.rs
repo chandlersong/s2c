@@ -461,7 +461,9 @@ impl SyncHistoryServiceTrait for PolyMarketSyncHistoryService {
                 now_ms,
                 &self.interval,
                 binary_search_ds.clone(),
-            )?;
+                0,
+            )?
+            .gaps;
             debug!("{} has {} gaps", instrument.asset_slug, gaps.len());
             let fidelity = self.interval.to_second() / 60;
             for g in gaps.iter() {

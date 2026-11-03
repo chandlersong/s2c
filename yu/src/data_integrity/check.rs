@@ -3,6 +3,7 @@ use crate::duck_db::DuckDBDSProvider;
 use crate::errors::YuError;
 use async_trait::async_trait;
 use log::warn;
+use std::cmp::max;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use yue::models::HistoryInterval;
@@ -14,6 +15,21 @@ pub trait ValidationStrategyTrait: Send + Sync {
     async fn validate(&self) -> Result<Option<ValidationResult>, YuError>;
 
     fn name(&self) -> String;
+}
+
+pub struct BinarySearchResult {
+    pub gaps: Vec<ValidationGap>,
+    pub level: usize,
+}
+
+impl BinarySearchResult {
+    pub fn new(gaps: Vec<ValidationGap>, level: usize) -> Self {
+        Self { gaps, level }
+    }
+
+    pub fn no_gaps(level: usize) -> Self {
+        Self { gaps: Vec::new(), level }
+    }
 }
 
 /// # 二分法具体查找方法。
@@ -38,6 +54,8 @@ pub trait ValidationStrategyTrait: Send + Sync {
 ///     - end!=gap.end_time。那么end_time是存在的。
 ///     - end==gap.end_time。那么end_time是不存在的。
 ///
+/// # level的作用
+/// 只要是判断到了低基层，如果返回的level是0，那么就表示在最顶层。没有任何的缺失数据。如果返回的level是1，那么就表示在第一层有缺失数据。如果返回的level是2，那么就表示在第二层有缺失数据。以此类推。
 ///
 pub fn binary_search_gap(
     identify: &str,
@@ -46,10 +64,11 @@ pub fn binary_search_gap(
     end: u64,
     interval: &HistoryInterval,
     data_source: BinarySearchDS,
-) -> Result<Vec<ValidationGap>, YuError> {
+    level: usize,
+) -> Result<BinarySearchResult, YuError> {
     // defensive
     if start >= end {
-        return Ok(Vec::new());
+        return Ok(BinarySearchResult::no_gaps(level));
     }
 
     let interval_ms = interval.to_milliseconds();
@@ -58,7 +77,7 @@ pub fn binary_search_gap(
     // count existing distinct slots in [start, end)
     let actual = data_source.count_distinct_between(identify, start, end)?;
     if actual == expected {
-        return Ok(Vec::new());
+        return Ok(BinarySearchResult::no_gaps(level));
     }
 
     // base case: single slot missing
@@ -70,7 +89,7 @@ pub fn binary_search_gap(
             end_time: start + interval_ms,
             table: data_source.table_name(),
         };
-        return Ok(vec![gap]);
+        return Ok(BinarySearchResult::new(vec![gap], level));
     }
 
     // 如果实际为0，说明[start, end)全部缺失，直接返回整个区间作为缺失
@@ -82,25 +101,26 @@ pub fn binary_search_gap(
             end_time: end,
             table: data_source.table_name(),
         };
-        return Ok(vec![gap]);
+        return Ok(BinarySearchResult::new(vec![gap], level));
     }
 
     // compute aligned mid（对齐到 interval 的整点）
     let mid = start + ((end - start) / 2 / interval_ms) * interval_ms;
 
+    let next_level = level + 1;
     // recurse left and right
-    let left = binary_search_gap(identify, trade_type, start, mid, interval, data_source.clone())?;
-    let mut right = binary_search_gap(identify, trade_type, mid, end, interval, data_source.clone())?;
+    let left = binary_search_gap(identify, trade_type, start, mid, interval, data_source.clone(), next_level)?;
+    let mut right = binary_search_gap(identify, trade_type, mid, end, interval, data_source.clone(), next_level)?;
 
     // 合并左右结果并按注释要求合并相邻区间
-    let mut gaps = left;
-    gaps.append(&mut right);
+    let mut gaps = left.gaps;
+    gaps.append(&mut right.gaps);
     let gaps = merge_gaps(gaps);
     if gaps.is_empty() {
-        return Ok(Vec::new());
+        return Ok(BinarySearchResult::no_gaps(level));
     }
-
-    Ok(gaps)
+    let rest_level = max(left.level, right.level);
+    Ok(BinarySearchResult::new(gaps, rest_level))
 }
 
 ///
@@ -441,6 +461,9 @@ mod tests {
         Ok(())
     }
 
+    // 测试目的：验证完整数据区间返回无缺失结果，并保留初始搜索层级。
+    // 准备数据/过程：模拟五个连续时间槽均存在，从第 0 层调用二分搜索。
+    // 预期结果：缺失区间为空，返回层级为 0。
     #[test]
     fn test_binary_search_gap_no_gap() -> Result<(), YuError> {
         let interval = HistoryInterval::FiveMinutes;
@@ -464,11 +487,15 @@ mod tests {
         });
 
         let ds = Arc::new(mock);
-        let res = binary_search_gap("BTCUSDT", "SPOT", start, end, &interval, ds)?;
-        assert!(res.is_empty(), "expected no repair requests but got: {:?}", res);
+        let res = binary_search_gap("BTCUSDT", "SPOT", start, end, &interval, ds, 0)?;
+        assert!(res.gaps.is_empty(), "expected no repair requests but got: {:?}", res.gaps);
+        assert_eq!(res.level, 0);
         Ok(())
     }
 
+    // 测试目的：验证偶数个完整时间槽不会产生缺失区间。
+    // 准备数据/过程：模拟十个连续时间槽均存在，从第 0 层执行搜索。
+    // 预期结果：返回的缺失区间为空且层级为 0。
     #[test]
     fn test_binary_search_gap_no_gap_even() -> Result<(), YuError> {
         // even number of slots (10)
@@ -493,11 +520,15 @@ mod tests {
         });
 
         let ds = Arc::new(mock);
-        let res = binary_search_gap("BTCUSDT", "SPOT", start, end, &interval, ds)?;
-        assert!(res.is_empty(), "expected no repair requests for even count but got: {:?}", res);
+        let res = binary_search_gap("BTCUSDT", "SPOT", start, end, &interval, ds, 0)?;
+        assert!(res.gaps.is_empty(), "expected no repair requests for even count but got: {:?}", res.gaps);
+        assert_eq!(res.level, 0);
         Ok(())
     }
 
+    // 测试目的：验证二分搜索能定位单个缺失时间槽并报告发现缺失的层级。
+    // 准备数据/过程：模拟五个时间槽中索引 2 缺失，从第 0 层执行搜索。
+    // 预期结果：返回该时间槽对应的缺失区间，且缺失在第 2 层被定位。
     #[test]
     fn test_binary_search_gap_single_missing() -> Result<(), YuError> {
         let interval = HistoryInterval::FiveMinutes;
@@ -521,22 +552,26 @@ mod tests {
         });
 
         let ds = Arc::new(mock);
-        let gaps = binary_search_gap("BTCUSDT", "SPOT", start, end, &interval, ds)?;
-        assert!(!gaps.is_empty(), "expected gaps but none produced");
+        let result = binary_search_gap("BTCUSDT", "SPOT", start, end, &interval, ds, 0)?;
+        assert!(!result.gaps.is_empty(), "expected gaps but none produced");
+        assert_eq!(result.level, 2);
         let missing_ts = t0 + 2 * interval_ms;
         let missing_end = missing_ts + interval_ms;
         let mut found = false;
-        for g in gaps.iter() {
+        for g in result.gaps.iter() {
             if let ValidationGap::MissingData { start_time, end_time, .. } = g {
                 if *start_time == missing_ts && *end_time == missing_end {
                     found = true;
                 }
             }
         }
-        assert!(found, "missing slot not reported in gaps: {:?}", gaps);
+        assert!(found, "missing slot not reported in gaps: {:?}", result.gaps);
         Ok(())
     }
 
+    // 测试目的：验证相邻缺失时间槽会合并，且返回最深缺失层级。
+    // 准备数据/过程：模拟五个时间槽中索引 2 和 3 缺失，从第 0 层执行搜索。
+    // 预期结果：两个缺失槽合并为一个区间，返回层级为 3。
     #[test]
     fn test_binary_search_gap_merge_adjacent() -> Result<(), YuError> {
         let interval = HistoryInterval::FiveMinutes;
@@ -559,10 +594,11 @@ mod tests {
         });
 
         let ds = Arc::new(mock);
-        let gaps = binary_search_gap("BTCUSDT", "SPOT", start, end, &interval, ds)?;
-        assert_eq!(gaps.len(), 1, "adjacent gaps should be merged into one gap");
+        let result = binary_search_gap("BTCUSDT", "SPOT", start, end, &interval, ds, 0)?;
+        assert_eq!(result.gaps.len(), 1, "adjacent gaps should be merged into one gap");
+        assert_eq!(result.level, 3);
 
-        match &gaps[0] {
+        match &result.gaps[0] {
             ValidationGap::MissingData { start_time, end_time, .. } => {
                 assert_eq!(*start_time, t0 + 2 * interval_ms);
                 assert_eq!(*end_time, t0 + 4 * interval_ms);
@@ -572,6 +608,9 @@ mod tests {
         Ok(())
     }
 
+    // 测试目的：验证多个不相邻缺失范围均被正确返回。
+    // 准备数据/过程：模拟十个时间槽中仅索引 0、1、4、8 存在，从第 0 层执行搜索。
+    // 预期结果：返回三个已合并的缺失区间，且搜索层级大于 0。
     #[test]
     fn test_binary_search_gap_merge_multiple_ranges() -> Result<(), YuError> {
         let interval = HistoryInterval::FiveMinutes;
@@ -594,9 +633,10 @@ mod tests {
         });
 
         let ds = Arc::new(mock);
-        let gaps = binary_search_gap("BTCUSDT", "SPOT", start, end, &interval, ds)?;
+        let result = binary_search_gap("BTCUSDT", "SPOT", start, end, &interval, ds, 0)?;
 
-        assert_eq!(gaps.len(), 3, "expected three merged gaps");
+        assert_eq!(result.gaps.len(), 3, "expected three merged gaps");
+        assert!(result.level > 0);
 
         let expected = vec![
             (t0 + 2 * interval_ms, t0 + 4 * interval_ms),
@@ -604,7 +644,7 @@ mod tests {
             (t0 + 9 * interval_ms, t0 + 10 * interval_ms),
         ];
 
-        for (gap, (exp_start, exp_end)) in gaps.iter().zip(expected.into_iter()) {
+        for (gap, (exp_start, exp_end)) in result.gaps.iter().zip(expected.into_iter()) {
             match gap {
                 ValidationGap::MissingData { start_time, end_time, .. } => {
                     assert_eq!(*start_time, exp_start);
@@ -753,8 +793,9 @@ mod tests {
         assert!(merged_empty.is_empty(), "empty input should produce empty output");
     }
 
-    // 测试：当区间内没有任何数据时，应直接返回覆盖整个区间的单个 MissingData
-    // 这与注释中描述的短路逻辑一致（actual == 0 时返回 [start, end)）
+    // 测试目的：验证整个区间均无数据时会直接返回覆盖输入范围的缺失区间。
+    // 准备数据/过程：模拟六个时间槽所在区间的计数始终为 0，从第 0 层执行搜索。
+    // 预期结果：只返回覆盖完整输入区间的一个缺失区间，层级为 0。
     #[test]
     fn test_binary_search_gap_all_missing() -> Result<(), YuError> {
         let interval = HistoryInterval::FiveMinutes;
@@ -769,11 +810,12 @@ mod tests {
         mock.expect_count_distinct_between().returning(move |_: &str, _s: u64, _e: u64| Ok(0));
 
         let ds = Arc::new(mock);
-        let gaps = binary_search_gap("BTCUSDT", "SPOT", start, end, &interval, ds)?;
+        let result = binary_search_gap("BTCUSDT", "SPOT", start, end, &interval, ds, 0)?;
 
         // 期望只有一个缺失区间，并且正好覆盖整个输入区间
-        assert_eq!(gaps.len(), 1, "expected single full-range gap when no data present");
-        match &gaps[0] {
+        assert_eq!(result.gaps.len(), 1, "expected single full-range gap when no data present");
+        assert_eq!(result.level, 0);
+        match &result.gaps[0] {
             ValidationGap::MissingData { start_time, end_time, .. } => {
                 assert_eq!(*start_time, start, "gap.start_time should be clamped to input start");
                 assert_eq!(*end_time, end, "gap.end_time should be clamped to input end");

@@ -236,7 +236,9 @@ impl ClientHistoryServiceTrait for BinanceSwapKlineClientHistoryService {
                 end_timestamp,
                 &self.interval,
                 self.binary_search.clone(),
-            )?;
+                0,
+            )?
+            .gaps;
             for gap in gaps {
                 if let ValidationGap::MissingData { start_time, end_time, .. } = gap {
                     self.backfill_history(instrument.server_id, instrument.id, start_time, end_time.saturating_sub(1))
@@ -425,7 +427,9 @@ impl ClientHistoryServiceTrait for BinanceSwapFundingRateClientHistoryService {
                 end_timestamp,
                 &self.interval,
                 self.binary_search.clone(),
-            )?;
+                0,
+            )?
+            .gaps;
             for gap in gaps {
                 if let ValidationGap::MissingData { start_time, end_time, .. } = gap {
                     self.backfill_history(instrument.server_id, instrument.id, start_time, end_time.saturating_sub(1))
@@ -604,7 +608,9 @@ impl ClientHistoryServiceTrait for BinanceSpotKlineClientHistoryService {
                 end_timestamp,
                 &self.interval,
                 self.binary_search.clone(),
-            )?;
+                0,
+            )?
+            .gaps;
             for gap in gaps {
                 if let ValidationGap::MissingData { start_time, end_time, .. } = gap {
                     self.backfill_history(instrument.server_id, instrument.id, start_time, end_time.saturating_sub(1))
@@ -1028,7 +1034,7 @@ mod tests {
     // 预期结果：两个 service 均收到同一 instrument 和结束时间各一次，且初始化成功。
     #[tokio::test]
     async fn initial_data_routes_spot_instrument_to_kline_and_trade_services() {
-        let mut kline_service = crate::sync::client::sync_client_service::MockClientHistoryServiceTrait::new();
+        let mut kline_service = MockClientHistoryServiceTrait::new();
         kline_service
             .expect_initial_data()
             .withf(|instrument, end_ms| {
@@ -1038,7 +1044,7 @@ mod tests {
             })
             .times(1)
             .returning(|_, _| Box::pin(async { Ok(()) }));
-        let mut trade_service = crate::sync::client::sync_client_service::MockClientHistoryServiceTrait::new();
+        let mut trade_service = MockClientHistoryServiceTrait::new();
         trade_service
             .expect_initial_data()
             .withf(|instrument, end_ms| {

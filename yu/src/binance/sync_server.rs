@@ -306,22 +306,28 @@ impl SyncHistoryServiceTrait for BinanceSpotSyncHistoryService {
         let instruments = self.dashboard.spot_living_symbols();
         let total = instruments.len();
         let mut completed = 0;
+        let mut no_gap_count = 0;
         let mut last_progress_log = tokio::time::Instant::now();
 
         for instrument in instruments {
             let instrument_start = instrument.on_board_time.unwrap_or(retention_floor).max(retention_floor);
             let start_ms = interval.get_close_unix_ms(instrument_start).saturating_add(interval.to_milliseconds());
             if start_ms < now_ms {
-                let gaps = binary_search_gap(
+                let gaps_res = binary_search_gap(
                     instrument.id.to_string().as_str(),
                     "SPOT",
                     start_ms,
                     now_ms,
                     &interval,
                     self.binary_search_ds.clone(),
+                    0,
                 )?;
+                let gaps = gaps_res.gaps;
                 debug!("{} has {} gaps", instrument.symbol, gaps.len());
-
+                no_gap_count = match gaps_res.level {
+                    0 => no_gap_count + 1,
+                    _ => no_gap_count,
+                };
                 for gap in gaps {
                     match gap {
                         ValidationGap::MissingData { start_time, end_time, .. } => {
@@ -339,11 +345,21 @@ impl SyncHistoryServiceTrait for BinanceSpotSyncHistoryService {
 
             completed += 1;
             if last_progress_log.elapsed() >= CHECK_HISTORY_PROGRESS_LOG_INTERVAL {
-                info!("binance Spot Kline history check progress: {}/{} instruments checked", completed, total);
+                info!(
+                    "binance Spot Kline history check progress: {}/{} instruments checked, {} instruments with gaps",
+                    completed,
+                    total,
+                    completed - no_gap_count
+                );
                 last_progress_log = tokio::time::Instant::now();
             }
         }
-        info!("binance Spot Kline history check done: {}/{} instruments checked", completed, total);
+        info!(
+            "binance Spot Kline history check done: {}/{} instruments checked，{} instruments with gaps",
+            completed,
+            total,
+            completed - no_gap_count
+        );
         Ok(())
     }
 
@@ -475,21 +491,28 @@ impl SyncHistoryServiceTrait for BinanceSwapSyncHistoryService {
         let instruments = self.dashboard.swap_living_symbols();
         let total = instruments.len();
         let mut completed = 0;
+        let mut no_gap_count = 0;
         let mut last_progress_log = tokio::time::Instant::now();
 
         for instrument in instruments {
             let instrument_start = instrument.on_board_time.unwrap_or(retention_floor).max(retention_floor);
             let start_ms = interval.get_close_unix_ms(instrument_start).saturating_add(interval.to_milliseconds());
             if start_ms < now_ms {
-                let gaps = binary_search_gap(
+                let gaps_res = binary_search_gap(
                     instrument.id.to_string().as_str(),
                     "SWAP",
                     start_ms,
                     now_ms,
                     &interval,
                     self.binary_search_ds.clone(),
+                    0,
                 )?;
+                let gaps = gaps_res.gaps;
                 debug!("{} has {} gaps", instrument.symbol, gaps.len());
+                no_gap_count = match gaps_res.level {
+                    0 => no_gap_count + 1,
+                    _ => no_gap_count,
+                };
 
                 for gap in gaps {
                     match gap {
@@ -508,11 +531,21 @@ impl SyncHistoryServiceTrait for BinanceSwapSyncHistoryService {
 
             completed += 1;
             if last_progress_log.elapsed() >= CHECK_HISTORY_PROGRESS_LOG_INTERVAL {
-                info!("binance Swap Kline history check progress: {}/{} instruments checked", completed, total);
+                info!(
+                    "binance Swap Kline history check progress: {}/{} instruments checked,{} instruments with gaps",
+                    completed,
+                    total,
+                    completed - no_gap_count
+                );
                 last_progress_log = tokio::time::Instant::now();
             }
         }
-        info!("binance Swap Kline history check done: {}/{} instruments checked", completed, total);
+        info!(
+            "binance Swap Kline history check done: {}/{} instruments checked, {} instruments with gaps",
+            completed,
+            total,
+            completed - no_gap_count
+        );
         Ok(())
     }
 
@@ -667,21 +700,27 @@ impl SyncHistoryServiceTrait for BinanceSwapFundingRateSyncHistoryService {
         let trading_instruments = self.inst_provider.instruments(None);
         let total = trading_instruments.len();
         let mut completed = 0;
+        let mut no_gap_count = 0;
         let mut last_progress_log = tokio::time::Instant::now();
         for instrument in trading_instruments {
             let instrument_start = instrument.on_board_time.unwrap_or(retention_floor).max(retention_floor);
             let start_ms = interval.get_close_unix_ms(instrument_start).saturating_add(interval.to_milliseconds());
             if start_ms < now_ms {
-                let gaps = binary_search_gap(
+                let gaps_res = binary_search_gap(
                     instrument.id.to_string().as_str(),
                     "SWAP",
                     start_ms,
                     now_ms,
                     &interval,
                     self.binary_search_ds.clone(),
+                    0,
                 )?;
+                let gaps = gaps_res.gaps;
                 debug!("{} has {} gaps", instrument.symbol, gaps.len());
-
+                no_gap_count = match gaps_res.level {
+                    0 => no_gap_count + 1,
+                    _ => no_gap_count,
+                };
                 for gap in gaps {
                     match gap {
                         ValidationGap::MissingData { start_time, end_time, .. } => {
@@ -696,16 +735,20 @@ impl SyncHistoryServiceTrait for BinanceSwapFundingRateSyncHistoryService {
             completed += 1;
             if last_progress_log.elapsed() >= CHECK_HISTORY_PROGRESS_LOG_INTERVAL {
                 info!(
-                    "binance Swap Funding Rate history check progress: {}/{} instruments checked",
-                    completed, total
+                    "binance Swap Funding Rate history check progress: {}/{} instruments checked,{} instruments with gaps",
+                    completed,
+                    total,
+                    completed - no_gap_count
                 );
                 last_progress_log = tokio::time::Instant::now();
             }
         }
 
         info!(
-            "binance Swap Funding Rate history check done: {}/{} instruments checked",
-            completed, total
+            "binance Swap Funding Rate history check done: {}/{} instruments checked,{} instruments with gaps",
+            completed,
+            total,
+            completed - no_gap_count
         );
         Ok(())
     }

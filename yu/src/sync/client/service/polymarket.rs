@@ -202,7 +202,9 @@ impl ClientHistoryServiceTrait for PolymarketClientHistoryService {
                 end_timestamp,
                 &self.interval,
                 self.binary_search.clone(),
-            )?;
+                0,
+            )?
+            .gaps;
             debug!("polymarket {} gaps: {}", instrument.server_id, gaps.len());
             for gap in gaps {
                 match gap {

@@ -216,7 +216,9 @@ impl ClientHistoryServiceTrait for OkxKlineClientHistoryService {
                 end_timestamp,
                 &self.interval,
                 self.binary_search.clone(),
-            )?;
+                0,
+            )?
+            .gaps;
             for gap in gaps {
                 if let ValidationGap::MissingData { start_time, end_time, .. } = gap {
                     self.backfill_history(instrument.server_id, instrument.id, start_time.saturating_sub(1), end_time)
