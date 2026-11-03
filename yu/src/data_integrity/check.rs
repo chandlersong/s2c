@@ -211,18 +211,17 @@ impl DuckDBBinarySearchDataImpl {
 impl BinarySearchDSTrait for DuckDBBinarySearchDataImpl {
     fn count_distinct_between(&self, identify: &str, start: u64, end: u64) -> Result<u64, YuError> {
         let sql = format!(
-            "SELECT COUNT(DISTINCT {time_col}) FROM {table} WHERE {time_col} >= ? AND {time_col} < ? AND {symbol_col}='{symbol}'",
+            "SELECT COUNT(*) FROM {table} {symbol_col} = ? WHERE AND {time_col} >= ? AND {time_col} < ?  ",
             time_col = self.time_column,
             table = self.table_name,
             symbol_col = self.symbol_column,
-            symbol = identify,
         );
         let connection = self.db_provider.acquire()?;
         let mut stmt = connection.prepare(&sql)?;
 
         let timer = Instant::now();
         let mut rows = stmt
-            .query([start as i64, end as i64])
+            .query(duckdb::params![start as i64, end as i64, identify])
             .map_err(|_| YuError::new(&format!("{}, query gap from {} to {}", identify, start, end)))?;
         let elapsed = timer.elapsed();
         if elapsed > Duration::from_secs(10) {
@@ -418,6 +417,29 @@ mod tests {
     use crate::errors::YuError;
     use std::sync::Arc;
     use yue::models::HistoryInterval;
+
+    // 测试目的：验证 DuckDB 计数只统计指定标识及左闭右开时间范围内的唯一记录。
+    // 准备数据/过程：创建带有 (inst_id, candle_time) 唯一索引的临时表，插入边界内外及其他标识的数据后执行计数。
+    // 预期结果：start 被包含、end 被排除，其他标识的记录不计入，返回 2。
+    #[test]
+    fn test_duckdb_count_distinct_between_uses_unique_key_semantics() -> Result<(), YuError> {
+        let provider = DuckDBDSProvider::memory_db();
+        let connection = provider.acquire()?;
+        connection.execute_batch(
+            "CREATE TABLE binary_search_count_test (inst_id BIGINT, candle_time BIGINT);
+             CREATE UNIQUE INDEX binary_search_count_test_unique ON binary_search_count_test(inst_id, candle_time);
+             INSERT INTO binary_search_count_test VALUES (7, 100), (7, 150), (7, 200), (8, 150);",
+        )?;
+
+        let data_source = DuckDBBinarySearchDataImpl {
+            db_provider: provider,
+            table_name: "binary_search_count_test".to_string(),
+            time_column: "candle_time".to_string(),
+            symbol_column: "inst_id".to_string(),
+        };
+        assert_eq!(data_source.count_distinct_between("7", 100, 200)?, 2);
+        Ok(())
+    }
 
     #[test]
     fn test_binary_search_gap_no_gap() -> Result<(), YuError> {
