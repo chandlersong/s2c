@@ -5,7 +5,7 @@ use crate::binance::duckdb_repository::{
     BNInstrumentRepository, BinanceFundingRateRepository, BinanceKlineRepository, BinanceTradeRepository, get_default_funding_rate_repo,
     get_default_spot_kline_repo, get_default_spot_trade_repo, get_default_swap_kline_repo, get_instrument_repo_for_production,
 };
-use crate::binance::history::{INITIAL_HISTORY_PROGRESS_LOG_INTERVAL, initial_kline};
+use crate::binance::history::initial_kline;
 use crate::binance::models::po::{BinanceInstrument, FundingRatePo, KlinePo, SpotStreamTradeRecordPo};
 use crate::data_integrity::check::{BinarySearchDS, DuckDBBinarySearchDataImpl, binary_search_gap};
 use crate::data_integrity::models::ValidationGap;
@@ -15,11 +15,11 @@ use crate::errors::YuError;
 use crate::sync::models::grpc_sync::{HistoryEntry, HistoryType, Instrument, ServerMessage};
 use crate::sync::server::sync_server::{SyncHistoryService, SyncHistoryServiceTrait, SyncInstrumentServiceTrait};
 use async_trait::async_trait;
+use indicatif::{ProgressBar, ProgressStyle};
 use li::tools::time::unix_time_now_u64_utc;
-use log::{debug, error, info};
+use log::{debug, error};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::mpsc;
 use tonic::Status;
 use yue::binance::bn_models::spot_restful::BinanceKline;
@@ -132,7 +132,16 @@ mod tests {
     }
 }
 
-pub(crate) const CHECK_HISTORY_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(5 * 60);
+fn history_progress_bar(total: usize, prefix: &str, message: &str) -> ProgressBar {
+    let progress = ProgressBar::new(total as u64);
+    let style = ProgressStyle::with_template("{prefix:.bold} [{bar:40.cyan/blue}] {pos}/{len} {msg}")
+        .expect("history progress bar template must be valid")
+        .progress_chars("##-");
+    progress.set_style(style);
+    progress.set_prefix(prefix.to_owned());
+    progress.set_message(message.to_owned());
+    progress
+}
 
 ///
 /// FUTURE:
@@ -304,9 +313,7 @@ impl SyncHistoryServiceTrait for BinanceSpotSyncHistoryService {
         let now_ms = interval.get_now_close_unix_ms_utc();
         let retention_floor = now_ms.saturating_sub(self.data_retention_ms);
         let instruments = self.dashboard.spot_living_symbols();
-        let total = instruments.len();
-        let mut completed = 0;
-        let mut last_progress_log = tokio::time::Instant::now();
+        let progress = history_progress_bar(instruments.len(), "Binance Spot Kline history check", "instruments checked");
 
         for instrument in instruments {
             let instrument_start = instrument.on_board_time.unwrap_or(retention_floor).max(retention_floor);
@@ -337,13 +344,9 @@ impl SyncHistoryServiceTrait for BinanceSpotSyncHistoryService {
                 }
             }
 
-            completed += 1;
-            if last_progress_log.elapsed() >= CHECK_HISTORY_PROGRESS_LOG_INTERVAL {
-                info!("binance Spot Kline history check progress: {}/{} instruments checked", completed, total);
-                last_progress_log = tokio::time::Instant::now();
-            }
+            progress.inc(1);
         }
-        info!("binance Spot Kline history check done: {}/{} instruments checked", completed, total);
+        progress.finish_with_message("done");
         Ok(())
     }
 
@@ -473,9 +476,7 @@ impl SyncHistoryServiceTrait for BinanceSwapSyncHistoryService {
         let now_ms = interval.get_now_close_unix_ms_utc();
         let retention_floor = now_ms.saturating_sub(self.data_retention_ms);
         let instruments = self.dashboard.swap_living_symbols();
-        let total = instruments.len();
-        let mut completed = 0;
-        let mut last_progress_log = tokio::time::Instant::now();
+        let progress = history_progress_bar(instruments.len(), "Binance Swap Kline history check", "instruments checked");
 
         for instrument in instruments {
             let instrument_start = instrument.on_board_time.unwrap_or(retention_floor).max(retention_floor);
@@ -506,13 +507,9 @@ impl SyncHistoryServiceTrait for BinanceSwapSyncHistoryService {
                 }
             }
 
-            completed += 1;
-            if last_progress_log.elapsed() >= CHECK_HISTORY_PROGRESS_LOG_INTERVAL {
-                info!("binance Swap Kline history check progress: {}/{} instruments checked", completed, total);
-                last_progress_log = tokio::time::Instant::now();
-            }
+            progress.inc(1);
         }
-        info!("binance Swap Kline history check done: {}/{} instruments checked", completed, total);
+        progress.finish_with_message("done");
         Ok(())
     }
 
@@ -665,9 +662,11 @@ impl SyncHistoryServiceTrait for BinanceSwapFundingRateSyncHistoryService {
         let retention_floor = now_ms.saturating_sub(self.data_retention_ms);
         let now_ms = interval.get_now_close_unix_ms_utc();
         let trading_instruments = self.inst_provider.instruments(None);
-        let total = trading_instruments.len();
-        let mut completed = 0;
-        let mut last_progress_log = tokio::time::Instant::now();
+        let progress = history_progress_bar(
+            trading_instruments.len(),
+            "Binance Swap Funding Rate history check",
+            "instruments checked",
+        );
         for instrument in trading_instruments {
             let instrument_start = instrument.on_board_time.unwrap_or(retention_floor).max(retention_floor);
             let start_ms = interval.get_close_unix_ms(instrument_start).saturating_add(interval.to_milliseconds());
@@ -693,20 +692,10 @@ impl SyncHistoryServiceTrait for BinanceSwapFundingRateSyncHistoryService {
                 }
             }
 
-            completed += 1;
-            if last_progress_log.elapsed() >= CHECK_HISTORY_PROGRESS_LOG_INTERVAL {
-                info!(
-                    "binance Swap Funding Rate history check progress: {}/{} instruments checked",
-                    completed, total
-                );
-                last_progress_log = tokio::time::Instant::now();
-            }
+            progress.inc(1);
         }
 
-        info!(
-            "binance Swap Funding Rate history check done: {}/{} instruments checked",
-            completed, total
-        );
+        progress.finish_with_message("done");
         Ok(())
     }
 
@@ -714,10 +703,12 @@ impl SyncHistoryServiceTrait for BinanceSwapFundingRateSyncHistoryService {
         let interval = HistoryInterval::OneHour;
         let start = interval.get_close_unix_ms(unix_time_now_u64_utc() - self.data_retention_ms);
         let instruments = self.inst_provider.instruments(None);
-        let total = instruments.len();
         let end = end_ms.unwrap_or_else(|| unix_time_now_u64_utc());
-        let mut last_progress_log = tokio::time::Instant::now();
-        let mut completed = 0;
+        let progress = history_progress_bar(
+            instruments.len(),
+            "Binance Swap Funding Rate history initialization",
+            "instruments completed",
+        );
         let latest_timestamps = self.funding_rate_repo.inst_id_with_lastest_timestamp_before(end).await?;
         for instrument in instruments {
             let inst_start = latest_timestamps.get(&instrument.id).cloned().unwrap_or(start) + 1;
@@ -726,25 +717,14 @@ impl SyncHistoryServiceTrait for BinanceSwapFundingRateSyncHistoryService {
                     "Binance Swap Funding Rate for instrument {} (id: {}) is already up-to-date; skipping initial sync",
                     instrument.symbol, instrument.id
                 );
-                completed += 1;
+                progress.inc(1);
                 continue;
             }
             self.sync_funding_rate(instrument.id as u64, inst_start, end, interval.clone(), false)
                 .await?;
-            completed += 1;
-
-            if last_progress_log.elapsed() >= INITIAL_HISTORY_PROGRESS_LOG_INTERVAL {
-                info!(
-                    "binance Swap Funding Rate history initialization progress: {}/{} instruments completed",
-                    completed, total
-                );
-                last_progress_log = tokio::time::Instant::now();
-            }
+            progress.inc(1);
         }
-        info!(
-            "binance Swap Funding Rate history initialization done: {}/{} instruments completed",
-            completed, total
-        );
+        progress.finish_with_message("done");
         Ok(())
     }
 
