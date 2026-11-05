@@ -1,5 +1,6 @@
 use crate::duck_db::DuckDBPO;
 use duckdb::appender_params_from_iter;
+use li::tools::time::UnixTimeStamp;
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display};
@@ -560,14 +561,14 @@ impl FundingRatePo {
         }
     }
 
-    pub fn from_funding_rate(source: FundingRate, inst_id: u64) -> Self {
+    pub fn from_funding_rate(source: FundingRate, inst_id: u64, funding_time: UnixTimeStamp) -> Self {
         let snow_flake = SnowyFlakeWrapper::new();
         let id = snow_flake.next_id_u64() as i64;
         FundingRatePo {
             id,
             inst_id,
             funding_rate: source.funding_rate,
-            funding_time: source.funding_time,
+            funding_time,
             mark_price: source.mark_price,
         }
     }

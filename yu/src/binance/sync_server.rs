@@ -582,6 +582,7 @@ struct BinanceSwapFundingRateGapSaver {
     history_tx: mpsc::Sender<HistoryEntry>,
     inst_id: u64,
     broadcast: bool,
+    interval: HistoryInterval,
 }
 
 impl BinanceSwapFundingRateGapSaver {
@@ -590,12 +591,14 @@ impl BinanceSwapFundingRateGapSaver {
         history_tx: mpsc::Sender<HistoryEntry>,
         inst_id: u64,
         broadcast: bool,
+        interval: HistoryInterval,
     ) -> ShareHistoryBatchHandler<FundingRate> {
         Arc::new(Self {
             repo,
             history_tx,
             inst_id,
             broadcast,
+            interval,
         }) as Arc<dyn HistoryBatchHandlerTrait<FundingRate> + Send>
     }
 }
@@ -603,9 +606,11 @@ impl BinanceSwapFundingRateGapSaver {
 #[async_trait]
 impl HistoryBatchHandlerTrait<FundingRate> for BinanceSwapFundingRateGapSaver {
     async fn handle(&self, batch_data: Vec<FundingRate>) -> Result<(), ExchangeError> {
+        // 因为原本的书简戳，会快几毫秒。所以这里做一点统。
+        let funding_time = self.interval.get_now_close_unix_ms_utc();
         let funding_rates = batch_data
             .into_iter()
-            .map(|rate| FundingRatePo::from_funding_rate(rate, self.inst_id))
+            .map(|rate| FundingRatePo::from_funding_rate(rate, self.inst_id, funding_time))
             .collect::<Vec<_>>();
         if let Err(error) = self.repo.batch_insert_funding_rate(funding_rates.clone()).await {
             error!("Error inserting Binance Swap Funding Rate into repository: {}", error);
@@ -654,7 +659,13 @@ impl BinanceSwapFundingRateSyncHistoryService {
             .find(|instrument| u64::try_from(instrument.id).ok() == Some(inst_id))
             .ok_or_else(|| YuError::new(&format!("Binance Swap instrument {inst_id} is unavailable for Funding Rate sync")))?;
         let request = CommonRequestBuilder::new(instrument.symbol, 1000, interval.clone());
-        let saver = BinanceSwapFundingRateGapSaver::new(self.funding_rate_repo.clone(), self.history_tx.clone(), inst_id, broadcast);
+        let saver = BinanceSwapFundingRateGapSaver::new(
+            self.funding_rate_repo.clone(),
+            self.history_tx.clone(),
+            inst_id,
+            broadcast,
+            interval.clone(),
+        );
         HistoryFetcherImpl::swap_funding_rate()
             .get_all_kline_data(request, Some(interval), Some(start_ms), Some(end_ms), Some(saver), true)
             .await?;

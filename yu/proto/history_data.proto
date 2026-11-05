@@ -11,6 +11,9 @@ package grpc_sync;
 1. 交易所。也就是Exchange暂时定位一个属性来维护。而不是具体的实体。因为在数据处理上面，交易所其实意义不大。Instrument就可以做区分。
   - 简化流程，你知道instrument的时候，也就知道了exchange。没有必要变成一个实体。
 
+FUTURE:
+1. 所有和时间相关的内容，都加入一个exchange_timestamp。表示交易所给的时间。因为实际上，交易所的时间戳，会多几毫秒。
+
 */
 
 
