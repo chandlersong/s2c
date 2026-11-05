@@ -15,13 +15,39 @@ description: 在 yu 中实现客户端 instrument 和 history 同步，包含本
 
 ## Instrument service
 
+管理本地instrument的服务。并非每次都需要创建。
+
+主要职责
+
+- 是维护本地的 instrument 与服务端 instrument 的映射关系，
+- 列出支持多少的 history service，并按 `HistoryType` 注册。
+- 维护缓存中的 instrument 列表，方便其所属的 history service 进行操作。
+
 参考 `PolymarketClientInstrumentService` 实现：
 
 - `for_production`：主要有下列功能
     - 构造服务端 instrument ID 到本地 instrument 的映射，并让在所有的 history service 中共享
     - 并创建支持的 history services，按 `HistoryType` 注册。
-- `initial_data`：遍历已注册的 history services，对每个 service 调用 `initial_data(instrument.clone(), end_ms)`。
+- `reconcile_instrument`：同步本地的 instrument 与服务端的 instrument，主要有下列功能
+    - 按服务端 ID 查询本地 instrument；不存在时创建本地 PO，然后更新server_id的缓存。
+- `initial_data`：
+    - 遍历已注册的 history services，对每个 service 调用 `initial_data(instrument.clone(), end_ms)`。
+    - 保证不会因为某个 history service 的失败而影响其他 history service 的同步和更新。
 - `supported_history_services`：返回该 instrument service 管理的 history services，供 `SyncClientService` 注册。
+- 要提供一种缓存机制。方便其他history service在内存中，读取instrument。
+    - 具体可以参考。`yu/src/sync/client/service/binance.rs` 中的 `BinanceClientInstrumentService` 的中`inst_cache`的使用
+    - 这个缓存，应该只有在该服务里面，才有写操作，其他地方只能读。并且，缓存的更新，应该在`reconcile_instrument`中进行。
+    - 非必要不更新缓存操作。只有在instrument修改/新增时，才进行写操作。
+    - 管理缓存，用的是`Cache-Aside`模式。也就是，先从缓存中读取，如果没有，再去数据库中读取，并更新缓存。
+    - 如果可以实现，cache中保存正在交易的instrument，删除已经不交易的instrument。
+        - 如果有status的，status最先判断
+        - 或者 instrument的start_ms和end_ms，判断是否在交易中
+
+### 设计原则
+
+- 原则上，单个数据的的插入/更新/删除操作的失败，不应该引起整个同步/更新任务的失败。
+    - 常规的错误，打debug级别的日志。比如instrument不存在，类型不匹配。
+    - 特殊的错误，打error级别的日志。比如数据库连接失败，grpc连接失败，磁盘满导致的插入失败。
 
 ## History service
 
@@ -42,6 +68,13 @@ description: 在 yu 中实现客户端 instrument 和 history 同步，包含本
     4. 对 `MissingData` 调用 `backfill_history` 回补缺失区间。
 - `insert_history`：校验 history type、instrument type 和 payload variant；先从服务端 ID 映射缓存获取本地 instrument
   ID，缓存未命中时查 repository 并更新缓存；本地 instrument 不存在时记录日志并跳过，找到时调用 batch insert 落库。
+
+### 设计原则
+
+- 禁止更新本地的Instrument，包括缓存，数据库。对于History来说，Instrument是只读的。Instrument的更新应该由InstrumentService来做。
+- 原则上，单个数据的的插入/更新/删除操作的失败，不应该引起整个同步/更新任务的失败。
+    - 常规的错误，打debug级别的日志。比如instrument不存在，类型不匹配。
+    - 特殊的错误，打error级别的日志。比如数据库连接失败，grpc连接失败，磁盘满导致的插入失败。
 
 ## SyncClientService 接线
 
