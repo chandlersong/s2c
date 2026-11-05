@@ -120,7 +120,7 @@ impl ClientInstrumentServiceTrait for PolymarketClientInstrumentService {
                 }
             }
             None => {
-                local_instrument.id = self.pm_repo.create_instruments(local_instrument.clone()).await?;
+                self.pm_repo.create_instruments(local_instrument.clone()).await?;
                 if is_active {
                     self.inst_cache.write().await.insert(server_instrument.server_id, local_instrument);
                 }
@@ -227,6 +227,15 @@ impl ClientHistoryServiceTrait for PolymarketClientHistoryService {
             latest_timestamp
         };
         let end_timestamp = end_ms;
+
+        if start_timestamp >= end_timestamp || (end_timestamp - start_timestamp) < self.interval.to_milliseconds() {
+            debug!(
+                "Polymarket instrument {} has no new history to sync (start: {}, end: {})",
+                server_instrument.server_id, start_timestamp, end_timestamp
+            );
+            return Ok(());
+        }
+
         self.backfill_history(server_instrument.server_id, local_instrument.id, start_timestamp, end_timestamp)
             .await?;
         Ok(())

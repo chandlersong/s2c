@@ -520,7 +520,7 @@ impl SyncHistoryServiceTrait for PolyMarketSyncHistoryService {
     /// 2. 如果没有，就取polymarket_instruments中的start_ms
     ///
     async fn initial_history_data(&self, end_ms: Option<u64>) -> Result<(), YuError> {
-        let end_sec = end_ms.unwrap_or_else(|| self.interval.get_now_close_unix_ms_utc()).saturating_add(1000);
+        let end_sec = end_ms.unwrap_or_else(|| self.interval.get_now_close_unix_ms_utc()).saturating_div(1000);
         let now_sec = self.interval.get_close_unix_sec(end_sec);
         let fidelity = self.interval.to_second() / 60;
         info!("start to initial polymarket history data");

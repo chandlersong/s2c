@@ -122,7 +122,7 @@ impl ClientInstrumentServiceTrait for OkxHistoryClientService {
                 }
             }
             None => {
-                local_instrument.id = self.repository.create_instruments(local_instrument.clone()).await?;
+                self.repository.create_instruments(local_instrument.clone()).await?;
                 if local_instrument
                     .state
                     .as_deref()

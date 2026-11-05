@@ -772,7 +772,7 @@ impl SyncHistoryServiceTrait for BinanceSwapFundingRateSyncHistoryService {
                 .cloned()
                 .unwrap_or(start)
                 .saturating_add(interval.to_milliseconds());
-            if inst_start >= end {
+            if inst_start >= end || (inst_start - end) < interval.to_milliseconds() {
                 debug!(
                     "Binance Swap Funding Rate for instrument {} (id: {}) is already up-to-date; skipping initial sync",
                     instrument.symbol, instrument.id
