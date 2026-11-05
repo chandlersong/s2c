@@ -114,7 +114,7 @@ pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: m
 
     // 订阅funding rate数据，因为这个比较慢，而且太实时意不大，变化小。所以也就提早几分钟。
     let funding_rate_history_sync = funding_rate_history_service.clone();
-    let _ = cron_job!("0 53 * * * *", move |_uuid, _locked| {
+    let _ = cron_job!("30 01 * * * *", move |_uuid, _locked| {
         let each_fuding_rate_sync = funding_rate_history_sync.clone();
         Box::pin(async move {
             if let Err(error) = each_fuding_rate_sync.sync_all().await {
