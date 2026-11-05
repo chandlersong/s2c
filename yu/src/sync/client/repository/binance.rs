@@ -39,6 +39,8 @@ const FIND_LATEST_SPOT_TRADE_CURSOR_SQL: &str = "
 pub trait ClientBinanceRepositoryTrait: Send + Sync {
     async fn list_all_instruments(&self, instrument_type: BinanceInstrumentType) -> Result<Vec<LocalBinanceInstrumentPo>, YuError>;
 
+    async fn find_instrument_by_server_id(&self, server_id: u64) -> Result<Option<LocalBinanceInstrumentPo>, YuError>;
+
     async fn find_instrument_id_by_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError>;
 
     async fn find_latest_kline_timestamp_by_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError>;
@@ -50,6 +52,8 @@ pub trait ClientBinanceRepositoryTrait: Send + Sync {
     async fn find_latest_spot_trade_cursor_by_server_id(&self, server_id: u64) -> Result<Option<(u64, i64)>, YuError>;
 
     async fn create_instrument(&self, instrument: LocalBinanceInstrumentPo) -> Result<u64, YuError>;
+
+    async fn update_instrument(&self, instrument: LocalBinanceInstrumentPo) -> Result<(), YuError>;
 }
 
 pub type ClientBinanceRepository = Arc<dyn ClientBinanceRepositoryTrait>;
@@ -71,6 +75,16 @@ impl ClientBinanceRepositoryTrait for ClientBinanceRepositoryImpl {
             sqlx::query_as::<_, LocalBinanceInstrumentPo>("SELECT * FROM binance_instruments WHERE symbol_type = $1")
                 .bind(instrument_type.symbol_type())
                 .fetch_all(&self.pg_pool)
+                .await?,
+        )
+    }
+
+    async fn find_instrument_by_server_id(&self, server_id: u64) -> Result<Option<LocalBinanceInstrumentPo>, YuError> {
+        let server_id = i64::try_from(server_id).map_err(|_| YuError::new("Binance server instrument ID exceeds BIGINT range"))?;
+        Ok(
+            sqlx::query_as::<_, LocalBinanceInstrumentPo>("SELECT * FROM binance_instruments WHERE server_id = $1")
+                .bind(server_id)
+                .fetch_optional(&self.pg_pool)
                 .await?,
         )
     }
@@ -128,7 +142,15 @@ impl ClientBinanceRepositoryTrait for ClientBinanceRepositoryImpl {
                 order_types, symbol_type, on_board_time
             )
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-            ON CONFLICT (server_id) DO UPDATE SET server_id = EXCLUDED.server_id
+            ON CONFLICT (server_id) DO UPDATE SET
+                symbol = EXCLUDED.symbol,
+                status = EXCLUDED.status,
+                base_asset = EXCLUDED.base_asset,
+                quote_asset = EXCLUDED.quote_asset,
+                quote_asset_precision = EXCLUDED.quote_asset_precision,
+                order_types = EXCLUDED.order_types,
+                symbol_type = EXCLUDED.symbol_type,
+                on_board_time = EXCLUDED.on_board_time
             RETURNING id
             "#,
         )
@@ -146,6 +168,41 @@ impl ClientBinanceRepositoryTrait for ClientBinanceRepositoryImpl {
         .await?;
 
         u64::try_from(inserted_id).map_err(|_| YuError::new("negative local Binance instrument ID"))
+    }
+
+    async fn update_instrument(&self, instrument: LocalBinanceInstrumentPo) -> Result<(), YuError> {
+        let id = i64::try_from(instrument.id).map_err(|_| YuError::new("local Binance instrument ID exceeds BIGINT range"))?;
+        let server_id = i64::try_from(instrument.server_id).map_err(|_| YuError::new("Binance server instrument ID exceeds BIGINT range"))?;
+        let on_board_time = instrument
+            .on_board_time
+            .map(i64::try_from)
+            .transpose()
+            .map_err(|_| YuError::new("Binance instrument listing time exceeds BIGINT range"))?;
+        let result = sqlx::query(
+            r#"
+            UPDATE binance_instruments
+            SET symbol = $1, status = $2, base_asset = $3, quote_asset = $4, quote_asset_precision = $5,
+                order_types = $6, symbol_type = $7, on_board_time = $8
+            WHERE server_id = $9 AND id = $10
+            "#,
+        )
+        .bind(instrument.symbol)
+        .bind(instrument.status)
+        .bind(instrument.base_asset)
+        .bind(instrument.quote_asset)
+        .bind(instrument.quote_asset_precision)
+        .bind(instrument.order_types)
+        .bind(instrument.symbol_type)
+        .bind(on_board_time)
+        .bind(server_id)
+        .bind(id)
+        .execute(&self.pg_pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(YuError::new("Binance instrument disappeared during reconciliation"));
+        }
+        Ok(())
     }
 }
 

@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::signal;
 
+use li::tools::time::{UnixTimeStamp, unix_time_now_u64_utc};
 use tonic::Request;
 use yu::config::get_config;
 use yu::cron_job;
@@ -44,21 +45,41 @@ async fn main() -> Result<(), YuError> {
     }
     let sync_server_manager = connection_manager.clone();
     let sync_client_service = client_service.clone();
+    let start_up_time = unix_time_now_u64_utc();
     // 这里是否要统一，比如initial和reconcile的时候，是否需要这里一致。我想以后再说吧
     let _ = client_service.start_subscribe(sync_server_manager.clone()).await?;
 
     tokio::spawn(async move {
-        if let Err(e) = initial_data(sync_client_service, sync_server_manager).await {
+        if let Err(e) = initial_data(sync_client_service, sync_server_manager, start_up_time).await {
             error!("Error when initial instruments with server: {}", e);
         }
     });
 
     let daily_client_service = client_service.clone();
+    let sync_manager = connection_manager.clone();
     let _ = cron_job!("0 28 */6 * * *", move |_uuid, _locked| {
         let sync_client_service = daily_client_service.clone();
+        let sync_connection_manager = sync_manager.clone();
         Box::pin(async move {
             info!("start refresh binance exchange info");
-            if let Err(e) = sync_client_service.reconcile_living_instrument_with_server().await {
+            let channel = sync_connection_manager.get_channel().await;
+            let mut server = SyncInterfaceClient::new(channel);
+            let resp = match server.list_instrument(Request::new(Empty {})).await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    error!("Error when refresh exchange info: {}", e);
+                    return;
+                }
+            };
+            let inst_list = resp.into_inner();
+            info!("获取instrument列表个数.{}", inst_list.instruments.len());
+            let server_inst_vec = inst_list.clone().instruments;
+            for instrument in server_inst_vec {
+                if let Err(e) = sync_client_service.reconcile_instrument(instrument).await {
+                    error!("error reconciling instrument with server: {}", e);
+                }
+            }
+            if let Err(e) = sync_client_service.reconcile_history_data().await {
                 error!("Error when async instruments with server: {}", e);
             }
         })
@@ -73,13 +94,19 @@ async fn main() -> Result<(), YuError> {
 ///
 /// FUTURE:
 /// 1. 可能会有一些已经关闭的instrument。这里也要同步。但是因为这里的问题其实希望client有完整信息，所以就过了吧。
-async fn initial_data(client_service: Arc<SyncClientService>, manager: GrpcChannelManager) -> Result<(), YuError> {
+async fn initial_data(client_service: Arc<SyncClientService>, manager: GrpcChannelManager, start_up_time: UnixTimeStamp) -> Result<(), YuError> {
     let channel = manager.get_channel().await;
-    let mut server = SyncInterfaceClient::new(channel.clone());
+    let mut server = SyncInterfaceClient::new(channel);
     let resp = server.list_instrument(Request::new(Empty {})).await?;
     let inst_list = resp.into_inner();
     info!("获取instrument列表个数.{}", inst_list.instruments.len());
-    if let Err(e) = client_service.initial_data(inst_list).await {
+    let server_inst_vec = inst_list.clone().instruments;
+    for instrument in server_inst_vec {
+        if let Err(e) = client_service.reconcile_instrument(instrument).await {
+            error!("error reconciling instrument with server: {}", e);
+        }
+    }
+    if let Err(e) = client_service.initial_data(inst_list, start_up_time).await {
         error!("error initializing client: {}", e);
     }
     info!("async_sync_server done. 历史数据异步写入，可能过会儿更新");

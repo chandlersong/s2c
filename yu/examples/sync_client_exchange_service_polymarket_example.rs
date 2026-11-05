@@ -71,7 +71,7 @@ async fn main() -> Result<(), YuError> {
     info!("和服务器对账");
     for (history_type, history_service) in polymarket_instrument_service.supported_history_services()? {
         info!("对账历史类型: {:?}", history_type.readable_name());
-        history_service.reconcile_living_instrument_with_server(now).await?;
+        history_service.reconcile_history_data(now).await?;
     }
     tokio::time::sleep(tokio::time::Duration::from_mins(5)).await;
     Ok(())

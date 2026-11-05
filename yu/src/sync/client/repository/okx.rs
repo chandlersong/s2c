@@ -10,6 +10,8 @@ use std::sync::Arc;
 pub trait ClientOkxRepositoryTrait {
     async fn list_all_instrument(&self) -> Result<Vec<LocalOkxInstrumentPo>, YuError>;
 
+    async fn find_instrument_by_server_id(&self, server_id: u64) -> Result<Option<LocalOkxInstrumentPo>, YuError>;
+
     async fn find_instrument_id_by_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError>;
 
     // 返回一个mapping。key是每个的inst_id,value是LocalOkxInstrumentPo
@@ -31,6 +33,8 @@ pub trait ClientOkxRepositoryTrait {
 
     /// Insert a new okx instrument into okx_instruments table.
     async fn create_instruments(&self, po: LocalOkxInstrumentPo) -> Result<u64, YuError>;
+
+    async fn update_instrument(&self, po: LocalOkxInstrumentPo) -> Result<(), YuError>;
 }
 
 pub type ClientOkxRepository = Arc<dyn ClientOkxRepositoryTrait + Send + Sync>;
@@ -51,6 +55,16 @@ impl ClientOkxRepositoryTrait for ClientOkxRepositoryImpl {
         Ok(sqlx::query_as::<_, LocalOkxInstrumentPo>(r#"select * from okx_instruments"#)
             .fetch_all(&self.pg_pool)
             .await?)
+    }
+
+    async fn find_instrument_by_server_id(&self, server_id: u64) -> Result<Option<LocalOkxInstrumentPo>, YuError> {
+        let server_id = i64::try_from(server_id).map_err(|_| YuError::new("OKX server instrument ID exceeds BIGINT range"))?;
+        Ok(
+            sqlx::query_as::<_, LocalOkxInstrumentPo>("SELECT * FROM okx_instruments WHERE server_id = $1")
+                .bind(server_id)
+                .fetch_optional(&self.pg_pool)
+                .await?,
+        )
     }
 
     async fn find_instrument_id_by_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError> {
@@ -132,7 +146,23 @@ impl ClientOkxRepositoryTrait for ClientOkxRepositoryImpl {
 
     async fn create_instruments(&self, po: LocalOkxInstrumentPo) -> Result<u64, YuError> {
         let sql = r#"INSERT INTO okx_instruments (id, server_id, inst_identify, inst_type, inst_family, base_ccy, quote_ccy, settle_ccy, list_time, exp_time, tick_sz, lot_sz, min_sz, alias, state, inst_id_code, inst_category)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT (id) DO NOTHING
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+            ON CONFLICT (server_id) DO UPDATE SET
+                inst_identify = EXCLUDED.inst_identify,
+                inst_type = EXCLUDED.inst_type,
+                inst_family = EXCLUDED.inst_family,
+                base_ccy = EXCLUDED.base_ccy,
+                quote_ccy = EXCLUDED.quote_ccy,
+                settle_ccy = EXCLUDED.settle_ccy,
+                list_time = EXCLUDED.list_time,
+                exp_time = EXCLUDED.exp_time,
+                tick_sz = EXCLUDED.tick_sz,
+                lot_sz = EXCLUDED.lot_sz,
+                min_sz = EXCLUDED.min_sz,
+                alias = EXCLUDED.alias,
+                state = EXCLUDED.state,
+                inst_id_code = EXCLUDED.inst_id_code,
+                inst_category = EXCLUDED.inst_category
             RETURNING id"#;
 
         let id = i64::try_from(po.id).map_err(|_| YuError::new("local OKX instrument ID exceeds BIGINT range"))?;
@@ -159,6 +189,54 @@ impl ClientOkxRepositoryTrait for ClientOkxRepositoryImpl {
             .await?;
 
         u64::try_from(inserted_id).map_err(|_| YuError::new("negative local OKX instrument ID"))
+    }
+
+    async fn update_instrument(&self, po: LocalOkxInstrumentPo) -> Result<(), YuError> {
+        let id = i64::try_from(po.id).map_err(|_| YuError::new("local OKX instrument ID exceeds BIGINT range"))?;
+        let server_id = i64::try_from(po.server_id).map_err(|_| YuError::new("OKX server instrument ID exceeds BIGINT range"))?;
+        let list_time = po
+            .list_time
+            .map(i64::try_from)
+            .transpose()
+            .map_err(|_| YuError::new("OKX listing time exceeds BIGINT range"))?;
+        let exp_time = po
+            .exp_time
+            .map(i64::try_from)
+            .transpose()
+            .map_err(|_| YuError::new("OKX expiration time exceeds BIGINT range"))?;
+        let result = sqlx::query(
+            r#"
+            UPDATE okx_instruments
+            SET inst_identify = $1, inst_type = $2, inst_family = $3, base_ccy = $4, quote_ccy = $5,
+                settle_ccy = $6, list_time = $7, exp_time = $8, tick_sz = $9, lot_sz = $10,
+                min_sz = $11, alias = $12, state = $13, inst_id_code = $14, inst_category = $15
+            WHERE server_id = $16 AND id = $17
+            "#,
+        )
+        .bind(po.inst_identify)
+        .bind(po.inst_type)
+        .bind(po.inst_family)
+        .bind(po.base_ccy)
+        .bind(po.quote_ccy)
+        .bind(po.settle_ccy)
+        .bind(list_time)
+        .bind(exp_time)
+        .bind(po.tick_sz)
+        .bind(po.lot_sz)
+        .bind(po.min_sz)
+        .bind(po.alias)
+        .bind(po.state)
+        .bind(po.inst_id_code)
+        .bind(po.inst_category)
+        .bind(server_id)
+        .bind(id)
+        .execute(&self.pg_pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(YuError::new("OKX instrument disappeared during reconciliation"));
+        }
+        Ok(())
     }
 }
 

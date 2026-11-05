@@ -1,10 +1,10 @@
 use crate::postgresql_db::CopyInsertable;
-use crate::sync::models::grpc_sync::{HistoryEntry, PolyMarketHistory, history_entry::Payload};
+use crate::sync::models::grpc_sync::{HistoryEntry, PolyMarketHistory, PolymarketInstrument, history_entry::Payload};
 use li::tools::time::unix_time_now_u64_utc;
 use sqlx::Row;
 use yue::tools::get_snow_flake_id_u64;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LocalPolyMarketInstrumentPo {
     pub id: u64,
     pub server_id: u64,
@@ -18,6 +18,25 @@ pub struct LocalPolyMarketInstrumentPo {
     pub assert_slug: String,
     pub start_ms: u64,
     pub end_ms: u64,
+}
+
+impl LocalPolyMarketInstrumentPo {
+    pub fn from_proto(instrument: PolymarketInstrument) -> Self {
+        Self {
+            id: get_snow_flake_id_u64(),
+            server_id: instrument.server_id,
+            series_id: instrument.series_id,
+            series_slug: instrument.series_slug,
+            event_id: instrument.event_id,
+            event_slug: instrument.event_slug,
+            market_id: instrument.market_id,
+            market_slug: instrument.market_slug,
+            assert_id: instrument.asset_id,
+            assert_slug: instrument.asset_slug,
+            start_ms: instrument.start_ms,
+            end_ms: instrument.end_ms,
+        }
+    }
 }
 
 impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for LocalPolyMarketInstrumentPo {
@@ -135,5 +154,44 @@ impl CopyInsertable for LocalPolyMarketHistoryPo {
         };
 
         Self::from_polymarket_history(history.clone(), local_inst_id, unix_time_now_u64_utc())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 测试目的：验证 Polymarket protobuf instrument 的字段完整映射。
+    // 准备数据/过程：构造包含所有字段的 PolymarketInstrument 并转换为本地 PO。
+    // 预期结果：服务端字段保持一致，且生成正数本地 ID。
+    #[test]
+    fn polymarket_instrument_proto_maps_to_local_po() {
+        let po = LocalPolyMarketInstrumentPo::from_proto(PolymarketInstrument {
+            server_id: 42,
+            series_id: "series-id".to_string(),
+            series_slug: "series-slug".to_string(),
+            event_id: "event-id".to_string(),
+            event_slug: "event-slug".to_string(),
+            market_id: "market-id".to_string(),
+            market_slug: "market-slug".to_string(),
+            asset_id: "asset-id".to_string(),
+            asset_slug: "asset-slug".to_string(),
+            start_ms: 100,
+            end_ms: 200,
+            latest_timestamp: 150,
+        });
+
+        assert!(po.id > 0);
+        assert_eq!(po.server_id, 42);
+        assert_eq!(po.series_id, "series-id");
+        assert_eq!(po.series_slug, "series-slug");
+        assert_eq!(po.event_id, "event-id");
+        assert_eq!(po.event_slug, "event-slug");
+        assert_eq!(po.market_id, "market-id");
+        assert_eq!(po.market_slug, "market-slug");
+        assert_eq!(po.assert_id, "asset-id");
+        assert_eq!(po.assert_slug, "asset-slug");
+        assert_eq!(po.start_ms, 100);
+        assert_eq!(po.end_ms, 200);
     }
 }

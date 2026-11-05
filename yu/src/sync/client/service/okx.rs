@@ -23,30 +23,63 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use yue::models::HistoryInterval;
-use yue::tools::get_snow_flake_id_u64;
 
-type ServerIdToLocalId = Arc<RwLock<HashMap<u64, u64>>>;
+type InstrumentCache = Arc<RwLock<HashMap<u64, LocalOkxInstrumentPo>>>;
+const OKX_INSTRUMENT_STATE_LIVE: &str = "live";
+
+async fn find_local_instrument(
+    repository: &ClientOkxRepository,
+    inst_cache: &InstrumentCache,
+    server_id: u64,
+) -> Result<Option<LocalOkxInstrumentPo>, YuError> {
+    if let Some(instrument) = inst_cache.read().await.get(&server_id).cloned() {
+        return Ok(Some(instrument));
+    }
+
+    let instrument = repository.find_instrument_by_server_id(server_id).await?;
+    if let Some(instrument) = &instrument {
+        inst_cache.write().await.insert(server_id, instrument.clone());
+    }
+    Ok(instrument)
+}
+
+async fn find_or_create_local_instrument(
+    repository: &ClientOkxRepository,
+    inst_cache: &InstrumentCache,
+    server_instrument: OkxInstrument,
+) -> Result<LocalOkxInstrumentPo, YuError> {
+    if let Some(instrument) = find_local_instrument(repository, inst_cache, server_instrument.server_id).await? {
+        return Ok(instrument);
+    }
+
+    let mut instrument = LocalOkxInstrumentPo::from_proto(server_instrument);
+    instrument.id = repository.create_instruments(instrument.clone()).await?;
+    inst_cache.write().await.insert(instrument.server_id, instrument.clone());
+    Ok(instrument)
+}
 
 pub struct OkxHistoryClientService {
     history_services: HashMap<HistoryType, ClientHistoryService>,
+    repository: ClientOkxRepository,
+    inst_cache: InstrumentCache,
 }
 
 impl OkxHistoryClientService {
     pub fn for_production() -> Result<ClientInstrumentService, YuError> {
         let pool = get_sync_client_pg_pool_sync()?;
         let repository = ClientOkxRepositoryImpl::from_pool(pool.clone());
-        let id_maps = block_on(repository.server_id_instrument_dictionary())?
-            .into_iter()
-            .map(|(server_id, instrument)| (server_id, instrument.id))
-            .collect();
-        let id_maps = Arc::new(RwLock::new(id_maps));
-        let kline_history_service = OkxKlineClientHistoryService::for_production(repository.clone(), pool, id_maps.clone());
-        let option_summary_history_service = OkxOptionSummaryClientHistoryService::for_production(repository, id_maps);
+        let inst_cache = Arc::new(RwLock::new(block_on(repository.server_id_instrument_dictionary())?));
+        let kline_history_service = OkxKlineClientHistoryService::for_production(repository.clone(), pool, inst_cache.clone());
+        let option_summary_history_service = OkxOptionSummaryClientHistoryService::for_production(repository.clone(), inst_cache.clone());
         let history_services = HashMap::from([
             (HistoryType::OkxKline, kline_history_service),
             (HistoryType::OkxOptionSummary, option_summary_history_service),
         ]);
-        Ok(Arc::new(Self { history_services }))
+        Ok(Arc::new(Self {
+            history_services,
+            repository,
+            inst_cache,
+        }))
     }
 }
 
@@ -55,6 +88,49 @@ impl ClientInstrumentServiceTrait for OkxHistoryClientService {
     async fn initial_data(&self, instrument: Instrument, end_ms: UnixTimeStamp) -> Result<(), YuError> {
         for history_service in self.history_services.values() {
             history_service.initial_data(instrument.clone(), end_ms).await?;
+        }
+        Ok(())
+    }
+
+    async fn reconcile_instrument(&self, instrument: Instrument) -> Result<(), YuError> {
+        if instrument.instrument_type != InstrumentType::Okx as i32 {
+            return Err(YuError::new("instrument exchange is not OKX"));
+        }
+        let Some(instrument::Payload::Okx(okx_instrument)) = instrument.payload else {
+            return Err(YuError::new("instrument payload is not OKX"));
+        };
+
+        let mut local_instrument = LocalOkxInstrumentPo::from_proto(okx_instrument.clone());
+        let cached_instrument = self.inst_cache.read().await.get(&okx_instrument.server_id).cloned();
+        match cached_instrument {
+            Some(existing_instrument) => {
+                local_instrument.id = existing_instrument.id;
+                let changed = local_instrument != existing_instrument;
+                if changed {
+                    self.repository.update_instrument(local_instrument.clone()).await?;
+                }
+                if local_instrument
+                    .state
+                    .as_deref()
+                    .is_some_and(|state| state.eq_ignore_ascii_case(OKX_INSTRUMENT_STATE_LIVE))
+                {
+                    if changed {
+                        self.inst_cache.write().await.insert(okx_instrument.server_id, local_instrument);
+                    }
+                } else {
+                    self.inst_cache.write().await.remove(&okx_instrument.server_id);
+                }
+            }
+            None => {
+                local_instrument.id = self.repository.create_instruments(local_instrument.clone()).await?;
+                if local_instrument
+                    .state
+                    .as_deref()
+                    .is_some_and(|state| state.eq_ignore_ascii_case(OKX_INSTRUMENT_STATE_LIVE))
+                {
+                    self.inst_cache.write().await.insert(okx_instrument.server_id, local_instrument);
+                }
+            }
         }
         Ok(())
     }
@@ -70,7 +146,7 @@ pub struct OkxKlineClientHistoryService {
     interval: HistoryInterval,
     grpc_manager: GrpcChannelManager,
     binary_search: BinarySearchDS,
-    id_maps: ServerIdToLocalId,
+    inst_cache: InstrumentCache,
 }
 
 impl OkxKlineClientHistoryService {
@@ -84,29 +160,7 @@ impl OkxKlineClientHistoryService {
         }
     }
 
-    fn local_instrument_from_server(instrument: OkxInstrument) -> LocalOkxInstrumentPo {
-        LocalOkxInstrumentPo {
-            id: get_snow_flake_id_u64(),
-            server_id: instrument.server_id,
-            inst_identify: instrument.inst_id,
-            inst_type: instrument.inst_type,
-            inst_family: (!instrument.inst_family.is_empty()).then_some(instrument.inst_family),
-            base_ccy: instrument.base_ccy,
-            quote_ccy: (!instrument.quote_ccy.is_empty()).then_some(instrument.quote_ccy),
-            settle_ccy: (!instrument.settle_ccy.is_empty()).then_some(instrument.settle_ccy),
-            list_time: (instrument.list_time > 0).then_some(instrument.list_time),
-            exp_time: (instrument.exp_time > 0).then_some(instrument.exp_time),
-            tick_sz: (instrument.tick_sz != 0.0).then_some(instrument.tick_sz),
-            lot_sz: (instrument.lot_sz != 0.0).then_some(instrument.lot_sz),
-            min_sz: (instrument.min_sz != 0.0).then_some(instrument.min_sz),
-            alias: (!instrument.alias.is_empty()).then_some(instrument.alias),
-            state: (!instrument.state.is_empty()).then_some(instrument.state),
-            inst_id_code: (!instrument.inst_id_code.is_empty()).then_some(instrument.inst_id_code),
-            inst_category: (!instrument.inst_category.is_empty()).then_some(instrument.inst_category),
-        }
-    }
-
-    fn for_production(repository: ClientOkxRepository, pool: sqlx::PgPool, id_maps: ServerIdToLocalId) -> ClientHistoryService {
+    fn for_production(repository: ClientOkxRepository, pool: sqlx::PgPool, inst_cache: InstrumentCache) -> ClientHistoryService {
         let history_batch_insert = get_okx_kline_batch_insert();
         let binary_search = SyncClientBinarySearchDataImpl::new(
             pool,
@@ -120,7 +174,7 @@ impl OkxKlineClientHistoryService {
             interval: HistoryInterval::OneMinute,
             grpc_manager: get_grpc_manager_from_config(),
             binary_search,
-            id_maps,
+            inst_cache,
         })
     }
 
@@ -166,22 +220,9 @@ impl ClientHistoryServiceTrait for OkxKlineClientHistoryService {
             return Err(YuError::new("instrument payload is not OKX"));
         };
 
-        let cached_local_inst_id = { self.id_maps.read().await.get(&okx_instrument.server_id).copied() };
-        let local_inst_id = match cached_local_inst_id {
-            Some(local_inst_id) => local_inst_id,
-            None => {
-                let local_inst_id = match self.repository.find_instrument_id_by_server_id(okx_instrument.server_id).await? {
-                    Some(local_inst_id) => local_inst_id,
-                    None => {
-                        self.repository
-                            .create_instruments(Self::local_instrument_from_server(okx_instrument.clone()))
-                            .await?
-                    }
-                };
-                self.id_maps.write().await.insert(okx_instrument.server_id, local_inst_id);
-                local_inst_id
-            }
-        };
+        let local_inst_id = find_or_create_local_instrument(&self.repository, &self.inst_cache, okx_instrument.clone())
+            .await?
+            .id;
 
         let latest_timestamp = self.repository.find_latest_kline_timestamp_by_server_id(okx_instrument.server_id).await?;
         let start_ms = match latest_timestamp {
@@ -193,12 +234,16 @@ impl ClientHistoryServiceTrait for OkxKlineClientHistoryService {
         self.backfill_history(okx_instrument.server_id, local_inst_id, start_ms, end_ms).await
     }
 
-    async fn reconcile_living_instrument_with_server(&self, end_ms: UnixTimeStamp) -> Result<(), YuError> {
+    async fn reconcile_history_data(&self, end_ms: UnixTimeStamp) -> Result<(), YuError> {
         let end_timestamp = self.interval.get_close_unix_ms(end_ms);
         let instruments = self.repository.list_all_instrument().await?;
 
         for instrument in instruments {
-            if !instrument.state.as_deref().is_some_and(|state| state.eq_ignore_ascii_case("live")) {
+            if !instrument
+                .state
+                .as_deref()
+                .is_some_and(|state| state.eq_ignore_ascii_case(OKX_INSTRUMENT_STATE_LIVE))
+            {
                 continue;
             }
             let Some(list_time) = instrument.list_time else {
@@ -237,17 +282,11 @@ impl ClientHistoryServiceTrait for OkxKlineClientHistoryService {
             return Err(YuError::new("received non-OKX kline history payload"));
         }
 
-        let local_inst_id = match self.id_maps.read().await.get(&history_entry.inst_id).copied() {
-            Some(local_inst_id) => local_inst_id,
-            None => {
-                let Some(local_inst_id) = self.repository.find_instrument_id_by_server_id(history_entry.inst_id).await? else {
-                    warn!("local OKX instrument {} not found; skipping history", history_entry.inst_id);
-                    return Ok(());
-                };
-                self.id_maps.write().await.insert(history_entry.inst_id, local_inst_id);
-                local_inst_id
-            }
+        let Some(local_instrument) = find_local_instrument(&self.repository, &self.inst_cache, history_entry.inst_id).await? else {
+            warn!("local OKX instrument {} not found; skipping history", history_entry.inst_id);
+            return Ok(());
         };
+        let local_inst_id = local_instrument.id;
         self.history_batch_insert.insert_data(history_entry, local_inst_id).await;
         Ok(())
     }
@@ -257,16 +296,16 @@ pub struct OkxOptionSummaryClientHistoryService {
     history_batch_insert: PostgresqlBatchInsert<LocalOkxOptionSummaryPo>,
     repository: ClientOkxRepository,
     grpc_manager: GrpcChannelManager,
-    id_maps: ServerIdToLocalId,
+    inst_cache: InstrumentCache,
 }
 
 impl OkxOptionSummaryClientHistoryService {
-    fn for_production(repository: ClientOkxRepository, id_maps: ServerIdToLocalId) -> ClientHistoryService {
+    fn for_production(repository: ClientOkxRepository, inst_cache: InstrumentCache) -> ClientHistoryService {
         Arc::new(Self {
             history_batch_insert: get_okx_option_summary_batch_insert(),
             repository,
             grpc_manager: get_grpc_manager_from_config(),
-            id_maps,
+            inst_cache,
         })
     }
 
@@ -302,20 +341,9 @@ impl OkxOptionSummaryClientHistoryService {
     }
 
     async fn resolve_local_instrument_id(&self, instrument: &OkxInstrument) -> Result<u64, YuError> {
-        if let Some(local_inst_id) = self.id_maps.read().await.get(&instrument.server_id).copied() {
-            return Ok(local_inst_id);
-        }
-
-        let local_inst_id = match self.repository.find_instrument_id_by_server_id(instrument.server_id).await? {
-            Some(local_inst_id) => local_inst_id,
-            None => {
-                self.repository
-                    .create_instruments(OkxKlineClientHistoryService::local_instrument_from_server(instrument.clone()))
-                    .await?
-            }
-        };
-        self.id_maps.write().await.insert(instrument.server_id, local_inst_id);
-        Ok(local_inst_id)
+        Ok(find_or_create_local_instrument(&self.repository, &self.inst_cache, instrument.clone())
+            .await?
+            .id)
     }
 }
 
@@ -343,12 +371,16 @@ impl ClientHistoryServiceTrait for OkxOptionSummaryClientHistoryService {
         self.backfill_history(okx_instrument.server_id, local_inst_id, start_ms, end_ms).await
     }
 
-    async fn reconcile_living_instrument_with_server(&self, end_ms: UnixTimeStamp) -> Result<(), YuError> {
+    async fn reconcile_history_data(&self, end_ms: UnixTimeStamp) -> Result<(), YuError> {
         let instruments = self.repository.list_all_instrument().await?;
         let latest_timestamps = self.repository.list_option_summary_timestamps().await?;
 
         for instrument in instruments {
-            if !instrument.state.as_deref().is_some_and(|state| state.eq_ignore_ascii_case("live")) {
+            if !instrument
+                .state
+                .as_deref()
+                .is_some_and(|state| state.eq_ignore_ascii_case(OKX_INSTRUMENT_STATE_LIVE))
+            {
                 continue;
             }
             let start_ms = match latest_timestamps.get(&instrument.server_id).copied() {
@@ -378,20 +410,14 @@ impl ClientHistoryServiceTrait for OkxOptionSummaryClientHistoryService {
             return Err(YuError::new("received non-OKX option summary history payload"));
         }
 
-        let local_inst_id = match self.id_maps.read().await.get(&history_entry.inst_id).copied() {
-            Some(local_inst_id) => local_inst_id,
-            None => {
-                let Some(local_inst_id) = self.repository.find_instrument_id_by_server_id(history_entry.inst_id).await? else {
-                    warn!(
-                        "local OKX instrument {} not found; skipping option summary history",
-                        history_entry.inst_id
-                    );
-                    return Ok(());
-                };
-                self.id_maps.write().await.insert(history_entry.inst_id, local_inst_id);
-                local_inst_id
-            }
+        let Some(local_instrument) = find_local_instrument(&self.repository, &self.inst_cache, history_entry.inst_id).await? else {
+            warn!(
+                "local OKX instrument {} not found; skipping option summary history",
+                history_entry.inst_id
+            );
+            return Ok(());
         };
+        let local_inst_id = local_instrument.id;
         self.history_batch_insert.insert_data(history_entry, local_inst_id).await;
         Ok(())
     }
@@ -433,12 +459,20 @@ mod tests {
         }
     }
 
+    fn instrument_cache(cached: Option<(u64, u64)>) -> InstrumentCache {
+        Arc::new(RwLock::new(
+            cached
+                .map(|(server_id, id)| HashMap::from([(server_id, local_instrument(server_id, id))]))
+                .unwrap_or_default(),
+        ))
+    }
+
     fn history_service(
         repository: ClientOkxRepository,
         history_batch_insert: PostgresqlBatchInsert<LocalOkxKlinePo>,
         grpc_manager: GrpcChannelManager,
         binary_search: BinarySearchDS,
-        id_maps: ServerIdToLocalId,
+        inst_cache: InstrumentCache,
     ) -> OkxKlineClientHistoryService {
         OkxKlineClientHistoryService {
             history_batch_insert,
@@ -446,7 +480,7 @@ mod tests {
             interval: HistoryInterval::OneMinute,
             grpc_manager,
             binary_search,
-            id_maps,
+            inst_cache,
         }
     }
 
@@ -454,13 +488,13 @@ mod tests {
         repository: ClientOkxRepository,
         history_batch_insert: PostgresqlBatchInsert<LocalOkxOptionSummaryPo>,
         grpc_manager: GrpcChannelManager,
-        id_maps: ServerIdToLocalId,
+        inst_cache: InstrumentCache,
     ) -> OkxOptionSummaryClientHistoryService {
         OkxOptionSummaryClientHistoryService {
             history_batch_insert,
             repository,
             grpc_manager,
-            id_maps,
+            inst_cache,
         }
     }
 
@@ -523,6 +557,167 @@ mod tests {
         Arc::new(MockBinarySearchDSTrait::new())
     }
 
+    // 测试目的：验证缓存缺少的 OKX instrument 会被创建并写入共享缓存。
+    // 准备数据/过程：缓存为空，mock repository 创建时返回本地 ID 7，并提交合法 OKX instrument。
+    // 预期结果：repository 收到正确映射的 PO，缓存保存新 instrument 及本地 ID 7。
+    #[tokio::test]
+    async fn reconcile_instrument_creates_missing_instrument_and_caches_it() {
+        let mut repository = MockClientOkxRepositoryTrait::new();
+        repository.expect_find_instrument_by_server_id().times(0);
+        repository
+            .expect_create_instruments()
+            .withf(|po| po.server_id == 42 && po.inst_identify == "BTC-USDT" && po.inst_type == "SPOT" && po.list_time == Some(60_000))
+            .times(1)
+            .returning(|_| Ok(7));
+        repository.expect_update_instrument().times(0);
+        let cache = instrument_cache(None);
+        let service = OkxHistoryClientService {
+            history_services: HashMap::new(),
+            repository: Arc::new(repository),
+            inst_cache: cache.clone(),
+        };
+
+        service.reconcile_instrument(server_instrument(42)).await.unwrap();
+
+        let cached = cache.read().await.get(&42).cloned().unwrap();
+        assert_eq!(cached.id, 7);
+        assert_eq!(cached.inst_identify, "BTC-USDT");
+    }
+
+    // 测试目的：验证新建的非 live OKX instrument 不会进入共享缓存。
+    // 准备数据/过程：提交 state 为 suspend 的 instrument，并 mock repository 创建成功。
+    // 预期结果：instrument 成功写入 repository，但 server ID 42 不在缓存中。
+    #[tokio::test]
+    async fn reconcile_instrument_does_not_cache_non_live_instrument() {
+        let mut repository = MockClientOkxRepositoryTrait::new();
+        repository.expect_find_instrument_by_server_id().times(0);
+        repository
+            .expect_create_instruments()
+            .withf(|po| po.server_id == 42 && po.state.as_deref() == Some("suspend"))
+            .times(1)
+            .returning(|_| Ok(7));
+        repository.expect_update_instrument().times(0);
+        let cache = instrument_cache(None);
+        let service = OkxHistoryClientService {
+            history_services: HashMap::new(),
+            repository: Arc::new(repository),
+            inst_cache: cache.clone(),
+        };
+        let mut instrument = server_instrument(42);
+        if let Some(instrument::Payload::Okx(okx_instrument)) = instrument.payload.as_mut() {
+            okx_instrument.state = "suspend".to_string();
+        }
+
+        service.reconcile_instrument(instrument).await.unwrap();
+
+        assert!(!cache.read().await.contains_key(&42));
+    }
+
+    // 测试目的：验证 OKX instrument 字段未变化时跳过 repository 写入。
+    // 准备数据/过程：缓存中预置与服务端 instrument 一致的 PO，并禁止 repository 查找、创建和更新。
+    // 预期结果：对账成功，缓存中的本地 ID 和字段保持不变。
+    #[tokio::test]
+    async fn reconcile_instrument_skips_write_when_cached_instrument_matches() {
+        let mut repository = MockClientOkxRepositoryTrait::new();
+        repository.expect_find_instrument_by_server_id().times(0);
+        repository.expect_create_instruments().times(0);
+        repository.expect_update_instrument().times(0);
+        let cache = instrument_cache(Some((42, 7)));
+        let service = OkxHistoryClientService {
+            history_services: HashMap::new(),
+            repository: Arc::new(repository),
+            inst_cache: cache.clone(),
+        };
+
+        service.reconcile_instrument(server_instrument(42)).await.unwrap();
+
+        assert_eq!(cache.read().await.get(&42).map(|instrument| instrument.id), Some(7));
+    }
+
+    // 测试目的：验证 OKX instrument 变化时保留本地 ID、更新数据库并刷新缓存。
+    // 准备数据/过程：缓存 instrument 的 inst_type 为 SWAP，服务端值为 SPOT，并校验 repository 更新参数。
+    // 预期结果：update 被调用一次，缓存更新为服务端字段且仍使用本地 ID 7。
+    #[tokio::test]
+    async fn reconcile_instrument_updates_changed_instrument() {
+        let mut cached = local_instrument(42, 7);
+        cached.inst_type = "SWAP".to_string();
+        let mut repository = MockClientOkxRepositoryTrait::new();
+        repository.expect_find_instrument_by_server_id().times(0);
+        repository
+            .expect_update_instrument()
+            .withf(|po| po.id == 7 && po.server_id == 42 && po.inst_type == "SPOT")
+            .times(1)
+            .returning(|_| Ok(()));
+        repository.expect_create_instruments().times(0);
+        let cache = Arc::new(RwLock::new(HashMap::from([(42, cached)])));
+        let service = OkxHistoryClientService {
+            history_services: HashMap::new(),
+            repository: Arc::new(repository),
+            inst_cache: cache.clone(),
+        };
+
+        service.reconcile_instrument(server_instrument(42)).await.unwrap();
+
+        let cached = cache.read().await.get(&42).cloned().unwrap();
+        assert_eq!(cached.id, 7);
+        assert_eq!(cached.inst_type, "SPOT");
+    }
+
+    // 测试目的：验证缓存中的 OKX instrument 变为非 live 状态后会从共享缓存移除。
+    // 准备数据/过程：预置 live instrument，并提交 state 为 suspend 的服务端 instrument。
+    // 预期结果：repository 更新一次，且 server ID 42 从缓存中移除。
+    #[tokio::test]
+    async fn reconcile_instrument_removes_non_live_instrument_from_cache() {
+        let mut repository = MockClientOkxRepositoryTrait::new();
+        repository.expect_find_instrument_by_server_id().times(0);
+        repository
+            .expect_update_instrument()
+            .withf(|po| po.id == 7 && po.server_id == 42 && po.state.as_deref() == Some("suspend"))
+            .times(1)
+            .returning(|_| Ok(()));
+        repository.expect_create_instruments().times(0);
+        let cache = instrument_cache(Some((42, 7)));
+        let service = OkxHistoryClientService {
+            history_services: HashMap::new(),
+            repository: Arc::new(repository),
+            inst_cache: cache.clone(),
+        };
+        let mut instrument = server_instrument(42);
+        if let Some(instrument::Payload::Okx(okx_instrument)) = instrument.payload.as_mut() {
+            okx_instrument.state = "suspend".to_string();
+        }
+
+        service.reconcile_instrument(instrument).await.unwrap();
+
+        assert!(!cache.read().await.contains_key(&42));
+    }
+
+    // 测试目的：验证 OKX 对账拒绝其他交易所或缺失 payload 的 instrument。
+    // 准备数据/过程：分别提交 exchange 类型错误和 OKX payload 为空的 instrument，repository 不配置调用。
+    // 预期结果：两个请求均返回校验错误，不读写本地 instrument。
+    #[tokio::test]
+    async fn reconcile_instrument_rejects_invalid_instrument() {
+        let mut repository = MockClientOkxRepositoryTrait::new();
+        repository.expect_find_instrument_by_server_id().times(0);
+        repository.expect_create_instruments().times(0);
+        repository.expect_update_instrument().times(0);
+        let service = OkxHistoryClientService {
+            history_services: HashMap::new(),
+            repository: Arc::new(repository),
+            inst_cache: instrument_cache(None),
+        };
+        let mut wrong_exchange = server_instrument(42);
+        wrong_exchange.instrument_type = InstrumentType::Binance as i32;
+        let mut missing_payload = server_instrument(42);
+        missing_payload.payload = None;
+
+        let exchange_error = service.reconcile_instrument(wrong_exchange).await.unwrap_err();
+        let payload_error = service.reconcile_instrument(missing_payload).await.unwrap_err();
+
+        assert!(exchange_error.to_string().contains("exchange is not OKX"));
+        assert!(payload_error.to_string().contains("payload is not OKX"));
+    }
+
     // 测试目的：验证初始同步从本地最新 Kline 时间戳之后请求服务端数据。
     // 准备数据/过程：mock 最新时间戳为 120_000，传入 OKX instrument 和结束时间 199_000，再执行 initial_data。
     // 预期结果：SyncRequest 使用 server ID 42、起始时间 120_000、对齐后的结束时间 180_000 和 OkxKline 类型。
@@ -549,7 +744,7 @@ mod tests {
             Arc::new(MockPostgresqlBatchInsertTrait::<LocalOkxKlinePo>::new()),
             Arc::new(grpc_manager),
             mock_binary_search(),
-            Arc::new(RwLock::new(HashMap::from([(42, 7)]))),
+            instrument_cache(Some((42, 7))),
         );
 
         service.initial_data(server_instrument(42), 199_000).await.unwrap();
@@ -562,7 +757,7 @@ mod tests {
     async fn initial_data_creates_missing_instrument_before_backfilling() {
         let mut repository = MockClientOkxRepositoryTrait::new();
         repository
-            .expect_find_instrument_id_by_server_id()
+            .expect_find_instrument_by_server_id()
             .withf(|server_id| *server_id == 42)
             .times(1)
             .returning(|_| Ok(None));
@@ -599,7 +794,7 @@ mod tests {
             Arc::new(MockPostgresqlBatchInsertTrait::<LocalOkxKlinePo>::new()),
             Arc::new(grpc_manager),
             mock_binary_search(),
-            Arc::new(RwLock::new(HashMap::new())),
+            instrument_cache(None),
         );
 
         service.initial_data(server_instrument(42), 199_000).await.unwrap();
@@ -623,7 +818,7 @@ mod tests {
             Arc::new(batch_insert),
             Arc::new(MockGrpcChannelManagerTrait::new()),
             mock_binary_search(),
-            Arc::new(RwLock::new(HashMap::from([(42, 7)]))),
+            instrument_cache(Some((42, 7))),
         );
         let entry = HistoryEntry {
             history_type: HistoryType::OkxKline as i32,
@@ -656,7 +851,7 @@ mod tests {
             Arc::new(MockPostgresqlBatchInsertTrait::<LocalOkxKlinePo>::new()),
             Arc::new(MockGrpcChannelManagerTrait::new()),
             mock_binary_search(),
-            Arc::new(RwLock::new(HashMap::new())),
+            instrument_cache(None),
         );
         let entry = HistoryEntry {
             history_type: HistoryType::OkxKline as i32,
@@ -700,10 +895,10 @@ mod tests {
             Arc::new(MockPostgresqlBatchInsertTrait::<LocalOkxKlinePo>::new()),
             Arc::new(grpc_manager),
             Arc::new(binary_search),
-            Arc::new(RwLock::new(HashMap::from([(42, 7)]))),
+            instrument_cache(Some((42, 7))),
         );
 
-        service.reconcile_living_instrument_with_server(239_000).await.unwrap();
+        service.reconcile_history_data(239_000).await.unwrap();
     }
 
     // 测试目的：验证 Option Summary 初始化从本地最新快照之后增量请求服务端历史。
@@ -747,7 +942,7 @@ mod tests {
             Arc::new(repository),
             Arc::new(batch_insert),
             Arc::new(grpc_manager),
-            Arc::new(RwLock::new(HashMap::from([(42, 7)]))),
+            instrument_cache(Some((42, 7))),
         );
 
         service.initial_data(server_instrument(42), 200_000).await.unwrap();
@@ -757,7 +952,7 @@ mod tests {
     async fn option_summary_initial_data_creates_missing_instrument() {
         let mut repository = MockClientOkxRepositoryTrait::new();
         repository
-            .expect_find_instrument_id_by_server_id()
+            .expect_find_instrument_by_server_id()
             .withf(|server_id| *server_id == 42)
             .times(1)
             .returning(|_| Ok(None));
@@ -783,16 +978,16 @@ mod tests {
             })
             .returning(|_| Ok(empty_stream()));
 
-        let id_maps = Arc::new(RwLock::new(HashMap::new()));
+        let inst_cache = instrument_cache(None);
         let service = option_summary_history_service(
             Arc::new(repository),
             Arc::new(MockPostgresqlBatchInsertTrait::<LocalOkxOptionSummaryPo>::new()),
             Arc::new(grpc_manager),
-            id_maps.clone(),
+            inst_cache.clone(),
         );
 
         service.initial_data(server_instrument(42), 200_000).await.unwrap();
-        assert_eq!(id_maps.read().await.get(&42), Some(&7));
+        assert_eq!(inst_cache.read().await.get(&42).map(|instrument| instrument.id), Some(7));
     }
 
     // 测试目的：验证实时 Option Summary 使用 server ID 映射成本地 instrument ID 后落库。
@@ -813,7 +1008,7 @@ mod tests {
             Arc::new(MockClientOkxRepositoryTrait::new()),
             Arc::new(batch_insert),
             Arc::new(MockGrpcChannelManagerTrait::new()),
-            Arc::new(RwLock::new(HashMap::from([(42, 7)]))),
+            instrument_cache(Some((42, 7))),
         );
 
         service.insert_history(option_summary_entry(42)).await.unwrap();
@@ -825,7 +1020,7 @@ mod tests {
             Arc::new(MockClientOkxRepositoryTrait::new()),
             Arc::new(MockPostgresqlBatchInsertTrait::<LocalOkxOptionSummaryPo>::new()),
             Arc::new(MockGrpcChannelManagerTrait::new()),
-            Arc::new(RwLock::new(HashMap::from([(42, 7)]))),
+            instrument_cache(Some((42, 7))),
         );
         let mut entry = option_summary_entry(42);
         entry.history_type = HistoryType::OkxKline as i32;
@@ -856,9 +1051,9 @@ mod tests {
             Arc::new(repository),
             Arc::new(MockPostgresqlBatchInsertTrait::<LocalOkxOptionSummaryPo>::new()),
             Arc::new(grpc_manager),
-            Arc::new(RwLock::new(HashMap::from([(42, 7)]))),
+            instrument_cache(Some((42, 7))),
         );
 
-        service.reconcile_living_instrument_with_server(200_000).await.unwrap();
+        service.reconcile_history_data(200_000).await.unwrap();
     }
 }

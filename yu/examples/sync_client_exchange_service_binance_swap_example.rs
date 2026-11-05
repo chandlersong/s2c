@@ -43,7 +43,7 @@ async fn main() -> Result<(), YuError> {
     binance_instrument_service.initial_data(instrument, end_ms).await?;
     for (history_type, history_service) in binance_instrument_service.supported_history_services()? {
         info!("reconcile history type: {}", history_type.readable_name());
-        history_service.reconcile_living_instrument_with_server(end_ms).await?;
+        history_service.reconcile_history_data(end_ms).await?;
     }
 
     Ok(())

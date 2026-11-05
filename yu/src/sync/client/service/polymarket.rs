@@ -13,35 +13,71 @@ use crate::sync::models::grpc_sync::{HistoryEntry, HistoryType, Instrument, Inst
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::executor::block_on;
-use li::tools::time::UnixTimeStamp;
+use li::tools::time::{UnixTimeStamp, unix_time_now_u64_utc};
 use log::{debug, error};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use yue::models::HistoryInterval;
-use yue::tools::get_snow_flake_id_u64;
 
-type SeverId2LocalId = Arc<RwLock<HashMap<u64, LocalPolyMarketInstrumentPo>>>;
+type InstrumentCache = Arc<RwLock<HashMap<u64, LocalPolyMarketInstrumentPo>>>;
+
+async fn find_local_instrument(
+    pm_repo: &ClientPolyMarketRepository,
+    inst_cache: &InstrumentCache,
+    server_id: u64,
+) -> Result<Option<LocalPolyMarketInstrumentPo>, YuError> {
+    if let Some(instrument) = inst_cache.read().await.get(&server_id).cloned() {
+        return Ok(Some(instrument));
+    }
+
+    let instrument = pm_repo.find_instrument_by_server_id(server_id).await?;
+    if let Some(instrument) = &instrument {
+        inst_cache.write().await.insert(server_id, instrument.clone());
+    }
+    Ok(instrument)
+}
+
+async fn find_or_create_local_instrument(
+    pm_repo: &ClientPolyMarketRepository,
+    inst_cache: &InstrumentCache,
+    server_instrument: crate::sync::models::grpc_sync::PolymarketInstrument,
+) -> Result<LocalPolyMarketInstrumentPo, YuError> {
+    if let Some(instrument) = find_local_instrument(pm_repo, inst_cache, server_instrument.server_id).await? {
+        return Ok(instrument);
+    }
+
+    let mut instrument = LocalPolyMarketInstrumentPo::from_proto(server_instrument);
+    instrument.id = pm_repo.create_instruments(instrument.clone()).await?;
+    inst_cache.write().await.insert(instrument.server_id, instrument.clone());
+    Ok(instrument)
+}
 
 pub struct PolymarketClientInstrumentService {
     history_services: HashMap<HistoryType, ClientHistoryService>,
+    pm_repo: ClientPolyMarketRepository,
+    inst_cache: InstrumentCache,
 }
 
 impl PolymarketClientInstrumentService {
-    fn new(history_services: HashMap<HistoryType, ClientHistoryService>) -> Self {
-        Self { history_services }
+    fn new(history_services: HashMap<HistoryType, ClientHistoryService>, pm_repo: ClientPolyMarketRepository, inst_cache: InstrumentCache) -> Self {
+        Self {
+            history_services,
+            pm_repo,
+            inst_cache,
+        }
     }
 
     pub fn for_production() -> Result<Arc<Self>, YuError> {
         let pm_repo = default_client_polymarket_repository();
 
-        let id_maps: SeverId2LocalId = Arc::new(RwLock::new(block_on(pm_repo.server_id_instrument_dictionary())?));
+        let inst_cache: InstrumentCache = Arc::new(RwLock::new(block_on(pm_repo.server_id_instrument_dictionary())?));
 
-        let history_service = PolymarketClientHistoryService::for_production(id_maps)?;
+        let history_service = PolymarketClientHistoryService::for_production(pm_repo.clone(), inst_cache.clone())?;
 
         let mut history_services: HashMap<HistoryType, ClientHistoryService> = HashMap::new();
         history_services.insert(HistoryType::PolymarketToken, history_service);
-        Ok(Arc::new(Self::new(history_services)))
+        Ok(Arc::new(Self::new(history_services, pm_repo, inst_cache)))
     }
 }
 
@@ -57,6 +93,42 @@ impl ClientInstrumentServiceTrait for PolymarketClientInstrumentService {
         Ok(())
     }
 
+    async fn reconcile_instrument(&self, instrument: Instrument) -> Result<(), YuError> {
+        if instrument.instrument_type != InstrumentType::Polymarket as i32 {
+            return Err(YuError::new("instrument exchange is not Polymarket"));
+        }
+        let Some(instrument::Payload::Polymarket(server_instrument)) = instrument.payload else {
+            return Err(YuError::new("instrument payload is not Polymarket"));
+        };
+
+        let mut local_instrument = LocalPolyMarketInstrumentPo::from_proto(server_instrument.clone());
+        let is_active = local_instrument.end_ms > unix_time_now_u64_utc();
+        let cached_instrument = self.inst_cache.read().await.get(&server_instrument.server_id).cloned();
+        match cached_instrument {
+            Some(existing_instrument) => {
+                local_instrument.id = existing_instrument.id;
+                let changed = local_instrument != existing_instrument;
+                if changed {
+                    self.pm_repo.update_instrument(local_instrument.clone()).await?;
+                }
+                if is_active {
+                    if changed {
+                        self.inst_cache.write().await.insert(server_instrument.server_id, local_instrument);
+                    }
+                } else {
+                    self.inst_cache.write().await.remove(&server_instrument.server_id);
+                }
+            }
+            None => {
+                local_instrument.id = self.pm_repo.create_instruments(local_instrument.clone()).await?;
+                if is_active {
+                    self.inst_cache.write().await.insert(server_instrument.server_id, local_instrument);
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn supported_history_services(&self) -> Result<HashMap<HistoryType, ClientHistoryService>, YuError> {
         Ok(self.history_services.clone())
     }
@@ -68,12 +140,11 @@ pub struct PolymarketClientHistoryService {
     interval: HistoryInterval,
     grpc_manager: GrpcChannelManager,
     binary_search: BinarySearchDS,
-    id_maps: SeverId2LocalId,
+    inst_cache: InstrumentCache,
 }
 
 impl PolymarketClientHistoryService {
-    pub fn for_production(id_maps: SeverId2LocalId) -> Result<Arc<Self>, YuError> {
-        let pm_repo = default_client_polymarket_repository();
+    pub fn for_production(pm_repo: ClientPolyMarketRepository, inst_cache: InstrumentCache) -> Result<Arc<Self>, YuError> {
         let history_batch_insert = get_polymarket_price_batch_insert();
         let pg_pool = get_sync_client_pg_pool_sync()?;
         let pm_binary_search_ds = SyncClientBinarySearchDataImpl::new(
@@ -89,7 +160,7 @@ impl PolymarketClientHistoryService {
             interval: HistoryInterval::OneHour,
             grpc_manager,
             binary_search: pm_binary_search_ds,
-            id_maps,
+            inst_cache,
         }))
     }
 
@@ -143,41 +214,20 @@ impl ClientHistoryServiceTrait for PolymarketClientHistoryService {
             return Err(YuError::new("instrument exchange is not polymarket"));
         }
 
-        let Some(instrument::Payload::Polymarket(instrument)) = instrument.payload else {
+        let Some(instrument::Payload::Polymarket(server_instrument)) = instrument.payload else {
             return Err(YuError::new("instrument payload is not polymarket"));
         };
 
-        let local_instrument = match self.pm_repo.find_instrument_by_server_id(instrument.server_id).await? {
-            Some(local_instrument) => local_instrument,
-            None => {
-                let id = get_snow_flake_id_u64();
-                self.pm_repo
-                    .create_instruments(LocalPolyMarketInstrumentPo {
-                        id,
-                        server_id: instrument.server_id,
-                        series_id: instrument.series_id,
-                        series_slug: instrument.series_slug,
-                        event_id: instrument.event_id,
-                        event_slug: instrument.event_slug,
-                        market_id: instrument.market_id,
-                        market_slug: instrument.market_slug,
-                        assert_id: instrument.asset_id,
-                        assert_slug: instrument.asset_slug,
-                        start_ms: instrument.start_ms,
-                        end_ms: instrument.end_ms,
-                    })
-                    .await?;
-                self.pm_repo
-                    .find_instrument_by_server_id(instrument.server_id)
-                    .await?
-                    .ok_or_else(|| YuError::new("created Polymarket instrument could not be found"))?
-            }
-        };
+        let local_instrument = find_or_create_local_instrument(&self.pm_repo, &self.inst_cache, server_instrument.clone()).await?;
 
-        let latest_timestamp = self.pm_repo.get_lastest_timestamps_by_server_id(instrument.server_id).await?;
-        let start_timestamp = if latest_timestamp == 0 { instrument.start_ms } else { latest_timestamp };
+        let latest_timestamp = self.pm_repo.get_lastest_timestamps_by_server_id(server_instrument.server_id).await?;
+        let start_timestamp = if latest_timestamp == 0 {
+            server_instrument.start_ms
+        } else {
+            latest_timestamp
+        };
         let end_timestamp = end_ms;
-        self.backfill_history(instrument.server_id, local_instrument.id, start_timestamp, end_timestamp)
+        self.backfill_history(server_instrument.server_id, local_instrument.id, start_timestamp, end_timestamp)
             .await?;
         Ok(())
     }
@@ -188,7 +238,7 @@ impl ClientHistoryServiceTrait for PolymarketClientHistoryService {
     /// 2. 循环第一步的方法，用二分法找出缺少的代码
     /// 3. 调用backfill。取补全
     ///
-    async fn reconcile_living_instrument_with_server(&self, end_ms: UnixTimeStamp) -> Result<(), YuError> {
+    async fn reconcile_history_data(&self, end_ms: UnixTimeStamp) -> Result<(), YuError> {
         let interval_ms = self.interval.to_milliseconds();
         let end_timestamp = self.interval.get_close_unix_ms(end_ms).saturating_sub(interval_ms);
         let instruments = self.pm_repo.get_live_instruments(end_ms).await?;
@@ -242,8 +292,8 @@ impl ClientHistoryServiceTrait for PolymarketClientHistoryService {
         }
 
         let cached_local_inst_id = {
-            let id_maps = self.id_maps.read().await;
-            id_maps.get(&history_entry.inst_id).map(|instrument| instrument.id)
+            let inst_cache = self.inst_cache.read().await;
+            inst_cache.get(&history_entry.inst_id).map(|instrument| instrument.id)
         };
         let local_inst_id = match cached_local_inst_id {
             Some(local_inst_id) => local_inst_id,
@@ -254,7 +304,7 @@ impl ClientHistoryServiceTrait for PolymarketClientHistoryService {
                     return Ok(());
                 };
                 let local_inst_id = local_instrument.id;
-                self.id_maps.write().await.insert(history_entry.inst_id, local_instrument);
+                self.inst_cache.write().await.insert(history_entry.inst_id, local_instrument);
                 local_inst_id
             }
         };
@@ -331,7 +381,7 @@ mod tests {
             interval,
             grpc_manager,
             binary_search,
-            id_maps: Arc::new(Default::default()),
+            inst_cache: Arc::new(Default::default()),
         }
     }
 
@@ -345,6 +395,155 @@ mod tests {
         Arc::new(mock)
     }
 
+    // 测试目的：验证缓存缺少的 Polymarket instrument 会被创建并写入共享缓存。
+    // 准备数据/过程：缓存为空，mock repository 创建时检查服务端字段并返回成功。
+    // 预期结果：创建操作执行一次，缓存保存新 instrument 及生成的本地 ID。
+    #[tokio::test]
+    async fn reconcile_instrument_creates_missing_instrument_and_caches_it() {
+        let end_ms = unix_time_now_u64_utc() + 60_000;
+        let mut repository = MockClientPolyMarketRepositoryTrait::new();
+        repository.expect_find_instrument_by_server_id().times(0);
+        repository
+            .expect_create_instruments()
+            .withf(move |po| po.server_id == 42 && po.assert_id == "asset-id" && po.start_ms == 100 && po.end_ms == end_ms)
+            .times(1)
+            .returning(|_| Ok(7));
+        repository.expect_update_instrument().times(0);
+        let cache = Arc::new(RwLock::new(HashMap::new()));
+        let service = PolymarketClientInstrumentService::new(HashMap::new(), Arc::new(repository), cache.clone());
+        let mut instrument = polymarket_instrument(42);
+        if let Some(instrument::Payload::Polymarket(server_instrument)) = instrument.payload.as_mut() {
+            server_instrument.end_ms = end_ms;
+        }
+
+        service.reconcile_instrument(instrument).await.unwrap();
+
+        let cached = cache.read().await.get(&42).cloned().unwrap();
+        assert_eq!(cached.id, 7);
+        assert_eq!(cached.assert_id, "asset-id");
+        assert_eq!(cached.end_ms, end_ms);
+    }
+
+    // 测试目的：验证新建的已过期 Polymarket instrument 不会进入共享缓存。
+    // 准备数据/过程：提交 end_ms 早于当前时间的 instrument，并 mock repository 创建成功。
+    // 预期结果：instrument 成功写入 repository，但 server ID 42 不在缓存中。
+    #[tokio::test]
+    async fn reconcile_instrument_does_not_cache_expired_instrument() {
+        let mut repository = MockClientPolyMarketRepositoryTrait::new();
+        repository.expect_find_instrument_by_server_id().times(0);
+        repository
+            .expect_create_instruments()
+            .withf(|po| po.server_id == 42 && po.end_ms < unix_time_now_u64_utc())
+            .times(1)
+            .returning(|_| Ok(7));
+        repository.expect_update_instrument().times(0);
+        let cache = Arc::new(RwLock::new(HashMap::new()));
+        let service = PolymarketClientInstrumentService::new(HashMap::new(), Arc::new(repository), cache.clone());
+
+        service.reconcile_instrument(polymarket_instrument(42)).await.unwrap();
+
+        assert!(!cache.read().await.contains_key(&42));
+    }
+
+    // 测试目的：验证 Polymarket instrument 字段未变化时跳过 repository 写入。
+    // 准备数据/过程：缓存中预置与服务端 instrument 一致的 PO，并禁止 repository 查找、创建和更新。
+    // 预期结果：对账成功，缓存中的本地 ID 和字段保持不变。
+    #[tokio::test]
+    async fn reconcile_instrument_skips_write_when_cached_instrument_matches() {
+        let end_ms = unix_time_now_u64_utc() + 60_000;
+        let mut repository = MockClientPolyMarketRepositoryTrait::new();
+        repository.expect_find_instrument_by_server_id().times(0);
+        repository.expect_create_instruments().times(0);
+        repository.expect_update_instrument().times(0);
+        let mut local = local_instrument(42);
+        local.end_ms = end_ms;
+        let cache = Arc::new(RwLock::new(HashMap::from([(42, local)])));
+        let service = PolymarketClientInstrumentService::new(HashMap::new(), Arc::new(repository), cache.clone());
+        let mut instrument = polymarket_instrument(42);
+        if let Some(instrument::Payload::Polymarket(server_instrument)) = instrument.payload.as_mut() {
+            server_instrument.end_ms = end_ms;
+        }
+
+        service.reconcile_instrument(instrument).await.unwrap();
+
+        assert_eq!(cache.read().await.get(&42).map(|instrument| instrument.id), Some(1));
+    }
+
+    // 测试目的：验证 Polymarket instrument 变化时保留本地 ID、更新数据库并刷新缓存。
+    // 准备数据/过程：缓存中的市场结束时间与服务端不同，并检查 repository 更新 PO。
+    // 预期结果：update 被调用一次，缓存采用服务端 end_ms 且本地 ID 不变。
+    #[tokio::test]
+    async fn reconcile_instrument_updates_changed_instrument() {
+        let end_ms = unix_time_now_u64_utc() + 60_000;
+        let mut cached = local_instrument(42);
+        cached.end_ms = end_ms - 100;
+        let mut repository = MockClientPolyMarketRepositoryTrait::new();
+        repository.expect_find_instrument_by_server_id().times(0);
+        repository
+            .expect_update_instrument()
+            .withf(move |po| po.id == 1 && po.server_id == 42 && po.end_ms == end_ms)
+            .times(1)
+            .returning(|_| Ok(()));
+        repository.expect_create_instruments().times(0);
+        let cache = Arc::new(RwLock::new(HashMap::from([(42, cached)])));
+        let service = PolymarketClientInstrumentService::new(HashMap::new(), Arc::new(repository), cache.clone());
+        let mut instrument = polymarket_instrument(42);
+        if let Some(instrument::Payload::Polymarket(server_instrument)) = instrument.payload.as_mut() {
+            server_instrument.end_ms = end_ms;
+        }
+
+        service.reconcile_instrument(instrument).await.unwrap();
+
+        let cached = cache.read().await.get(&42).cloned().unwrap();
+        assert_eq!(cached.id, 1);
+        assert_eq!(cached.end_ms, end_ms);
+    }
+
+    // 测试目的：验证缓存中的 Polymarket instrument 过期后会从共享缓存移除。
+    // 准备数据/过程：预置尚未过期的本地 instrument，并提交 end_ms 早于当前时间的服务端版本。
+    // 预期结果：repository 更新一次，且 server ID 42 从缓存中移除。
+    #[tokio::test]
+    async fn reconcile_instrument_removes_expired_instrument_from_cache() {
+        let mut repository = MockClientPolyMarketRepositoryTrait::new();
+        repository.expect_find_instrument_by_server_id().times(0);
+        repository
+            .expect_update_instrument()
+            .withf(|po| po.id == 1 && po.server_id == 42 && po.end_ms == 200)
+            .times(1)
+            .returning(|_| Ok(()));
+        repository.expect_create_instruments().times(0);
+        let mut cached = local_instrument(42);
+        cached.end_ms = unix_time_now_u64_utc() + 60_000;
+        let cache = Arc::new(RwLock::new(HashMap::from([(42, cached)])));
+        let service = PolymarketClientInstrumentService::new(HashMap::new(), Arc::new(repository), cache.clone());
+
+        service.reconcile_instrument(polymarket_instrument(42)).await.unwrap();
+
+        assert!(!cache.read().await.contains_key(&42));
+    }
+
+    // 测试目的：验证 Polymarket 对账拒绝其他交易所或缺失 payload 的 instrument。
+    // 准备数据/过程：分别提交 exchange 类型错误和 Polymarket payload 为空的 instrument，repository 不配置调用。
+    // 预期结果：两个请求均返回校验错误，不读写本地 instrument。
+    #[tokio::test]
+    async fn reconcile_instrument_rejects_invalid_instrument() {
+        let mut repository = MockClientPolyMarketRepositoryTrait::new();
+        repository.expect_find_instrument_by_server_id().times(0);
+        repository.expect_create_instruments().times(0);
+        repository.expect_update_instrument().times(0);
+        let service = PolymarketClientInstrumentService::new(HashMap::new(), Arc::new(repository), Arc::new(RwLock::new(HashMap::new())));
+        let mut wrong_exchange = polymarket_instrument(42);
+        wrong_exchange.instrument_type = InstrumentType::Okx as i32;
+        let mut missing_payload = polymarket_instrument(42);
+        missing_payload.payload = None;
+
+        let exchange_error = service.reconcile_instrument(wrong_exchange).await.unwrap_err();
+        let payload_error = service.reconcile_instrument(missing_payload).await.unwrap_err();
+
+        assert!(exchange_error.to_string().contains("exchange is not Polymarket"));
+        assert!(payload_error.to_string().contains("payload is not Polymarket"));
+    }
+
     // 测试目的：验证本地不存在的 Polymarket instrument 会先写入本地，再从起始时间补取历史。
     // 测试步骤：模拟首次查询不到、创建成功、历史时间戳为空，并检查请求从 start_ms + 1 开始。
     // 预期结果：初始化成功，且按预期的 server_id、起始时间和 instrument 类型发起历史同步。
@@ -354,15 +553,8 @@ mod tests {
         let mut repo = MockClientPolyMarketRepositoryTrait::new();
         repo.expect_find_instrument_by_server_id()
             .withf(|server_id| *server_id == 42)
-            .times(2)
-            .returning({
-                let find_count = Arc::new(std::sync::Mutex::new(0));
-                move |_| {
-                    let mut find_count = find_count.lock().unwrap();
-                    *find_count += 1;
-                    if *find_count == 1 { Ok(None) } else { Ok(Some(local_instrument(42))) }
-                }
-            });
+            .times(1)
+            .returning(|_| Ok(None));
         repo.expect_create_instruments()
             .withf(|po| {
                 po.server_id == 42
@@ -373,7 +565,7 @@ mod tests {
                     && po.start_ms == 100
                     && po.end_ms == 200
             })
-            .returning(|_| Ok(()));
+            .returning(|_| Ok(1));
         repo.expect_get_lastest_timestamps_by_server_id()
             .withf(|server_id| *server_id == 42)
             .returning(|_| Ok(0));
@@ -393,6 +585,9 @@ mod tests {
         service.initial_data(polymarket_instrument(42), now).await.unwrap();
     }
 
+    // 测试目的：验证 Polymarket instrument service 将初始化委托给注册的 history service。
+    // 准备数据/过程：注册一个 mock history service，并提交 Polymarket instrument 和结束时间。
+    // 预期结果：history service 收到同一 instrument 和结束时间一次，初始化成功。
     #[tokio::test]
     async fn initial_data_delegates_to_registered_history_services() {
         let end_ms = unix_time_now_u64_utc();
@@ -403,7 +598,11 @@ mod tests {
             .times(1)
             .returning(|_, _| Box::pin(async { Ok(()) }));
         let history_service: ClientHistoryService = Arc::new(history_service);
-        let instrument_service = PolymarketClientInstrumentService::new(HashMap::from([(HistoryType::PolymarketToken, history_service)]));
+        let instrument_service = PolymarketClientInstrumentService::new(
+            HashMap::from([(HistoryType::PolymarketToken, history_service)]),
+            Arc::new(MockClientPolyMarketRepositoryTrait::new()),
+            Arc::new(RwLock::new(HashMap::new())),
+        );
 
         instrument_service.initial_data(polymarket_instrument(42), end_ms).await.unwrap();
     }
@@ -506,7 +705,7 @@ mod tests {
             .withf(|entry, local_inst_id| *local_inst_id == 123 && entry.history_type == HistoryType::PolymarketToken as i32 && entry.inst_id == 42)
             .times(1)
             .returning(|_, _| ());
-        let id_maps = Arc::new(RwLock::new(HashMap::new()));
+        let inst_cache = Arc::new(RwLock::new(HashMap::new()));
         let mut service = history_service(
             Arc::new(repo),
             Arc::new(batch_insert),
@@ -514,7 +713,7 @@ mod tests {
             mock_binary_search_ds(),
             HistoryInterval::OneHour,
         );
-        service.id_maps = id_maps.clone();
+        service.inst_cache = inst_cache.clone();
 
         service
             .insert_history(HistoryEntry {
@@ -525,7 +724,7 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(id_maps.read().await.get(&42).map(|instrument| instrument.id), Some(123));
+        assert_eq!(inst_cache.read().await.get(&42).map(|instrument| instrument.id), Some(123));
     }
 
     #[tokio::test]
@@ -538,7 +737,7 @@ mod tests {
             .withf(|entry, local_inst_id| *local_inst_id == 321 && entry.inst_id == 42)
             .times(1)
             .returning(|_, _| ());
-        let id_maps = Arc::new(RwLock::new(HashMap::from([(
+        let inst_cache = Arc::new(RwLock::new(HashMap::from([(
             42,
             LocalPolyMarketInstrumentPo {
                 id: 321,
@@ -552,7 +751,7 @@ mod tests {
             mock_binary_search_ds(),
             HistoryInterval::OneHour,
         );
-        service.id_maps = id_maps;
+        service.inst_cache = inst_cache;
 
         service
             .insert_history(HistoryEntry {
@@ -636,7 +835,7 @@ mod tests {
             interval,
         );
 
-        service.reconcile_living_instrument_with_server(end_ms).await.unwrap();
+        service.reconcile_history_data(end_ms).await.unwrap();
     }
 
     // 测试目的：验证仓库没有返回仍在运行的 instrument 时不会执行缺口查询或历史回补。
@@ -657,7 +856,7 @@ mod tests {
             HistoryInterval::OneHour,
         );
 
-        service.reconcile_living_instrument_with_server(end_ms).await.unwrap();
+        service.reconcile_history_data(end_ms).await.unwrap();
     }
 
     // 测试目的：确保服务拒绝非 Polymarket 交易所的 instrument。

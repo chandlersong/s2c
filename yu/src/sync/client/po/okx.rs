@@ -1,10 +1,10 @@
 use crate::postgresql_db::CopyInsertable;
-use crate::sync::models::grpc_sync::{HistoryEntry, history_entry::Payload};
+use crate::sync::models::grpc_sync::{HistoryEntry, OkxInstrument, history_entry::Payload};
 use li::tools::time::{format_timestamp_millis, unix_time_now_u64_utc};
 use sqlx::Row;
 use yue::tools::get_snow_flake_id_u64;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LocalOkxInstrumentPo {
     pub id: u64,
     pub server_id: u64,
@@ -23,6 +23,30 @@ pub struct LocalOkxInstrumentPo {
     pub state: Option<String>,
     pub inst_id_code: Option<String>,
     pub inst_category: Option<String>,
+}
+
+impl LocalOkxInstrumentPo {
+    pub fn from_proto(instrument: OkxInstrument) -> Self {
+        Self {
+            id: get_snow_flake_id_u64(),
+            server_id: instrument.server_id,
+            inst_identify: instrument.inst_id,
+            inst_type: instrument.inst_type,
+            inst_family: (!instrument.inst_family.is_empty()).then_some(instrument.inst_family),
+            base_ccy: instrument.base_ccy,
+            quote_ccy: (!instrument.quote_ccy.is_empty()).then_some(instrument.quote_ccy),
+            settle_ccy: (!instrument.settle_ccy.is_empty()).then_some(instrument.settle_ccy),
+            list_time: (instrument.list_time > 0).then_some(instrument.list_time),
+            exp_time: (instrument.exp_time > 0).then_some(instrument.exp_time),
+            tick_sz: (instrument.tick_sz != 0.0).then_some(instrument.tick_sz),
+            lot_sz: (instrument.lot_sz != 0.0).then_some(instrument.lot_sz),
+            min_sz: (instrument.min_sz != 0.0).then_some(instrument.min_sz),
+            alias: (!instrument.alias.is_empty()).then_some(instrument.alias),
+            state: (!instrument.state.is_empty()).then_some(instrument.state),
+            inst_id_code: (!instrument.inst_id_code.is_empty()).then_some(instrument.inst_id_code),
+            inst_category: (!instrument.inst_category.is_empty()).then_some(instrument.inst_category),
+        }
+    }
 }
 
 impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for LocalOkxInstrumentPo {
@@ -360,6 +384,46 @@ fn csv_quote(value: &str) -> String {
 mod tests {
     use super::*;
     use crate::sync::models::grpc_sync::{HistoryType, InstrumentType, OkxKline, OkxOptionSummary, history_entry::Payload};
+
+    // 测试目的：验证 OKX protobuf instrument 的字段映射及空值归一化。
+    // 准备数据/过程：构造包含必填字段、空字符串和零值的 OkxInstrument 并转换为本地 PO。
+    // 预期结果：服务端 ID 与非空字段保留，空字符串和零值转换为 None，并生成有效本地 ID。
+    #[test]
+    fn okx_instrument_proto_maps_to_local_po() {
+        let po = LocalOkxInstrumentPo::from_proto(crate::sync::models::grpc_sync::OkxInstrument {
+            server_id: 42,
+            inst_id: "BTC-USDT".to_string(),
+            inst_type: "SPOT".to_string(),
+            inst_family: String::new(),
+            base_ccy: "BTC".to_string(),
+            quote_ccy: "USDT".to_string(),
+            settle_ccy: String::new(),
+            list_time: 60_000,
+            exp_time: 0,
+            tick_sz: 0.1,
+            lot_sz: 0.0,
+            min_sz: 1.0,
+            alias: String::new(),
+            state: "live".to_string(),
+            inst_id_code: String::new(),
+            inst_category: String::new(),
+        });
+
+        assert!(po.id > 0);
+        assert_eq!(po.server_id, 42);
+        assert_eq!(po.inst_identify, "BTC-USDT");
+        assert_eq!(po.inst_family, None);
+        assert_eq!(po.quote_ccy.as_deref(), Some("USDT"));
+        assert_eq!(po.settle_ccy, None);
+        assert_eq!(po.list_time, Some(60_000));
+        assert_eq!(po.exp_time, None);
+        assert_eq!(po.tick_sz, Some(0.1));
+        assert_eq!(po.lot_sz, None);
+        assert_eq!(po.min_sz, Some(1.0));
+        assert_eq!(po.state.as_deref(), Some("live"));
+        assert_eq!(po.inst_id_code, None);
+        assert_eq!(po.inst_category, None);
+    }
 
     #[test]
     fn okx_kline_history_maps_to_local_po_and_database_columns() {

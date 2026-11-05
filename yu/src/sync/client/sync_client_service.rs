@@ -26,7 +26,18 @@ const INITIAL_DATA_PROGRESS_INTERVAL: Duration = Duration::from_secs(30);
 ///
 #[async_trait]
 pub trait ClientInstrumentServiceTrait: Send + Sync {
+    ///
+    /// 调用下层的ClientHistoryServiceTrait同步数据。
+    ///
+    /// # 禁止做的事情
+    /// 1. 修改任何本地的Instrument数据。包括数据库和内部数据。只能读不能写。
+    ///
     async fn initial_data(&self, instrument: Instrument, end_ms: UnixTimeStamp) -> Result<(), YuError>;
+
+    ///
+    /// 用户本地的instrument和服务器的同步
+    ///
+    async fn reconcile_instrument(&self, instrument: Instrument) -> Result<(), YuError>;
 
     fn supported_history_services(&self) -> Result<HashMap<HistoryType, ClientHistoryService>, YuError>;
 }
@@ -44,7 +55,7 @@ pub trait ClientHistoryServiceTrait: Send + Sync {
     ///
     /// 校对正在运行的instrument的数据
     ///
-    async fn reconcile_living_instrument_with_server(&self, end_ms: UnixTimeStamp) -> Result<(), YuError>;
+    async fn reconcile_history_data(&self, end_ms: UnixTimeStamp) -> Result<(), YuError>;
 
     async fn insert_history(&self, history_entry: HistoryEntry) -> Result<(), YuError>;
 }
@@ -125,9 +136,21 @@ impl Hash for InstrumentCacheKey {
 }
 
 impl SyncClientService {
-    pub async fn initial_data(&self, server_inst: InstrumentList) -> Result<(), YuError> {
+    pub async fn reconcile_instrument(&self, instrument: Instrument) -> Result<(), YuError> {
+        let instrument_type = InstrumentType::try_from(instrument.instrument_type).map_err(|_| YuError::new("unknown exchange type"))?;
+        let instrument_name = instrument_type.readable_name();
+        let Some(service) = self.instrument_services.get(&instrument_type) else {
+            error!("{} not found instrument sync service to handle", instrument_name);
+            return Ok(());
+        };
+        if let Err(error) = service.reconcile_instrument(instrument).await {
+            error!("error reconciling instrument {},error:{}", instrument_name, error);
+        }
+        Ok(())
+    }
+
+    pub async fn initial_data(&self, server_inst: InstrumentList, end_ms: UnixTimeStamp) -> Result<(), YuError> {
         // 因为整个流程时间很长，且监听会同时开始。所以要统一结束时间。
-        let now = unix_time_now_u64_utc();
         info!("initial_data start");
         let total = server_inst.instruments.len();
         let instrument_services = Arc::new(self.instrument_services.clone());
@@ -135,7 +158,7 @@ impl SyncClientService {
         let mut tasks = JoinSet::new();
         for _ in 0..INITIAL_DATA_CONCURRENCY {
             if let Some(instrument) = instruments.next() {
-                tasks.spawn(initialize_instrument(instrument, now, instrument_services.clone()));
+                tasks.spawn(initialize_instrument(instrument, end_ms, instrument_services.clone()));
             }
         }
         let mut completed = 0;
@@ -155,7 +178,7 @@ impl SyncClientService {
                     }
                     completed += 1;
                     if let Some(instrument) = instruments.next() {
-                        tasks.spawn(initialize_instrument(instrument, now, instrument_services.clone()));
+                        tasks.spawn(initialize_instrument(instrument, end_ms, instrument_services.clone()));
                     }
                 }
                 _ = progress_interval.tick() => {
@@ -174,14 +197,14 @@ impl SyncClientService {
     ///
     /// # 流程
     /// 1. 确定结束时间。一般默认取now
-    /// 2. 获取exchange_services，然后调用其reconcile_living_instrument_with_server。
+    /// 2. 获取exchange_services，然后调用其reconcile_history_data。
     /// 3. 如果错误，打印日志，然后跳过。
     ///
-    pub async fn reconcile_living_instrument_with_server(&self) -> Result<(), YuError> {
+    pub async fn reconcile_history_data(&self) -> Result<(), YuError> {
         let now = unix_time_now_u64_utc();
         for (history_type, history_history) in &self.history_services {
             let exchange_name = history_type.readable_name();
-            if let Err(e) = history_history.reconcile_living_instrument_with_server(now).await {
+            if let Err(e) = history_history.reconcile_history_data(now).await {
                 error!("error reconciling exchange {},error:{}", exchange_name, e);
             }
         }
@@ -316,6 +339,10 @@ mod tests {
             Ok(())
         }
 
+        async fn reconcile_instrument(&self, instrument: Instrument) -> Result<(), YuError> {
+            todo!()
+        }
+
         fn supported_history_services(&self) -> Result<HashMap<HistoryType, ClientHistoryService>, YuError> {
             Ok(HashMap::new())
         }
@@ -376,7 +403,7 @@ mod tests {
             server_timestamp: 0,
         };
 
-        service.initial_data(instrument_list).await.unwrap();
+        service.initial_data(instrument_list, 0).await.unwrap();
 
         assert_eq!(max_active.load(Ordering::SeqCst), INITIAL_DATA_CONCURRENCY);
         assert_eq!(active.load(Ordering::SeqCst), 0);

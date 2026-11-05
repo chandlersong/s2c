@@ -1,3 +1,4 @@
+use crate::binance::bn_consts::BN_SYMBOL_STATUS_TRADING;
 use crate::data_integrity::check::{BinarySearchDS, SyncClientBinarySearchDataImpl, binary_search_gap};
 use crate::data_integrity::models::ValidationGap;
 use crate::errors::YuError;
@@ -22,16 +23,34 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use futures::executor::block_on;
 use li::tools::time::UnixTimeStamp;
-use log::warn;
+use log::{debug, warn};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use yue::models::{DEFAULT_START_TIMESTAMP, HistoryInterval};
 
-type ServerIdToLocalId = Arc<RwLock<HashMap<u64, u64>>>;
+type InstrumentCache = Arc<RwLock<HashMap<u64, LocalBinanceInstrumentPo>>>;
+
+async fn find_local_instrument(
+    repository: &ClientBinanceRepository,
+    inst_cache: &InstrumentCache,
+    server_id: u64,
+) -> Result<Option<LocalBinanceInstrumentPo>, YuError> {
+    if let Some(instrument) = inst_cache.read().await.get(&server_id).cloned() {
+        return Ok(Some(instrument));
+    }
+
+    let instrument = repository.find_instrument_by_server_id(server_id).await?;
+    if let Some(instrument) = &instrument {
+        inst_cache.write().await.insert(server_id, instrument.clone());
+    }
+    Ok(instrument)
+}
 
 pub struct BinanceSpotClientInstrumentService {
     history_services: HashMap<HistoryType, ClientHistoryService>,
+    inst_cache: InstrumentCache,
+    repository: ClientBinanceRepository,
 }
 
 impl BinanceSpotClientInstrumentService {
@@ -40,17 +59,18 @@ impl BinanceSpotClientInstrumentService {
         let repository = ClientBinanceRepositoryImpl::from_pool(pool.clone());
         let spot_instruments = block_on(repository.list_all_instruments(BinanceInstrumentType::Spot))?;
         let swap_instruments = block_on(repository.list_all_instruments(BinanceInstrumentType::Swap))?;
-        let id_maps = spot_instruments
+        let inst_cache = spot_instruments
             .into_iter()
             .chain(swap_instruments)
-            .map(|instrument| (instrument.server_id, instrument.id))
+            .map(|instrument| (instrument.server_id, instrument))
             .collect();
-        let id_maps = Arc::new(RwLock::new(id_maps));
-        let kline_service = BinanceSpotKlineClientHistoryService::for_production(repository.clone(), pool.clone(), id_maps.clone());
-        let trade_service = BinanceSpotTradeClientHistoryService::for_production(repository.clone(), id_maps.clone());
-        let order_book_snapshot_service = BinanceOrderBookSnapshotClientHistoryService::for_production(repository.clone(), id_maps.clone());
-        let swap_kline_service = BinanceSwapKlineClientHistoryService::for_production(repository.clone(), pool.clone(), id_maps.clone());
-        let swap_funding_rate_service = BinanceSwapFundingRateClientHistoryService::for_production(repository, pool.clone(), id_maps);
+        let inst_cache = Arc::new(RwLock::new(inst_cache));
+        let kline_service = BinanceSpotKlineClientHistoryService::for_production(repository.clone(), pool.clone(), inst_cache.clone());
+        let trade_service = BinanceSpotTradeClientHistoryService::for_production(repository.clone(), inst_cache.clone());
+        let order_book_snapshot_service = BinanceOrderBookSnapshotClientHistoryService::for_production(repository.clone(), inst_cache.clone());
+        let swap_kline_service = BinanceSwapKlineClientHistoryService::for_production(repository.clone(), pool.clone(), inst_cache.clone());
+        let swap_funding_rate_service =
+            BinanceSwapFundingRateClientHistoryService::for_production(repository.clone(), pool.clone(), inst_cache.clone());
         let swap_service: ClientHistoryService = Arc::new(BinanceSwapClientHistoryService {
             kline: swap_kline_service,
             funding_rate: swap_funding_rate_service.clone(),
@@ -63,6 +83,8 @@ impl BinanceSpotClientInstrumentService {
                 (HistoryType::BinanceSwap, swap_service),
                 (HistoryType::BinanceSwapFundingRate, swap_funding_rate_service),
             ]),
+            inst_cache,
+            repository,
         }))
     }
 }
@@ -89,12 +111,71 @@ impl ClientInstrumentServiceTrait for BinanceSpotClientInstrumentService {
         if history_type == HistoryType::BinanceSwap {
             let funding_rate_service = self.history_services.get(&HistoryType::BinanceSwapFundingRate);
             if let Some(fr_service) = funding_rate_service {
-                fr_service.initial_data(instrument, end_ms).await?;
+                if let Err(e) = fr_service.initial_data(instrument.clone(), end_ms).await {
+                    warn!(
+                        "Error initializing Binance swap funding rate history, server id:{},error is {}",
+                        binance_instrument.server_id, e
+                    );
+                }
             }
         }
 
         // FUTURE：
         // trade这类初始化的逻辑，就很难，因为他不是全集,需要服务器把这类信息发过来。所以就暂时先不管了。。
+        Ok(())
+    }
+
+    ///
+    /// 1. 把instrument转换成LocalBinanceInstrumentPo
+    /// 2. 判断instrument是否存在，如果存在，判断是否一致，不一致就更新。
+    /// 3. 如果不存在，就创建新的instrument,然后插入cache
+    ///
+    /// FUTURE:
+    /// 1. cache是否要考虑删除？现在没有删除机制。
+    ///
+    async fn reconcile_instrument(&self, instrument: Instrument) -> Result<(), YuError> {
+        if instrument.instrument_type != InstrumentType::Binance as i32 {
+            return Err(YuError::new("instrument exchange is not Binance"));
+        }
+        let Some(instrument::Payload::Binance(binance_instrument)) = instrument.payload else {
+            return Err(YuError::new("instrument payload is not Binance"));
+        };
+        if BinanceInstrumentType::from_symbol_type(&binance_instrument.symbol_type).is_none() {
+            return Err(YuError::new("unsupported Binance instrument symbol type"));
+        }
+
+        let mut local_instrument = LocalBinanceInstrumentPo::from_proto(binance_instrument.clone());
+        let cached_instrument = self.inst_cache.read().await.get(&binance_instrument.server_id).cloned();
+        match cached_instrument {
+            Some(existing_instrument) => {
+                local_instrument.id = existing_instrument.id;
+                let changed = existing_instrument.symbol != local_instrument.symbol
+                    || existing_instrument.status != local_instrument.status
+                    || existing_instrument.base_asset != local_instrument.base_asset
+                    || existing_instrument.quote_asset != local_instrument.quote_asset
+                    || existing_instrument.quote_asset_precision != local_instrument.quote_asset_precision
+                    || existing_instrument.order_types != local_instrument.order_types
+                    || existing_instrument.symbol_type != local_instrument.symbol_type
+                    || existing_instrument.on_board_time != local_instrument.on_board_time;
+                if changed {
+                    self.repository.update_instrument(local_instrument.clone()).await?;
+                }
+                if local_instrument.status == BN_SYMBOL_STATUS_TRADING {
+                    if changed {
+                        self.inst_cache.write().await.insert(binance_instrument.server_id, local_instrument);
+                    }
+                } else {
+                    self.inst_cache.write().await.remove(&binance_instrument.server_id);
+                }
+            }
+            None => {
+                local_instrument.id = self.repository.create_instrument(local_instrument.clone()).await?;
+                if local_instrument.status == BN_SYMBOL_STATUS_TRADING {
+                    self.inst_cache.write().await.insert(binance_instrument.server_id, local_instrument);
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -109,11 +190,11 @@ pub struct BinanceSwapKlineClientHistoryService {
     interval: HistoryInterval,
     grpc_manager: GrpcChannelManager,
     binary_search: BinarySearchDS,
-    id_maps: ServerIdToLocalId,
+    inst_cache: InstrumentCache,
 }
 
 impl BinanceSwapKlineClientHistoryService {
-    fn for_production(repository: ClientBinanceRepository, pool: sqlx::PgPool, id_maps: ServerIdToLocalId) -> ClientHistoryService {
+    fn for_production(repository: ClientBinanceRepository, pool: sqlx::PgPool, inst_cache: InstrumentCache) -> ClientHistoryService {
         let binary_search = SyncClientBinarySearchDataImpl::new_with_instrument_column(
             pool,
             ClientsTables::BinanceSwapKline.table_name(),
@@ -127,7 +208,7 @@ impl BinanceSwapKlineClientHistoryService {
             interval: HistoryInterval::OneMinute,
             grpc_manager: get_grpc_manager_from_config(),
             binary_search,
-            id_maps,
+            inst_cache,
         })
     }
 
@@ -185,22 +266,12 @@ impl ClientHistoryServiceTrait for BinanceSwapKlineClientHistoryService {
             return Err(YuError::new("instrument is not a Binance swap instrument"));
         }
 
-        let cached_local_inst_id = { self.id_maps.read().await.get(&binance_instrument.server_id).copied() };
-        let local_inst_id = match cached_local_inst_id {
-            Some(local_inst_id) => local_inst_id,
-            None => {
-                let local_inst_id = match self.repository.find_instrument_id_by_server_id(binance_instrument.server_id).await? {
-                    Some(local_inst_id) => local_inst_id,
-                    None => {
-                        self.repository
-                            .create_instrument(LocalBinanceInstrumentPo::from_proto(binance_instrument.clone()))
-                            .await?
-                    }
-                };
-                self.id_maps.write().await.insert(binance_instrument.server_id, local_inst_id);
-                local_inst_id
-            }
+        let Some(local_instrument) = find_local_instrument(&self.repository, &self.inst_cache, binance_instrument.server_id).await? else {
+            debug!("local Binance instrument {} not found; skipping history", binance_instrument.server_id);
+            return Ok(());
         };
+
+        let local_inst_id = local_instrument.id;
 
         let start_ms = match self
             .repository
@@ -219,7 +290,7 @@ impl ClientHistoryServiceTrait for BinanceSwapKlineClientHistoryService {
         self.backfill_history(binance_instrument.server_id, local_inst_id, start_ms, end_ms).await
     }
 
-    async fn reconcile_living_instrument_with_server(&self, end_ms: UnixTimeStamp) -> Result<(), YuError> {
+    async fn reconcile_history_data(&self, end_ms: UnixTimeStamp) -> Result<(), YuError> {
         let end_timestamp = self.interval.get_close_unix_ms(end_ms);
         for instrument in self.repository.list_all_instruments(BinanceInstrumentType::Swap).await? {
             if !instrument.status.eq_ignore_ascii_case("TRADING") {
@@ -261,30 +332,14 @@ impl ClientHistoryServiceTrait for BinanceSwapKlineClientHistoryService {
             return Err(YuError::new("received non-Binance swap kline history payload"));
         }
 
-        let cached_local_inst_id = { self.id_maps.read().await.get(&history_entry.inst_id).copied() };
-        let local_inst_id = match cached_local_inst_id {
-            Some(local_inst_id) => local_inst_id,
-            None => {
-                let Some(local_inst_id) = self.repository.find_instrument_id_by_server_id(history_entry.inst_id).await? else {
-                    warn!("local Binance instrument {} not found; skipping history", history_entry.inst_id);
-                    return Ok(());
-                };
-                self.id_maps.write().await.insert(history_entry.inst_id, local_inst_id);
-                local_inst_id
-            }
+        let Some(local_instrument) = find_local_instrument(&self.repository, &self.inst_cache, history_entry.inst_id).await? else {
+            debug!("local Binance instrument {} not found; skipping history", history_entry.inst_id);
+            return Ok(());
         };
+        let local_inst_id = local_instrument.id;
         self.history_batch_insert.insert_data(history_entry, local_inst_id).await;
         Ok(())
     }
-}
-
-pub struct BinanceSwapFundingRateClientHistoryService {
-    history_batch_insert: PostgresqlBatchInsert<LocalBinanceFundingRatePo>,
-    repository: ClientBinanceRepository,
-    interval: HistoryInterval,
-    grpc_manager: GrpcChannelManager,
-    binary_search: BinarySearchDS,
-    id_maps: ServerIdToLocalId,
 }
 
 struct BinanceSwapClientHistoryService {
@@ -299,8 +354,8 @@ impl ClientHistoryServiceTrait for BinanceSwapClientHistoryService {
         self.funding_rate.initial_data(instrument, end_ms).await
     }
 
-    async fn reconcile_living_instrument_with_server(&self, end_ms: UnixTimeStamp) -> Result<(), YuError> {
-        self.kline.reconcile_living_instrument_with_server(end_ms).await
+    async fn reconcile_history_data(&self, end_ms: UnixTimeStamp) -> Result<(), YuError> {
+        self.kline.reconcile_history_data(end_ms).await
     }
 
     async fn insert_history(&self, history_entry: HistoryEntry) -> Result<(), YuError> {
@@ -312,8 +367,17 @@ impl ClientHistoryServiceTrait for BinanceSwapClientHistoryService {
     }
 }
 
+pub struct BinanceSwapFundingRateClientHistoryService {
+    history_batch_insert: PostgresqlBatchInsert<LocalBinanceFundingRatePo>,
+    repository: ClientBinanceRepository,
+    interval: HistoryInterval,
+    grpc_manager: GrpcChannelManager,
+    binary_search: BinarySearchDS,
+    inst_cache: InstrumentCache,
+}
+
 impl BinanceSwapFundingRateClientHistoryService {
-    fn for_production(repository: ClientBinanceRepository, pool: sqlx::PgPool, id_maps: ServerIdToLocalId) -> ClientHistoryService {
+    fn for_production(repository: ClientBinanceRepository, pool: sqlx::PgPool, inst_cache: InstrumentCache) -> ClientHistoryService {
         let interval = HistoryInterval::OneHour;
         let binary_search = SyncClientBinarySearchDataImpl::new_with_instrument_column(
             pool,
@@ -328,7 +392,7 @@ impl BinanceSwapFundingRateClientHistoryService {
             interval,
             grpc_manager: get_grpc_manager_from_config(),
             binary_search,
-            id_maps,
+            inst_cache,
         })
     }
 
@@ -377,22 +441,12 @@ impl ClientHistoryServiceTrait for BinanceSwapFundingRateClientHistoryService {
             return Err(YuError::new("instrument is not a Binance swap instrument"));
         }
 
-        let cached_local_inst_id = { self.id_maps.read().await.get(&binance_instrument.server_id).copied() };
-        let local_inst_id = match cached_local_inst_id {
-            Some(local_inst_id) => local_inst_id,
-            None => {
-                let local_inst_id = match self.repository.find_instrument_id_by_server_id(binance_instrument.server_id).await? {
-                    Some(local_inst_id) => local_inst_id,
-                    None => {
-                        self.repository
-                            .create_instrument(LocalBinanceInstrumentPo::from_proto(binance_instrument.clone()))
-                            .await?
-                    }
-                };
-                self.id_maps.write().await.insert(binance_instrument.server_id, local_inst_id);
-                local_inst_id
-            }
+        let Some(local_instrument) = find_local_instrument(&self.repository, &self.inst_cache, binance_instrument.server_id).await? else {
+            debug!("local Binance instrument {} not found; skipping history", binance_instrument.server_id);
+            return Ok(());
         };
+
+        let local_inst_id = local_instrument.id;
 
         let start_ms = match self
             .repository
@@ -407,7 +461,7 @@ impl ClientHistoryServiceTrait for BinanceSwapFundingRateClientHistoryService {
         self.backfill_history(binance_instrument.server_id, local_inst_id, start_ms, end_ms).await
     }
 
-    async fn reconcile_living_instrument_with_server(&self, end_ms: UnixTimeStamp) -> Result<(), YuError> {
+    async fn reconcile_history_data(&self, end_ms: UnixTimeStamp) -> Result<(), YuError> {
         let end_timestamp = self.interval.get_close_unix_ms(end_ms);
         for instrument in self.repository.list_all_instruments(BinanceInstrumentType::Swap).await? {
             if !instrument.status.eq_ignore_ascii_case("TRADING") {
@@ -454,21 +508,14 @@ impl ClientHistoryServiceTrait for BinanceSwapFundingRateClientHistoryService {
             return Err(YuError::new("received non-Binance swap funding rate history payload"));
         }
 
-        let cached_local_inst_id = { self.id_maps.read().await.get(&history_entry.inst_id).copied() };
-        let local_inst_id = match cached_local_inst_id {
-            Some(local_inst_id) => local_inst_id,
-            None => {
-                let Some(local_inst_id) = self.repository.find_instrument_id_by_server_id(history_entry.inst_id).await? else {
-                    warn!(
-                        "local Binance instrument {} not found; skipping funding rate history",
-                        history_entry.inst_id
-                    );
-                    return Ok(());
-                };
-                self.id_maps.write().await.insert(history_entry.inst_id, local_inst_id);
-                local_inst_id
-            }
+        let Some(local_instrument) = find_local_instrument(&self.repository, &self.inst_cache, history_entry.inst_id).await? else {
+            debug!(
+                "local Binance instrument {} not found; skipping funding rate history",
+                history_entry.inst_id
+            );
+            return Ok(());
         };
+        let local_inst_id = local_instrument.id;
         self.history_batch_insert.insert_data(history_entry, local_inst_id).await;
         Ok(())
     }
@@ -480,11 +527,11 @@ pub struct BinanceSpotKlineClientHistoryService {
     interval: HistoryInterval,
     grpc_manager: GrpcChannelManager,
     binary_search: BinarySearchDS,
-    id_maps: ServerIdToLocalId,
+    inst_cache: InstrumentCache,
 }
 
 impl BinanceSpotKlineClientHistoryService {
-    fn for_production(repository: ClientBinanceRepository, pool: sqlx::PgPool, id_maps: ServerIdToLocalId) -> ClientHistoryService {
+    fn for_production(repository: ClientBinanceRepository, pool: sqlx::PgPool, inst_cache: InstrumentCache) -> ClientHistoryService {
         let binary_search = SyncClientBinarySearchDataImpl::new_with_instrument_column(
             pool,
             ClientsTables::BinanceSpotKline.table_name(),
@@ -498,7 +545,7 @@ impl BinanceSpotKlineClientHistoryService {
             interval: HistoryInterval::OneMinute,
             grpc_manager: get_grpc_manager_from_config(),
             binary_search,
-            id_maps,
+            inst_cache,
         })
     }
 
@@ -556,22 +603,12 @@ impl ClientHistoryServiceTrait for BinanceSpotKlineClientHistoryService {
             return Err(YuError::new("instrument is not a Binance spot instrument"));
         }
 
-        let cached_local_inst_id = self.id_maps.read().await.get(&binance_instrument.server_id).copied();
-        let local_inst_id = match cached_local_inst_id {
-            Some(local_inst_id) => local_inst_id,
-            None => {
-                let local_inst_id = match self.repository.find_instrument_id_by_server_id(binance_instrument.server_id).await? {
-                    Some(local_inst_id) => local_inst_id,
-                    None => {
-                        self.repository
-                            .create_instrument(LocalBinanceInstrumentPo::from_proto(binance_instrument.clone()))
-                            .await?
-                    }
-                };
-                self.id_maps.write().await.insert(binance_instrument.server_id, local_inst_id);
-                local_inst_id
-            }
+        let Some(local_instrument) = find_local_instrument(&self.repository, &self.inst_cache, binance_instrument.server_id).await? else {
+            debug!("local Binance instrument {} not found; skipping history", binance_instrument.server_id);
+            return Ok(());
         };
+
+        let local_inst_id = local_instrument.id;
 
         let start_ms = match self
             .repository
@@ -591,14 +628,14 @@ impl ClientHistoryServiceTrait for BinanceSpotKlineClientHistoryService {
         self.backfill_history(binance_instrument.server_id, local_inst_id, start_ms, end_ms).await
     }
 
-    async fn reconcile_living_instrument_with_server(&self, end_ms: UnixTimeStamp) -> Result<(), YuError> {
+    async fn reconcile_history_data(&self, end_ms: UnixTimeStamp) -> Result<(), YuError> {
         let end_timestamp = self.interval.get_close_unix_ms(end_ms);
         for instrument in self.repository.list_all_instruments(BinanceInstrumentType::Spot).await? {
             if !instrument.status.eq_ignore_ascii_case("TRADING") {
                 continue;
             }
             let Some(on_board_time) = instrument.on_board_time else {
-                warn!(
+                debug!(
                     "Binance spot instrument {} has no listing time; skipping history reconciliation",
                     instrument.server_id
                 );
@@ -633,17 +670,11 @@ impl ClientHistoryServiceTrait for BinanceSpotKlineClientHistoryService {
             return Err(YuError::new("received non-Binance spot kline history payload"));
         }
 
-        let local_inst_id = match self.id_maps.read().await.get(&history_entry.inst_id).copied() {
-            Some(local_inst_id) => local_inst_id,
-            None => {
-                let Some(local_inst_id) = self.repository.find_instrument_id_by_server_id(history_entry.inst_id).await? else {
-                    warn!("local Binance instrument {} not found; skipping history", history_entry.inst_id);
-                    return Ok(());
-                };
-                self.id_maps.write().await.insert(history_entry.inst_id, local_inst_id);
-                local_inst_id
-            }
+        let Some(local_instrument) = find_local_instrument(&self.repository, &self.inst_cache, history_entry.inst_id).await? else {
+            debug!("local Binance instrument {} not found; skipping history", history_entry.inst_id);
+            return Ok(());
         };
+        let local_inst_id = local_instrument.id;
         self.history_batch_insert.insert_data(history_entry, local_inst_id).await;
         Ok(())
     }
@@ -652,15 +683,15 @@ impl ClientHistoryServiceTrait for BinanceSpotKlineClientHistoryService {
 pub struct BinanceSpotTradeClientHistoryService {
     history_batch_insert: PostgresqlBatchInsert<LocalBinanceTradePo>,
     repository: ClientBinanceRepository,
-    id_maps: ServerIdToLocalId,
+    inst_cache: InstrumentCache,
 }
 
 impl BinanceSpotTradeClientHistoryService {
-    fn for_production(repository: ClientBinanceRepository, id_maps: ServerIdToLocalId) -> ClientHistoryService {
+    fn for_production(repository: ClientBinanceRepository, inst_cache: InstrumentCache) -> ClientHistoryService {
         Arc::new(Self {
             history_batch_insert: get_binance_trade_batch_insert(),
             repository,
-            id_maps,
+            inst_cache,
         })
     }
 }
@@ -672,7 +703,7 @@ impl ClientHistoryServiceTrait for BinanceSpotTradeClientHistoryService {
         Ok(())
     }
 
-    async fn reconcile_living_instrument_with_server(&self, _end_ms: UnixTimeStamp) -> Result<(), YuError> {
+    async fn reconcile_history_data(&self, _end_ms: UnixTimeStamp) -> Result<(), YuError> {
         // FUTURE: Binance spot trade history reconciliation，逻辑上要重写，通过id。先不管了。。
         Ok(())
     }
@@ -685,17 +716,11 @@ impl ClientHistoryServiceTrait for BinanceSpotTradeClientHistoryService {
             return Err(YuError::new("received non-Binance spot trade history payload"));
         }
 
-        let local_inst_id = match self.id_maps.read().await.get(&history_entry.inst_id).copied() {
-            Some(local_inst_id) => local_inst_id,
-            None => {
-                let Some(local_inst_id) = self.repository.find_instrument_id_by_server_id(history_entry.inst_id).await? else {
-                    warn!("local Binance instrument {} not found; skipping trade history", history_entry.inst_id);
-                    return Ok(());
-                };
-                self.id_maps.write().await.insert(history_entry.inst_id, local_inst_id);
-                local_inst_id
-            }
+        let Some(local_instrument) = find_local_instrument(&self.repository, &self.inst_cache, history_entry.inst_id).await? else {
+            debug!("local Binance instrument {} not found; skipping trade history", history_entry.inst_id);
+            return Ok(());
         };
+        let local_inst_id = local_instrument.id;
         self.history_batch_insert.insert_data(history_entry, local_inst_id).await;
         Ok(())
     }
@@ -704,15 +729,15 @@ impl ClientHistoryServiceTrait for BinanceSpotTradeClientHistoryService {
 pub struct BinanceOrderBookSnapshotClientHistoryService {
     history_batch_insert: PostgresqlBatchInsert<LocalBinanceOrderBookSnapshotPo>,
     repository: ClientBinanceRepository,
-    id_maps: ServerIdToLocalId,
+    inst_cache: InstrumentCache,
 }
 
 impl BinanceOrderBookSnapshotClientHistoryService {
-    fn for_production(repository: ClientBinanceRepository, id_maps: ServerIdToLocalId) -> ClientHistoryService {
+    fn for_production(repository: ClientBinanceRepository, inst_cache: InstrumentCache) -> ClientHistoryService {
         Arc::new(Self {
             history_batch_insert: get_binance_order_book_snapshot_batch_insert(),
             repository,
-            id_maps,
+            inst_cache,
         })
     }
 }
@@ -723,7 +748,7 @@ impl ClientHistoryServiceTrait for BinanceOrderBookSnapshotClientHistoryService 
         Ok(())
     }
 
-    async fn reconcile_living_instrument_with_server(&self, _end_ms: UnixTimeStamp) -> Result<(), YuError> {
+    async fn reconcile_history_data(&self, _end_ms: UnixTimeStamp) -> Result<(), YuError> {
         Ok(())
     }
 
@@ -735,21 +760,14 @@ impl ClientHistoryServiceTrait for BinanceOrderBookSnapshotClientHistoryService 
             return Err(YuError::new("received non-Binance order book snapshot history payload"));
         }
 
-        let cached_local_inst_id = { self.id_maps.read().await.get(&history_entry.inst_id).copied() };
-        let local_inst_id = match cached_local_inst_id {
-            Some(local_inst_id) => local_inst_id,
-            None => {
-                let Some(local_inst_id) = self.repository.find_instrument_id_by_server_id(history_entry.inst_id).await? else {
-                    warn!(
-                        "local Binance instrument {} not found; skipping order book snapshot history",
-                        history_entry.inst_id
-                    );
-                    return Ok(());
-                };
-                self.id_maps.write().await.insert(history_entry.inst_id, local_inst_id);
-                local_inst_id
-            }
+        let Some(local_instrument) = find_local_instrument(&self.repository, &self.inst_cache, history_entry.inst_id).await? else {
+            debug!(
+                "local Binance instrument {} not found; skipping order book snapshot history",
+                history_entry.inst_id
+            );
+            return Ok(());
         };
+        let local_inst_id = local_instrument.id;
         self.history_batch_insert.insert_data(history_entry, local_inst_id).await;
         Ok(())
     }
@@ -769,6 +787,46 @@ mod tests {
 
     fn mock_binary_search() -> BinarySearchDS {
         Arc::new(MockBinarySearchDSTrait::new())
+    }
+
+    fn local_instrument(server_id: u64, id: u64) -> LocalBinanceInstrumentPo {
+        LocalBinanceInstrumentPo {
+            id,
+            server_id,
+            symbol: "BTCUSDT".to_string(),
+            status: "TRADING".to_string(),
+            base_asset: "BTC".to_string(),
+            quote_asset: "USDT".to_string(),
+            quote_asset_precision: 8,
+            order_types: vec!["LIMIT".to_string()],
+            symbol_type: "SPOT".to_string(),
+            on_board_time: Some(1_700_000_000_000),
+        }
+    }
+
+    fn instrument_cache(cached: Option<(u64, u64)>) -> InstrumentCache {
+        Arc::new(RwLock::new(
+            cached
+                .map(|(server_id, id)| HashMap::from([(server_id, local_instrument(server_id, id))]))
+                .unwrap_or_default(),
+        ))
+    }
+
+    fn server_instrument() -> Instrument {
+        Instrument {
+            instrument_type: InstrumentType::Binance as i32,
+            payload: Some(instrument::Payload::Binance(crate::sync::models::grpc_sync::BinanceInstrument {
+                server_id: 42,
+                symbol: "BTCUSDT".to_string(),
+                status: "TRADING".to_string(),
+                base_asset: "BTC".to_string(),
+                quote_asset: "USDT".to_string(),
+                quote_asset_precision: 8,
+                order_types: vec!["LIMIT".to_string()],
+                symbol_type: "SPOT".to_string(),
+                on_board_time: Some(1_700_000_000_000),
+            })),
+        }
     }
 
     fn order_book_snapshot_entry() -> HistoryEntry {
@@ -819,7 +877,7 @@ mod tests {
         let service = BinanceOrderBookSnapshotClientHistoryService {
             history_batch_insert: Arc::new(batch_insert),
             repository: Arc::new(repository),
-            id_maps: Arc::new(RwLock::new(HashMap::from([(42, 7)]))),
+            inst_cache: instrument_cache(Some((42, 7))),
         };
 
         service.insert_history(order_book_snapshot_entry()).await.unwrap();
@@ -832,10 +890,10 @@ mod tests {
     async fn order_book_snapshot_insert_resolves_and_caches_local_instrument_id() {
         let mut repository = MockClientBinanceRepositoryTrait::new();
         repository
-            .expect_find_instrument_id_by_server_id()
+            .expect_find_instrument_by_server_id()
             .with(mockall::predicate::eq(42))
             .times(1)
-            .returning(|_| Ok(Some(7)));
+            .returning(|_| Ok(Some(local_instrument(42, 7))));
         let mut batch_insert = MockPostgresqlBatchInsertTrait::<LocalBinanceOrderBookSnapshotPo>::new();
         batch_insert
             .expect_insert_data()
@@ -845,7 +903,7 @@ mod tests {
         let service = BinanceOrderBookSnapshotClientHistoryService {
             history_batch_insert: Arc::new(batch_insert),
             repository: Arc::new(repository),
-            id_maps: Arc::new(RwLock::new(HashMap::new())),
+            inst_cache: instrument_cache(None),
         };
 
         service.insert_history(order_book_snapshot_entry()).await.unwrap();
@@ -859,7 +917,7 @@ mod tests {
     async fn order_book_snapshot_insert_skips_unknown_local_instrument() {
         let mut repository = MockClientBinanceRepositoryTrait::new();
         repository
-            .expect_find_instrument_id_by_server_id()
+            .expect_find_instrument_by_server_id()
             .with(mockall::predicate::eq(42))
             .times(1)
             .returning(|_| Ok(None));
@@ -868,7 +926,7 @@ mod tests {
         let service = BinanceOrderBookSnapshotClientHistoryService {
             history_batch_insert: Arc::new(batch_insert),
             repository: Arc::new(repository),
-            id_maps: Arc::new(RwLock::new(HashMap::new())),
+            inst_cache: instrument_cache(None),
         };
 
         service.insert_history(order_book_snapshot_entry()).await.unwrap();
@@ -880,13 +938,13 @@ mod tests {
     #[tokio::test]
     async fn order_book_snapshot_insert_rejects_mismatched_history_type() {
         let mut repository = MockClientBinanceRepositoryTrait::new();
-        repository.expect_find_instrument_id_by_server_id().times(0);
+        repository.expect_find_instrument_by_server_id().times(0);
         let mut batch_insert = MockPostgresqlBatchInsertTrait::<LocalBinanceOrderBookSnapshotPo>::new();
         batch_insert.expect_insert_data().times(0);
         let service = BinanceOrderBookSnapshotClientHistoryService {
             history_batch_insert: Arc::new(batch_insert),
             repository: Arc::new(repository),
-            id_maps: Arc::new(RwLock::new(HashMap::from([(42, 7)]))),
+            inst_cache: instrument_cache(Some((42, 7))),
         };
         let mut entry = order_book_snapshot_entry();
         entry.history_type = HistoryType::BinanceTrade as i32;
@@ -906,7 +964,7 @@ mod tests {
         let service = BinanceOrderBookSnapshotClientHistoryService {
             history_batch_insert: Arc::new(batch_insert),
             repository: Arc::new(repository),
-            id_maps: Arc::new(RwLock::new(HashMap::new())),
+            inst_cache: instrument_cache(None),
         };
 
         service
@@ -919,7 +977,7 @@ mod tests {
             )
             .await
             .unwrap();
-        service.reconcile_living_instrument_with_server(1_700_000_000_000).await.unwrap();
+        service.reconcile_history_data(1_700_000_000_000).await.unwrap();
     }
 
     // 测试目的：验证实时 Binance Spot Kline 根据服务端 instrument ID 映射到本地 ID 后提交批量写入。
@@ -945,7 +1003,7 @@ mod tests {
             interval: HistoryInterval::OneMinute,
             grpc_manager: Arc::new(MockGrpcChannelManagerTrait::new()),
             binary_search: mock_binary_search(),
-            id_maps: Arc::new(RwLock::new(HashMap::from([(42, 7)]))),
+            inst_cache: instrument_cache(Some((42, 7))),
         };
         let entry = HistoryEntry {
             history_type: HistoryType::BinanceSpot as i32,
@@ -997,7 +1055,7 @@ mod tests {
             interval: HistoryInterval::OneMinute,
             grpc_manager: Arc::new(MockGrpcChannelManagerTrait::new()),
             binary_search: mock_binary_search(),
-            id_maps: Arc::new(RwLock::new(HashMap::from([(42, 7)]))),
+            inst_cache: instrument_cache(Some((42, 7))),
         };
         let entry = HistoryEntry {
             history_type: HistoryType::BinanceSwap as i32,
@@ -1032,10 +1090,10 @@ mod tests {
     async fn funding_rate_insert_history_resolves_local_instrument_id() {
         let mut repository = MockClientBinanceRepositoryTrait::new();
         repository
-            .expect_find_instrument_id_by_server_id()
+            .expect_find_instrument_by_server_id()
             .with(mockall::predicate::eq(42))
             .times(1)
-            .returning(|_| Ok(Some(7)));
+            .returning(|_| Ok(Some(local_instrument(42, 7))));
         let mut batch_insert = MockPostgresqlBatchInsertTrait::<LocalBinanceFundingRatePo>::new();
         batch_insert
             .expect_insert_data()
@@ -1054,7 +1112,7 @@ mod tests {
             interval: HistoryInterval::OneHour,
             grpc_manager: Arc::new(MockGrpcChannelManagerTrait::new()),
             binary_search: mock_binary_search(),
-            id_maps: Arc::new(RwLock::new(HashMap::new())),
+            inst_cache: instrument_cache(None),
         };
         let entry = HistoryEntry {
             history_type: HistoryType::BinanceSwapFundingRate as i32,
@@ -1153,10 +1211,10 @@ mod tests {
             interval,
             grpc_manager: Arc::new(grpc_manager),
             binary_search: Arc::new(binary_search),
-            id_maps: Arc::new(RwLock::new(HashMap::from([(42, 7)]))),
+            inst_cache: instrument_cache(Some((42, 7))),
         };
 
-        service.reconcile_living_instrument_with_server(end_timestamp).await.unwrap();
+        service.reconcile_history_data(end_timestamp).await.unwrap();
     }
 
     // 测试目的：验证 Binance Spot Trade 实时历史使用缓存的服务端到本地 instrument ID 映射。
@@ -1180,7 +1238,7 @@ mod tests {
         let service = BinanceSpotTradeClientHistoryService {
             history_batch_insert: Arc::new(batch_insert),
             repository: Arc::new(repository),
-            id_maps: Arc::new(RwLock::new(HashMap::from([(42, 7)]))),
+            inst_cache: instrument_cache(Some((42, 7))),
         };
         service
             .insert_history(HistoryEntry {
@@ -1202,6 +1260,197 @@ mod tests {
             .unwrap();
     }
 
+    // 测试目的：验证服务端缺少的 Binance instrument 会被创建并写入共享缓存。
+    // 准备数据/过程：缓存中不含 server ID 42，并 mock 创建操作返回本地 ID 7。
+    // 预期结果：创建内容保留服务端字段，缓存记录 server ID 42 到本地 ID 7 的 instrument。
+    #[tokio::test]
+    async fn reconcile_instrument_creates_missing_instrument_and_caches_it() {
+        let mut repository = MockClientBinanceRepositoryTrait::new();
+        repository.expect_find_instrument_by_server_id().times(0);
+        repository
+            .expect_create_instrument()
+            .withf(|instrument| {
+                instrument.server_id == 42 && instrument.symbol == "BTCUSDT" && instrument.status == "TRADING" && instrument.symbol_type == "SPOT"
+            })
+            .times(1)
+            .returning(|_| Ok(7));
+        repository.expect_update_instrument().times(0);
+
+        let cache = instrument_cache(None);
+        let service = BinanceSpotClientInstrumentService {
+            history_services: HashMap::new(),
+            inst_cache: cache.clone(),
+            repository: Arc::new(repository),
+        };
+
+        service.reconcile_instrument(server_instrument()).await.unwrap();
+
+        let cached = cache.read().await.get(&42).cloned().unwrap();
+        assert_eq!(cached.id, 7);
+        assert_eq!(cached.symbol, "BTCUSDT");
+    }
+
+    // 测试目的：验证新建的非交易中 Binance instrument 不会进入共享缓存。
+    // 准备数据/过程：提交状态为 BREAK 的 instrument，并 mock 创建操作返回本地 ID 7。
+    // 预期结果：instrument 成功写入 repository，但 server ID 42 不在缓存中。
+    #[tokio::test]
+    async fn reconcile_instrument_does_not_cache_non_trading_instrument() {
+        let mut repository = MockClientBinanceRepositoryTrait::new();
+        repository.expect_find_instrument_by_server_id().times(0);
+        repository
+            .expect_create_instrument()
+            .withf(|instrument| instrument.server_id == 42 && instrument.status == "BREAK")
+            .times(1)
+            .returning(|_| Ok(7));
+        repository.expect_update_instrument().times(0);
+        let cache = instrument_cache(None);
+        let service = BinanceSpotClientInstrumentService {
+            history_services: HashMap::new(),
+            inst_cache: cache.clone(),
+            repository: Arc::new(repository),
+        };
+        let mut instrument = server_instrument();
+        if let Some(instrument::Payload::Binance(binance_instrument)) = instrument.payload.as_mut() {
+            binance_instrument.status = "BREAK".to_string();
+        }
+
+        service.reconcile_instrument(instrument).await.unwrap();
+
+        assert!(!cache.read().await.contains_key(&42));
+    }
+
+    // 测试目的：验证本地 Binance instrument 字段一致时不执行数据库写入。
+    // 准备数据/过程：预热与服务端 instrument 完全一致的缓存，并禁止调用 repository 查询、创建或更新。
+    // 预期结果：对账成功且本地 instrument ID 和字段保持不变。
+    #[tokio::test]
+    async fn reconcile_instrument_skips_write_when_cached_instrument_matches() {
+        let mut repository = MockClientBinanceRepositoryTrait::new();
+        repository.expect_find_instrument_by_server_id().times(0);
+        repository.expect_create_instrument().times(0);
+        repository.expect_update_instrument().times(0);
+        let cache = instrument_cache(Some((42, 7)));
+        let service = BinanceSpotClientInstrumentService {
+            history_services: HashMap::new(),
+            inst_cache: cache.clone(),
+            repository: Arc::new(repository),
+        };
+
+        service.reconcile_instrument(server_instrument()).await.unwrap();
+
+        let cached = cache.read().await.get(&42).cloned().unwrap();
+        assert_eq!(cached.id, 7);
+        assert_eq!(cached.status, "TRADING");
+    }
+
+    // 测试目的：验证发现 Binance instrument 字段变化时保留本地 ID、更新数据库并刷新缓存。
+    // 准备数据/过程：缓存中预置状态为 BREAK 的本地 instrument，服务端状态为 TRADING，并校验更新 PO。
+    // 预期结果：update 被调用一次，且缓存包含更新后的字段和原本地 ID。
+    #[tokio::test]
+    async fn reconcile_instrument_updates_changed_instrument() {
+        let mut cached = local_instrument(42, 7);
+        cached.status = "BREAK".to_string();
+        let mut repository = MockClientBinanceRepositoryTrait::new();
+        repository.expect_find_instrument_by_server_id().times(0);
+        repository
+            .expect_update_instrument()
+            .withf(|instrument| instrument.id == 7 && instrument.server_id == 42 && instrument.status == "TRADING")
+            .times(1)
+            .returning(|_| Ok(()));
+        repository.expect_create_instrument().times(0);
+
+        let cache = Arc::new(RwLock::new(HashMap::from([(42, cached)])));
+        let service = BinanceSpotClientInstrumentService {
+            history_services: HashMap::new(),
+            inst_cache: cache.clone(),
+            repository: Arc::new(repository),
+        };
+
+        service.reconcile_instrument(server_instrument()).await.unwrap();
+
+        let cached = cache.read().await.get(&42).cloned().unwrap();
+        assert_eq!(cached.id, 7);
+        assert_eq!(cached.status, "TRADING");
+    }
+
+    // 测试目的：验证缓存中的 Binance instrument 变为非交易状态后会从共享缓存移除。
+    // 准备数据/过程：预置交易中 instrument，并提交状态为 BREAK 的服务端 instrument。
+    // 预期结果：repository 更新一次，且 server ID 42 从缓存中移除。
+    #[tokio::test]
+    async fn reconcile_instrument_removes_non_trading_instrument_from_cache() {
+        let mut repository = MockClientBinanceRepositoryTrait::new();
+        repository.expect_find_instrument_by_server_id().times(0);
+        repository
+            .expect_update_instrument()
+            .withf(|instrument| instrument.id == 7 && instrument.server_id == 42 && instrument.status == "BREAK")
+            .times(1)
+            .returning(|_| Ok(()));
+        repository.expect_create_instrument().times(0);
+        let cache = instrument_cache(Some((42, 7)));
+        let service = BinanceSpotClientInstrumentService {
+            history_services: HashMap::new(),
+            inst_cache: cache.clone(),
+            repository: Arc::new(repository),
+        };
+        let mut instrument = server_instrument();
+        if let Some(instrument::Payload::Binance(binance_instrument)) = instrument.payload.as_mut() {
+            binance_instrument.status = "BREAK".to_string();
+        }
+
+        service.reconcile_instrument(instrument).await.unwrap();
+
+        assert!(!cache.read().await.contains_key(&42));
+    }
+
+    // 测试目的：验证其他交易所的 instrument 不会进入 Binance instrument 对账流程。
+    // 准备数据/过程：将 Binance instrument 的 instrument_type 改为 OKX，并配置 repository 无可调用操作。
+    // 预期结果：返回 exchange 校验错误，且 repository 不被访问。
+    #[tokio::test]
+    async fn reconcile_instrument_rejects_another_exchange() {
+        let mut repository = MockClientBinanceRepositoryTrait::new();
+        repository.expect_find_instrument_by_server_id().times(0);
+        repository.expect_create_instrument().times(0);
+        repository.expect_update_instrument().times(0);
+        let service = BinanceSpotClientInstrumentService {
+            history_services: HashMap::new(),
+            inst_cache: instrument_cache(None),
+            repository: Arc::new(repository),
+        };
+        let mut instrument = server_instrument();
+        instrument.instrument_type = InstrumentType::Okx as i32;
+
+        let error = service.reconcile_instrument(instrument).await.unwrap_err();
+
+        assert!(error.to_string().contains("exchange is not Binance"));
+    }
+
+    // 测试目的：验证缺失 Binance payload 或不支持的 symbol type 会被明确拒绝。
+    // 准备数据/过程：分别提交 payload 为空和 symbol_type 为 OPTION 的 instrument，并禁止 repository 调用。
+    // 预期结果：两个请求均返回对应校验错误，不读写本地 instrument。
+    #[tokio::test]
+    async fn reconcile_instrument_rejects_invalid_payload_and_symbol_type() {
+        let mut repository = MockClientBinanceRepositoryTrait::new();
+        repository.expect_find_instrument_by_server_id().times(0);
+        repository.expect_create_instrument().times(0);
+        repository.expect_update_instrument().times(0);
+        let service = BinanceSpotClientInstrumentService {
+            history_services: HashMap::new(),
+            inst_cache: instrument_cache(None),
+            repository: Arc::new(repository),
+        };
+        let mut missing_payload = server_instrument();
+        missing_payload.payload = None;
+        let mut unsupported_symbol = server_instrument();
+        if let Some(instrument::Payload::Binance(binance_instrument)) = unsupported_symbol.payload.as_mut() {
+            binance_instrument.symbol_type = "OPTION".to_string();
+        }
+
+        let payload_error = service.reconcile_instrument(missing_payload).await.unwrap_err();
+        let symbol_type_error = service.reconcile_instrument(unsupported_symbol).await.unwrap_err();
+
+        assert!(payload_error.to_string().contains("payload is not Binance"));
+        assert!(symbol_type_error.to_string().contains("unsupported Binance instrument symbol type"));
+    }
+
     // 测试目的：验证 Binance Swap instrument 被路由到 Swap history service，而不误调 Spot service。
     // 准备数据/过程：仅注册 Swap mock service，并向 instrument service 提交 symbol_type 为 SWAP 的 Binance instrument。
     // 预期结果：Swap service 收到一次该 instrument，调用成功。
@@ -1221,6 +1470,8 @@ mod tests {
         let swap_history_service: ClientHistoryService = Arc::new(swap_history_service);
         let service = BinanceSpotClientInstrumentService {
             history_services: HashMap::from([(HistoryType::BinanceSwap, swap_history_service)]),
+            inst_cache: instrument_cache(None),
+            repository: Arc::new(MockClientBinanceRepositoryTrait::new()),
         };
         let instrument = Instrument {
             instrument_type: InstrumentType::Binance as i32,
@@ -1270,6 +1521,8 @@ mod tests {
                 (HistoryType::BinanceSpot, Arc::new(kline_service) as ClientHistoryService),
                 (HistoryType::BinanceTrade, Arc::new(trade_service) as ClientHistoryService),
             ]),
+            inst_cache: instrument_cache(None),
+            repository: Arc::new(MockClientBinanceRepositoryTrait::new()),
         };
         let instrument = Instrument {
             instrument_type: InstrumentType::Binance as i32,

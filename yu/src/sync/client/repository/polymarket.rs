@@ -25,7 +25,9 @@ pub trait ClientPolyMarketRepositoryTrait {
         Ok(map)
     }
     /// Insert a new asset info into polymarket_assert_info table.
-    async fn create_instruments(&self, po: LocalPolyMarketInstrumentPo) -> Result<(), YuError>;
+    async fn create_instruments(&self, po: LocalPolyMarketInstrumentPo) -> Result<u64, YuError>;
+
+    async fn update_instrument(&self, po: LocalPolyMarketInstrumentPo) -> Result<(), YuError>;
 
     async fn find_instrument_by_server_id(&self, server_id: u64) -> Result<Option<LocalPolyMarketInstrumentPo>, YuError>;
 
@@ -86,13 +88,29 @@ impl ClientPolyMarketRepositoryTrait for ClientPolyMarketRepositoryImpl {
         Ok(map)
     }
 
-    async fn create_instruments(&self, po: LocalPolyMarketInstrumentPo) -> Result<(), YuError> {
+    async fn create_instruments(&self, po: LocalPolyMarketInstrumentPo) -> Result<u64, YuError> {
         let sql = r#"INSERT INTO polymarket_instruments (id, server_id, series_id, series_slug, event_id, event_slug, market_id, market_slug, assert_id, assert_slug, start_ms, end_ms)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT (id) DO NOTHING"#;
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+            ON CONFLICT (assert_id) DO UPDATE SET
+                server_id = EXCLUDED.server_id,
+                series_id = EXCLUDED.series_id,
+                series_slug = EXCLUDED.series_slug,
+                event_id = EXCLUDED.event_id,
+                event_slug = EXCLUDED.event_slug,
+                market_id = EXCLUDED.market_id,
+                market_slug = EXCLUDED.market_slug,
+                assert_slug = EXCLUDED.assert_slug,
+                start_ms = EXCLUDED.start_ms,
+                end_ms = EXCLUDED.end_ms
+            RETURNING id"#;
 
-        sqlx::query(sql)
-            .bind(po.id as i64)
-            .bind(po.server_id as i64)
+        let id = i64::try_from(po.id).map_err(|_| YuError::new("local Polymarket instrument ID exceeds BIGINT range"))?;
+        let server_id = i64::try_from(po.server_id).map_err(|_| YuError::new("Polymarket server instrument ID exceeds BIGINT range"))?;
+        let start_ms = i64::try_from(po.start_ms).map_err(|_| YuError::new("Polymarket start time exceeds BIGINT range"))?;
+        let end_ms = i64::try_from(po.end_ms).map_err(|_| YuError::new("Polymarket end time exceeds BIGINT range"))?;
+        let inserted_id: i64 = sqlx::query_scalar(sql)
+            .bind(id)
+            .bind(server_id)
             .bind(&po.series_id)
             .bind(&po.series_slug)
             .bind(&po.event_id)
@@ -101,11 +119,45 @@ impl ClientPolyMarketRepositoryTrait for ClientPolyMarketRepositoryImpl {
             .bind(&po.market_slug)
             .bind(&po.assert_id)
             .bind(&po.assert_slug)
-            .bind(po.start_ms as i64)
-            .bind(po.end_ms as i64)
-            .execute(&self.pg_pool)
+            .bind(start_ms)
+            .bind(end_ms)
+            .fetch_one(&self.pg_pool)
             .await?;
 
+        u64::try_from(inserted_id).map_err(|_| YuError::new("negative local Polymarket instrument ID"))
+    }
+
+    async fn update_instrument(&self, po: LocalPolyMarketInstrumentPo) -> Result<(), YuError> {
+        let id = i64::try_from(po.id).map_err(|_| YuError::new("local Polymarket instrument ID exceeds BIGINT range"))?;
+        let server_id = i64::try_from(po.server_id).map_err(|_| YuError::new("Polymarket server instrument ID exceeds BIGINT range"))?;
+        let start_ms = i64::try_from(po.start_ms).map_err(|_| YuError::new("Polymarket start time exceeds BIGINT range"))?;
+        let end_ms = i64::try_from(po.end_ms).map_err(|_| YuError::new("Polymarket end time exceeds BIGINT range"))?;
+        let result = sqlx::query(
+            r#"
+            UPDATE polymarket_instruments
+            SET series_id = $1, series_slug = $2, event_id = $3, event_slug = $4, market_id = $5,
+                market_slug = $6, assert_id = $7, assert_slug = $8, start_ms = $9, end_ms = $10
+            WHERE server_id = $11 AND id = $12
+            "#,
+        )
+        .bind(po.series_id)
+        .bind(po.series_slug)
+        .bind(po.event_id)
+        .bind(po.event_slug)
+        .bind(po.market_id)
+        .bind(po.market_slug)
+        .bind(po.assert_id)
+        .bind(po.assert_slug)
+        .bind(start_ms)
+        .bind(end_ms)
+        .bind(server_id)
+        .bind(id)
+        .execute(&self.pg_pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(YuError::new("Polymarket instrument disappeared during reconciliation"));
+        }
         Ok(())
     }
 
