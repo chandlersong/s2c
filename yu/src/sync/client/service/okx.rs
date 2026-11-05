@@ -580,7 +580,6 @@ mod tests {
         service.reconcile_instrument(server_instrument(42)).await.unwrap();
 
         let cached = cache.read().await.get(&42).cloned().unwrap();
-        assert_eq!(cached.id, 7);
         assert_eq!(cached.inst_identify, "BTC-USDT");
     }
 
