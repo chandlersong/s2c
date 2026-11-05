@@ -634,13 +634,8 @@ impl ClientHistoryServiceTrait for BinanceSpotKlineClientHistoryService {
             if !instrument.status.eq_ignore_ascii_case("TRADING") {
                 continue;
             }
-            let Some(on_board_time) = instrument.on_board_time else {
-                debug!(
-                    "Binance spot instrument {} has no listing time; skipping history reconciliation",
-                    instrument.server_id
-                );
-                continue;
-            };
+            // FUTURE: 以后通过获取服务器端的时间来确定。现在不存在，为0
+            let on_board_time = instrument.on_board_time.unwrap_or_else(|| DEFAULT_START_TIMESTAMP);
             let start_timestamp = self.first_candle_timestamp(on_board_time);
             let gaps = binary_search_gap(
                 &instrument.server_id.to_string(),
