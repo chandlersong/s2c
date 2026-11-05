@@ -800,7 +800,8 @@ impl SyncHistoryServiceTrait for BinanceSwapFundingRateSyncHistoryService {
 
     async fn sync_all(&self) -> Result<(), YuError> {
         let interval = HistoryInterval::OneHour;
-        let start = interval.get_now_close_unix_ms_utc() - interval.to_milliseconds() + 1;
+        //因为时间并不是严格对齐的，所以这里需要多加5分钟，以免和之前数据对冲
+        let start = interval.get_now_close_unix_ms_utc() - interval.to_milliseconds() + 5 * 60 * 1000;
         let end = interval.get_now_close_unix_ms_utc() + 30 * 1000;
         let instruments = self.inst_provider.instruments(None);
         for instrument in instruments {
