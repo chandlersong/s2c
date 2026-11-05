@@ -772,7 +772,7 @@ impl SyncHistoryServiceTrait for BinanceSwapFundingRateSyncHistoryService {
         let start = interval.get_close_unix_ms(unix_time_now_u64_utc() - self.data_retention_ms);
         let instruments = self.inst_provider.instruments(None);
         let total = instruments.len();
-        let end = interval.get_close_unix_ms(end_ms.unwrap_or_else(|| unix_time_now_u64_utc()));
+        let end = interval.get_close_unix_ms(end_ms.unwrap_or_else(|| unix_time_now_u64_utc())) + 1;
         let mut last_progress_log = tokio::time::Instant::now();
         let mut completed = 0;
         let latest_timestamps = self.funding_rate_repo.inst_id_with_lastest_timestamp_before(end).await?;
