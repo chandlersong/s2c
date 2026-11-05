@@ -32,7 +32,7 @@ pub async fn start_okx_sync_server_job(app_config: &AppConfig, history_tx: mpsc:
         OkxSyncOptionSummaryHistoryService::for_production(history_tx.clone(), okx_option_service.clone(), get_default_option_summary_repo(None));
 
     let check_history_job = history_service.clone();
-    let _ = cron_job!("0 17 */6 * * *", move |_uuid, _locked| {
+    let _ = cron_job!("0 45 * * * *", move |_uuid, _locked| {
         let each_sync = check_history_job.clone();
         Box::pin(async move {
             debug!("start checking OKX kline history");
