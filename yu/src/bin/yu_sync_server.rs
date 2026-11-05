@@ -63,8 +63,6 @@ async fn main() -> Result<(), YuError> {
     }
 
     let polymarket_config = &app_config.polymarket;
-    //TODO: 重构完成后，放入后面的括号中
-
     if polymarket_config.as_ref().is_some_and(|config| config.enable()) {
         let polymarket_instrument_service = start_polymarket_sync_series_job(&app_config, history_tx.clone()).await?;
         instrument_services.push(polymarket_instrument_service);

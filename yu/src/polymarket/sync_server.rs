@@ -520,8 +520,8 @@ impl SyncHistoryServiceTrait for PolyMarketSyncHistoryService {
     /// 2. 如果没有，就取polymarket_instruments中的start_ms
     ///
     async fn initial_history_data(&self, end_ms: Option<u64>) -> Result<(), YuError> {
-        let end = end_ms.unwrap_or_else(|| self.interval.get_now_close_unix_ms_utc());
-        let now = self.interval.get_close_unix_sec(end);
+        let end_sec = end_ms.unwrap_or_else(|| self.interval.get_now_close_unix_ms_utc()).saturating_add(1000);
+        let now_sec = self.interval.get_close_unix_sec(end_sec);
         let fidelity = self.interval.to_second() / 60;
         info!("start to initial polymarket history data");
         let max_timestamp_dictionary = self.history_repo.max_timestamp_group_by_inst_id().await?;
@@ -535,14 +535,14 @@ impl SyncHistoryServiceTrait for PolyMarketSyncHistoryService {
                 }
                 Some(v) => v.saturating_div(1000).saturating_add(120),
             };
-            if (start_ts >= now) || ((now - start_ts) < gap) {
+            if (start_ts >= now_sec) || ((now_sec - start_ts) < gap) {
                 continue;
             }
 
             let query_param = GetPricesHistoryQuery {
                 market: instrument.asset_id.clone(),
                 start_ts: Some(start_ts),
-                end_ts: Some(now.clone() + 120),
+                end_ts: Some(now_sec + 120),
                 interval: Some(self.interval.clone()),
                 fidelity: Some(fidelity.clone() as u32),
             };

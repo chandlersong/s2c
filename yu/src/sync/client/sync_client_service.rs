@@ -339,7 +339,7 @@ mod tests {
             Ok(())
         }
 
-        async fn reconcile_instrument(&self, instrument: Instrument) -> Result<(), YuError> {
+        async fn reconcile_instrument(&self, _instrument: Instrument) -> Result<(), YuError> {
             todo!()
         }
 
