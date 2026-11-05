@@ -568,7 +568,7 @@ impl FundingRatePo {
             id,
             inst_id,
             funding_rate: source.funding_rate,
-            funding_time,
+            funding_time: source.funding_time,
             mark_price: source.mark_price,
         }
     }
