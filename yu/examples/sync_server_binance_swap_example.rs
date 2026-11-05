@@ -76,7 +76,7 @@ async fn main() -> Result<(), YuError> {
     )
     .await?;
     history_service.initial_history_data(None).await?;
-    history_service.check_history_data().await?;
+    history_service.check_history_data(None).await?;
     history_service.sync_all().await?;
     info!("Binance Swap sync services started; press Ctrl+C to stop");
     tokio::signal::ctrl_c()

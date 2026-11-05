@@ -59,7 +59,7 @@ pub async fn start_polymarket_sync_series_job(
         Box::pin(async move {
             //TODO: 正常后，改成debug level
             info!("start check polymarket history data");
-            if let Err(e) = each_sync.check_history_data().await {
+            if let Err(e) = each_sync.check_history_data(None).await {
                 error!("Error when check polymarket history data: {}", e);
             }
             info!("finish check polymarket history data");

@@ -160,22 +160,27 @@ pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: m
     info!("start initial Binance Swap funding rate history data");
     funding_rate_history_service.initial_history_data(Some(start_initial_ms)).await?;
     info!("started checking Binance Spot kline history data");
-    history_service.check_history_data().await?;
+    history_service.check_history_data(None).await?;
     info!("started checking Binance Swap kline history data");
-    swap_history_service.check_history_data().await?;
+    swap_history_service.check_history_data(None).await?;
 
     let check_history_job = history_service.clone();
     let check_swap_history_job = swap_history_service.clone();
+    let funding_rate_history_check = funding_rate_history_service.clone();
     let _ = cron_job!("0 23 */6 * * *", move |_uuid, _locked| {
         let each_spot_sync = check_history_job.clone();
         let each_swap_sync = check_swap_history_job.clone();
+        let each_fuding_rate_sync = funding_rate_history_check.clone();
         Box::pin(async move {
             debug!("start checking Binance Spot and Swap kline history");
-            if let Err(error) = each_spot_sync.check_history_data().await {
+            if let Err(error) = each_spot_sync.check_history_data(None).await {
                 error!("failed to check Binance Spotkline history: {}", error);
             }
-            if let Err(error) = each_swap_sync.check_history_data().await {
+            if let Err(error) = each_swap_sync.check_history_data(None).await {
                 error!("failed to check Binance Swap kline history: {}", error);
+            }
+            if let Err(error) = each_fuding_rate_sync.check_history_data(Some(unix_time_now_u64_utc())).await {
+                error!("failed to check Binance Swap funding rate history: {}", error);
             }
             debug!("finished checking Binance Spot and Swap kline history");
         })
@@ -192,16 +197,6 @@ pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: m
             }
         })
     });
-    let funding_rate_history_check = funding_rate_history_service.clone();
-    let _ = cron_job!("37 12 */6 * * *", move |_uuid, _locked| {
-        let each_fuding_rate_sync = funding_rate_history_check.clone();
-        Box::pin(async move {
-            debug!("start check Binance Swap funding ");
-            if let Err(error) = each_fuding_rate_sync.check_history_data().await {
-                error!("failed to check Binance Swap funding rate history: {}", error);
-            }
-            debug!("finished check Binance Swap funding ");
-        })
-    });
+
     Ok(instrument_service)
 }

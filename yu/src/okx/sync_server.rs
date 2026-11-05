@@ -7,6 +7,7 @@ use crate::sync::models::grpc_sync::{
 };
 use crate::sync::server::sync_server::{SyncHistoryService, SyncHistoryServiceTrait, SyncInstrumentServiceTrait};
 use async_trait::async_trait;
+use li::tools::time::UnixTimeStamp;
 use li::websocket::connection::MessageHandlerTrait;
 use log::{error, info, trace, warn};
 use std::collections::HashMap;
@@ -237,8 +238,8 @@ impl OkxSyncHistoryService {
         broadcast_kline(&self.history_tx, kline).await;
     }
 
-    pub async fn check_and_broadcast_history(&self) -> Result<(), YuError> {
-        for kline in self.okx_option_service.check_history_data().await? {
+    pub async fn check_and_broadcast_history(&self, end_ms: Option<UnixTimeStamp>) -> Result<(), YuError> {
+        for kline in self.okx_option_service.check_history_data(end_ms).await? {
             self.broadcast_message(kline).await;
         }
         Ok(())
@@ -299,11 +300,11 @@ impl SyncHistoryServiceTrait for OkxSyncHistoryService {
         }
     }
 
-    async fn check_history_data(&self) -> Result<(), YuError> {
-        self.check_and_broadcast_history().await
+    async fn check_history_data(&self, end_ms: Option<UnixTimeStamp>) -> Result<(), YuError> {
+        self.check_and_broadcast_history(end_ms).await
     }
 
-    async fn initial_history_data(&self, end_ms: Option<u64>) -> Result<(), YuError> {
+    async fn initial_history_data(&self, end_ms: Option<UnixTimeStamp>) -> Result<(), YuError> {
         self.okx_option_service.initial_candle(0, None, end_ms).await
     }
 
@@ -390,13 +391,13 @@ impl SyncHistoryServiceTrait for OkxSyncOptionSummaryHistoryService {
         }
     }
 
-    async fn check_history_data(&self) -> Result<(), YuError> {
+    async fn check_history_data(&self, _option: Option<UnixTimeStamp>) -> Result<(), YuError> {
         // OKX exposes current option-summary snapshots but no historical range endpoint to detect or repair gaps.
         log::debug!("skip OKX option summary history validation: historical snapshots are unavailable from the REST API");
         Ok(())
     }
 
-    async fn initial_history_data(&self, _end_ms: Option<u64>) -> Result<(), YuError> {
+    async fn initial_history_data(&self, _end_ms: Option<UnixTimeStamp>) -> Result<(), YuError> {
         // OKX exposes current option-summary snapshots but no historical range endpoint to detect or repair gaps.
         log::debug!("skip OKX option summary history Initial: historical snapshots are unavailable from the REST API");
         Ok(())

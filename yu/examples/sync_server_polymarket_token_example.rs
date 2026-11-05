@@ -60,7 +60,7 @@ async fn main() -> Result<(), YuError> {
     if let Err(e) = token_history.initial_history_data(None).await {
         error!("error initial history data: {}", e)
     }
-    if let Err(e) = token_history.check_history_data().await {
+    if let Err(e) = token_history.check_history_data(None).await {
         error!("error checking history_data: {}", e)
     }
     if let Err(e) = token_history.sync_all().await {

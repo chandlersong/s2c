@@ -8,6 +8,7 @@ use crate::okx::service::OptionService;
 use crate::okx::sync_server::{OkxSyncHistoryService, OkxSyncInstrumentService, OkxSyncKlineHandler, OkxSyncOptionSummaryHistoryService};
 use crate::sync::models::grpc_sync::{HistoryEntry, HistoryType};
 use crate::sync::server::sync_server::{SyncHistoryService, SyncHistoryServiceTrait, SyncInstrumentService, SyncInstrumentServiceTrait};
+use li::tools::time::unix_time_now_u64_utc;
 use log::{debug, error, info};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -35,7 +36,7 @@ pub async fn start_okx_sync_server_job(app_config: &AppConfig, history_tx: mpsc:
         let each_sync = check_history_job.clone();
         Box::pin(async move {
             debug!("start checking OKX kline history");
-            if let Err(error) = each_sync.check_history_data().await {
+            if let Err(error) = each_sync.check_history_data(Some(unix_time_now_u64_utc())).await {
                 error!("failed to check OKX kline history: {}", error);
             }
             debug!("finished checking OKX kline history");

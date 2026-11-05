@@ -16,7 +16,7 @@ use crate::errors::YuError;
 use crate::sync::models::grpc_sync::{HistoryEntry, HistoryType, Instrument, ServerMessage};
 use crate::sync::server::sync_server::{SyncHistoryService, SyncHistoryServiceTrait, SyncInstrumentServiceTrait};
 use async_trait::async_trait;
-use li::tools::time::unix_time_now_u64_utc;
+use li::tools::time::{UnixTimeStamp, unix_time_now_u64_utc};
 use log::{debug, error, info};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -304,9 +304,9 @@ impl SyncHistoryServiceTrait for BinanceSpotSyncHistoryService {
         Ok(())
     }
 
-    async fn check_history_data(&self) -> Result<(), YuError> {
+    async fn check_history_data(&self, end_ms: Option<UnixTimeStamp>) -> Result<(), YuError> {
         let interval = self.interval.clone();
-        let now_ms = interval.get_now_close_unix_ms_utc();
+        let now_ms = end_ms.unwrap_or_else(|| interval.get_now_close_unix_ms_utc());
         let retention_floor = now_ms.saturating_sub(self.data_retention_ms);
         let instruments = self.inst_provider.instruments(None);
         let total = instruments.len();
@@ -488,9 +488,9 @@ impl SyncHistoryServiceTrait for BinanceSwapSyncHistoryService {
         Ok(())
     }
 
-    async fn check_history_data(&self) -> Result<(), YuError> {
+    async fn check_history_data(&self, end_ms: Option<UnixTimeStamp>) -> Result<(), YuError> {
         let interval = self.interval.clone();
-        let now_ms = interval.get_now_close_unix_ms_utc();
+        let now_ms = end_ms.unwrap_or_else(|| interval.get_now_close_unix_ms_utc());
         let retention_floor = now_ms.saturating_sub(self.data_retention_ms);
         let instruments = self.inst_provider.instruments(None);
         let total = instruments.len();
@@ -553,7 +553,7 @@ impl SyncHistoryServiceTrait for BinanceSwapSyncHistoryService {
         Ok(())
     }
 
-    async fn initial_history_data(&self, initial_before_ms: Option<u64>) -> Result<(), YuError> {
+    async fn initial_history_data(&self, initial_before_ms: Option<UnixTimeStamp>) -> Result<(), YuError> {
         let before = initial_before_ms.unwrap_or_else(|| unix_time_now_u64_utc());
         let latest_timestamps = self.kline_repo.inst_id_with_lastest_timestamp_before(before).await?;
         initial_kline(
@@ -695,9 +695,9 @@ impl SyncHistoryServiceTrait for BinanceSwapFundingRateSyncHistoryService {
         Ok(())
     }
 
-    async fn check_history_data(&self) -> Result<(), YuError> {
+    async fn check_history_data(&self, end_ms: Option<UnixTimeStamp>) -> Result<(), YuError> {
         let interval = HistoryInterval::OneHour;
-        let now_ms = unix_time_now_u64_utc();
+        let now_ms = end_ms.unwrap_or_else(|| unix_time_now_u64_utc());
         let retention_floor = now_ms.saturating_sub(self.data_retention_ms);
         let now_ms = interval.get_now_close_unix_ms_utc();
         let trading_instruments = self.inst_provider.instruments(None);
@@ -835,14 +835,14 @@ impl SyncInstrumentServiceTrait for BinanceSyncInstrumentService {
     async fn list_instruments(&self) -> Result<Vec<Instrument>, YuError> {
         let mut instruments = self
             .instrument_repo
-            .get_trading_instrument_by_type(yue::models::InstrumentType::Spot)
+            .get_trading_instrument_by_type(InstrumentType::Spot)
             .await?
             .into_iter()
             .map(BinanceInstrument::into_proto_instrument)
             .collect::<Vec<_>>();
         instruments.extend(
             self.instrument_repo
-                .get_trading_instrument_by_type(yue::models::InstrumentType::Swap)
+                .get_trading_instrument_by_type(InstrumentType::Swap)
                 .await?
                 .into_iter()
                 .map(BinanceInstrument::into_proto_instrument),

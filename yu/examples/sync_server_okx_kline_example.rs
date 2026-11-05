@@ -63,7 +63,7 @@ async fn main() -> Result<(), YuError> {
         error!("failed to initial OKX kline history data: {:?}", e);
         return Err(e);
     }
-    if let Err(error) = kline_history_service.check_history_data().await {
+    if let Err(error) = kline_history_service.check_history_data(None).await {
         error!("failed to check OKX kline history: {}", error);
     }
     drop(instrument_service);

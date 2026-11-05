@@ -35,7 +35,7 @@ async fn main() -> Result<(), YuError> {
         .get(&HistoryType::BinanceSpot)
         .ok_or_else(|| YuError::ConfigError("Binance Spot history service is not registered".to_string()))?;
     history_service.initial_history_data(None).await?;
-    history_service.check_history_data().await?;
+    history_service.check_history_data(None).await?;
     history_service.sync_all().await?;
 
     history_receiver

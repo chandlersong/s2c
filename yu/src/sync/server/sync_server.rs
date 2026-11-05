@@ -3,7 +3,7 @@ use crate::errors::YuError;
 use crate::sync::models::grpc_sync::sync_interface_server::SyncInterface;
 use crate::sync::models::grpc_sync::{Empty, HistoryEntry, HistoryType, Instrument, InstrumentList, ServerMessage, SubscribeRequest, SyncRequest};
 use async_trait::async_trait;
-use li::tools::time::unix_time_now_u64_utc;
+use li::tools::time::{UnixTimeStamp, unix_time_now_u64_utc};
 use log::{debug, error, info, trace};
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -68,7 +68,7 @@ pub trait SyncHistoryServiceTrait {
     ///
     /// 用于检查本地数据与远程数据是否一致，如果不一致，则自动补全数据
     ///
-    async fn check_history_data(&self) -> Result<(), YuError>;
+    async fn check_history_data(&self, end_ms: Option<UnixTimeStamp>) -> Result<(), YuError>;
 
     ///
     /// 服务器启动时，比较本地数据和服务器的数据的差异，然后补全差异数据
@@ -421,11 +421,11 @@ mod tests {
             Ok(())
         }
 
-        async fn check_history_data(&self) -> Result<(), YuError> {
+        async fn check_history_data(&self, _: Option<UnixTimeStamp>) -> Result<(), YuError> {
             todo!()
         }
 
-        async fn initial_history_data(&self, _: Option<u64>) -> Result<(), YuError> {
+        async fn initial_history_data(&self, _: Option<UnixTimeStamp>) -> Result<(), YuError> {
             todo!()
         }
 

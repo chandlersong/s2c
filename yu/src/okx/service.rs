@@ -13,7 +13,7 @@ use crate::okx::duckdb_repository::{
 use async_trait::async_trait;
 use futures::stream::StreamExt;
 use governor::Jitter;
-use li::tools::time::{UnixTimeStamp, unix_2_readable};
+use li::tools::time::{UnixTimeStamp, unix_2_readable, unix_time_now_u64_utc};
 use li::websocket::connection::{
     CommandMessage, ConnectionAction, ConnectionConfig, MessageHandlerTrait, ShareMessageHandler, ToServerMessage, WebSocketConnection,
     WebSocketInterface,
@@ -701,14 +701,14 @@ impl OptionService {
         Ok(())
     }
 
-    pub(crate) async fn check_history_data(&self) -> Result<Vec<OkxKlinePo>, YuError> {
+    pub(crate) async fn check_history_data(&self, end_ms: Option<UnixTimeStamp>) -> Result<Vec<OkxKlinePo>, YuError> {
         let binary_search_ds = DuckDBBinarySearchDataImpl::new(
             self.okx_sync.get_kline_repo().get_db_provider(),
             OkxTables::Kline.table_name(),
             "timestamp".to_string(),
             "inst_id".to_string(),
         );
-        let now_ms = self.interval.get_now_close_unix_ms_utc();
+        let now_ms = self.interval.get_close_unix_ms(end_ms.unwrap_or_else(|| unix_time_now_u64_utc()));
         let interval_ms = self.interval.to_milliseconds();
         let mut repaired_history = Vec::new();
         let instruments = {

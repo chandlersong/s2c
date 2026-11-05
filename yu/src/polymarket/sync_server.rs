@@ -10,7 +10,7 @@ use crate::sync::models::grpc_sync::{
 };
 use crate::sync::server::sync_server::{SyncHistoryService, SyncHistoryServiceTrait, SyncInstrumentService, SyncInstrumentServiceTrait};
 use async_trait::async_trait;
-use li::tools::time::{unix_2_readable, unix_time_now_u64_utc, unix_time_now_u64_utc_seconds};
+use li::tools::time::{UnixTimeStamp, unix_2_readable, unix_time_now_u64_utc, unix_time_now_u64_utc_seconds};
 use log::{Level, debug, error, info, trace};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -442,14 +442,14 @@ impl SyncHistoryServiceTrait for PolyMarketSyncHistoryService {
     /// FUTURE：
     /// 1. polymarket的数据本来就不完整。所以造成检查的时候，会反复拉取
     ///
-    async fn check_history_data(&self) -> Result<(), YuError> {
+    async fn check_history_data(&self, end_ms: Option<UnixTimeStamp>) -> Result<(), YuError> {
         let binary_search_ds = DuckDBBinarySearchDataImpl::new(
             self.history_repo.get_db_provider(),
             PolyMarketTables::PriceHistory.table_name(),
             "timestamp".to_string(),
             "instrument_id".to_string(),
         );
-        let now_ms = self.interval.get_now_close_unix_ms_utc();
+        let now_ms = self.interval.get_close_unix_ms(end_ms.unwrap_or_else(|| unix_time_now_u64_utc()));
         let interval_ms = self.interval.to_milliseconds();
         for instrument in self.live_instruments.read().await.iter() {
             //因为第一个时间点，应该是没有的。所以直接跳过。
