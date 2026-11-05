@@ -561,7 +561,8 @@ impl FundingRatePo {
         }
     }
 
-    pub fn from_funding_rate(source: FundingRate, inst_id: u64, funding_time: UnixTimeStamp) -> Self {
+    //FUTURE：以后使用_funding_time
+    pub fn from_funding_rate(source: FundingRate, inst_id: u64, _funding_time: UnixTimeStamp) -> Self {
         let snow_flake = SnowyFlakeWrapper::new();
         let id = snow_flake.next_id_u64() as i64;
         FundingRatePo {
