@@ -4,4 +4,5 @@ pub mod bn_restful_commands;
 pub mod restful_func;
 
 pub mod http_client;
+pub mod option_api;
 pub mod order_book;

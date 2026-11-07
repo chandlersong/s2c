@@ -1,4 +1,5 @@
 pub mod common;
+pub mod option_restful;
 pub mod portfolio_account_websocket;
 pub mod prototype;
 pub mod spot_restful;
