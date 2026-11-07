@@ -1,8 +1,9 @@
 use hmac::digest::InvalidLength;
+use li::errors::LiError;
 use thiserror::Error;
 
 // 将外部不可克隆的 error 类型转换为 String 存储，以便整个枚举可派生 Clone
-#[derive(Error, Debug, Clone)]
+#[derive(Error, Debug)]
 pub enum YueError {
     #[error("Request error: code={code:?}, body={body:?}")]
     ExchangeRequestError { code: u16, body: String },
@@ -60,5 +61,11 @@ impl From<std::io::Error> for YueError {
 impl From<InvalidLength> for YueError {
     fn from(e: InvalidLength) -> Self {
         YueError::InvalidKeyLength(e.to_string())
+    }
+}
+
+impl From<LiError> for YueError {
+    fn from(e: LiError) -> Self {
+        YueError::CustomError(e.to_string())
     }
 }

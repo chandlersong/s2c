@@ -1,4 +1,3 @@
-use crate::binance::bn_models::common::SymbolInfoTrait;
 use crate::binance::bn_models::spot_restful::RateLimit;
 use crate::models::Decimal;
 use crate::tools::{string_to_decimal, string_to_option_decimal};
@@ -81,6 +80,12 @@ pub struct OptionExchangeInfo {
     pub rate_limits: Vec<RateLimit>,
 }
 
+impl OptionExchangeInfo {
+    pub fn get_request_weight_limit(&self) -> Option<&RateLimit> {
+        self.rate_limits.iter().find(|rl| rl.rate_limit_type == "REQUEST_WEIGHT")
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct OptionContract {
     #[serde(rename = "baseAsset")]
@@ -91,6 +96,8 @@ pub struct OptionContract {
     pub underlying: String,
     #[serde(rename = "settleAsset")]
     pub settle_asset: String,
+    #[serde(rename = "nakedSell")]
+    pub naked_sell: Option<bool>, // 可选字段，表示是否允许裸卖空
 }
 
 #[derive(Debug, Deserialize)]
@@ -140,40 +147,9 @@ pub struct OptionSymbol {
     #[serde(rename = "underlyingType")]
     pub underlying_type: String,
     #[serde(rename = "nakedSell")]
-    pub naked_sell: bool,
+    pub naked_sell: Option<bool>,
     #[serde(rename = "status")]
     pub status: String,
-}
-
-impl SymbolInfoTrait for OptionSymbol {
-    fn symbol(&self) -> &str {
-        &self.symbol
-    }
-
-    fn status(&self) -> &str {
-        &self.status
-    }
-
-    fn base_asset(&self) -> &str {
-        self.underlying.strip_suffix(&self.quote_asset).unwrap_or(&self.underlying)
-    }
-
-    fn quote_asset(&self) -> &str {
-        &self.quote_asset
-    }
-
-    fn order_types(&self) -> &Vec<String> {
-        static EMPTY_ORDER_TYPES: Vec<String> = Vec::new();
-        &EMPTY_ORDER_TYPES
-    }
-
-    fn quote_precision(&self) -> i32 {
-        self.price_scale
-    }
-
-    fn symbol_type(&self) -> &str {
-        &self.contract_type
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -241,7 +217,6 @@ pub struct OptionMarketPrice {
 #[cfg(test)]
 mod tests {
     use super::{OptionExchangeInfo, OptionMarketPrice};
-    use crate::binance::bn_models::common::SymbolInfoTrait;
     use crate::models::Decimal;
 
     // 测试目的：验证期权交易所信息字段映射、Decimal 转换，以及 OptionSymbol 的 SymbolInfoTrait 映射。
@@ -311,16 +286,8 @@ mod tests {
         assert_eq!(symbol.quote_asset, "USDT");
         assert_eq!(symbol.contract_type, "CRYPTO_OPTIONS");
         assert_eq!(symbol.underlying_type, "CRYPTO");
-        assert!(!symbol.naked_sell);
+        assert!(!symbol.naked_sell.unwrap_or(false));
         assert_eq!(symbol.status, "TRADING");
-        assert_eq!(symbol.symbol(), "BTC-220815-50000-C");
-        assert_eq!(symbol.status(), "TRADING");
-        assert_eq!(symbol.base_asset(), "BTC");
-        assert_eq!(symbol.quote_asset(), "USDT");
-        assert!(symbol.order_types().is_empty());
-        assert_eq!(symbol.quote_precision(), 2);
-        assert_eq!(symbol.symbol_type(), "CRYPTO_OPTIONS");
-        assert_eq!(symbol.get_on_board_time(), None);
         assert_eq!(symbol.filters[0].filter_type, "PRICE_FILTER");
         assert_eq!(symbol.filters[0].min_price, Some(Decimal::new(2, 2)));
         assert_eq!(symbol.filters[0].max_price, Some(Decimal::new(8000001, 2)));

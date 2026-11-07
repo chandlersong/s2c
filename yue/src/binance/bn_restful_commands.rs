@@ -17,6 +17,8 @@ pub static SPOT_RATE_PER_MINUTE: u32 = 2000;
 pub static SWAP_LIMITER_PER_MINUTE: u32 = 2000;
 pub static SWAP_FUNDING_PER_MINUTE: u32 = 90;
 
+pub static OPTION_LIMITER_PER_MINUTE: u32 = 400;
+
 //已知最大的token是获取盘后深度的50
 pub static BURST_NUM: u32 = 58;
 #[cfg(not(any(feature = "binance-testnet", test)))]
@@ -109,6 +111,33 @@ pub const BINANCE_PAPI_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
     ))
 });
 
+#[cfg(not(any(feature = "binance-testnet", test)))]
+pub const BINANCE_OPTION_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
+    Arc::new(HostInfo::new(
+        "https://eapi.binance.com",
+        OPTION_LIMITER_PER_MINUTE,
+        create_share_rate_limiter(OPTION_LIMITER_PER_MINUTE, Some(39)),
+    ))
+});
+
+#[cfg(all(feature = "binance-testnet", not(test)))]
+pub const BINANCE_OPTION_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
+    Arc::new(HostInfo::new(
+        "https://testnet.binancefuture.com",
+        OPTION_LIMITER_PER_MINUTE,
+        create_share_rate_limiter(OPTION_LIMITER_PER_MINUTE, Some(39)),
+    ))
+});
+
+#[cfg(test)]
+pub const BINANCE_OPTION_BASE: LazyLock<Arc<HostInfo>> = LazyLock::new(|| {
+    Arc::new(HostInfo::new(
+        "http://127.0.0.1:18082",
+        OPTION_LIMITER_PER_MINUTE,
+        create_share_rate_limiter(OPTION_LIMITER_PER_MINUTE, Some(39)),
+    ))
+});
+
 pub const PING_PATH: &str = "/api/v3/ping";
 pub const SPOT_EXCHANGE_INFO_PATH: &str = "/api/v3/exchangeInfo";
 pub const SPOT_SERVER_TIME_PATH: &str = "/api/v3/time";
@@ -132,6 +161,8 @@ pub const SWAP_POSITION_PATH: &str = "/papi/v1/um/positionRisk";
 pub const SWAP_LISTEN_KEY_PATH: &str = "/fapi/v1/listenKey";
 
 pub const PAPI_LISTEN_KEY_PATH: &str = "/papi/v1/listenKey";
+
+pub const OPTION_EXCHANGE_INFO_PATH: &str = "/eapi/v1/exchangeInfo";
 
 /// Wrapper for Binance requests to enable retry with backon
 
@@ -226,6 +257,10 @@ pub static SWAP_FUNDING_RATE_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| {
         Some(24 * 60 * 60),
     )
     .unwrap()
+});
+
+pub static OPTION_EXCHANGE_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| {
+    RequestInfo::from_base_path(BINANCE_OPTION_BASE.clone(), OPTION_EXCHANGE_INFO_PATH, false, 1, None, Some(24 * 60 * 60)).unwrap()
 });
 
 /**
