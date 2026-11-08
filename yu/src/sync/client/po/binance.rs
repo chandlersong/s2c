@@ -330,6 +330,7 @@ impl CopyInsertable for LocalBinanceOrderBookSnapshotPo {
     }
 
     fn to_csv_row(&self) -> String {
+        let snapshot_time = format_timestamp_millis(i64::try_from(self.snapshot_time).expect("snapshot_time must fit in i64 milliseconds"));
         let bids = serde_json::to_string(&self.bids).expect("serializing order book bids cannot fail");
         let asks = serde_json::to_string(&self.asks).expect("serializing order book asks cannot fail");
         let csv_quote = |value: String| format!("\"{}\"", value.replace('"', "\"\""));
@@ -339,7 +340,7 @@ impl CopyInsertable for LocalBinanceOrderBookSnapshotPo {
             self.id,
             self.server_id,
             self.inst_id,
-            self.snapshot_time,
+            snapshot_time,
             self.local_update_id,
             csv_quote(bids),
             csv_quote(asks),
@@ -553,6 +554,28 @@ mod tests {
         assert_eq!(values[3], "0.0001");
         assert_eq!(values[4], "42500.25");
         assert_eq!(values[5], "1700000300000");
+    }
+
+    // 测试目的：验证快照毫秒时间戳在 COPY 行中转换为 PostgreSQL TIMESTAMPTZ 文本。
+    // 准备数据/过程：构造包含毫秒精度 snapshot_time 的订单簿快照 PO，并序列化为 CSV 行。
+    // 预期结果：时间字段以 UTC ISO 8601 格式输出，且位于声明的 snapshot_time 列位置。
+    #[test]
+    fn binance_order_book_snapshot_copy_row_formats_snapshot_time_as_timestamptz() {
+        let snapshot = BinanceOrderBookSnapshot {
+            server_id: 2,
+            snapshot_time: 1_700_000_000_123,
+            local_update_id: 3,
+            bids: Vec::new(),
+            asks: Vec::new(),
+        };
+        let po = LocalBinanceOrderBookSnapshotPo::from_proto(snapshot, 4, 5);
+
+        let row = po.to_csv_row();
+        let snapshot_time = format_timestamp_millis(1_700_000_000_123);
+        let columns = <LocalBinanceOrderBookSnapshotPo as CopyInsertable>::columns();
+
+        assert!(row.starts_with(&format!("{},{},{},{},", po.id, po.server_id, po.inst_id, snapshot_time)));
+        assert_eq!(columns.split(',').nth(3), Some("snapshot_time"));
     }
 
     // 测试目的：验证从错误 payload 的 HistoryEntry 创建订单簿快照客户端 PO 时明确失败。
