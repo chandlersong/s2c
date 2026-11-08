@@ -1,9 +1,12 @@
 use crate::binance::bn_models::spot_restful::RateLimit;
+use crate::errors::YueError;
 use crate::models::Decimal;
 use crate::tools::{string_to_decimal, string_to_option_decimal};
 use serde::Deserialize;
 
 //
+// URL: /eapi/v1/exchangeInfo
+
 // {
 //   "timezone": "UTC",
 //   "serverTime": 1592387337630,
@@ -216,7 +219,7 @@ pub struct OptionMarketPrice {
 
 #[cfg(test)]
 mod tests {
-    use super::{OptionExchangeInfo, OptionMarketPrice};
+    use super::{KLinesResponse, OptionExchangeInfo, OptionMarketPrice};
     use crate::models::Decimal;
 
     // 测试目的：验证期权交易所信息字段映射、Decimal 转换，以及 OptionSymbol 的 SymbolInfoTrait 映射。
@@ -360,5 +363,241 @@ mod tests {
         }"#;
 
         assert!(serde_json::from_str::<OptionMarketPrice>(json).is_err());
+    }
+
+    // 测试目的：验证期权 K 线响应可以同时反序列化数字和字符串元素。
+    // 准备数据/过程：反序列化含字符串价格、数字时间戳和数字价格的 K 线 JSON，并调用公开取值方法。
+    // 预期结果：OptionKLine 的各字段均按预期类型读取，响应迭代、长度和兼容访问方法正确。
+    #[test]
+    fn deserialize_option_klines_with_mixed_value_types() {
+        let json = r#"[
+            [1499040000000,"0.01","0.02","0.005","0.01634790","12.5",1499644799999,"100.25",7,"6.5","50.75","0"],
+            [1499040000001,0.02,0.03,0.01,0.025,10.5,"1499644800000",20.5,9,8.5,19.5,0]
+        ]"#;
+
+        let response: KLinesResponse = serde_json::from_str(json).unwrap();
+        let kline = response.get(0).unwrap();
+
+        assert_eq!(response.len(), 2);
+        assert_eq!(response.iter().count(), 2);
+        assert_eq!(kline.candle_begin_time().unwrap(), 1499040000000);
+        assert_eq!(kline.open_price().unwrap().to_string(), "0.01");
+        assert_eq!(kline.high_price().unwrap().to_string(), "0.02");
+        assert_eq!(kline.low_price().unwrap().to_string(), "0.005");
+        assert_eq!(kline.close_price().unwrap().to_string(), "0.01634790");
+        assert_eq!(kline.close_time().unwrap(), 1499644799999);
+        assert_eq!(kline.quote_asset_volume().unwrap().to_string(), "100.25");
+        assert_eq!(kline.number_of_trades().unwrap(), 7);
+        assert_eq!(kline.taker_buy_base_asset_volume().unwrap().to_string(), "6.5");
+        assert_eq!(kline.taker_buy_quote_asset_volume().unwrap().to_string(), "50.75");
+        assert_eq!(kline.ignore().unwrap(), &serde_json::Value::String("0".to_string()));
+        assert_eq!(response.close_price(0).unwrap().to_string(), "0.01634790");
+        assert_eq!(response.volume(0).unwrap().to_string(), "12.5");
+        assert_eq!(response.close_time(0).unwrap(), 1499644799999);
+        assert_eq!(response.close_price(1).unwrap().to_string(), "0.025");
+        assert_eq!(response.volume(1).unwrap().to_string(), "10.5");
+        assert_eq!(response.close_time(1).unwrap(), 1499644800000);
+    }
+
+    // 测试目的：验证 K 线取值方法遇到缺失索引或错误字段值时返回错误。
+    // 准备数据/过程：反序列化收盘价为非数字字符串的记录，并分别读取错误价格和越界记录。
+    // 预期结果：close_price 和 volume 均返回 Err，不产生默认值或 panic。
+    #[test]
+    fn kline_accessors_reject_invalid_values_and_indices() {
+        let json = r#"[[1499040000000,"1","2","0","invalid","3",1499644799999]]"#;
+        let response: KLinesResponse = serde_json::from_str(json).unwrap();
+
+        assert!(response.close_price(0).is_err());
+        assert!(response.volume(1).is_err());
+    }
+
+    // 测试目的：验证 KLinesResponse 支持按引用和按值迭代。
+    // 准备数据/过程：反序列化两条 K 线，通过引用迭代读取收盘价，再消费响应统计记录数。
+    // 预期结果：引用迭代可读取两条收盘价，按值迭代返回两条记录。
+    #[test]
+    fn kline_response_supports_owned_and_borrowed_iteration() {
+        let json = r#"[[0,0,0,0,"1"],[0,0,0,0,"2"]]"#;
+        let response: KLinesResponse = serde_json::from_str(json).unwrap();
+
+        let close_prices: Vec<String> = (&response).into_iter().map(|kline| kline.close_price().unwrap().to_string()).collect();
+        let owned_count = response.into_iter().count();
+
+        assert_eq!(close_prices, ["1", "2"]);
+        assert_eq!(owned_count, 2);
+    }
+}
+
+///
+/// [文档](https://developers.binance.com/zh-CN/docs/catalog/core-trading-derivatives-trading-options/api/rest-api/market-data#kline-candlestick-data)
+/// index说明
+/// 0: candle_begin_time
+/// 1: open price
+/// 2: high price
+/// 3: low price
+/// 4: close price
+/// 5: volume
+/// 6: close time
+/// 7: quote asset volume
+/// 8: number of trades
+/// 9: taker buy base asset volume
+/// 10: taker buy quote asset volume
+/// 11: ignore
+#[derive(Debug, Deserialize)]
+pub struct OptionKLine(Vec<serde_json::Value>);
+
+impl OptionKLine {
+    /// Returns the candle begin time in milliseconds.
+    pub fn candle_begin_time(&self) -> Result<u64, YueError> {
+        self.integer_value(0, "candle begin time")
+    }
+
+    /// Returns the open price.
+    pub fn open_price(&self) -> Result<Decimal, YueError> {
+        self.decimal_value(1, "open price")
+    }
+
+    /// Returns the high price.
+    pub fn high_price(&self) -> Result<Decimal, YueError> {
+        self.decimal_value(2, "high price")
+    }
+
+    /// Returns the low price.
+    pub fn low_price(&self) -> Result<Decimal, YueError> {
+        self.decimal_value(3, "low price")
+    }
+
+    /// Returns the close price.
+    pub fn close_price(&self) -> Result<Decimal, YueError> {
+        self.decimal_value(4, "close price")
+    }
+
+    /// Returns the base-asset volume.
+    pub fn volume(&self) -> Result<Decimal, YueError> {
+        self.decimal_value(5, "volume")
+    }
+
+    /// Returns the candle close time in milliseconds.
+    pub fn close_time(&self) -> Result<u64, YueError> {
+        self.integer_value(6, "close time")
+    }
+
+    /// Returns the quote-asset volume.
+    pub fn quote_asset_volume(&self) -> Result<Decimal, YueError> {
+        self.decimal_value(7, "quote asset volume")
+    }
+
+    /// Returns the number of trades.
+    pub fn number_of_trades(&self) -> Result<u64, YueError> {
+        self.integer_value(8, "number of trades")
+    }
+
+    /// Returns the taker-buy base-asset volume.
+    pub fn taker_buy_base_asset_volume(&self) -> Result<Decimal, YueError> {
+        self.decimal_value(9, "taker buy base asset volume")
+    }
+
+    /// Returns the taker-buy quote-asset volume.
+    pub fn taker_buy_quote_asset_volume(&self) -> Result<Decimal, YueError> {
+        self.decimal_value(10, "taker buy quote asset volume")
+    }
+
+    /// Returns the raw value of the reserved ignore field.
+    pub fn ignore(&self) -> Result<&serde_json::Value, YueError> {
+        self.value(11, "ignore")
+    }
+
+    fn decimal_value(&self, index: usize, field: &str) -> Result<Decimal, YueError> {
+        let value = self.value(index, field)?;
+        let raw = value.as_str().map(str::to_owned).unwrap_or_else(|| value.to_string());
+        raw.parse()
+            .map_err(|error| YueError::ParseError(format!("invalid option kline {field}: {error}")))
+    }
+
+    fn integer_value(&self, index: usize, field: &str) -> Result<u64, YueError> {
+        let value = self.value(index, field)?;
+        value
+            .as_u64()
+            .or_else(|| value.as_str().and_then(|raw| raw.parse().ok()))
+            .ok_or_else(|| YueError::ParseError(format!("invalid option kline {field}")))
+    }
+
+    fn value(&self, index: usize, field: &str) -> Result<&serde_json::Value, YueError> {
+        self.0
+            .get(index)
+            .ok_or_else(|| YueError::ParseError(format!("option kline is missing {field}")))
+    }
+}
+
+///
+///  URL:/eapi/v1/klines
+///
+#[derive(Debug, Deserialize)]
+#[serde(transparent)]
+pub struct KLinesResponse(Vec<OptionKLine>);
+
+impl KLinesResponse {
+    /// Returns the number of K-line records.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Returns whether the response contains no K-line records.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Returns an iterator over the K-line records by reference.
+    pub fn iter(&self) -> impl Iterator<Item = &OptionKLine> {
+        self.0.iter()
+    }
+
+    /// Returns the K-line record at `index`.
+    pub fn get(&self, index: usize) -> Option<&OptionKLine> {
+        self.0.get(index)
+    }
+
+    /// Returns the close price for the K-line at `index`.
+    pub fn close_price(&self, index: usize) -> Result<Decimal, YueError> {
+        self.kline_at(index)?.close_price()
+    }
+
+    /// Returns the close time in milliseconds for the K-line at `index`.
+    pub fn close_time(&self, index: usize) -> Result<u64, YueError> {
+        self.kline_at(index)?.close_time()
+    }
+
+    /// Returns the base-asset volume for the K-line at `index`.
+    pub fn volume(&self, index: usize) -> Result<Decimal, YueError> {
+        self.kline_at(index)?.volume()
+    }
+
+    fn kline_at(&self, index: usize) -> Result<&OptionKLine, YueError> {
+        self.0
+            .get(index)
+            .ok_or_else(|| YueError::ParseError(format!("option kline at index {index} does not exist")))
+    }
+}
+
+impl FromIterator<OptionKLine> for KLinesResponse {
+    fn from_iter<T: IntoIterator<Item = OptionKLine>>(iter: T) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
+
+impl IntoIterator for KLinesResponse {
+    type Item = OptionKLine;
+    type IntoIter = std::vec::IntoIter<OptionKLine>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a KLinesResponse {
+    type Item = &'a OptionKLine;
+    type IntoIter = std::slice::Iter<'a, OptionKLine>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
     }
 }

@@ -55,7 +55,7 @@ pub struct TimeStampRequest {
     pub rec_window: u16,
 }
 
-impl fmt::Display for TimeStampRequest {
+impl Display for TimeStampRequest {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "timestamp={}&recvWindow={}", self.timestamp, self.rec_window)
     }
