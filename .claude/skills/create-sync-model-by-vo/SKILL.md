@@ -10,7 +10,8 @@ description: 根据指定 VO 创建服务端/客户端 PO、protobuf 实体、�
 根据用户指定的 VO，创建或补齐该业务对象在同步数据模型中的实体定义和字段转换。只允许做以下与目标实体直接相关的改动：
 
 - 服务端 PO 及其 VO → PO 转换，放在该业务对象所属的模型文件中。
-- `yu/proto/history_data.proto` 中对应的 protobuf message；仅在承载该实体所必需时，追加对应的 enum 值或 `HistoryEntry.oneof` 字段。
+- `yu/proto/history_data.proto` 中对应的 protobuf message；仅在承载该实体所必需时，追加对应的 enum 值或
+  `HistoryEntry.oneof` 字段。
 - `yu/src/sync/models.rs` 中对应的 PO → protobuf 转换（遵循仓库既有放置模式）。
 - 客户端 PO 及其 protobuf → 客户端 PO 转换，放在对应客户端 PO 文件中。
 - 服务端和客户端该实体对应的表 DDL，以及让表被既有初始化入口识别所需的最小表注册改动。
@@ -27,14 +28,16 @@ description: 根据指定 VO 创建服务端/客户端 PO、protobuf 实体、�
 - 与本次 PO/protobuf/客户端 PO 转换或实体 schema 无关的测试、测试文件或测试函数。
 - 数据写入器、查询逻辑、冲突处理流程或数据库初始化实现；只允许添加既有初始化入口需要的新表注册，不修改初始化流程本身。
 
-`history_data.proto` 中的 message、enum 值和 `oneof` 字段属于实体传输定义，可以按上述范围添加；不得添加或修改 RPC service、请求流程或运行时分发逻辑。
+`history_data.proto` 中的 message、enum 值和 `oneof` 字段属于实体传输定义，可以按上述范围添加；不得添加或修改 RPC
+service、请求流程或运行时分发逻辑。
 
 ## 开始前检查
 
 1. 定位用户指定 VO 的定义、字段类型及已有 PO/protobuf/客户端 PO。
 2. 只读检查与字段语义直接相关的转换代码，确认 nullable、金融数值类型、时间单位/时区、实体 ID 与关联 ID 的含义。
 3. 不沿运行入口扩展调查服务端查询、订阅、消费或 repository；只定位新表所需的既有表注册列表，不扩展到数据库初始化流程。
-4. 只有字段语义或 ID/时间映射存在无法从 VO 和相邻模型推断的歧义，且会改变实体字段或 protobuf 兼容性时，才使用 `ask_user` 澄清。
+4. 只有字段语义或 ID/时间映射存在无法从 VO 和相邻模型推断的歧义，且会改变实体字段或 protobuf 兼容性时，才使用 `ask_user`
+   澄清。
 
 参考模式：
 
@@ -43,7 +46,9 @@ description: 根据指定 VO 创建服务端/客户端 PO、protobuf 实体、�
 - 服务端表：`yu/src/okx/duckdb_consts.rs` 中对应的实体 DDL。
 - protobuf message：`yu/proto/history_data.proto` 中的 `OkxOptionSummary`。
 - 客户端 PO：`yu/src/sync/client/po/okx.rs` 中的 `LocalOkxOptionSummaryPo`。
+    - 时间字段，在po中为u64，数据中为`TIMESTAMPTZ`。注意转换
 - 客户端表：`yu/src/sync/client/db_consts.rs` 中对应的实体 DDL。
+    - 时间字段在数据中，用`TIMESTAMPTZ`。
 - PO/protobuf 转换：参考相邻业务模型的既有实现位置和风格。
 
 ## 实施约定
