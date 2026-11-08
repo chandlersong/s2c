@@ -164,6 +164,7 @@ pub const PAPI_LISTEN_KEY_PATH: &str = "/papi/v1/listenKey";
 
 pub const OPTION_EXCHANGE_INFO_PATH: &str = "/eapi/v1/exchangeInfo";
 pub const OPTION_KLINE_PATH: &str = "/eapi/v1/klines";
+pub const OPTION_MARK_PRICE_PATH: &str = "/eapi/v1/mark";
 
 /// Wrapper for Binance requests to enable retry with backon
 
@@ -266,6 +267,9 @@ pub static OPTION_EXCHANGE_COMMAND: LazyLock<RequestInfo> = LazyLock::new(|| {
 
 pub static OPTION_KLINE_COMMAND: LazyLock<RequestInfo> =
     LazyLock::new(|| RequestInfo::from_base_path(BINANCE_OPTION_BASE.clone(), OPTION_KLINE_PATH, false, 1, None, Some(24 * 60 * 60)).unwrap());
+
+pub static OPTION_MARK_PRICE_COMMAND: LazyLock<RequestInfo> =
+    LazyLock::new(|| RequestInfo::from_base_path(BINANCE_OPTION_BASE.clone(), OPTION_MARK_PRICE_PATH, false, 5, None, Some(24 * 60 * 60)).unwrap());
 
 /**
 根据api。这个注释是动态的。如果所以专门写一个command用于处理,

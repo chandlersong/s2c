@@ -217,6 +217,43 @@ pub struct OptionMarketPrice {
     pub risk_free_interest: Decimal,
 }
 
+///
+/// /eapi/v1/mark
+///
+#[derive(Debug, Deserialize)]
+#[serde(transparent)]
+pub struct MarketPriceResponse(Vec<OptionMarketPrice>);
+
+impl MarketPriceResponse {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+impl FromIterator<OptionMarketPrice> for MarketPriceResponse {
+    fn from_iter<T: IntoIterator<Item = OptionMarketPrice>>(iter: T) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
+
+impl IntoIterator for MarketPriceResponse {
+    type Item = OptionMarketPrice;
+    type IntoIter = std::vec::IntoIter<OptionMarketPrice>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a MarketPriceResponse {
+    type Item = &'a OptionMarketPrice;
+    type IntoIter = std::slice::Iter<'a, OptionMarketPrice>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{KLinesResponse, OptionExchangeInfo, OptionMarketPrice};

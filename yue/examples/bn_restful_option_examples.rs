@@ -57,5 +57,8 @@ async fn main() -> Result<(), YueError> {
         info!("kline: close={}, close time={}, volume={}", close, unix_2_readable(&close_time), volume);
     }
 
+    let market_price = binance_option_api.get_all_market_price().await?;
+    info!("mark price num: {:?}", market_price.len());
+
     Ok(())
 }
