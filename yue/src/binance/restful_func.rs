@@ -400,12 +400,16 @@ where
             }
         }
 
-        debug!(
-            "{} fetch {} kline,  to {}",
-            symbol,
-            total_count,
-            unix_2_readable(&last_timestamp.unwrap_or(0))
-        );
+        if total_count == 0 {
+            debug!("{} fetch 0 kline", symbol);
+        } else {
+            debug!(
+                "{} fetch {} kline to {}",
+                symbol,
+                total_count,
+                unix_2_readable(&last_timestamp.unwrap_or(0))
+            );
+        }
         Ok(total_count)
     }
 }
