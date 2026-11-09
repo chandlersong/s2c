@@ -61,11 +61,13 @@ pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: m
     support_history_service.insert(HistoryType::BinanceSwap, swap_history_service.clone());
     support_history_service.insert(HistoryType::BinanceSwapFundingRate, funding_rate_history_service.clone());
     let instrument_service = BinanceSyncInstrumentService::for_production(dash_board.clone(), support_history_service);
-    info!("start initial Binance Spot and Swap instruments");
+    info!("start initial Binance Spot, Swap and Option instruments");
     if let Err(error) = instrument_service.sync_instrument().await {
-        error!("failed to sync Binance Spot and Swap instruments: {}", error);
+        error!("failed to sync Binance Spot, Swap and Option instruments: {}", error);
     }
-    info!("finished initial Binance Spot and Swap instruments data");
+    info!("finished initial Binance Spot, Swap and Option instruments data");
+    let initial_instruments = instrument_service.list_instruments().await?;
+    info!("loaded {} Binance Spot, Swap and Option instruments", initial_instruments.len());
     //加上一个周期的时间。因为后续处理，会减去当前周期。
     let start_initial_ms = unix_time_now_u64_utc() + interval.to_milliseconds();
     info!(
@@ -189,11 +191,11 @@ pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: m
     let _ = cron_job!("37 17 */6 * * *", move |_uuid, _locked| {
         let each_sync = sync_instrument_job.clone();
         Box::pin(async move {
-            debug!("start syncing Binance Spot and Swap instruments");
+            debug!("start syncing Binance Spot, Swap and Option instruments");
             if let Err(error) = each_sync.sync_instrument().await {
-                error!("failed to sync Binance Spot and Swap instruments: {}", error);
+                error!("failed to sync Binance Spot, Swap and Option instruments: {}", error);
             } else {
-                debug!("finished syncing Binance Spot and Swap instruments");
+                debug!("finished syncing Binance Spot, Swap and Option instruments");
             }
         })
     });

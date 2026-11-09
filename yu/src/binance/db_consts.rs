@@ -102,7 +102,8 @@ CREATE TABLE IF NOT EXISTS bn_option_instruments (
     underlying_type         VARCHAR NOT NULL,
     naked_sell              BOOLEAN,
     status                  VARCHAR NOT NULL,
-    filters                 JSON NOT NULL
+    filters                 JSON NOT NULL,
+    UNIQUE (symbol)
 );
 "#;
 

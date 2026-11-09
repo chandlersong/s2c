@@ -2,11 +2,12 @@ use crate::binance::bn_backend_service::{get_spot_kline_table, get_spot_order_bo
 use crate::binance::bn_dashboard::{BinanceDashboard, InstrumentProvider, SpotInstrumentProvider, SwapInstrumentProvider};
 use crate::binance::db_consts::BinanceTables;
 use crate::binance::duckdb_repository::{
-    BNInstrumentRepository, BinanceFundingRateRepository, BinanceKlineRepository, get_default_funding_rate_repo, get_default_spot_kline_repo,
-    get_default_swap_kline_repo, get_instrument_repo_for_production,
+    BNInstrumentRepository, BinanceFundingRateRepository, BinanceKlineRepository, BinanceOptionInstrumentRepository,
+    get_binance_option_instrument_repo, get_default_funding_rate_repo, get_default_spot_kline_repo, get_default_swap_kline_repo,
+    get_instrument_repo_for_production,
 };
 use crate::binance::history::{INITIAL_HISTORY_PROGRESS_LOG_INTERVAL, initial_kline};
-use crate::binance::models::po::{BinanceInstrument, FundingRatePo, KlinePo};
+use crate::binance::models::po::{BinanceInstrument, BinanceOptionInstrumentPo, FundingRatePo, KlinePo};
 use crate::config::AppConfig;
 use crate::data_integrity::check::{BinarySearchDS, DuckDBBinarySearchDataImpl, binary_search_gap};
 use crate::data_integrity::models::ValidationGap;
@@ -21,11 +22,12 @@ use log::{debug, error, info};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{RwLock, mpsc};
 use tonic::Status;
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_models::swap_restful::FundingRate;
 use yue::binance::bn_restful_commands::{SPOT_KLINE_HISTORY_COMMAND, SWAP_KLINE_HISTORY_COMMAND};
+use yue::binance::option_api::{BinanceOptionExchangeApi, default_binance_option_api};
 use yue::binance::order_book::OrderBookService;
 use yue::binance::restful_func::{CommonRequestBuilder, HistoryBatchHandlerTrait, HistoryFetcherImpl, HistoryFetcherTrait, ShareHistoryBatchHandler};
 use yue::errors::YueError as ExchangeError;
@@ -829,7 +831,102 @@ impl SyncHistoryServiceTrait for BinanceSwapFundingRateSyncHistoryService {
 pub struct BinanceSyncInstrumentService {
     dashboard: Arc<BinanceDashboard>,
     instrument_repo: BNInstrumentRepository,
+    option_instrument_service: Arc<BinanceOptionSyncInstrumentService>,
     support_history_service: HashMap<HistoryType, SyncHistoryService>,
+}
+
+pub struct BinanceOptionSyncInstrumentService {
+    instrument_repo: BinanceOptionInstrumentRepository,
+    option_api: BinanceOptionExchangeApi,
+    live_instruments: Arc<RwLock<HashMap<String, BinanceOptionInstrumentPo>>>,
+}
+
+impl BinanceOptionSyncInstrumentService {
+    pub fn new(
+        instrument_repo: BinanceOptionInstrumentRepository,
+        option_api: BinanceOptionExchangeApi,
+        live_instruments: Arc<RwLock<HashMap<String, BinanceOptionInstrumentPo>>>,
+    ) -> Self {
+        Self {
+            instrument_repo,
+            option_api,
+            live_instruments,
+        }
+    }
+
+    pub fn for_production() -> Arc<Self> {
+        Arc::new(Self::new(
+            get_binance_option_instrument_repo(None),
+            default_binance_option_api(),
+            Arc::new(RwLock::new(HashMap::new())),
+        ))
+    }
+
+    pub async fn list_all_instruments(&self) -> Result<Vec<BinanceOptionInstrumentPo>, YuError> {
+        self.instrument_repo.list_all().await
+    }
+}
+
+#[async_trait]
+impl SyncInstrumentServiceTrait for BinanceOptionSyncInstrumentService {
+    async fn list_instruments(&self) -> Result<Vec<Instrument>, YuError> {
+        self.list_all_instruments().await?.into_iter().map(option_instrument_to_proto).collect()
+    }
+
+    async fn sync_instrument(&self) -> Result<Vec<Instrument>, YuError> {
+        let exchange_info = self.option_api.get_exchange_info().await?;
+        let mut previous_instruments = self
+            .instrument_repo
+            .list_all()
+            .await?
+            .into_iter()
+            .map(|instrument| (instrument.symbol.clone(), instrument))
+            .collect::<HashMap<_, _>>();
+        let mut current_instruments = HashMap::new();
+        let mut protobuf_instruments = Vec::with_capacity(exchange_info.option_symbols.len());
+
+        for symbol in &exchange_info.option_symbols {
+            let instrument = match previous_instruments.remove(&symbol.symbol) {
+                Some(previous) => BinanceOptionInstrumentPo::from_option_symbol_with_id(symbol, previous.id),
+                None => BinanceOptionInstrumentPo::from(symbol),
+            };
+            let instrument = self.instrument_repo.upsert(instrument).await?;
+            if instrument
+                .status
+                .eq_ignore_ascii_case(crate::binance::bn_consts::BN_SYMBOL_STATUS_TRADING)
+            {
+                current_instruments.insert(instrument.symbol.clone(), instrument.clone());
+            }
+            protobuf_instruments.push(option_instrument_to_proto(instrument)?);
+        }
+
+        for (_, mut instrument) in previous_instruments {
+            if !instrument
+                .status
+                .eq_ignore_ascii_case(crate::binance::bn_consts::BN_SYMBOL_STATUS_NOT_TRADING)
+            {
+                instrument.status = crate::binance::bn_consts::BN_SYMBOL_STATUS_NOT_TRADING.to_string();
+                self.instrument_repo.upsert(instrument).await?;
+            }
+        }
+
+        *self.live_instruments.write().await = current_instruments;
+        Ok(protobuf_instruments)
+    }
+
+    fn error_log(&self) -> String {
+        "error when syncing Binance option instruments".to_string()
+    }
+
+    fn support_history_list(&self) -> Result<HashMap<HistoryType, SyncHistoryService>, YuError> {
+        Ok(HashMap::new())
+    }
+}
+
+fn option_instrument_to_proto(instrument: BinanceOptionInstrumentPo) -> Result<Instrument, YuError> {
+    instrument
+        .into_proto_instrument()
+        .map_err(|error| YuError::new(&format!("invalid Binance option instrument ID: {error}")))
 }
 
 impl BinanceSyncInstrumentService {
@@ -837,6 +934,7 @@ impl BinanceSyncInstrumentService {
         Arc::new(Self {
             dashboard,
             instrument_repo: get_instrument_repo_for_production(None),
+            option_instrument_service: BinanceOptionSyncInstrumentService::for_production(),
             support_history_service,
         })
     }
@@ -859,6 +957,7 @@ impl SyncInstrumentServiceTrait for BinanceSyncInstrumentService {
                 .into_iter()
                 .map(BinanceInstrument::into_proto_instrument),
         );
+        instruments.extend(self.option_instrument_service.list_instruments().await?);
         Ok(instruments)
     }
 
@@ -871,6 +970,7 @@ impl SyncInstrumentServiceTrait for BinanceSyncInstrumentService {
             .map(BinanceInstrument::into_proto_instrument)
             .collect::<Vec<_>>();
         instruments.extend(snapshot.live_swap.clone().into_values().map(BinanceInstrument::into_proto_instrument));
+        instruments.extend(self.option_instrument_service.sync_instrument().await?);
         Ok(instruments)
     }
 
@@ -880,5 +980,205 @@ impl SyncInstrumentServiceTrait for BinanceSyncInstrumentService {
 
     fn support_history_list(&self) -> Result<HashMap<HistoryType, SyncHistoryService>, YuError> {
         Ok(self.support_history_service.clone())
+    }
+}
+
+#[cfg(test)]
+mod option_instrument_tests {
+    use super::*;
+    use crate::binance::db_consts::CREATE_BINANCE_OPTION_INSTRUMENTS_TABLE;
+    use crate::binance::duckdb_repository::get_binance_option_instrument_repo;
+    use crate::sync::models::grpc_sync::{InstrumentType as SyncInstrumentType, instrument};
+    use crate::test_utils::create_memory_db_provider;
+    use std::sync::Mutex;
+    use yue::binance::bn_models::option_restful::{KLinesResponse, MarketPriceResponse, OptionExchangeInfo, OptionSymbol, OptionSymbolFilter};
+    use yue::binance::option_api::BinanceOptionApiTrait;
+    use yue::query_message::DataSourceProviderTrait;
+
+    struct TestOptionApi {
+        exchange_info: Mutex<Option<OptionExchangeInfo>>,
+    }
+
+    impl TestOptionApi {
+        fn new(exchange_info: Option<OptionExchangeInfo>) -> Self {
+            Self {
+                exchange_info: Mutex::new(exchange_info),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl BinanceOptionApiTrait for TestOptionApi {
+        async fn get_exchange_info(&self) -> Result<OptionExchangeInfo, ExchangeError> {
+            self.exchange_info
+                .lock()
+                .unwrap()
+                .take()
+                .ok_or_else(|| ExchangeError::new("test exchange info unavailable"))
+        }
+
+        async fn get_kline_history(&self, _request_builder: CommonRequestBuilder) -> Result<KLinesResponse, ExchangeError> {
+            Err(ExchangeError::new("option kline API is not used by instrument tests"))
+        }
+
+        async fn get_all_market_price(&self) -> Result<MarketPriceResponse, ExchangeError> {
+            Err(ExchangeError::new("option market price API is not used by instrument tests"))
+        }
+    }
+
+    fn option_symbol(status: &str) -> OptionSymbol {
+        OptionSymbol {
+            expiry_date: 1_700_000_000_123,
+            filters: vec![OptionSymbolFilter {
+                filter_type: "PRICE_FILTER".to_string(),
+                min_price: Some("0.00000001".parse().unwrap()),
+                max_price: Some("80000.01000000".parse().unwrap()),
+                tick_size: Some("0.01000000".parse().unwrap()),
+                min_qty: Some("0.01".parse().unwrap()),
+                max_qty: None,
+                step_size: Some("0.001".parse().unwrap()),
+            }],
+            symbol: "BTC-270101-50000-C".to_string(),
+            side: "CALL".to_string(),
+            strike_price: "50000.00000001".parse().unwrap(),
+            underlying: "BTCUSDT".to_string(),
+            unit: 1,
+            liquidation_fee_rate: "0.0019000".parse().unwrap(),
+            min_qty: "0.01".parse().unwrap(),
+            max_qty: "100".parse().unwrap(),
+            initial_margin: "0.15".parse().unwrap(),
+            maintenance_margin: "0.075".parse().unwrap(),
+            min_initial_margin: "0.1".parse().unwrap(),
+            min_maintenance_margin: "0.05".parse().unwrap(),
+            price_scale: 2,
+            quantity_scale: 2,
+            quote_asset: "USDT".to_string(),
+            contract_type: "CRYPTO_OPTIONS".to_string(),
+            underlying_type: "CRYPTO".to_string(),
+            naked_sell: Some(false),
+            status: status.to_string(),
+        }
+    }
+
+    fn option_exchange_info(symbol: OptionSymbol) -> OptionExchangeInfo {
+        OptionExchangeInfo {
+            timezone: "UTC".to_string(),
+            server_time: 1_700_000_000_000,
+            option_contracts: Vec::new(),
+            option_assets: Vec::new(),
+            option_symbols: vec![symbol],
+            rate_limits: Vec::new(),
+        }
+    }
+
+    fn option_instrument_service(
+        exchange_info: Option<OptionExchangeInfo>,
+    ) -> (
+        BinanceOptionSyncInstrumentService,
+        Arc<RwLock<HashMap<String, BinanceOptionInstrumentPo>>>,
+        BinanceOptionInstrumentRepository,
+    ) {
+        let provider = create_memory_db_provider();
+        let conn = provider.acquire().unwrap();
+        for statement in CREATE_BINANCE_OPTION_INSTRUMENTS_TABLE
+            .split(';')
+            .map(str::trim)
+            .filter(|sql| !sql.is_empty())
+        {
+            conn.execute(statement, []).unwrap();
+        }
+        drop(conn);
+
+        let instrument_repo = get_binance_option_instrument_repo(Some(provider));
+        let api: BinanceOptionExchangeApi = Arc::new(TestOptionApi::new(exchange_info));
+        let live_instruments = Arc::new(RwLock::new(HashMap::new()));
+        (
+            BinanceOptionSyncInstrumentService::new(instrument_repo.clone(), api, live_instruments.clone()),
+            live_instruments,
+            instrument_repo,
+        )
+    }
+
+    // 测试目的：验证 Option instrument service 从交易所 API 同步、持久化、标记缺失记录并缓存当前 TRADING instrument。
+    // 准备数据/过程：预存同 symbol 的历史 ID 和另一条旧 instrument，再注入返回当前 symbol 的 API mock，调用同步并查询列表、状态与缓存。
+    // 预期结果：同 symbol 保留原服务器 ID，缺失记录变为 NOT_TRADING，proto 使用 BinanceOption 类型，live cache 只包含当前记录且无历史类型。
+    #[tokio::test]
+    async fn option_instrument_service_syncs_persists_and_lists_api_symbols() {
+        let (service, live_instruments, instrument_repo) = option_instrument_service(Some(option_exchange_info(option_symbol("TRADING"))));
+
+        assert!(service.list_instruments().await.unwrap().is_empty());
+        let current_symbol = option_symbol("TRADING");
+        instrument_repo
+            .upsert(BinanceOptionInstrumentPo::from_option_symbol_with_id(&current_symbol, 123))
+            .await
+            .unwrap();
+        let mut removed_symbol = option_symbol("TRADING");
+        removed_symbol.symbol = "BTC-270101-40000-C".to_string();
+        instrument_repo
+            .upsert(BinanceOptionInstrumentPo::from_option_symbol_with_id(&removed_symbol, 456))
+            .await
+            .unwrap();
+
+        let synced = service.sync_instrument().await.unwrap();
+        let listed = service.list_instruments().await.unwrap();
+
+        assert_eq!(synced.len(), 1);
+        assert_eq!(listed.len(), 2);
+        assert_eq!(synced[0].instrument_type, SyncInstrumentType::BinanceOption as i32);
+        let Some(instrument::Payload::BinanceOptionInstrument(payload)) = synced[0].payload.as_ref() else {
+            panic!("expected BinanceOptionInstrument payload");
+        };
+        assert_eq!(payload.symbol, "BTC-270101-50000-C");
+        assert_eq!(payload.server_id, 123);
+        assert_eq!(live_instruments.read().await.len(), 1);
+        let stored_instruments = instrument_repo.list_all().await.unwrap();
+        assert_eq!(
+            stored_instruments
+                .iter()
+                .find(|instrument| instrument.symbol == "BTC-270101-40000-C")
+                .unwrap()
+                .status,
+            crate::binance::bn_consts::BN_SYMBOL_STATUS_NOT_TRADING
+        );
+        assert!(service.support_history_list().unwrap().is_empty());
+        assert_eq!(service.error_log(), "error when syncing Binance option instruments");
+    }
+
+    // 测试目的：验证交易所 API 获取失败时 Option instrument service 显式返回错误且不覆盖 live cache。
+    // 准备数据/过程：注入不提供 exchange info 的 API mock，并预置一条 live instrument 后调用 sync_instrument。
+    // 预期结果：同步返回 Err，且之前缓存的 instrument 保持不变。
+    #[tokio::test]
+    async fn option_instrument_service_propagates_api_errors_without_clearing_cache() {
+        let (service, live_instruments, _) = option_instrument_service(None);
+        live_instruments.write().await.insert(
+            "BTC-OLD-C".to_string(),
+            BinanceOptionInstrumentPo {
+                id: 1,
+                expiry_date: 1,
+                symbol: "BTC-OLD-C".to_string(),
+                side: "CALL".to_string(),
+                strike_price: "1".parse().unwrap(),
+                underlying: "BTCUSDT".to_string(),
+                unit: 1,
+                liquidation_fee_rate: "0".parse().unwrap(),
+                min_qty: "1".parse().unwrap(),
+                max_qty: "1".parse().unwrap(),
+                initial_margin: "0".parse().unwrap(),
+                maintenance_margin: "0".parse().unwrap(),
+                min_initial_margin: "0".parse().unwrap(),
+                min_maintenance_margin: "0".parse().unwrap(),
+                price_scale: 0,
+                quantity_scale: 0,
+                quote_asset: "USDT".to_string(),
+                contract_type: "CRYPTO_OPTIONS".to_string(),
+                underlying_type: "CRYPTO".to_string(),
+                naked_sell: None,
+                status: "TRADING".to_string(),
+                filters: Vec::new(),
+            },
+        );
+
+        assert!(service.sync_instrument().await.is_err());
+        assert_eq!(live_instruments.read().await.len(), 1);
     }
 }

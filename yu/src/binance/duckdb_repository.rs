@@ -1,6 +1,6 @@
 use crate::binance::bn_backend_service::{get_spot_kline_table, get_swap_funding_rate_table, get_swap_kline_table};
 use crate::binance::bn_consts::{BN_SYMBOL_STATUS_NOT_TRADING, BN_SYMBOL_STATUS_TRADING};
-use crate::binance::models::po::{BinanceInstrument, FundingRatePo, KlinePo, SpotStreamTradeRecordPo};
+use crate::binance::models::po::{BinanceInstrument, BinanceOptionInstrumentPo, FundingRatePo, KlinePo, SpotStreamTradeRecordPo};
 use crate::duck_db::DuckDBDSProvider;
 use crate::duck_db_tables::DuckTableTableChannel;
 use crate::errors::YuError;
@@ -48,6 +48,14 @@ pub trait BNInstrumentRepositoryTrait {
 
 #[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
 #[async_trait]
+pub trait BinanceOptionInstrumentRepositoryTrait {
+    async fn list_all(&self) -> Result<Vec<BinanceOptionInstrumentPo>, YuError>;
+
+    async fn upsert(&self, instrument: BinanceOptionInstrumentPo) -> Result<BinanceOptionInstrumentPo, YuError>;
+}
+
+#[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
+#[async_trait]
 pub trait BinanceKlineRepositoryTrait {
     async fn find_by_inst_id_between(&self, inst_id: u64, start_ms: u64, end_ms: u64) -> Result<Vec<KlinePo>, YuError>;
 
@@ -86,12 +94,19 @@ pub trait BinanceTradeRepositoryTrait {
 }
 
 pub type BNInstrumentRepository = Arc<dyn BNInstrumentRepositoryTrait + Send + Sync>;
+pub type BinanceOptionInstrumentRepository = Arc<dyn BinanceOptionInstrumentRepositoryTrait + Send + Sync>;
 pub type BinanceKlineRepository = Arc<dyn BinanceKlineRepositoryTrait + Send + Sync>;
 pub type BinanceFundingRateRepository = Arc<dyn BinanceFundingRateRepositoryTrait + Send + Sync>;
 pub type BinanceTradeRepository = Arc<dyn BinanceTradeRepositoryTrait + Send + Sync>;
 
 pub fn get_instrument_repo_for_production(provider: Option<DuckDBDSProvider>) -> BNInstrumentRepository {
     Arc::new(BNInstrumentRepositoryImpl {
+        provider: provider.unwrap_or_default(),
+    })
+}
+
+pub fn get_binance_option_instrument_repo(provider: Option<DuckDBDSProvider>) -> BinanceOptionInstrumentRepository {
+    Arc::new(BinanceOptionInstrumentRepositoryImpl {
         provider: provider.unwrap_or_default(),
     })
 }
@@ -475,13 +490,225 @@ impl BNInstrumentRepositoryImpl {
     }
 }
 
+struct BinanceOptionInstrumentRepositoryImpl {
+    provider: DuckDBDSProvider,
+}
+
+#[async_trait]
+impl BinanceOptionInstrumentRepositoryTrait for BinanceOptionInstrumentRepositoryImpl {
+    async fn list_all(&self) -> Result<Vec<BinanceOptionInstrumentPo>, YuError> {
+        let conn = self.provider.acquire()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, expiry_date, symbol, side, CAST(strike_price AS VARCHAR), underlying, unit, \
+             CAST(liquidation_fee_rate AS VARCHAR), CAST(min_qty AS VARCHAR), CAST(max_qty AS VARCHAR), \
+             CAST(initial_margin AS VARCHAR), CAST(maintenance_margin AS VARCHAR), \
+             CAST(min_initial_margin AS VARCHAR), CAST(min_maintenance_margin AS VARCHAR), \
+             price_scale, quantity_scale, quote_asset, contract_type, underlying_type, naked_sell, status, \
+             CAST(filters AS VARCHAR) \
+             FROM bn_option_instruments ORDER BY symbol;",
+        )?;
+        let mut rows = stmt.query([])?;
+        let mut instruments = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            let expiry_date: i64 = row.get(1)?;
+            let filters_json: String = row.get(21)?;
+            instruments.push(BinanceOptionInstrumentPo {
+                id: row.get(0)?,
+                expiry_date: u64::try_from(expiry_date).map_err(|error| YuError::new(&format!("invalid option expiry_date: {error}")))?,
+                symbol: row.get(2)?,
+                side: row.get(3)?,
+                strike_price: parse_option_decimal(row.get(4)?, "strike_price")?,
+                underlying: row.get(5)?,
+                unit: row.get(6)?,
+                liquidation_fee_rate: parse_option_decimal(row.get(7)?, "liquidation_fee_rate")?,
+                min_qty: parse_option_decimal(row.get(8)?, "min_qty")?,
+                max_qty: parse_option_decimal(row.get(9)?, "max_qty")?,
+                initial_margin: parse_option_decimal(row.get(10)?, "initial_margin")?,
+                maintenance_margin: parse_option_decimal(row.get(11)?, "maintenance_margin")?,
+                min_initial_margin: parse_option_decimal(row.get(12)?, "min_initial_margin")?,
+                min_maintenance_margin: parse_option_decimal(row.get(13)?, "min_maintenance_margin")?,
+                price_scale: row.get(14)?,
+                quantity_scale: row.get(15)?,
+                quote_asset: row.get(16)?,
+                contract_type: row.get(17)?,
+                underlying_type: row.get(18)?,
+                naked_sell: row.get(19)?,
+                status: row.get(20)?,
+                filters: serde_json::from_str(&filters_json)?,
+            });
+        }
+
+        Ok(instruments)
+    }
+
+    async fn upsert(&self, instrument: BinanceOptionInstrumentPo) -> Result<BinanceOptionInstrumentPo, YuError> {
+        let expiry_date =
+            i64::try_from(instrument.expiry_date).map_err(|error| YuError::new(&format!("option expiry_date does not fit in i64: {error}")))?;
+        let strike_price = instrument.strike_price.to_string();
+        let liquidation_fee_rate = instrument.liquidation_fee_rate.to_string();
+        let min_qty = instrument.min_qty.to_string();
+        let max_qty = instrument.max_qty.to_string();
+        let initial_margin = instrument.initial_margin.to_string();
+        let maintenance_margin = instrument.maintenance_margin.to_string();
+        let min_initial_margin = instrument.min_initial_margin.to_string();
+        let min_maintenance_margin = instrument.min_maintenance_margin.to_string();
+        let filters = serde_json::to_string(&instrument.filters)?;
+        let conn = self.provider.acquire()?;
+
+        conn.execute(
+            "INSERT INTO bn_option_instruments (\
+                id, expiry_date, symbol, side, strike_price, underlying, unit, liquidation_fee_rate, min_qty, max_qty, \
+                initial_margin, maintenance_margin, min_initial_margin, min_maintenance_margin, price_scale, quantity_scale, \
+                quote_asset, contract_type, underlying_type, naked_sell, status, filters\
+             ) VALUES (\
+                ?, ?, ?, ?, CAST(? AS DECIMAL(38, 18)), ?, ?, CAST(? AS DECIMAL(38, 18)), \
+                CAST(? AS DECIMAL(38, 18)), CAST(? AS DECIMAL(38, 18)), CAST(? AS DECIMAL(38, 18)), \
+                CAST(? AS DECIMAL(38, 18)), CAST(? AS DECIMAL(38, 18)), CAST(? AS DECIMAL(38, 18)), \
+                ?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON)\
+             ) ON CONFLICT(symbol) DO UPDATE SET \
+                expiry_date = excluded.expiry_date, side = excluded.side, strike_price = excluded.strike_price, \
+                underlying = excluded.underlying, unit = excluded.unit, liquidation_fee_rate = excluded.liquidation_fee_rate, \
+                min_qty = excluded.min_qty, max_qty = excluded.max_qty, initial_margin = excluded.initial_margin, \
+                maintenance_margin = excluded.maintenance_margin, min_initial_margin = excluded.min_initial_margin, \
+                min_maintenance_margin = excluded.min_maintenance_margin, price_scale = excluded.price_scale, \
+                quantity_scale = excluded.quantity_scale, quote_asset = excluded.quote_asset, \
+                contract_type = excluded.contract_type, underlying_type = excluded.underlying_type, \
+                naked_sell = excluded.naked_sell, status = excluded.status, filters = excluded.filters;",
+            duckdb::params![
+                instrument.id,
+                expiry_date,
+                instrument.symbol.as_str(),
+                instrument.side.as_str(),
+                strike_price,
+                instrument.underlying.as_str(),
+                instrument.unit,
+                liquidation_fee_rate,
+                min_qty,
+                max_qty,
+                initial_margin,
+                maintenance_margin,
+                min_initial_margin,
+                min_maintenance_margin,
+                instrument.price_scale,
+                instrument.quantity_scale,
+                instrument.quote_asset.as_str(),
+                instrument.contract_type.as_str(),
+                instrument.underlying_type.as_str(),
+                instrument.naked_sell,
+                instrument.status.as_str(),
+                filters,
+            ],
+        )?;
+
+        let id = conn.query_row(
+            "SELECT id FROM bn_option_instruments WHERE symbol = ?;",
+            duckdb::params![instrument.symbol.as_str()],
+            |row| row.get::<_, i64>(0),
+        )?;
+        Ok(BinanceOptionInstrumentPo { id, ..instrument })
+    }
+}
+
+fn parse_option_decimal(value: String, field: &str) -> Result<rust_decimal::Decimal, YuError> {
+    value
+        .parse()
+        .map_err(|error| YuError::new(&format!("invalid {field} in bn_option_instruments: {error}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::binance::bn_consts::{BN_SYMBOL_STATUS_BREAK, BN_SYMBOL_STATUS_TRADING};
-    use crate::binance::db_consts::{CREATE_BINANCE_INSTRUMENTS_TABLE, CREATE_FUNDING_RATE_TABLE, CREATE_SPOT_KLINE_TABLE, CREATE_SWAP_KLINE_TABLE};
+    use crate::binance::db_consts::{
+        CREATE_BINANCE_INSTRUMENTS_TABLE, CREATE_BINANCE_OPTION_INSTRUMENTS_TABLE, CREATE_FUNDING_RATE_TABLE, CREATE_SPOT_KLINE_TABLE,
+        CREATE_SWAP_KLINE_TABLE,
+    };
     use crate::test_utils::create_memory_db_provider;
     use tokio::sync::mpsc;
+
+    // 测试目的：验证 Binance Option instrument repository 可读取、按 symbol 幂等更新，并保留毫秒时间、Decimal、filters 和服务器 ID。
+    // 准备数据/过程：在内存 DuckDB 创建 option 表，插入一条期权 instrument，再以相同 symbol 和新 ID 更新并重新读取。
+    // 预期结果：相同 symbol 不产生重复行且保留原 ID；最新字段、精确 Decimal 和 nullable filter 值均正确。
+    #[tokio::test]
+    async fn option_instrument_repository_upserts_and_reads_instruments() {
+        let provider = create_memory_db_provider();
+        let conn = provider.acquire().unwrap();
+        for statement in CREATE_BINANCE_OPTION_INSTRUMENTS_TABLE
+            .split(';')
+            .map(str::trim)
+            .filter(|sql| !sql.is_empty())
+        {
+            conn.execute(statement, []).unwrap();
+        }
+        drop(conn);
+
+        let repo = get_binance_option_instrument_repo(Some(provider));
+        let instrument = BinanceOptionInstrumentPo {
+            id: 42,
+            expiry_date: 1_700_000_000_123,
+            symbol: "BTC-270101-50000-C".to_string(),
+            side: "CALL".to_string(),
+            strike_price: "50000.00000001".parse().unwrap(),
+            underlying: "BTCUSDT".to_string(),
+            unit: 1,
+            liquidation_fee_rate: "0.0019000".parse().unwrap(),
+            min_qty: "0.01".parse().unwrap(),
+            max_qty: "100".parse().unwrap(),
+            initial_margin: "0.15".parse().unwrap(),
+            maintenance_margin: "0.075".parse().unwrap(),
+            min_initial_margin: "0.1".parse().unwrap(),
+            min_maintenance_margin: "0.05".parse().unwrap(),
+            price_scale: 2,
+            quantity_scale: 2,
+            quote_asset: "USDT".to_string(),
+            contract_type: "CRYPTO_OPTIONS".to_string(),
+            underlying_type: "CRYPTO".to_string(),
+            naked_sell: Some(false),
+            status: BN_SYMBOL_STATUS_TRADING.to_string(),
+            filters: vec![crate::binance::models::po::BinanceOptionSymbolFilterPo {
+                filter_type: "PRICE_FILTER".to_string(),
+                min_price: Some("0.00000001".parse().unwrap()),
+                max_price: Some("80000.01000000".parse().unwrap()),
+                tick_size: Some("0.01000000".parse().unwrap()),
+                min_qty: Some("0.01".parse().unwrap()),
+                max_qty: None,
+                step_size: Some("0.001".parse().unwrap()),
+            }],
+        };
+        repo.upsert(instrument.clone()).await.unwrap();
+
+        let updated = BinanceOptionInstrumentPo {
+            id: 99,
+            status: "EXPIRED".to_string(),
+            strike_price: "50001.00000001".parse().unwrap(),
+            naked_sell: None,
+            ..instrument
+        };
+        let saved = repo.upsert(updated).await.unwrap();
+        let instruments = repo.list_all().await.unwrap();
+
+        assert_eq!(instruments.len(), 1);
+        assert_eq!(saved.id, 42);
+        assert_eq!(instruments[0].id, 42);
+        assert_eq!(instruments[0].expiry_date, 1_700_000_000_123);
+        assert_eq!(instruments[0].status, "EXPIRED");
+        assert_eq!(instruments[0].strike_price, "50001.00000001".parse().unwrap());
+        assert_eq!(instruments[0].liquidation_fee_rate, "0.0019000".parse().unwrap());
+        assert_eq!(instruments[0].naked_sell, None);
+        assert_eq!(instruments[0].filters[0].min_price.unwrap().to_string(), "0.00000001");
+        assert_eq!(instruments[0].filters[0].max_qty, None);
+    }
+
+    // 测试目的：验证 option instrument repository 在表不存在时显式返回读取错误。
+    // 准备数据/过程：使用未创建 option instrument 表的内存 DuckDB 调用 list_all。
+    // 预期结果：方法返回 Err，不将数据库故障伪装成空列表。
+    #[tokio::test]
+    async fn option_instrument_repository_propagates_missing_table_error() {
+        let repo = get_binance_option_instrument_repo(Some(create_memory_db_provider()));
+
+        assert!(repo.list_all().await.is_err());
+    }
 
     // 测试目的：验证 instrument 的全量查询和交易中查询会按 status 正确区分。
     // 准备数据/过程：插入 BTCUSDT Spot，先查询交易中列表，再将其更新为 BREAK 后重新查询。
