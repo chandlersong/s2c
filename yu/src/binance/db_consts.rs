@@ -15,6 +15,8 @@ pub static QUERY_LATEST_FUNDING_RATE_SQL: &str = "select symbol,max(funding_time
 pub enum BinanceTables {
     Instrument,
     OptionInstrument,
+    OptionKline,
+    OptionMarketPrice,
     SpotKline,
     SwapKline,
     SwapFundingRate,
@@ -29,6 +31,8 @@ impl DuckDbTableTrait for BinanceTables {
         match self {
             BinanceTables::Instrument => String::from("bn_instruments"),
             BinanceTables::OptionInstrument => String::from("bn_option_instruments"),
+            BinanceTables::OptionKline => String::from("bn_option_kline"),
+            BinanceTables::OptionMarketPrice => String::from("bn_option_market_price"),
             BinanceTables::SpotKline => String::from("bn_spot_kline"),
             BinanceTables::SwapKline => String::from("bn_swap_kline"),
             BinanceTables::SwapFundingRate => String::from("bn_swap_funding_rate"),
@@ -43,6 +47,8 @@ impl DuckDbTableTrait for BinanceTables {
         match self {
             BinanceTables::Instrument => String::from(CREATE_BINANCE_INSTRUMENTS_TABLE),
             BinanceTables::OptionInstrument => String::from(CREATE_BINANCE_OPTION_INSTRUMENTS_TABLE),
+            BinanceTables::OptionKline => String::from(CREATE_BINANCE_OPTION_KLINE_TABLE),
+            BinanceTables::OptionMarketPrice => String::from(CREATE_BINANCE_OPTION_MARKET_PRICE_TABLE),
             BinanceTables::SpotKline => String::from(CREATE_SPOT_KLINE_TABLE),
             BinanceTables::SwapKline => String::from(CREATE_SWAP_KLINE_TABLE),
             BinanceTables::SwapFundingRate => String::from(CREATE_FUNDING_RATE_TABLE),
@@ -104,6 +110,46 @@ CREATE TABLE IF NOT EXISTS bn_option_instruments (
     status                  VARCHAR NOT NULL,
     filters                 JSON NOT NULL,
     UNIQUE (symbol)
+);
+"#;
+
+pub const CREATE_BINANCE_OPTION_KLINE_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS bn_option_kline (
+    id                          BIGINT NOT NULL,
+    inst_id                     BIGINT NOT NULL,
+    candle_begin_time           BIGINT NOT NULL,
+    open                        DECIMAL(38, 18) NOT NULL,
+    high                        DECIMAL(38, 18) NOT NULL,
+    low                         DECIMAL(38, 18) NOT NULL,
+    close                       DECIMAL(38, 18) NOT NULL,
+    volume                      DECIMAL(38, 18) NOT NULL,
+    close_time                  BIGINT NOT NULL,
+    quote_asset_volume          DECIMAL(38, 18) NOT NULL,
+    number_of_trades            BIGINT NOT NULL,
+    taker_buy_base_asset_volume DECIMAL(38, 18) NOT NULL,
+    taker_buy_quote_asset_volume DECIMAL(38, 18) NOT NULL,
+    PRIMARY KEY (inst_id, candle_begin_time)
+);
+"#;
+
+pub const CREATE_BINANCE_OPTION_MARKET_PRICE_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS bn_option_market_price (
+    id                  BIGINT NOT NULL,
+    inst_id             BIGINT NOT NULL,
+    symbol              VARCHAR NOT NULL,
+    acquire_ts          BIGINT NOT NULL,
+    mark_price          DECIMAL(38, 18) NOT NULL,
+    bid_iv              DECIMAL(38, 18) NOT NULL,
+    ask_iv              DECIMAL(38, 18) NOT NULL,
+    mark_iv             DECIMAL(38, 18) NOT NULL,
+    delta               DECIMAL(38, 18) NOT NULL,
+    theta               DECIMAL(38, 18) NOT NULL,
+    gamma               DECIMAL(38, 18) NOT NULL,
+    vega                DECIMAL(38, 18) NOT NULL,
+    high_price_limit    DECIMAL(38, 18) NOT NULL,
+    low_price_limit     DECIMAL(38, 18) NOT NULL,
+    risk_free_interest  DECIMAL(38, 18) NOT NULL,
+    PRIMARY KEY (inst_id, acquire_ts)
 );
 "#;
 
@@ -228,6 +274,8 @@ const CREATE_BN_SPOT_ORDER_BOOK_SNAPSHOT_TABLE: &str = r#"
 pub(crate) const ALL_BINANCE_TABLES: &[BinanceTables] = &[
     BinanceTables::Instrument,
     BinanceTables::OptionInstrument,
+    BinanceTables::OptionKline,
+    BinanceTables::OptionMarketPrice,
     BinanceTables::SpotKline,
     BinanceTables::SwapKline,
     BinanceTables::SwapFundingRate,
@@ -337,6 +385,50 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM pragma_table_info('bn_option_instruments')", [], |row| row.get(0))
             .unwrap();
         assert_eq!(column_count, 22);
+    }
+
+    // 测试目的：验证 Binance Option Kline 和 Market Price 服务端表已注册且 DDL 可创建完整 schema。
+    // 准备数据/过程：分别执行两张表的注册 DDL，并从 DuckDB 元数据读取列数。
+    // 预期结果：表名和初始化注册正确，Kline 有 13 列、Market Price 有 15 列，Decimal 字段采用精确 DECIMAL 类型。
+    #[test]
+    fn binance_option_history_tables_are_registered_and_create_schema() {
+        let kline_table = BinanceTables::OptionKline;
+        let market_price_table = BinanceTables::OptionMarketPrice;
+        let conn = duckdb::Connection::open_in_memory().unwrap();
+
+        assert_eq!(kline_table.table_name(), "bn_option_kline");
+        assert_eq!(market_price_table.table_name(), "bn_option_market_price");
+        assert!(ALL_BINANCE_TABLES.iter().any(|table| table.table_name() == kline_table.table_name()));
+        assert!(
+            ALL_BINANCE_TABLES
+                .iter()
+                .any(|table| table.table_name() == market_price_table.table_name())
+        );
+        assert!(
+            kline_table
+                .create_table_statement()
+                .contains("open                        DECIMAL(38, 18)")
+        );
+        assert!(
+            market_price_table
+                .create_table_statement()
+                .contains("mark_price          DECIMAL(38, 18)")
+        );
+
+        for table in [kline_table, market_price_table] {
+            for statement in table.create_table_statement().split(';').map(str::trim).filter(|sql| !sql.is_empty()) {
+                conn.execute(statement, []).unwrap();
+            }
+        }
+
+        let kline_columns: i64 = conn
+            .query_row("SELECT COUNT(*) FROM pragma_table_info('bn_option_kline')", [], |row| row.get(0))
+            .unwrap();
+        let market_price_columns: i64 = conn
+            .query_row("SELECT COUNT(*) FROM pragma_table_info('bn_option_market_price')", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(kline_columns, 13);
+        assert_eq!(market_price_columns, 15);
     }
 
     // 测试目的：验证订单簿快照表已注册到 Binance 表集合且 DDL 包含完整快照字段。

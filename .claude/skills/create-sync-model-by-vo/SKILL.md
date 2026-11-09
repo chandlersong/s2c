@@ -39,12 +39,13 @@ service、请求流程或运行时分发逻辑。
 4. 只有字段语义或 ID/时间映射存在无法从 VO 和相邻模型推断的歧义，且会改变实体字段或 protobuf 兼容性时，才使用 `ask_user`
    澄清。
 
-参考模式：
+### 具体实施的细节
 
 - VO：`yue/src/okx/models/restful.rs` 中的 `OptionSummaryDetail`。
 - 服务端 PO：`yu/src/okx/duck_po.rs`。
 - 服务端表：`yu/src/okx/duckdb_consts.rs` 中对应的实体 DDL。
 - protobuf message：`yu/proto/history_data.proto` 中的 `OkxOptionSummary`。
+    - instrument的类型，需要修改InstrumentType enum，History类型的数据，需要加入一个HistoryType enum
 - 客户端 PO：`yu/src/sync/client/po/okx.rs` 中的 `LocalOkxOptionSummaryPo`。
     - 时间字段，在po中为u64，数据中为`TIMESTAMPTZ`。注意转换
 - 客户端表：`yu/src/sync/client/db_consts.rs` 中对应的实体 DDL。
@@ -62,6 +63,21 @@ service、请求流程或运行时分发逻辑。
 - protobuf 仅追加未使用的字段号和 enum 值；不得复用、删除或改号已有字段。
 - DDL 列、客户端 PO 字段及批量序列化列（若已有转换实现使用该列序列）必须逐列一致；不得顺带修改既有表或其它实体。
 - 不改动用户已有注释、说明文档及无关文件。
+- 时间类时间一律采用UTC时间,Unix时间戳一律采用毫秒级
+    - 数据库中时间字段类型为TIMESTAMPTZ,po中时间字段类型为u64,protobuf中时间字段类型为int64
+
+## 命名规范和字段规范
+
+### Instrument
+
+- 所有的instrument类型的都用Instrument结尾
+    - 因为每个交易所的命名不通，可以统一改成这个，比如binance叫做symbol,polymarket叫做Asset
+- 需要再InstrumentType enum中添加对应的资产类型。
+
+### History
+
+- 所有的History类型的都用History结尾
+- 需要再HistoryType enum中添加对应的历史类型。
 
 ## 验证
 

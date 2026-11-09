@@ -38,6 +38,8 @@ enum HistoryType {
   BINANCE_SWAP_TRADE = 7;
   BINANCE_SWAP_FUNDING_RATE = 8;
   BINANCE_ORDER_BOOK_SNAPSHOT = 9;
+  BINANCE_OPTION_KLINE = 10;
+  BINANCE_OPTION_MARKET_PRICE = 11;
 }
 
 message PolymarketInstrument{
@@ -182,6 +184,8 @@ message HistoryEntry{
     BinanceTrade binance_trade = 8;
     BinanceFundingRate binance_funding_rate = 9;
     BinanceOrderBookSnapshot binance_order_book_snapshot = 10;
+    BinanceOptionKline binance_option_kline = 11;
+    BinanceOptionMarketPrice binance_option_market_price = 12;
   }
 }
 
@@ -261,6 +265,38 @@ message BinanceKline {
   uint32 interval = 14;
   optional int64 first_trade_id = 15;
   optional int64 last_trade_id = 16;
+}
+
+message BinanceOptionKline {
+  uint64 id = 1;
+  uint64 candle_begin_time = 2;
+  string open = 3;
+  string high = 4;
+  string low = 5;
+  string close = 6;
+  string volume = 7;
+  uint64 close_time = 8;
+  string quote_asset_volume = 9;
+  uint64 number_of_trades = 10;
+  string taker_buy_base_asset_volume = 11;
+  string taker_buy_quote_asset_volume = 12;
+}
+
+message BinanceOptionMarketPrice {
+  uint64 id = 1;
+  string symbol = 2;
+  uint64 acquire_ts = 3;
+  string mark_price = 4;
+  string bid_iv = 5;
+  string ask_iv = 6;
+  string mark_iv = 7;
+  string delta = 8;
+  string theta = 9;
+  string gamma = 10;
+  string vega = 11;
+  string high_price_limit = 12;
+  string low_price_limit = 13;
+  string risk_free_interest = 14;
 }
 
 message BinanceTrade {

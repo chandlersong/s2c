@@ -31,6 +31,8 @@ pub mod grpc_sync {
                 Self::BinanceSwapTrade => "Binance Swap Trade",
                 Self::BinanceSwapFundingRate => "Binance Swap Funding Rate",
                 Self::BinanceOrderBookSnapshot => "Binance Order Book Snapshot",
+                Self::BinanceOptionKline => "Binance Option Kline",
+                Self::BinanceOptionMarketPrice => "Binance Option Market Price",
             }
         }
     }
@@ -159,6 +161,46 @@ pub mod grpc_sync {
         }
     }
 
+    impl From<crate::binance::models::po::BinanceOptionKlinePo> for BinanceOptionKline {
+        fn from(value: crate::binance::models::po::BinanceOptionKlinePo) -> Self {
+            Self {
+                id: value.id,
+                candle_begin_time: value.candle_begin_time,
+                open: value.open.to_string(),
+                high: value.high.to_string(),
+                low: value.low.to_string(),
+                close: value.close.to_string(),
+                volume: value.volume.to_string(),
+                close_time: value.close_time,
+                quote_asset_volume: value.quote_asset_volume.to_string(),
+                number_of_trades: value.number_of_trades,
+                taker_buy_base_asset_volume: value.taker_buy_base_asset_volume.to_string(),
+                taker_buy_quote_asset_volume: value.taker_buy_quote_asset_volume.to_string(),
+            }
+        }
+    }
+
+    impl From<crate::binance::models::po::BinanceOptionMarketPricePo> for BinanceOptionMarketPrice {
+        fn from(value: crate::binance::models::po::BinanceOptionMarketPricePo) -> Self {
+            Self {
+                id: value.id,
+                symbol: value.symbol,
+                acquire_ts: value.acquire_ts,
+                mark_price: value.mark_price.to_string(),
+                bid_iv: value.bid_iv.to_string(),
+                ask_iv: value.ask_iv.to_string(),
+                mark_iv: value.mark_iv.to_string(),
+                delta: value.delta.to_string(),
+                theta: value.theta.to_string(),
+                gamma: value.gamma.to_string(),
+                vega: value.vega.to_string(),
+                high_price_limit: value.high_price_limit.to_string(),
+                low_price_limit: value.low_price_limit.to_string(),
+                risk_free_interest: value.risk_free_interest.to_string(),
+            }
+        }
+    }
+
     impl From<crate::binance::models::SpotStreamTradeRecordPo> for BinanceTrade {
         fn from(value: crate::binance::models::SpotStreamTradeRecordPo) -> Self {
             BinanceTrade {
@@ -218,9 +260,11 @@ mod tests {
     use crate::binance::models::po::BinanceOrderBookSnapshotPo;
     use crate::binance::models::po::{BinanceInstrument as BinanceInstrumentPo, KlinePo, SpotStreamTradeRecordPo};
     use crate::sync::client::po::binance::LocalBinanceOrderBookSnapshotPo;
-    use crate::sync::client::po::binance::{LocalBinanceKlinePo, LocalBinanceOptionInstrumentPo, LocalBinanceTradePo};
+    use crate::sync::client::po::binance::{
+        LocalBinanceKlinePo, LocalBinanceOptionInstrumentPo, LocalBinanceOptionKlinePo, LocalBinanceOptionMarketPricePo, LocalBinanceTradePo,
+    };
     use rust_decimal::Decimal;
-    use yue::binance::bn_models::option_restful::{OptionSymbol, OptionSymbolFilter};
+    use yue::binance::bn_models::option_restful::{OptionKLine, OptionMarketPrice as OptionMarketPriceVo, OptionSymbol, OptionSymbolFilter};
     use yue::binance::bn_models::spot_restful::Depth;
     use yue::binance::order_book::OrderBook;
     use yue::models::InstrumentType;
@@ -353,6 +397,149 @@ mod tests {
         assert_eq!(client_po.filters[0].min_qty.as_deref(), Some("0.01"));
         assert_eq!(client_po.filters[0].max_qty, None);
         assert_eq!(client_po.filters[0].step_size.as_deref(), Some("0.001"));
+    }
+
+    // 测试目的：验证 Binance Option KLine 从 VO 经服务端 PO、protobuf 到客户端 PO 的字段和 Decimal 精度映射。
+    // 准备数据/过程：反序列化含毫秒时间、完整 K 线字段及高精度十进制字符串的数组，依次转换并生成客户端 COPY 行。
+    // 预期结果：History/Instrument 类型、instrument ID、全部数值字符串和毫秒时间均保留，客户端列数与 COPY 行一致。
+    #[test]
+    fn binance_option_kline_maps_vo_server_po_proto_and_client_po() {
+        use crate::postgresql_db::CopyInsertable;
+
+        let source: OptionKLine = serde_json::from_str(
+            r#"[1700000000123,"100.000000000000000001","101.2","99.8","100.5","2.25",1700000060123,"225.000000000000000002",7,"1.25","125.000000000000000003",0]"#,
+        )
+        .unwrap();
+        let server_po = crate::binance::models::po::BinanceOptionKlinePo::from_option_kline(42, &source).unwrap();
+        let entry = server_po.to_history_entry();
+
+        assert_eq!(HistoryType::try_from(entry.history_type).unwrap(), HistoryType::BinanceOptionKline);
+        assert_eq!(
+            GrpcInstrumentType::try_from(entry.instrument_type).unwrap(),
+            GrpcInstrumentType::BinanceOption
+        );
+        assert_eq!(entry.inst_id, 42);
+        let Some(super::grpc_sync::history_entry::Payload::BinanceOptionKline(proto)) = entry.payload.as_ref() else {
+            panic!("expected Binance Option Kline payload");
+        };
+        assert_eq!(proto.id, server_po.id);
+        assert_eq!(proto.candle_begin_time, 1_700_000_000_123);
+        assert_eq!(proto.open, "100.000000000000000001");
+        assert_eq!(proto.high, "101.2");
+        assert_eq!(proto.low, "99.8");
+        assert_eq!(proto.close, "100.5");
+        assert_eq!(proto.volume, "2.25");
+        assert_eq!(proto.close_time, 1_700_000_060_123);
+        assert_eq!(proto.quote_asset_volume, "225.000000000000000002");
+        assert_eq!(proto.number_of_trades, 7);
+        assert_eq!(proto.taker_buy_base_asset_volume, "1.25");
+        assert_eq!(proto.taker_buy_quote_asset_volume, "125.000000000000000003");
+
+        let client_po = LocalBinanceOptionKlinePo::from_history_entry(&entry, 7);
+        let row = client_po.to_csv_row();
+        assert_ne!(client_po.id, server_po.id);
+        assert_eq!(client_po.inst_id, 7);
+        assert_eq!(client_po.candle_begin_time, 1_700_000_000_123);
+        assert_eq!(client_po.open, "100.000000000000000001");
+        assert_eq!(client_po.high, "101.2");
+        assert_eq!(client_po.low, "99.8");
+        assert_eq!(client_po.close, "100.5");
+        assert_eq!(client_po.volume, "2.25");
+        assert_eq!(client_po.close_time, 1_700_000_060_123);
+        assert_eq!(client_po.quote_asset_volume, "225.000000000000000002");
+        assert_eq!(client_po.number_of_trades, 7);
+        assert_eq!(client_po.taker_buy_base_asset_volume, "1.25");
+        assert_eq!(client_po.taker_buy_quote_asset_volume, "125.000000000000000003");
+        assert_eq!(
+            <LocalBinanceOptionKlinePo as CopyInsertable>::columns().split(',').count(),
+            row.split(',').count()
+        );
+        assert!(row.contains("2023-11-14T22:13:20.123+00:00"));
+    }
+
+    // 测试目的：验证 Binance Option Kline VO 缺少必需数组字段时转换显式返回错误。
+    // 准备数据/过程：将只有开盘时间的短数组反序列化为 OptionKLine 并尝试创建服务端 PO。
+    // 预期结果：VO→PO 返回错误，不生成缺字段或默认值填充的实体。
+    #[test]
+    fn binance_option_kline_rejects_missing_fields() {
+        let source: OptionKLine = serde_json::from_str("[1700000000123]").unwrap();
+        assert!(crate::binance::models::po::BinanceOptionKlinePo::from_option_kline(42, &source).is_err());
+    }
+
+    // 测试目的：验证 Binance Option Market Price 从 VO 经服务端 PO、protobuf 到客户端 PO 时保留全部 Decimal 精度和采集时间。
+    // 准备数据/过程：构造包含精确 Decimal 字符串的 OptionMarketPrice，转换为历史条目及本地 PO，并生成 COPY 行。
+    // 预期结果：采集时间由服务端转换时自动生成并保持毫秒精度，所有市场字段无精度损失，instrument 与列映射正确。
+    #[test]
+    fn binance_option_market_price_maps_vo_server_po_proto_and_client_po() {
+        use crate::postgresql_db::CopyInsertable;
+        use li::tools::time::unix_time_now_u64_utc;
+
+        let source = OptionMarketPriceVo {
+            symbol: "BTC-270101-50000-C".to_string(),
+            mark_price: "123.000000000000000001".parse().unwrap(),
+            bid_iv: "0.21".parse().unwrap(),
+            ask_iv: "0.22".parse().unwrap(),
+            mark_iv: "0.215".parse().unwrap(),
+            delta: "0.5".parse().unwrap(),
+            theta: "-0.01".parse().unwrap(),
+            gamma: "0.000000000000000123".parse().unwrap(),
+            vega: "0.03".parse().unwrap(),
+            high_price_limit: "130.1".parse().unwrap(),
+            low_price_limit: "110.2".parse().unwrap(),
+            risk_free_interest: "0.1".parse().unwrap(),
+        };
+        let start_ts = unix_time_now_u64_utc();
+        let server_po = crate::binance::models::po::BinanceOptionMarketPricePo::from_market_price(42, &source);
+        let entry = server_po.to_history_entry();
+        let end_ts = unix_time_now_u64_utc();
+
+        assert!(server_po.acquire_ts >= start_ts && server_po.acquire_ts <= end_ts);
+        assert_eq!(HistoryType::try_from(entry.history_type).unwrap(), HistoryType::BinanceOptionMarketPrice);
+        assert_eq!(
+            GrpcInstrumentType::try_from(entry.instrument_type).unwrap(),
+            GrpcInstrumentType::BinanceOption
+        );
+        assert_eq!(entry.inst_id, 42);
+        let Some(super::grpc_sync::history_entry::Payload::BinanceOptionMarketPrice(proto)) = entry.payload.as_ref() else {
+            panic!("expected Binance Option Market Price payload");
+        };
+        assert_eq!(proto.id, server_po.id);
+        assert_eq!(proto.symbol, source.symbol);
+        assert_eq!(proto.acquire_ts, server_po.acquire_ts);
+        assert_eq!(proto.mark_price, "123.000000000000000001");
+        assert_eq!(proto.bid_iv, "0.21");
+        assert_eq!(proto.ask_iv, "0.22");
+        assert_eq!(proto.mark_iv, "0.215");
+        assert_eq!(proto.delta, "0.5");
+        assert_eq!(proto.theta, "-0.01");
+        assert_eq!(proto.gamma, "0.000000000000000123");
+        assert_eq!(proto.vega, "0.03");
+        assert_eq!(proto.high_price_limit, "130.1");
+        assert_eq!(proto.low_price_limit, "110.2");
+        assert_eq!(proto.risk_free_interest, "0.1");
+
+        let client_po = LocalBinanceOptionMarketPricePo::from_history_entry(&entry, 7);
+        let row = client_po.to_csv_row();
+        assert_ne!(client_po.id, server_po.id);
+        assert_eq!(client_po.inst_id, 7);
+        assert_eq!(client_po.symbol, source.symbol);
+        assert_eq!(client_po.acquire_ts, server_po.acquire_ts);
+        assert_eq!(client_po.mark_price, "123.000000000000000001");
+        assert_eq!(client_po.bid_iv, "0.21");
+        assert_eq!(client_po.ask_iv, "0.22");
+        assert_eq!(client_po.mark_iv, "0.215");
+        assert_eq!(client_po.delta, "0.5");
+        assert_eq!(client_po.theta, "-0.01");
+        assert_eq!(client_po.gamma, "0.000000000000000123");
+        assert_eq!(client_po.vega, "0.03");
+        assert_eq!(client_po.high_price_limit, "130.1");
+        assert_eq!(client_po.low_price_limit, "110.2");
+        assert_eq!(client_po.risk_free_interest, "0.1");
+        assert_eq!(
+            <LocalBinanceOptionMarketPricePo as CopyInsertable>::columns().split(',').count(),
+            row.split(',').count()
+        );
+        assert!(row.contains(&li::tools::time::format_timestamp_millis(i64::try_from(server_po.acquire_ts).unwrap())));
     }
 
     #[test]

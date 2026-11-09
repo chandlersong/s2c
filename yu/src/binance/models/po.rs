@@ -1,13 +1,13 @@
 use crate::duck_db::DuckDBPO;
 use duckdb::appender_params_from_iter;
-use li::tools::time::UnixTimeStamp;
+use li::tools::time::{UnixTimeStamp, unix_time_now_u64_utc};
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display};
 use std::string::ToString;
 use yue::binance::bn_models::common::SymbolInfoTrait;
 use yue::binance::bn_models::common::{PortfolioSpotOrderData, PortfolioSwapOrderData, SpotOrderData, SwapOrderData};
-use yue::binance::bn_models::option_restful::{OptionSymbol, OptionSymbolFilter};
+use yue::binance::bn_models::option_restful::{OptionKLine, OptionMarketPrice, OptionSymbol, OptionSymbolFilter};
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_models::spot_websocket_stream::{KlineStreamPayload, SpotKlineData, TradeStreamPayload};
 use yue::binance::bn_models::swap_restful::FundingRate;
@@ -175,6 +175,108 @@ impl From<&OptionSymbol> for BinanceOptionInstrumentPo {
     fn from(symbol: &OptionSymbol) -> Self {
         let id = i64::try_from(get_snow_flake_id_u64()).expect("Binance option instrument id must fit in i64");
         Self::from_option_symbol_with_id(symbol, id)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinanceOptionKlinePo {
+    pub id: u64,
+    pub inst_id: u64,
+    pub candle_begin_time: u64,
+    pub open: rust_decimal::Decimal,
+    pub high: rust_decimal::Decimal,
+    pub low: rust_decimal::Decimal,
+    pub close: rust_decimal::Decimal,
+    pub volume: rust_decimal::Decimal,
+    pub close_time: u64,
+    pub quote_asset_volume: rust_decimal::Decimal,
+    pub number_of_trades: u64,
+    pub taker_buy_base_asset_volume: rust_decimal::Decimal,
+    pub taker_buy_quote_asset_volume: rust_decimal::Decimal,
+}
+
+impl BinanceOptionKlinePo {
+    pub fn from_option_kline(inst_id: u64, kline: &OptionKLine) -> Result<Self, yue::errors::YueError> {
+        Ok(Self {
+            id: get_snow_flake_id_u64(),
+            inst_id,
+            candle_begin_time: kline.candle_begin_time()?,
+            open: kline.open_price()?,
+            high: kline.high_price()?,
+            low: kline.low_price()?,
+            close: kline.close_price()?,
+            volume: kline.volume()?,
+            close_time: kline.close_time()?,
+            quote_asset_volume: kline.quote_asset_volume()?,
+            number_of_trades: kline.number_of_trades()?,
+            taker_buy_base_asset_volume: kline.taker_buy_base_asset_volume()?,
+            taker_buy_quote_asset_volume: kline.taker_buy_quote_asset_volume()?,
+        })
+    }
+
+    pub fn to_history_entry(&self) -> crate::sync::models::grpc_sync::HistoryEntry {
+        use crate::sync::models::grpc_sync::{HistoryType, InstrumentType, history_entry};
+        crate::sync::models::grpc_sync::HistoryEntry {
+            history_type: HistoryType::BinanceOptionKline.into(),
+            instrument_type: InstrumentType::BinanceOption.into(),
+            inst_id: self.inst_id,
+            payload: Some(history_entry::Payload::BinanceOptionKline(
+                crate::sync::models::grpc_sync::BinanceOptionKline::from(self.clone()),
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinanceOptionMarketPricePo {
+    pub id: u64,
+    pub inst_id: u64,
+    pub symbol: String,
+    pub acquire_ts: u64,
+    pub mark_price: rust_decimal::Decimal,
+    pub bid_iv: rust_decimal::Decimal,
+    pub ask_iv: rust_decimal::Decimal,
+    pub mark_iv: rust_decimal::Decimal,
+    pub delta: rust_decimal::Decimal,
+    pub theta: rust_decimal::Decimal,
+    pub gamma: rust_decimal::Decimal,
+    pub vega: rust_decimal::Decimal,
+    pub high_price_limit: rust_decimal::Decimal,
+    pub low_price_limit: rust_decimal::Decimal,
+    pub risk_free_interest: rust_decimal::Decimal,
+}
+
+impl BinanceOptionMarketPricePo {
+    pub fn from_market_price(inst_id: u64, price: &OptionMarketPrice) -> Self {
+        Self {
+            id: get_snow_flake_id_u64(),
+            inst_id,
+            symbol: price.symbol.clone(),
+            acquire_ts: unix_time_now_u64_utc(),
+            mark_price: price.mark_price,
+            bid_iv: price.bid_iv,
+            ask_iv: price.ask_iv,
+            mark_iv: price.mark_iv,
+            delta: price.delta,
+            theta: price.theta,
+            gamma: price.gamma,
+            vega: price.vega,
+            high_price_limit: price.high_price_limit,
+            low_price_limit: price.low_price_limit,
+            risk_free_interest: price.risk_free_interest,
+        }
+    }
+
+    pub fn to_history_entry(&self) -> crate::sync::models::grpc_sync::HistoryEntry {
+        use crate::sync::models::grpc_sync::{HistoryType, InstrumentType, history_entry};
+        crate::sync::models::grpc_sync::HistoryEntry {
+            history_type: HistoryType::BinanceOptionMarketPrice.into(),
+            instrument_type: InstrumentType::BinanceOption.into(),
+            inst_id: self.inst_id,
+            payload: Some(history_entry::Payload::BinanceOptionMarketPrice(
+                crate::sync::models::grpc_sync::BinanceOptionMarketPrice::from(self.clone()),
+            )),
+        }
     }
 }
 

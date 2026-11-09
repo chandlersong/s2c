@@ -9,6 +9,8 @@ pub enum ClientsTables {
     OkxInstruments,
     BinanceInstruments,
     BinanceOptionInstruments,
+    BinanceOptionKline,
+    BinanceOptionMarketPrice,
     BinanceSpotKline,
     BinanceSpotTrade,
     BinanceSwapKline,
@@ -27,6 +29,8 @@ impl PostgresqlTableTrait for ClientsTables {
             ClientsTables::OkxInstruments => "okx_instruments",
             ClientsTables::BinanceInstruments => "binance_instruments",
             ClientsTables::BinanceOptionInstruments => "binance_option_instruments",
+            ClientsTables::BinanceOptionKline => "binance_option_kline_history",
+            ClientsTables::BinanceOptionMarketPrice => "binance_option_market_price_history",
             ClientsTables::BinanceSpotKline => "binance_spot_kline_history",
             ClientsTables::BinanceSpotTrade => "binance_spot_trade_history",
             ClientsTables::BinanceSwapKline => "binance_swap_kline_history",
@@ -45,6 +49,8 @@ impl PostgresqlTableTrait for ClientsTables {
             ClientsTables::OkxInstruments => CREATE_OKX_INSTRUMENTS_TABLE,
             ClientsTables::BinanceInstruments => CREATE_BINANCE_INSTRUMENTS_TABLE,
             ClientsTables::BinanceOptionInstruments => CREATE_BINANCE_OPTION_INSTRUMENTS_TABLE,
+            ClientsTables::BinanceOptionKline => CREATE_BINANCE_OPTION_KLINE_TABLE,
+            ClientsTables::BinanceOptionMarketPrice => CREATE_BINANCE_OPTION_MARKET_PRICE_TABLE,
             ClientsTables::BinanceSpotKline => CREATE_BINANCE_SPOT_KLINE_TABLE,
             ClientsTables::BinanceSpotTrade => CREATE_BINANCE_SPOT_TRADE_TABLE,
             ClientsTables::BinanceSwapKline => CREATE_BINANCE_SWAP_KLINE_TABLE,
@@ -233,6 +239,70 @@ CREATE TABLE IF NOT EXISTS binance_option_instruments (
 );
 "#;
 
+pub const CREATE_BINANCE_OPTION_KLINE_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS binance_option_kline_history (
+    id                           BIGINT NOT NULL,
+    inst_id                      BIGINT NOT NULL,
+    candle_begin_time            TIMESTAMPTZ NOT NULL,
+    open                         NUMERIC NOT NULL,
+    high                         NUMERIC NOT NULL,
+    low                          NUMERIC NOT NULL,
+    close                        NUMERIC NOT NULL,
+    volume                       NUMERIC NOT NULL,
+    close_time                   BIGINT NOT NULL,
+    quote_asset_volume           NUMERIC NOT NULL,
+    number_of_trades             BIGINT NOT NULL,
+    taker_buy_base_asset_volume  NUMERIC NOT NULL,
+    taker_buy_quote_asset_volume NUMERIC NOT NULL,
+    batch_timestamp              BIGINT NOT NULL,
+    PRIMARY KEY (inst_id, candle_begin_time)
+);
+SELECT create_hypertable(
+  'binance_option_kline_history',
+  'candle_begin_time',
+  if_not_exists => TRUE
+);
+ALTER TABLE binance_option_kline_history SET (
+  timescaledb.enable_columnstore,
+  timescaledb.orderby = 'candle_begin_time DESC',
+  timescaledb.segmentby = 'inst_id'
+);
+SELECT add_compression_policy('binance_option_kline_history', INTERVAL '30 days');
+"#;
+
+pub const CREATE_BINANCE_OPTION_MARKET_PRICE_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS binance_option_market_price_history (
+    id                 BIGINT NOT NULL,
+    inst_id            BIGINT NOT NULL,
+    symbol             VARCHAR NOT NULL,
+    acquire_ts         TIMESTAMPTZ NOT NULL,
+    mark_price         NUMERIC NOT NULL,
+    bid_iv             NUMERIC NOT NULL,
+    ask_iv             NUMERIC NOT NULL,
+    mark_iv            NUMERIC NOT NULL,
+    delta              NUMERIC NOT NULL,
+    theta              NUMERIC NOT NULL,
+    gamma              NUMERIC NOT NULL,
+    vega               NUMERIC NOT NULL,
+    high_price_limit   NUMERIC NOT NULL,
+    low_price_limit    NUMERIC NOT NULL,
+    risk_free_interest NUMERIC NOT NULL,
+    batch_timestamp    BIGINT NOT NULL,
+    PRIMARY KEY (inst_id, acquire_ts)
+);
+SELECT create_hypertable(
+  'binance_option_market_price_history',
+  'acquire_ts',
+  if_not_exists => TRUE
+);
+ALTER TABLE binance_option_market_price_history SET (
+  timescaledb.enable_columnstore,
+  timescaledb.orderby = 'acquire_ts DESC',
+  timescaledb.segmentby = 'inst_id'
+);
+SELECT add_compression_policy('binance_option_market_price_history', INTERVAL '30 days');
+"#;
+
 pub const CREATE_BINANCE_SPOT_KLINE_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS binance_spot_kline_history (
     id BIGINT NOT NULL,
@@ -399,6 +469,8 @@ pub(crate) const ALL_CLIENT_TABLES: &[ClientsTables] = &[
     ClientsTables::OkxInstruments,
     ClientsTables::BinanceInstruments,
     ClientsTables::BinanceOptionInstruments,
+    ClientsTables::BinanceOptionKline,
+    ClientsTables::BinanceOptionMarketPrice,
     ClientsTables::BinanceSpotKline,
     ClientsTables::BinanceSpotTrade,
     ClientsTables::BinanceSwapKline,
@@ -456,6 +528,54 @@ mod tests {
         assert!(ALL_CLIENT_TABLES.iter().any(|registered| registered.table_name() == table.table_name()));
         for column in columns {
             assert!(ddl.contains(column));
+        }
+    }
+
+    // 测试目的：验证 Binance Option Kline 和 Market Price 客户端表注册及 DDL 与客户端 PO 字段对齐。
+    // 准备数据/过程：读取两张表的注册项和建表语句，检查毫秒时间字段 TIMESTAMPTZ 及各实体列。
+    // 预期结果：表名和初始化注册正确，Kline 开始时间及 Market Price 采集时间为 TIMESTAMPTZ，Decimal 列可存储 NUMERIC。
+    #[test]
+    fn binance_option_history_client_tables_are_registered() {
+        let kline_table = ClientsTables::BinanceOptionKline;
+        let market_price_table = ClientsTables::BinanceOptionMarketPrice;
+        let kline_columns = [
+            "id BIGINT NOT NULL",
+            "inst_id BIGINT NOT NULL",
+            "candle_begin_time TIMESTAMPTZ NOT NULL",
+            "quote_asset_volume NUMERIC NOT NULL",
+            "number_of_trades BIGINT NOT NULL",
+            "batch_timestamp BIGINT NOT NULL",
+        ];
+        let market_price_columns = [
+            "id                 BIGINT NOT NULL",
+            "symbol             VARCHAR NOT NULL",
+            "acquire_ts         TIMESTAMPTZ NOT NULL",
+            "mark_price         NUMERIC NOT NULL",
+            "risk_free_interest NUMERIC NOT NULL",
+            "batch_timestamp    BIGINT NOT NULL",
+        ];
+
+        assert_eq!(kline_table.table_name(), "binance_option_kline_history");
+        assert_eq!(market_price_table.table_name(), "binance_option_market_price_history");
+        assert!(ALL_CLIENT_TABLES.iter().any(|table| table.table_name() == kline_table.table_name()));
+        assert!(
+            ALL_CLIENT_TABLES
+                .iter()
+                .any(|table| table.table_name() == market_price_table.table_name())
+        );
+        let kline_ddl = kline_table.create_table_statement().split_whitespace().collect::<Vec<_>>().join(" ");
+        let market_price_ddl = market_price_table
+            .create_table_statement()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        for column in kline_columns {
+            let column = column.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(kline_ddl.contains(&column));
+        }
+        for column in market_price_columns {
+            let column = column.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(market_price_ddl.contains(&column));
         }
     }
 }

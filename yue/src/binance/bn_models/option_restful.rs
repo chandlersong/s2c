@@ -254,6 +254,181 @@ impl<'a> IntoIterator for &'a MarketPriceResponse {
     }
 }
 
+///
+/// [文档](https://developers.binance.com/zh-CN/docs/catalog/core-trading-derivatives-trading-options/api/rest-api/market-data#kline-candlestick-data)
+/// index说明
+/// 0: candle_begin_time
+/// 1: open price
+/// 2: high price
+/// 3: low price
+/// 4: close price
+/// 5: volume
+/// 6: close time
+/// 7: quote asset volume
+/// 8: number of trades
+/// 9: taker buy base asset volume
+/// 10: taker buy quote asset volume
+/// 11: ignore
+#[derive(Debug, Deserialize)]
+pub struct OptionKLine(Vec<serde_json::Value>);
+
+impl OptionKLine {
+    /// Returns the candle begin time in milliseconds.
+    pub fn candle_begin_time(&self) -> Result<u64, YueError> {
+        self.integer_value(0, "candle begin time")
+    }
+
+    /// Returns the open price.
+    pub fn open_price(&self) -> Result<Decimal, YueError> {
+        self.decimal_value(1, "open price")
+    }
+
+    /// Returns the high price.
+    pub fn high_price(&self) -> Result<Decimal, YueError> {
+        self.decimal_value(2, "high price")
+    }
+
+    /// Returns the low price.
+    pub fn low_price(&self) -> Result<Decimal, YueError> {
+        self.decimal_value(3, "low price")
+    }
+
+    /// Returns the close price.
+    pub fn close_price(&self) -> Result<Decimal, YueError> {
+        self.decimal_value(4, "close price")
+    }
+
+    /// Returns the base-asset volume.
+    pub fn volume(&self) -> Result<Decimal, YueError> {
+        self.decimal_value(5, "volume")
+    }
+
+    /// Returns the candle close time in milliseconds.
+    pub fn close_time(&self) -> Result<u64, YueError> {
+        self.integer_value(6, "close time")
+    }
+
+    /// Returns the quote-asset volume.
+    pub fn quote_asset_volume(&self) -> Result<Decimal, YueError> {
+        self.decimal_value(7, "quote asset volume")
+    }
+
+    /// Returns the number of trades.
+    pub fn number_of_trades(&self) -> Result<u64, YueError> {
+        self.integer_value(8, "number of trades")
+    }
+
+    /// Returns the taker-buy base-asset volume.
+    pub fn taker_buy_base_asset_volume(&self) -> Result<Decimal, YueError> {
+        self.decimal_value(9, "taker buy base asset volume")
+    }
+
+    /// Returns the taker-buy quote-asset volume.
+    pub fn taker_buy_quote_asset_volume(&self) -> Result<Decimal, YueError> {
+        self.decimal_value(10, "taker buy quote asset volume")
+    }
+
+    /// Returns the raw value of the reserved ignore field.
+    pub fn ignore(&self) -> Result<&serde_json::Value, YueError> {
+        self.value(11, "ignore")
+    }
+
+    fn decimal_value(&self, index: usize, field: &str) -> Result<Decimal, YueError> {
+        let value = self.value(index, field)?;
+        let raw = value.as_str().map(str::to_owned).unwrap_or_else(|| value.to_string());
+        raw.parse()
+            .map_err(|error| YueError::ParseError(format!("invalid option kline {field}: {error}")))
+    }
+
+    fn integer_value(&self, index: usize, field: &str) -> Result<u64, YueError> {
+        let value = self.value(index, field)?;
+        value
+            .as_u64()
+            .or_else(|| value.as_str().and_then(|raw| raw.parse().ok()))
+            .ok_or_else(|| YueError::ParseError(format!("invalid option kline {field}")))
+    }
+
+    fn value(&self, index: usize, field: &str) -> Result<&serde_json::Value, YueError> {
+        self.0
+            .get(index)
+            .ok_or_else(|| YueError::ParseError(format!("option kline is missing {field}")))
+    }
+}
+
+///
+///  URL:/eapi/v1/klines
+///
+#[derive(Debug, Deserialize)]
+#[serde(transparent)]
+pub struct KLinesResponse(Vec<OptionKLine>);
+
+impl KLinesResponse {
+    /// Returns the number of K-line records.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Returns whether the response contains no K-line records.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Returns an iterator over the K-line records by reference.
+    pub fn iter(&self) -> impl Iterator<Item = &OptionKLine> {
+        self.0.iter()
+    }
+
+    /// Returns the K-line record at `index`.
+    pub fn get(&self, index: usize) -> Option<&OptionKLine> {
+        self.0.get(index)
+    }
+
+    /// Returns the close price for the K-line at `index`.
+    pub fn close_price(&self, index: usize) -> Result<Decimal, YueError> {
+        self.kline_at(index)?.close_price()
+    }
+
+    /// Returns the close time in milliseconds for the K-line at `index`.
+    pub fn close_time(&self, index: usize) -> Result<u64, YueError> {
+        self.kline_at(index)?.close_time()
+    }
+
+    /// Returns the base-asset volume for the K-line at `index`.
+    pub fn volume(&self, index: usize) -> Result<Decimal, YueError> {
+        self.kline_at(index)?.volume()
+    }
+
+    fn kline_at(&self, index: usize) -> Result<&OptionKLine, YueError> {
+        self.0
+            .get(index)
+            .ok_or_else(|| YueError::ParseError(format!("option kline at index {index} does not exist")))
+    }
+}
+
+impl FromIterator<OptionKLine> for KLinesResponse {
+    fn from_iter<T: IntoIterator<Item = OptionKLine>>(iter: T) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
+
+impl IntoIterator for KLinesResponse {
+    type Item = OptionKLine;
+    type IntoIter = std::vec::IntoIter<OptionKLine>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a KLinesResponse {
+    type Item = &'a OptionKLine;
+    type IntoIter = std::slice::Iter<'a, OptionKLine>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{KLinesResponse, OptionExchangeInfo, OptionMarketPrice};
@@ -461,180 +636,5 @@ mod tests {
 
         assert_eq!(close_prices, ["1", "2"]);
         assert_eq!(owned_count, 2);
-    }
-}
-
-///
-/// [文档](https://developers.binance.com/zh-CN/docs/catalog/core-trading-derivatives-trading-options/api/rest-api/market-data#kline-candlestick-data)
-/// index说明
-/// 0: candle_begin_time
-/// 1: open price
-/// 2: high price
-/// 3: low price
-/// 4: close price
-/// 5: volume
-/// 6: close time
-/// 7: quote asset volume
-/// 8: number of trades
-/// 9: taker buy base asset volume
-/// 10: taker buy quote asset volume
-/// 11: ignore
-#[derive(Debug, Deserialize)]
-pub struct OptionKLine(Vec<serde_json::Value>);
-
-impl OptionKLine {
-    /// Returns the candle begin time in milliseconds.
-    pub fn candle_begin_time(&self) -> Result<u64, YueError> {
-        self.integer_value(0, "candle begin time")
-    }
-
-    /// Returns the open price.
-    pub fn open_price(&self) -> Result<Decimal, YueError> {
-        self.decimal_value(1, "open price")
-    }
-
-    /// Returns the high price.
-    pub fn high_price(&self) -> Result<Decimal, YueError> {
-        self.decimal_value(2, "high price")
-    }
-
-    /// Returns the low price.
-    pub fn low_price(&self) -> Result<Decimal, YueError> {
-        self.decimal_value(3, "low price")
-    }
-
-    /// Returns the close price.
-    pub fn close_price(&self) -> Result<Decimal, YueError> {
-        self.decimal_value(4, "close price")
-    }
-
-    /// Returns the base-asset volume.
-    pub fn volume(&self) -> Result<Decimal, YueError> {
-        self.decimal_value(5, "volume")
-    }
-
-    /// Returns the candle close time in milliseconds.
-    pub fn close_time(&self) -> Result<u64, YueError> {
-        self.integer_value(6, "close time")
-    }
-
-    /// Returns the quote-asset volume.
-    pub fn quote_asset_volume(&self) -> Result<Decimal, YueError> {
-        self.decimal_value(7, "quote asset volume")
-    }
-
-    /// Returns the number of trades.
-    pub fn number_of_trades(&self) -> Result<u64, YueError> {
-        self.integer_value(8, "number of trades")
-    }
-
-    /// Returns the taker-buy base-asset volume.
-    pub fn taker_buy_base_asset_volume(&self) -> Result<Decimal, YueError> {
-        self.decimal_value(9, "taker buy base asset volume")
-    }
-
-    /// Returns the taker-buy quote-asset volume.
-    pub fn taker_buy_quote_asset_volume(&self) -> Result<Decimal, YueError> {
-        self.decimal_value(10, "taker buy quote asset volume")
-    }
-
-    /// Returns the raw value of the reserved ignore field.
-    pub fn ignore(&self) -> Result<&serde_json::Value, YueError> {
-        self.value(11, "ignore")
-    }
-
-    fn decimal_value(&self, index: usize, field: &str) -> Result<Decimal, YueError> {
-        let value = self.value(index, field)?;
-        let raw = value.as_str().map(str::to_owned).unwrap_or_else(|| value.to_string());
-        raw.parse()
-            .map_err(|error| YueError::ParseError(format!("invalid option kline {field}: {error}")))
-    }
-
-    fn integer_value(&self, index: usize, field: &str) -> Result<u64, YueError> {
-        let value = self.value(index, field)?;
-        value
-            .as_u64()
-            .or_else(|| value.as_str().and_then(|raw| raw.parse().ok()))
-            .ok_or_else(|| YueError::ParseError(format!("invalid option kline {field}")))
-    }
-
-    fn value(&self, index: usize, field: &str) -> Result<&serde_json::Value, YueError> {
-        self.0
-            .get(index)
-            .ok_or_else(|| YueError::ParseError(format!("option kline is missing {field}")))
-    }
-}
-
-///
-///  URL:/eapi/v1/klines
-///
-#[derive(Debug, Deserialize)]
-#[serde(transparent)]
-pub struct KLinesResponse(Vec<OptionKLine>);
-
-impl KLinesResponse {
-    /// Returns the number of K-line records.
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    /// Returns whether the response contains no K-line records.
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    /// Returns an iterator over the K-line records by reference.
-    pub fn iter(&self) -> impl Iterator<Item = &OptionKLine> {
-        self.0.iter()
-    }
-
-    /// Returns the K-line record at `index`.
-    pub fn get(&self, index: usize) -> Option<&OptionKLine> {
-        self.0.get(index)
-    }
-
-    /// Returns the close price for the K-line at `index`.
-    pub fn close_price(&self, index: usize) -> Result<Decimal, YueError> {
-        self.kline_at(index)?.close_price()
-    }
-
-    /// Returns the close time in milliseconds for the K-line at `index`.
-    pub fn close_time(&self, index: usize) -> Result<u64, YueError> {
-        self.kline_at(index)?.close_time()
-    }
-
-    /// Returns the base-asset volume for the K-line at `index`.
-    pub fn volume(&self, index: usize) -> Result<Decimal, YueError> {
-        self.kline_at(index)?.volume()
-    }
-
-    fn kline_at(&self, index: usize) -> Result<&OptionKLine, YueError> {
-        self.0
-            .get(index)
-            .ok_or_else(|| YueError::ParseError(format!("option kline at index {index} does not exist")))
-    }
-}
-
-impl FromIterator<OptionKLine> for KLinesResponse {
-    fn from_iter<T: IntoIterator<Item = OptionKLine>>(iter: T) -> Self {
-        Self(iter.into_iter().collect())
-    }
-}
-
-impl IntoIterator for KLinesResponse {
-    type Item = OptionKLine;
-    type IntoIter = std::vec::IntoIter<OptionKLine>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
-    }
-}
-
-impl<'a> IntoIterator for &'a KLinesResponse {
-    type Item = &'a OptionKLine;
-    type IntoIter = std::slice::Iter<'a, OptionKLine>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.iter()
     }
 }

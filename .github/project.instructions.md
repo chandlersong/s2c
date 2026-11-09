@@ -74,7 +74,12 @@ applyTo: "**/*.rs"
     1. 初始条件，过程和预期输出
     2. 测试的目的
     3. 准备的数据
+- 单元测试必须放在末尾
 - 单元测试的mock方式
     - 如果测试的属性，参数可以用mockall，就用mockall。
     - 如果测试的是一些restful的调用，那么就用wiremock。
         - 具体可以参考`yue/src/binance/bn_restful_commands.rs`中的单元测试代码
+    - 数据库相关的单元测试，主要是repository的单元测试，相关的单元测试。
+        - duckdb的单元测试，参考`yu/src/binance/duckdb_repository.rs`中的单元测试代码
+            - 用`create_memory_db_provider`创建一个内存数据库，来处理。
+        - 其余，如果不能创建内存数据库，则直接跳过。

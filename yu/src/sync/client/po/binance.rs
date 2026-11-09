@@ -1,7 +1,7 @@
 use crate::postgresql_db::CopyInsertable;
 use crate::sync::models::grpc_sync::{
-    BinanceFundingRate, BinanceInstrument, BinanceKline, BinanceOptionInstrument, BinanceOrderBookSnapshot, BinanceTrade, HistoryEntry,
-    history_entry::Payload,
+    BinanceFundingRate, BinanceInstrument, BinanceKline, BinanceOptionInstrument, BinanceOptionKline, BinanceOptionMarketPrice,
+    BinanceOrderBookSnapshot, BinanceTrade, HistoryEntry, history_entry::Payload,
 };
 use li::tools::time::{format_timestamp_millis, unix_time_now_u64_utc};
 use sqlx::Row;
@@ -156,6 +156,164 @@ impl LocalBinanceOptionInstrumentPo {
                 })
                 .collect(),
         }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct LocalBinanceOptionKlinePo {
+    pub id: u64,
+    pub inst_id: u64,
+    pub candle_begin_time: u64,
+    pub open: String,
+    pub high: String,
+    pub low: String,
+    pub close: String,
+    pub volume: String,
+    pub close_time: u64,
+    pub quote_asset_volume: String,
+    pub number_of_trades: u64,
+    pub taker_buy_base_asset_volume: String,
+    pub taker_buy_quote_asset_volume: String,
+    pub batch_timestamp: u64,
+}
+
+impl LocalBinanceOptionKlinePo {
+    pub fn from_proto(kline: BinanceOptionKline, inst_id: u64, batch_timestamp: u64) -> Self {
+        Self {
+            id: get_snow_flake_id_u64(),
+            inst_id,
+            candle_begin_time: kline.candle_begin_time,
+            open: kline.open,
+            high: kline.high,
+            low: kline.low,
+            close: kline.close,
+            volume: kline.volume,
+            close_time: kline.close_time,
+            quote_asset_volume: kline.quote_asset_volume,
+            number_of_trades: kline.number_of_trades,
+            taker_buy_base_asset_volume: kline.taker_buy_base_asset_volume,
+            taker_buy_quote_asset_volume: kline.taker_buy_quote_asset_volume,
+            batch_timestamp,
+        }
+    }
+}
+
+impl CopyInsertable for LocalBinanceOptionKlinePo {
+    fn columns() -> &'static str {
+        "id,inst_id,candle_begin_time,open,high,low,close,volume,close_time,quote_asset_volume,number_of_trades,taker_buy_base_asset_volume,taker_buy_quote_asset_volume,batch_timestamp"
+    }
+
+    fn to_csv_row(&self) -> String {
+        let candle_begin_time =
+            format_timestamp_millis(i64::try_from(self.candle_begin_time).expect("candle_begin_time must fit in i64 milliseconds"));
+
+        format!(
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            self.id,
+            self.inst_id,
+            candle_begin_time,
+            self.open,
+            self.high,
+            self.low,
+            self.close,
+            self.volume,
+            self.close_time,
+            self.quote_asset_volume,
+            self.number_of_trades,
+            self.taker_buy_base_asset_volume,
+            self.taker_buy_quote_asset_volume,
+            self.batch_timestamp
+        )
+    }
+
+    fn from_history_entry(history_entry: &HistoryEntry, local_inst_id: u64) -> Self {
+        let Some(Payload::BinanceOptionKline(kline)) = history_entry.payload.as_ref() else {
+            panic!("HistoryEntry payload is not a BinanceOptionKline");
+        };
+
+        Self::from_proto(kline.clone(), local_inst_id, unix_time_now_u64_utc())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct LocalBinanceOptionMarketPricePo {
+    pub id: u64,
+    pub inst_id: u64,
+    pub symbol: String,
+    pub acquire_ts: u64,
+    pub mark_price: String,
+    pub bid_iv: String,
+    pub ask_iv: String,
+    pub mark_iv: String,
+    pub delta: String,
+    pub theta: String,
+    pub gamma: String,
+    pub vega: String,
+    pub high_price_limit: String,
+    pub low_price_limit: String,
+    pub risk_free_interest: String,
+    pub batch_timestamp: u64,
+}
+
+impl LocalBinanceOptionMarketPricePo {
+    pub fn from_proto(price: BinanceOptionMarketPrice, inst_id: u64, batch_timestamp: u64) -> Self {
+        Self {
+            id: get_snow_flake_id_u64(),
+            inst_id,
+            symbol: price.symbol,
+            acquire_ts: price.acquire_ts,
+            mark_price: price.mark_price,
+            bid_iv: price.bid_iv,
+            ask_iv: price.ask_iv,
+            mark_iv: price.mark_iv,
+            delta: price.delta,
+            theta: price.theta,
+            gamma: price.gamma,
+            vega: price.vega,
+            high_price_limit: price.high_price_limit,
+            low_price_limit: price.low_price_limit,
+            risk_free_interest: price.risk_free_interest,
+            batch_timestamp,
+        }
+    }
+}
+
+impl CopyInsertable for LocalBinanceOptionMarketPricePo {
+    fn columns() -> &'static str {
+        "id,inst_id,symbol,acquire_ts,mark_price,bid_iv,ask_iv,mark_iv,delta,theta,gamma,vega,high_price_limit,low_price_limit,risk_free_interest,batch_timestamp"
+    }
+
+    fn to_csv_row(&self) -> String {
+        let acquire_ts = format_timestamp_millis(i64::try_from(self.acquire_ts).expect("acquire_ts must fit in i64 milliseconds"));
+        let csv_quote = |value: &str| format!("\"{}\"", value.replace('"', "\"\""));
+
+        format!(
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            self.id,
+            self.inst_id,
+            csv_quote(&self.symbol),
+            acquire_ts,
+            self.mark_price,
+            self.bid_iv,
+            self.ask_iv,
+            self.mark_iv,
+            self.delta,
+            self.theta,
+            self.gamma,
+            self.vega,
+            self.high_price_limit,
+            self.low_price_limit,
+            self.risk_free_interest,
+            self.batch_timestamp
+        )
+    }
+
+    fn from_history_entry(history_entry: &HistoryEntry, local_inst_id: u64) -> Self {
+        let Some(Payload::BinanceOptionMarketPrice(price)) = history_entry.payload.as_ref() else {
+            panic!("HistoryEntry payload is not a BinanceOptionMarketPrice");
+        };
+
+        Self::from_proto(price.clone(), local_inst_id, unix_time_now_u64_utc())
     }
 }
 
@@ -673,5 +831,37 @@ mod tests {
         };
 
         LocalBinanceOrderBookSnapshotPo::from_history_entry(&entry, 77);
+    }
+
+    // 测试目的：验证从错误 payload 的 HistoryEntry 创建期权 Kline 客户端 PO 时明确失败。
+    // 准备数据/过程：构造 payload 为空的 HistoryEntry，并调用客户端 PO 转换入口。
+    // 预期结果：触发 payload 类型不匹配的 panic，不生成不完整的 Kline 实体。
+    #[test]
+    #[should_panic(expected = "HistoryEntry payload is not a BinanceOptionKline")]
+    fn binance_option_kline_rejects_missing_history_payload() {
+        let entry = HistoryEntry {
+            history_type: 0,
+            instrument_type: 0,
+            inst_id: 42,
+            payload: None,
+        };
+
+        LocalBinanceOptionKlinePo::from_history_entry(&entry, 77);
+    }
+
+    // 测试目的：验证从错误 payload 的 HistoryEntry 创建期权 Market Price 客户端 PO 时明确失败。
+    // 准备数据/过程：构造 payload 为空的 HistoryEntry，并调用客户端 PO 转换入口。
+    // 预期结果：触发 payload 类型不匹配的 panic，不生成不完整的 Market Price 实体。
+    #[test]
+    #[should_panic(expected = "HistoryEntry payload is not a BinanceOptionMarketPrice")]
+    fn binance_option_market_price_rejects_missing_history_payload() {
+        let entry = HistoryEntry {
+            history_type: 0,
+            instrument_type: 0,
+            inst_id: 42,
+            payload: None,
+        };
+
+        LocalBinanceOptionMarketPricePo::from_history_entry(&entry, 77);
     }
 }
