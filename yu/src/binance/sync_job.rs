@@ -168,6 +168,21 @@ pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: m
         });
     }
 
+    let option_kline_periodic_sync = option_kline_history_service.clone();
+    let option_market_price_periodic_sync = option_market_price_history_service.clone();
+    let _ = cron_job!("37 0 * * * *", move |_uuid, _locked| {
+        let each_option_kline_sync = option_kline_periodic_sync.clone();
+        let each_option_market_price_sync = option_market_price_periodic_sync.clone();
+        Box::pin(async move {
+            if let Err(error) = each_option_kline_sync.sync_all().await {
+                error!("failed to sync Binance Option Kline history: {}", error);
+            }
+            if let Err(error) = each_option_market_price_sync.sync_all().await {
+                error!("failed to sync Binance Option Market Price history: {}", error);
+            }
+        })
+    });
+
     info!("started initial Binance Spot kline history data");
     history_service.initial_history_data(Some(start_initial_ms)).await?;
     info!("started initial Binance Swap kline history data");
@@ -175,9 +190,7 @@ pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: m
     info!("start initial Binance Swap funding rate history data");
     funding_rate_history_service.initial_history_data(Some(start_initial_ms)).await?;
     info!("started initial Binance Option Kline history data");
-    option_kline_history_service.initial_history_data(None).await?;
-    info!("started initial Binance Option Market Price snapshot");
-    option_market_price_history_service.initial_history_data(None).await?;
+    option_kline_history_service.initial_history_data(Some(start_initial_ms)).await?;
     info!("started checking Binance Spot kline history data");
     history_service.check_history_data(None).await?;
     info!("started checking Binance Swap kline history data");
@@ -217,20 +230,7 @@ pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: m
             debug!("finished checking Binance Spot and Swap kline history");
         })
     });
-    let option_kline_periodic_sync = option_kline_history_service.clone();
-    let option_market_price_periodic_sync = option_market_price_history_service.clone();
-    let _ = cron_job!("37 0 * * * *", move |_uuid, _locked| {
-        let each_option_kline_sync = option_kline_periodic_sync.clone();
-        let each_option_market_price_sync = option_market_price_periodic_sync.clone();
-        Box::pin(async move {
-            if let Err(error) = each_option_kline_sync.sync_all().await {
-                error!("failed to sync Binance Option Kline history: {}", error);
-            }
-            if let Err(error) = each_option_market_price_sync.sync_all().await {
-                error!("failed to sync Binance Option Market Price history: {}", error);
-            }
-        })
-    });
+
     let sync_instrument_job = instrument_service.clone();
     let _ = cron_job!("37 17 */6 * * *", move |_uuid, _locked| {
         let each_sync = sync_instrument_job.clone();

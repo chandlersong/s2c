@@ -103,7 +103,7 @@ impl SyncClientService {
         // 组装Binance Spot和Swap的service
         let binance_instruments = BinanceSpotClientInstrumentService::for_production()?;
         history_services.extend(binance_instruments.supported_history_services()?);
-        // Binance Option instruments have no client-side history service.
+        // 组装 Binance Option 的 instrument 和 history services
         let binance_option_instruments = BinanceOptionClientInstrumentService::for_production()?;
         history_services.extend(binance_option_instruments.supported_history_services()?);
 

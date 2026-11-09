@@ -38,6 +38,20 @@ const FIND_LATEST_SWAP_FUNDING_RATE_TIMESTAMP_SQL: &str = "
     WHERE i.server_id = $1
 ";
 
+const FIND_LATEST_OPTION_KLINE_TIMESTAMP_SQL: &str = "
+    SELECT MAX(h.candle_begin_time)
+    FROM binance_option_instruments i
+    LEFT JOIN binance_option_kline_history h ON h.inst_id = i.id
+    WHERE i.server_id = $1
+";
+
+const FIND_LATEST_OPTION_MARKET_PRICE_TIMESTAMP_SQL: &str = "
+    SELECT MAX(h.acquire_ts)
+    FROM binance_option_instruments i
+    LEFT JOIN binance_option_market_price_history h ON h.inst_id = i.id
+    WHERE i.server_id = $1
+";
+
 const FIND_LATEST_SPOT_TRADE_CURSOR_SQL: &str = "
     SELECT h.event_time, h.trade_id
     FROM binance_instruments i
@@ -82,6 +96,10 @@ pub trait ClientBinanceOptionInstrumentRepositoryTrait: Send + Sync {
 
     async fn find_instrument_by_server_id(&self, server_id: u64) -> Result<Option<LocalBinanceOptionInstrumentPo>, YuError>;
 
+    async fn find_latest_kline_timestamp_by_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError>;
+
+    async fn find_latest_market_price_timestamp_by_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError>;
+
     async fn create_instrument(&self, instrument: LocalBinanceOptionInstrumentPo) -> Result<u64, YuError>;
 
     async fn update_instrument(&self, instrument: LocalBinanceOptionInstrumentPo) -> Result<(), YuError>;
@@ -124,6 +142,16 @@ impl ClientBinanceOptionInstrumentRepositoryTrait for ClientBinanceOptionInstrum
         .fetch_optional(&self.pg_pool)
         .await?;
         row.map(option_instrument_from_row).transpose()
+    }
+
+    async fn find_latest_kline_timestamp_by_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError> {
+        self.find_latest_history_timestamp(server_id, FIND_LATEST_OPTION_KLINE_TIMESTAMP_SQL)
+            .await
+    }
+
+    async fn find_latest_market_price_timestamp_by_server_id(&self, server_id: u64) -> Result<Option<u64>, YuError> {
+        self.find_latest_history_timestamp(server_id, FIND_LATEST_OPTION_MARKET_PRICE_TIMESTAMP_SQL)
+            .await
     }
 
     async fn create_instrument(&self, instrument: LocalBinanceOptionInstrumentPo) -> Result<u64, YuError> {
@@ -242,6 +270,16 @@ impl ClientBinanceOptionInstrumentRepositoryTrait for ClientBinanceOptionInstrum
             return Err(YuError::new("Binance Option instrument disappeared during reconciliation"));
         }
         Ok(())
+    }
+}
+
+impl ClientBinanceOptionInstrumentRepositoryImpl {
+    async fn find_latest_history_timestamp(&self, server_id: u64, query: &'static str) -> Result<Option<u64>, YuError> {
+        let server_id = i64::try_from(server_id).map_err(|_| YuError::new("Binance Option server instrument ID exceeds BIGINT range"))?;
+        let timestamp: Option<DateTime<Utc>> = sqlx::query_scalar(query).bind(server_id).fetch_one(&self.pg_pool).await?;
+        timestamp
+            .map(|timestamp| u64::try_from(timestamp.timestamp_millis()).map_err(|_| YuError::new("negative Binance Option history timestamp")))
+            .transpose()
     }
 }
 

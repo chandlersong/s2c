@@ -1,18 +1,20 @@
 use crate::binance::bn_consts::BN_SYMBOL_STATUS_TRADING;
+use crate::config::get_config;
 use crate::data_integrity::check::{BinarySearchDS, SyncClientBinarySearchDataImpl, binary_search_gap};
 use crate::data_integrity::models::ValidationGap;
 use crate::errors::YuError;
 use crate::postgresql_db::{PostgresqlTableTrait, get_sync_client_pg_pool_sync};
 use crate::postgresql_db_tables::PostgresqlBatchInsert;
 use crate::sync::client::database::{
-    get_binance_kline_batch_insert, get_binance_order_book_snapshot_batch_insert, get_binance_swap_funding_rate_batch_insert,
-    get_binance_swap_kline_batch_insert, get_binance_trade_batch_insert,
+    get_binance_kline_batch_insert, get_binance_option_kline_batch_insert, get_binance_option_market_price_batch_insert,
+    get_binance_order_book_snapshot_batch_insert, get_binance_swap_funding_rate_batch_insert, get_binance_swap_kline_batch_insert,
+    get_binance_trade_batch_insert,
 };
 use crate::sync::client::db_consts::ClientsTables;
 use crate::sync::client::grpc_manager::{GrpcChannelManager, get_grpc_manager_from_config};
 use crate::sync::client::po::binance::{
     BinanceInstrumentType, LocalBinanceFundingRatePo, LocalBinanceInstrumentPo, LocalBinanceKlinePo, LocalBinanceOptionInstrumentPo,
-    LocalBinanceOrderBookSnapshotPo, LocalBinanceTradePo,
+    LocalBinanceOptionKlinePo, LocalBinanceOptionMarketPricePo, LocalBinanceOrderBookSnapshotPo, LocalBinanceTradePo,
 };
 use crate::sync::client::repository::binance::{
     ClientBinanceOptionInstrumentRepository, ClientBinanceOptionInstrumentRepositoryImpl, ClientBinanceRepository, ClientBinanceRepositoryImpl,
@@ -25,7 +27,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use futures::executor::block_on;
 use li::tools::time::UnixTimeStamp;
-use log::{debug, warn};
+use log::{debug, error, warn};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -43,7 +45,9 @@ async fn find_local_instrument(
     }
 
     let instrument = repository.find_instrument_by_server_id(server_id).await?;
-    if let Some(instrument) = &instrument {
+    if let Some(instrument) = &instrument
+        && instrument.status.eq_ignore_ascii_case(BN_SYMBOL_STATUS_TRADING)
+    {
         inst_cache.write().await.insert(server_id, instrument.clone());
     }
     Ok(instrument)
@@ -188,38 +192,84 @@ impl ClientInstrumentServiceTrait for BinanceSpotClientInstrumentService {
 
 type BinanceOptionInstrumentCache = Arc<RwLock<HashMap<u64, LocalBinanceOptionInstrumentPo>>>;
 
+async fn find_local_option_instrument(
+    repository: &ClientBinanceOptionInstrumentRepository,
+    inst_cache: &BinanceOptionInstrumentCache,
+    server_id: u64,
+) -> Result<Option<LocalBinanceOptionInstrumentPo>, YuError> {
+    if let Some(instrument) = inst_cache.read().await.get(&server_id).cloned() {
+        return Ok(Some(instrument));
+    }
+
+    let instrument = repository.find_instrument_by_server_id(server_id).await?;
+    if let Some(instrument) = &instrument {
+        inst_cache.write().await.insert(server_id, instrument.clone());
+    }
+    Ok(instrument)
+}
+
 pub struct BinanceOptionClientInstrumentService {
     inst_cache: BinanceOptionInstrumentCache,
     repository: ClientBinanceOptionInstrumentRepository,
+    history_services: HashMap<HistoryType, ClientHistoryService>,
 }
 
 impl BinanceOptionClientInstrumentService {
     pub fn for_production() -> Result<ClientInstrumentService, YuError> {
         let pool = get_sync_client_pg_pool_sync()?;
-        let repository = ClientBinanceOptionInstrumentRepositoryImpl::from_pool(pool);
+        let repository = ClientBinanceOptionInstrumentRepositoryImpl::from_pool(pool.clone());
         let instruments = block_on(repository.list_all_instruments())?;
         let inst_cache = instruments
             .into_iter()
             .filter(|instrument| instrument.status.eq_ignore_ascii_case(BN_SYMBOL_STATUS_TRADING))
             .map(|instrument| (instrument.server_id, instrument))
             .collect();
+        let inst_cache = Arc::new(RwLock::new(inst_cache));
+        let data_retention_ms = get_config().get_data_retention_ms();
+        let kline_service = BinanceOptionKlineClientHistoryService::for_production(repository.clone(), inst_cache.clone(), pool, data_retention_ms);
+        let market_price_service =
+            BinanceOptionMarketPriceClientHistoryService::for_production(repository.clone(), inst_cache.clone(), data_retention_ms);
         Ok(Arc::new(Self {
-            inst_cache: Arc::new(RwLock::new(inst_cache)),
+            inst_cache,
             repository,
+            history_services: HashMap::from([
+                (HistoryType::BinanceOptionKline, kline_service),
+                (HistoryType::BinanceOptionMarketPrice, market_price_service),
+            ]),
         }))
     }
 
     #[cfg(test)]
     fn new(repository: ClientBinanceOptionInstrumentRepository, inst_cache: BinanceOptionInstrumentCache) -> Self {
-        Self { inst_cache, repository }
+        Self {
+            inst_cache,
+            repository,
+            history_services: HashMap::new(),
+        }
     }
 }
 
 #[async_trait]
 impl ClientInstrumentServiceTrait for BinanceOptionClientInstrumentService {
-    async fn initial_data(&self, _instrument: Instrument, _end_ms: UnixTimeStamp) -> Result<(), YuError> {
-        debug!("Binance Option instruments do not have a supported history service; skipping initial data");
-        Ok(())
+    async fn initial_data(&self, instrument: Instrument, end_ms: UnixTimeStamp) -> Result<(), YuError> {
+        let mut errors = Vec::new();
+        for (history_type, history_service) in &self.history_services {
+            if let Err(error) = history_service.initial_data(instrument.clone(), end_ms).await {
+                error!(
+                    "failed to initialize Binance Option {:?} history for instrument type {}: {}",
+                    history_type, instrument.instrument_type, error
+                );
+                errors.push(format!("{history_type:?}: {error}"));
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(YuError::new(&format!(
+                "Binance Option history initialization failed: {}",
+                errors.join("; ")
+            )))
+        }
     }
 
     async fn reconcile_instrument(&self, instrument: Instrument) -> Result<(), YuError> {
@@ -288,7 +338,299 @@ impl ClientInstrumentServiceTrait for BinanceOptionClientInstrumentService {
     }
 
     fn supported_history_services(&self) -> Result<HashMap<HistoryType, ClientHistoryService>, YuError> {
-        Ok(HashMap::new())
+        Ok(self.history_services.clone())
+    }
+}
+
+pub struct BinanceOptionKlineClientHistoryService {
+    history_batch_insert: PostgresqlBatchInsert<LocalBinanceOptionKlinePo>,
+    repository: ClientBinanceOptionInstrumentRepository,
+    interval: HistoryInterval,
+    data_retention_ms: u64,
+    grpc_manager: GrpcChannelManager,
+    binary_search: BinarySearchDS,
+    inst_cache: BinanceOptionInstrumentCache,
+}
+
+impl BinanceOptionKlineClientHistoryService {
+    fn for_production(
+        repository: ClientBinanceOptionInstrumentRepository,
+        inst_cache: BinanceOptionInstrumentCache,
+        pool: sqlx::PgPool,
+        data_retention_ms: u64,
+    ) -> ClientHistoryService {
+        let binary_search = SyncClientBinarySearchDataImpl::new_with_instrument_column(
+            pool,
+            ClientsTables::BinanceOptionKline.table_name(),
+            ClientsTables::BinanceOptionInstruments.table_name(),
+            "inst_id",
+            "candle_begin_time",
+        );
+        Arc::new(Self {
+            history_batch_insert: get_binance_option_kline_batch_insert(),
+            repository,
+            interval: HistoryInterval::OneMinute,
+            data_retention_ms,
+            grpc_manager: get_grpc_manager_from_config(),
+            binary_search,
+            inst_cache,
+        })
+    }
+
+    async fn backfill_history(&self, server_inst_id: u64, local_inst_id: u64, start_ms: u64, end_ms: u64) -> Result<(), YuError> {
+        if start_ms >= end_ms {
+            return Ok(());
+        }
+
+        let mut history_stream = self
+            .grpc_manager
+            .sync_history(SyncRequest {
+                inst_id: server_inst_id,
+                start_ms: start_ms.saturating_add(1),
+                end_ms,
+                history_type: HistoryType::BinanceOptionKline as i32,
+            })
+            .await?;
+        while let Some(message) = history_stream.next().await {
+            for entry in message?.history {
+                if entry.history_type != HistoryType::BinanceOptionKline as i32
+                    || entry.instrument_type != InstrumentType::BinanceOption as i32
+                    || entry.inst_id != server_inst_id
+                    || !matches!(entry.payload.as_ref(), Some(Payload::BinanceOptionKline(_)))
+                {
+                    return Err(YuError::new("received invalid Binance Option Kline history entry"));
+                }
+                self.history_batch_insert.insert_data(entry, local_inst_id).await;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl ClientHistoryServiceTrait for BinanceOptionKlineClientHistoryService {
+    async fn initial_data(&self, instrument: Instrument, end_ms: UnixTimeStamp) -> Result<(), YuError> {
+        if instrument.instrument_type != InstrumentType::BinanceOption as i32 {
+            return Err(YuError::new("instrument exchange is not Binance Option"));
+        }
+        let Some(instrument::Payload::BinanceOptionInstrument(option_instrument)) = instrument.payload else {
+            return Err(YuError::new("instrument payload is not Binance Option"));
+        };
+        let Some(local_instrument) = find_local_option_instrument(&self.repository, &self.inst_cache, option_instrument.server_id).await? else {
+            debug!(
+                "local Binance Option instrument {} not found; skipping Kline history",
+                option_instrument.server_id
+            );
+            return Ok(());
+        };
+
+        let end_ms = self.interval.get_close_unix_ms(end_ms);
+        let start_ms = self
+            .repository
+            .find_latest_kline_timestamp_by_server_id(option_instrument.server_id)
+            .await?
+            .unwrap_or_else(|| {
+                self.interval
+                    .get_close_unix_ms(end_ms.saturating_sub(self.data_retention_ms))
+                    .saturating_sub(1)
+            });
+        self.backfill_history(option_instrument.server_id, local_instrument.id, start_ms, end_ms)
+            .await
+    }
+
+    async fn reconcile_history_data(&self, end_ms: UnixTimeStamp) -> Result<(), YuError> {
+        let end_ms = self.interval.get_close_unix_ms(end_ms);
+        let start_ms = self.interval.get_close_unix_ms(end_ms.saturating_sub(self.data_retention_ms));
+        let instruments = self.repository.list_all_instruments().await?;
+        let mut errors = Vec::new();
+        for instrument in instruments {
+            if !instrument.status.eq_ignore_ascii_case(BN_SYMBOL_STATUS_TRADING) {
+                continue;
+            }
+            let gaps = binary_search_gap(
+                &instrument.server_id.to_string(),
+                "BINANCE_OPTION",
+                start_ms,
+                end_ms,
+                &self.interval,
+                self.binary_search.clone(),
+                0,
+            )?
+            .gaps;
+            for gap in gaps {
+                if let ValidationGap::MissingData { start_time, end_time, .. } = gap {
+                    if let Err(error) = self
+                        .backfill_history(
+                            instrument.server_id,
+                            instrument.id,
+                            start_time.saturating_sub(1),
+                            end_time.saturating_sub(1),
+                        )
+                        .await
+                    {
+                        error!(
+                            "failed to backfill Binance Option Kline history for server instrument {}: {}",
+                            instrument.server_id, error
+                        );
+                        errors.push(error.to_string());
+                    }
+                }
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(YuError::new(&format!(
+                "Binance Option Kline reconciliation failed: {}",
+                errors.join("; ")
+            )))
+        }
+    }
+
+    async fn insert_history(&self, history_entry: HistoryEntry) -> Result<(), YuError> {
+        if history_entry.history_type != HistoryType::BinanceOptionKline as i32
+            || history_entry.instrument_type != InstrumentType::BinanceOption as i32
+            || !matches!(history_entry.payload.as_ref(), Some(Payload::BinanceOptionKline(_)))
+        {
+            return Err(YuError::new("received non-Binance Option Kline history payload"));
+        }
+        let Some(local_instrument) = find_local_option_instrument(&self.repository, &self.inst_cache, history_entry.inst_id).await? else {
+            debug!(
+                "local Binance Option instrument {} not found; skipping Kline history",
+                history_entry.inst_id
+            );
+            return Ok(());
+        };
+        self.history_batch_insert.insert_data(history_entry, local_instrument.id).await;
+        Ok(())
+    }
+}
+
+pub struct BinanceOptionMarketPriceClientHistoryService {
+    history_batch_insert: PostgresqlBatchInsert<LocalBinanceOptionMarketPricePo>,
+    repository: ClientBinanceOptionInstrumentRepository,
+    data_retention_ms: u64,
+    grpc_manager: GrpcChannelManager,
+    inst_cache: BinanceOptionInstrumentCache,
+}
+
+impl BinanceOptionMarketPriceClientHistoryService {
+    fn for_production(
+        repository: ClientBinanceOptionInstrumentRepository,
+        inst_cache: BinanceOptionInstrumentCache,
+        data_retention_ms: u64,
+    ) -> ClientHistoryService {
+        Arc::new(Self {
+            history_batch_insert: get_binance_option_market_price_batch_insert(),
+            repository,
+            data_retention_ms,
+            grpc_manager: get_grpc_manager_from_config(),
+            inst_cache,
+        })
+    }
+
+    async fn backfill_history(&self, server_inst_id: u64, local_inst_id: u64, start_ms: u64, end_ms: u64) -> Result<(), YuError> {
+        if start_ms >= end_ms {
+            return Ok(());
+        }
+
+        let mut history_stream = self
+            .grpc_manager
+            .sync_history(SyncRequest {
+                inst_id: server_inst_id,
+                start_ms: start_ms.saturating_add(1),
+                end_ms,
+                history_type: HistoryType::BinanceOptionMarketPrice as i32,
+            })
+            .await?;
+        while let Some(message) = history_stream.next().await {
+            for entry in message?.history {
+                if entry.history_type != HistoryType::BinanceOptionMarketPrice as i32
+                    || entry.instrument_type != InstrumentType::BinanceOption as i32
+                    || entry.inst_id != server_inst_id
+                    || !matches!(entry.payload.as_ref(), Some(Payload::BinanceOptionMarketPrice(_)))
+                {
+                    return Err(YuError::new("received invalid Binance Option Market Price history entry"));
+                }
+                self.history_batch_insert.insert_data(entry, local_inst_id).await;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl ClientHistoryServiceTrait for BinanceOptionMarketPriceClientHistoryService {
+    async fn initial_data(&self, instrument: Instrument, end_ms: UnixTimeStamp) -> Result<(), YuError> {
+        if instrument.instrument_type != InstrumentType::BinanceOption as i32 {
+            return Err(YuError::new("instrument exchange is not Binance Option"));
+        }
+        let Some(instrument::Payload::BinanceOptionInstrument(option_instrument)) = instrument.payload else {
+            return Err(YuError::new("instrument payload is not Binance Option"));
+        };
+        let Some(local_instrument) = find_local_option_instrument(&self.repository, &self.inst_cache, option_instrument.server_id).await? else {
+            debug!(
+                "local Binance Option instrument {} not found; skipping Market Price history",
+                option_instrument.server_id
+            );
+            return Ok(());
+        };
+
+        let start_ms = self
+            .repository
+            .find_latest_market_price_timestamp_by_server_id(option_instrument.server_id)
+            .await?
+            .unwrap_or_else(|| end_ms.saturating_sub(self.data_retention_ms).saturating_sub(1));
+        self.backfill_history(option_instrument.server_id, local_instrument.id, start_ms, end_ms)
+            .await
+    }
+
+    async fn reconcile_history_data(&self, end_ms: UnixTimeStamp) -> Result<(), YuError> {
+        let instruments = self.repository.list_all_instruments().await?;
+        let mut errors = Vec::new();
+        for instrument in instruments {
+            if !instrument.status.eq_ignore_ascii_case(BN_SYMBOL_STATUS_TRADING) {
+                continue;
+            }
+            let start_ms = self
+                .repository
+                .find_latest_market_price_timestamp_by_server_id(instrument.server_id)
+                .await?
+                .unwrap_or_else(|| end_ms.saturating_sub(self.data_retention_ms).saturating_sub(1));
+            if let Err(error) = self.backfill_history(instrument.server_id, instrument.id, start_ms, end_ms).await {
+                error!(
+                    "failed to backfill Binance Option Market Price history for server instrument {}: {}",
+                    instrument.server_id, error
+                );
+                errors.push(error.to_string());
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(YuError::new(&format!(
+                "Binance Option Market Price reconciliation failed: {}",
+                errors.join("; ")
+            )))
+        }
+    }
+
+    async fn insert_history(&self, history_entry: HistoryEntry) -> Result<(), YuError> {
+        if history_entry.history_type != HistoryType::BinanceOptionMarketPrice as i32
+            || history_entry.instrument_type != InstrumentType::BinanceOption as i32
+            || !matches!(history_entry.payload.as_ref(), Some(Payload::BinanceOptionMarketPrice(_)))
+        {
+            return Err(YuError::new("received non-Binance Option Market Price history payload"));
+        }
+        let Some(local_instrument) = find_local_option_instrument(&self.repository, &self.inst_cache, history_entry.inst_id).await? else {
+            debug!(
+                "local Binance Option instrument {} not found; skipping Market Price history",
+                history_entry.inst_id
+            );
+            return Ok(());
+        };
+        self.history_batch_insert.insert_data(history_entry, local_instrument.id).await;
+        Ok(())
     }
 }
 
@@ -885,8 +1227,8 @@ mod tests {
     use crate::sync::client::repository::binance::{MockClientBinanceOptionInstrumentRepositoryTrait, MockClientBinanceRepositoryTrait};
     use crate::sync::client::sync_client_service::MockClientHistoryServiceTrait;
     use crate::sync::models::grpc_sync::{
-        BinanceFundingRate, BinanceKline, BinanceOptionInstrument, BinanceOptionSymbolFilter, BinanceOrderBookLevel, BinanceOrderBookSnapshot,
-        BinanceTrade, HistoryType, InstrumentType,
+        BinanceFundingRate, BinanceKline, BinanceOptionInstrument, BinanceOptionKline, BinanceOptionMarketPrice, BinanceOptionSymbolFilter,
+        BinanceOrderBookLevel, BinanceOrderBookSnapshot, BinanceTrade, HistoryType, InstrumentType,
     };
 
     fn mock_binary_search() -> BinarySearchDS {
@@ -1015,6 +1357,52 @@ mod tests {
         ))
     }
 
+    fn option_kline_history_entry(candle_begin_time: u64) -> HistoryEntry {
+        HistoryEntry {
+            history_type: HistoryType::BinanceOptionKline as i32,
+            instrument_type: InstrumentType::BinanceOption as i32,
+            inst_id: 42,
+            payload: Some(Payload::BinanceOptionKline(BinanceOptionKline {
+                id: 11,
+                candle_begin_time,
+                open: "100.000000000000000001".to_string(),
+                high: "101".to_string(),
+                low: "99".to_string(),
+                close: "100.5".to_string(),
+                volume: "1.25".to_string(),
+                close_time: candle_begin_time + 59_999,
+                quote_asset_volume: "126.25".to_string(),
+                number_of_trades: 4,
+                taker_buy_base_asset_volume: "0.75".to_string(),
+                taker_buy_quote_asset_volume: "75.375".to_string(),
+            })),
+        }
+    }
+
+    fn option_market_price_history_entry(acquire_ts: u64) -> HistoryEntry {
+        HistoryEntry {
+            history_type: HistoryType::BinanceOptionMarketPrice as i32,
+            instrument_type: InstrumentType::BinanceOption as i32,
+            inst_id: 42,
+            payload: Some(Payload::BinanceOptionMarketPrice(BinanceOptionMarketPrice {
+                id: 12,
+                symbol: "BTC-270101-50000-C".to_string(),
+                acquire_ts,
+                mark_price: "123.000000000000000001".to_string(),
+                bid_iv: "0.21".to_string(),
+                ask_iv: "0.22".to_string(),
+                mark_iv: "0.215".to_string(),
+                delta: "0.5".to_string(),
+                theta: "-0.01".to_string(),
+                gamma: "0.000000000000000123".to_string(),
+                vega: "0.03".to_string(),
+                high_price_limit: "130.1".to_string(),
+                low_price_limit: "110.2".to_string(),
+                risk_free_interest: "0.1".to_string(),
+            })),
+        }
+    }
+
     fn order_book_snapshot_entry() -> HistoryEntry {
         HistoryEntry {
             history_type: HistoryType::BinanceOrderBookSnapshot as i32,
@@ -1140,11 +1528,11 @@ mod tests {
         );
     }
 
-    // 测试目的：验证 Option instrument 不执行历史初始化、不注册历史类型，且错误 payload 不触发 repository。
-    // 准备数据/过程：调用 initial_data 和 supported_history_services，再提交没有 payload 的 Binance Option instrument。
+    // 测试目的：验证未配置 history service 的 instrument service 可跳过初始化，且错误 payload 不触发 repository。
+    // 准备数据/过程：使用空 history map 调用 initial_data 和 supported_history_services，再提交没有 payload 的 Option instrument。
     // 预期结果：初始化成功且 history map 为空；异常 payload 被跳过，repository 无读写调用。
     #[tokio::test]
-    async fn option_instrument_has_no_history_and_ignores_invalid_payload() {
+    async fn unconfigured_option_instrument_service_skips_initialization_and_ignores_invalid_payload() {
         let mut repository = MockClientBinanceOptionInstrumentRepositoryTrait::new();
         repository.expect_find_instrument_by_server_id().times(0);
         repository.expect_create_instrument().times(0);
@@ -1189,7 +1577,7 @@ mod tests {
         let mut batch_insert = MockPostgresqlBatchInsertTrait::<LocalBinanceOrderBookSnapshotPo>::new();
         batch_insert
             .expect_insert_data()
-            .withf(|entry, local_inst_id| {
+            .withf(move |entry, local_inst_id| {
                 entry.inst_id == 42
                     && *local_inst_id == 7
                     && matches!(
@@ -1909,5 +2297,333 @@ mod tests {
         };
 
         service.initial_data(instrument, 1_700_000_060_000).await.unwrap();
+    }
+
+    // 测试目的：验证 Binance Option instrument 初始化时，一个 history service 失败不会阻止另一个 service 执行。
+    // 准备数据/过程：注册一个返回错误的 Kline mock 和一个成功的 Market Price mock，再初始化有效 Option instrument。
+    // 预期结果：两个 service 各执行一次，整体返回初始化错误以便上层记录。
+    #[tokio::test]
+    async fn option_instrument_initial_data_runs_all_history_services_after_failure() {
+        let mut kline_service = MockClientHistoryServiceTrait::new();
+        kline_service
+            .expect_initial_data()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Err(YuError::new("kline unavailable")) }));
+        let mut market_price_service = MockClientHistoryServiceTrait::new();
+        market_price_service
+            .expect_initial_data()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+        let service = BinanceOptionClientInstrumentService {
+            inst_cache: option_instrument_cache(None),
+            repository: Arc::new(MockClientBinanceOptionInstrumentRepositoryTrait::new()),
+            history_services: HashMap::from([
+                (HistoryType::BinanceOptionKline, Arc::new(kline_service) as ClientHistoryService),
+                (
+                    HistoryType::BinanceOptionMarketPrice,
+                    Arc::new(market_price_service) as ClientHistoryService,
+                ),
+            ]),
+        };
+
+        let error = service.initial_data(option_instrument("TRADING"), 1_700_000_060_000).await.unwrap_err();
+
+        assert!(error.to_string().contains("kline unavailable"));
+        let history_services = service.supported_history_services().unwrap();
+        assert!(history_services.contains_key(&HistoryType::BinanceOptionKline));
+        assert!(history_services.contains_key(&HistoryType::BinanceOptionMarketPrice));
+    }
+
+    // 测试目的：验证实时 Binance Option Kline 用缓存的本地 instrument ID 入批，并拒绝错误历史类型。
+    // 准备数据/过程：缓存 server ID 42 到 local ID 7，提交一条合法 Kline 后再提交 history_type 不匹配的记录。
+    // 预期结果：合法数据仅写入一次且使用本地 ID 7；错误类型返回校验错误。
+    #[tokio::test]
+    async fn option_kline_insert_history_uses_local_instrument_id_and_validates_type() {
+        let repository = MockClientBinanceOptionInstrumentRepositoryTrait::new();
+        let mut batch_insert = MockPostgresqlBatchInsertTrait::<LocalBinanceOptionKlinePo>::new();
+        batch_insert
+            .expect_insert_data()
+            .withf(move |entry, local_inst_id| {
+                entry.history_type == HistoryType::BinanceOptionKline as i32
+                    && entry.instrument_type == InstrumentType::BinanceOption as i32
+                    && *local_inst_id == 7
+                    && matches!(entry.payload.as_ref(), Some(Payload::BinanceOptionKline(kline)) if kline.open == "100.000000000000000001")
+            })
+            .times(1)
+            .returning(|_, _| ());
+        let service = BinanceOptionKlineClientHistoryService {
+            history_batch_insert: Arc::new(batch_insert),
+            repository: Arc::new(repository),
+            interval: HistoryInterval::OneMinute,
+            data_retention_ms: 60_000,
+            grpc_manager: Arc::new(MockGrpcChannelManagerTrait::new()),
+            binary_search: mock_binary_search(),
+            inst_cache: option_instrument_cache(Some(local_option_instrument(42, 7))),
+        };
+
+        service.insert_history(option_kline_history_entry(60_000)).await.unwrap();
+        let mut invalid_entry = option_kline_history_entry(120_000);
+        invalid_entry.history_type = HistoryType::BinanceOptionMarketPrice as i32;
+        let error = service.insert_history(invalid_entry).await.unwrap_err();
+
+        assert!(error.to_string().contains("non-Binance Option Kline"));
+    }
+
+    // 测试目的：验证 Kline 初始回补按服务端 instrument ID 请求，并以本地 instrument ID 批量保存。
+    // 准备数据/过程：mock 最新时间戳、返回一条合法 Kline 的 gRPC 流和 batch insert，再初始化 server ID 42。
+    // 预期结果：请求从最新时间戳之后开始，类型和结束时间正确，历史写入使用 local ID 7。
+    #[tokio::test]
+    async fn option_kline_initial_data_backfills_to_local_instrument() {
+        let interval = HistoryInterval::OneMinute;
+        let latest_timestamp = 1_700_000_000_000;
+        let end_ms = 1_700_000_060_123;
+        let expected_end_ms = interval.get_close_unix_ms(end_ms);
+        let history_entry = option_kline_history_entry(expected_end_ms);
+        let mut repository = MockClientBinanceOptionInstrumentRepositoryTrait::new();
+        repository
+            .expect_find_latest_kline_timestamp_by_server_id()
+            .with(mockall::predicate::eq(42))
+            .times(1)
+            .returning(move |_| Ok(Some(latest_timestamp)));
+        let mut grpc_manager = MockGrpcChannelManagerTrait::new();
+        grpc_manager
+            .expect_sync_history()
+            .withf(move |request| {
+                request.inst_id == 42
+                    && request.start_ms == latest_timestamp + 1
+                    && request.end_ms == expected_end_ms
+                    && request.history_type == HistoryType::BinanceOptionKline as i32
+            })
+            .times(1)
+            .returning(move |_| {
+                Ok(Box::pin(futures::stream::iter(vec![Ok(crate::sync::models::grpc_sync::ServerMessage {
+                    history: vec![history_entry.clone()],
+                    server_timestamp: expected_end_ms,
+                })])) as crate::sync::client::grpc_manager::GrpcServerMessageStream)
+            });
+        let mut batch_insert = MockPostgresqlBatchInsertTrait::<LocalBinanceOptionKlinePo>::new();
+        batch_insert
+            .expect_insert_data()
+            .withf(move |entry, local_inst_id| {
+                entry.history_type == HistoryType::BinanceOptionKline as i32
+                    && *local_inst_id == 7
+                    && matches!(entry.payload.as_ref(), Some(Payload::BinanceOptionKline(kline)) if kline.candle_begin_time == expected_end_ms)
+            })
+            .times(1)
+            .returning(|_, _| ());
+        let service = BinanceOptionKlineClientHistoryService {
+            history_batch_insert: Arc::new(batch_insert),
+            repository: Arc::new(repository),
+            interval,
+            data_retention_ms: 86_400_000,
+            grpc_manager: Arc::new(grpc_manager),
+            binary_search: mock_binary_search(),
+            inst_cache: option_instrument_cache(Some(local_option_instrument(42, 7))),
+        };
+
+        service.initial_data(option_instrument("TRADING"), end_ms).await.unwrap();
+    }
+
+    // 测试目的：验证 Kline 完整性对账通过 BinarySearchDS 发现缺口并回补到本地。
+    // 准备数据/过程：mock 一个活跃 Option instrument、空区间计数、含 Kline 的 gRPC 响应和批量写入。
+    // 预期结果：检测范围按一分钟周期对齐，缺失区间被请求并用 local ID 7 保存。
+    #[tokio::test]
+    async fn option_kline_reconciliation_backfills_missing_candles() {
+        let interval = HistoryInterval::OneMinute;
+        let interval_ms = interval.to_milliseconds();
+        let data_retention_ms = interval_ms * 3;
+        let end_ms = interval_ms * 4;
+        let expected_start_ms = interval.get_close_unix_ms(end_ms.saturating_sub(data_retention_ms));
+        let expected_end_ms = interval.get_close_unix_ms(end_ms);
+        let mut repository = MockClientBinanceOptionInstrumentRepositoryTrait::new();
+        repository
+            .expect_list_all_instruments()
+            .times(1)
+            .returning(|| Ok(vec![local_option_instrument(42, 7)]));
+        let mut binary_search = MockBinarySearchDSTrait::new();
+        binary_search
+            .expect_count_distinct_between()
+            .withf(move |identify, start, end| identify == "42" && *start == expected_start_ms && *end == expected_end_ms)
+            .times(1)
+            .returning(|_, _, _| Ok(0));
+        binary_search
+            .expect_table_name()
+            .times(1)
+            .returning(|| "binance_option_kline_history".to_string());
+        let mut grpc_manager = MockGrpcChannelManagerTrait::new();
+        grpc_manager
+            .expect_sync_history()
+            .withf(move |request| {
+                request.inst_id == 42
+                    && request.start_ms == expected_start_ms
+                    && request.end_ms == expected_end_ms - 1
+                    && request.history_type == HistoryType::BinanceOptionKline as i32
+            })
+            .times(1)
+            .returning(move |_| {
+                Ok(Box::pin(futures::stream::iter(vec![Ok(crate::sync::models::grpc_sync::ServerMessage {
+                    history: vec![option_kline_history_entry(expected_start_ms)],
+                    server_timestamp: expected_end_ms,
+                })])) as crate::sync::client::grpc_manager::GrpcServerMessageStream)
+            });
+        let mut batch_insert = MockPostgresqlBatchInsertTrait::<LocalBinanceOptionKlinePo>::new();
+        batch_insert
+            .expect_insert_data()
+            .withf(|entry, local_inst_id| {
+                *local_inst_id == 7 && matches!(entry.payload.as_ref(), Some(Payload::BinanceOptionKline(kline)) if kline.candle_begin_time == 60_000)
+            })
+            .times(1)
+            .returning(|_, _| ());
+        let service = BinanceOptionKlineClientHistoryService {
+            history_batch_insert: Arc::new(batch_insert),
+            repository: Arc::new(repository),
+            interval,
+            data_retention_ms,
+            grpc_manager: Arc::new(grpc_manager),
+            binary_search: Arc::new(binary_search),
+            inst_cache: option_instrument_cache(None),
+        };
+        service.inst_cache.write().await.insert(42, local_option_instrument(42, 7));
+
+        service.reconcile_history_data(end_ms).await.unwrap();
+    }
+
+    // 测试目的：验证 Market Price 初始回补按最新快照时间增量请求并使用本地 instrument ID 入批。
+    // 准备数据/过程：mock server ID 42 的最新快照、gRPC 响应和批量写入，缓存其 local ID 7 后执行初始化。
+    // 预期结果：请求从 latest timestamp 之后开始，历史类型正确，价格快照以 local ID 7 写入。
+    #[tokio::test]
+    async fn option_market_price_initial_data_backfills_after_latest_snapshot() {
+        let latest_timestamp = 1_700_000_000_123;
+        let end_ms = 1_700_000_060_000;
+        let mut repository = MockClientBinanceOptionInstrumentRepositoryTrait::new();
+        repository
+            .expect_find_latest_market_price_timestamp_by_server_id()
+            .with(mockall::predicate::eq(42))
+            .times(1)
+            .returning(move |_| Ok(Some(latest_timestamp)));
+        let mut grpc_manager = MockGrpcChannelManagerTrait::new();
+        grpc_manager
+            .expect_sync_history()
+            .withf(move |request| {
+                request.inst_id == 42
+                    && request.start_ms == latest_timestamp + 1
+                    && request.end_ms == end_ms
+                    && request.history_type == HistoryType::BinanceOptionMarketPrice as i32
+            })
+            .times(1)
+            .returning(move |_| {
+                Ok(Box::pin(futures::stream::iter(vec![Ok(crate::sync::models::grpc_sync::ServerMessage {
+                    history: vec![option_market_price_history_entry(latest_timestamp + 10_000)],
+                    server_timestamp: end_ms,
+                })])) as crate::sync::client::grpc_manager::GrpcServerMessageStream)
+            });
+        let mut batch_insert = MockPostgresqlBatchInsertTrait::<LocalBinanceOptionMarketPricePo>::new();
+        batch_insert
+            .expect_insert_data()
+            .withf(|entry, local_inst_id| {
+                *local_inst_id == 7
+                    && matches!(entry.payload.as_ref(), Some(Payload::BinanceOptionMarketPrice(price)) if price.acquire_ts == 1_700_000_010_123)
+            })
+            .times(1)
+            .returning(|_, _| ());
+        let service = BinanceOptionMarketPriceClientHistoryService {
+            history_batch_insert: Arc::new(batch_insert),
+            repository: Arc::new(repository),
+            data_retention_ms: 86_400_000,
+            grpc_manager: Arc::new(grpc_manager),
+            inst_cache: option_instrument_cache(Some(local_option_instrument(42, 7))),
+        };
+
+        service.initial_data(option_instrument("TRADING"), end_ms).await.unwrap();
+    }
+
+    // 测试目的：验证 Market Price living reconciliation 从每个活跃 instrument 的最新快照后增量回补。
+    // 准备数据/过程：mock 活跃 Option instrument、最新快照时间、gRPC 历史流和 batch insert，再运行 reconcile。
+    // 预期结果：请求从最新快照之后开始，返回记录通过本地 instrument ID 7 写入。
+    #[tokio::test]
+    async fn option_market_price_reconciliation_catches_up_after_latest_snapshot() {
+        let latest_timestamp = 1_700_000_000_123;
+        let end_ms = 1_700_000_060_000;
+        let mut repository = MockClientBinanceOptionInstrumentRepositoryTrait::new();
+        repository
+            .expect_list_all_instruments()
+            .times(1)
+            .returning(|| Ok(vec![local_option_instrument(42, 7)]));
+        repository
+            .expect_find_latest_market_price_timestamp_by_server_id()
+            .with(mockall::predicate::eq(42))
+            .times(1)
+            .returning(move |_| Ok(Some(latest_timestamp)));
+        let mut grpc_manager = MockGrpcChannelManagerTrait::new();
+        grpc_manager
+            .expect_sync_history()
+            .withf(move |request| {
+                request.inst_id == 42
+                    && request.start_ms == latest_timestamp + 1
+                    && request.end_ms == end_ms
+                    && request.history_type == HistoryType::BinanceOptionMarketPrice as i32
+            })
+            .times(1)
+            .returning(move |_| {
+                Ok(Box::pin(futures::stream::iter(vec![Ok(crate::sync::models::grpc_sync::ServerMessage {
+                    history: vec![option_market_price_history_entry(latest_timestamp + 10_000)],
+                    server_timestamp: end_ms,
+                })])) as crate::sync::client::grpc_manager::GrpcServerMessageStream)
+            });
+        let mut batch_insert = MockPostgresqlBatchInsertTrait::<LocalBinanceOptionMarketPricePo>::new();
+        batch_insert
+            .expect_insert_data()
+            .withf(|entry, local_inst_id| {
+                *local_inst_id == 7
+                    && matches!(entry.payload.as_ref(), Some(Payload::BinanceOptionMarketPrice(price)) if price.acquire_ts == 1_700_000_010_123)
+            })
+            .times(1)
+            .returning(|_, _| ());
+        let service = BinanceOptionMarketPriceClientHistoryService {
+            history_batch_insert: Arc::new(batch_insert),
+            repository: Arc::new(repository),
+            data_retention_ms: 86_400_000,
+            grpc_manager: Arc::new(grpc_manager),
+            inst_cache: option_instrument_cache(None),
+        };
+
+        service.reconcile_history_data(end_ms).await.unwrap();
+    }
+
+    // 测试目的：验证 Market Price 实时历史在缓存未命中时查找本地 instrument，并以本地 ID 入批。
+    // 准备数据/过程：mock repository 返回 server ID 42 到 local ID 7 的交易中 instrument，提交合法价格消息。
+    // 预期结果：记录用本地 ID 7 保存，并将 instrument 放入共享缓存供后续 history 使用。
+    #[tokio::test]
+    async fn option_market_price_insert_history_loads_instrument_on_cache_miss() {
+        let mut repository = MockClientBinanceOptionInstrumentRepositoryTrait::new();
+        repository
+            .expect_find_instrument_by_server_id()
+            .with(mockall::predicate::eq(42))
+            .times(1)
+            .returning(|_| Ok(Some(local_option_instrument(42, 7))));
+        let mut batch_insert = MockPostgresqlBatchInsertTrait::<LocalBinanceOptionMarketPricePo>::new();
+        batch_insert
+            .expect_insert_data()
+            .withf(|entry, local_inst_id| {
+                *local_inst_id == 7
+                    && matches!(entry.payload.as_ref(), Some(Payload::BinanceOptionMarketPrice(price)) if price.mark_price == "123.000000000000000001")
+            })
+            .times(1)
+            .returning(|_, _| ());
+        let cache = option_instrument_cache(None);
+        let service = BinanceOptionMarketPriceClientHistoryService {
+            history_batch_insert: Arc::new(batch_insert),
+            repository: Arc::new(repository),
+            data_retention_ms: 86_400_000,
+            grpc_manager: Arc::new(MockGrpcChannelManagerTrait::new()),
+            inst_cache: cache.clone(),
+        };
+
+        service
+            .insert_history(option_market_price_history_entry(1_700_000_000_123))
+            .await
+            .unwrap();
+
+        assert_eq!(cache.read().await.get(&42).map(|instrument| instrument.id), Some(7));
     }
 }
