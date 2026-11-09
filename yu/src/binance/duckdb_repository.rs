@@ -1,6 +1,10 @@
-use crate::binance::bn_backend_service::{get_spot_kline_table, get_swap_funding_rate_table, get_swap_kline_table};
+use crate::binance::bn_backend_service::{
+    get_binance_option_kline_table, get_binance_option_market_price_table, get_spot_kline_table, get_swap_funding_rate_table, get_swap_kline_table,
+};
 use crate::binance::bn_consts::{BN_SYMBOL_STATUS_NOT_TRADING, BN_SYMBOL_STATUS_TRADING};
-use crate::binance::models::po::{BinanceInstrument, BinanceOptionInstrumentPo, FundingRatePo, KlinePo, SpotStreamTradeRecordPo};
+use crate::binance::models::po::{
+    BinanceInstrument, BinanceOptionInstrumentPo, BinanceOptionKlinePo, BinanceOptionMarketPricePo, FundingRatePo, KlinePo, SpotStreamTradeRecordPo,
+};
 use crate::duck_db::DuckDBDSProvider;
 use crate::duck_db_tables::DuckTableTableChannel;
 use crate::errors::YuError;
@@ -73,6 +77,26 @@ pub trait BinanceKlineRepositoryTrait {
 
 #[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
 #[async_trait]
+pub trait BinanceOptionKlineRepositoryTrait: Send + Sync {
+    async fn find_by_inst_id_between(&self, inst_id: u64, start_ms: u64, end_ms: u64) -> Result<Vec<BinanceOptionKlinePo>, YuError>;
+
+    async fn inst_id_with_latest_timestamp_before(&self, before_ms: u64) -> Result<HashMap<i64, u64>, YuError>;
+
+    async fn insert_kline(&self, kline: BinanceOptionKlinePo) -> Result<(), YuError>;
+
+    async fn batch_insert_kline(&self, klines: Vec<BinanceOptionKlinePo>) -> Result<(), YuError>;
+}
+
+#[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
+#[async_trait]
+pub trait BinanceOptionMarketPriceRepositoryTrait: Send + Sync {
+    async fn find_by_inst_id_between(&self, inst_id: u64, start_ms: u64, end_ms: u64) -> Result<Vec<BinanceOptionMarketPricePo>, YuError>;
+
+    async fn batch_insert_market_price(&self, prices: Vec<BinanceOptionMarketPricePo>) -> Result<(), YuError>;
+}
+
+#[cfg_attr(any(test, feature = "mockable"), mockall::automock)]
+#[async_trait]
 pub trait BinanceFundingRateRepositoryTrait {
     async fn find_by_inst_id_between(&self, inst_id: u64, start_ms: u64, end_ms: u64) -> Result<Vec<FundingRatePo>, YuError>;
 
@@ -98,6 +122,8 @@ pub type BinanceOptionInstrumentRepository = Arc<dyn BinanceOptionInstrumentRepo
 pub type BinanceKlineRepository = Arc<dyn BinanceKlineRepositoryTrait + Send + Sync>;
 pub type BinanceFundingRateRepository = Arc<dyn BinanceFundingRateRepositoryTrait + Send + Sync>;
 pub type BinanceTradeRepository = Arc<dyn BinanceTradeRepositoryTrait + Send + Sync>;
+pub type BinanceOptionKlineRepository = Arc<dyn BinanceOptionKlineRepositoryTrait + Send + Sync>;
+pub type BinanceOptionMarketPriceRepository = Arc<dyn BinanceOptionMarketPriceRepositoryTrait + Send + Sync>;
 
 pub fn get_instrument_repo_for_production(provider: Option<DuckDBDSProvider>) -> BNInstrumentRepository {
     Arc::new(BNInstrumentRepositoryImpl {
@@ -124,6 +150,26 @@ pub fn get_default_swap_kline_repo(provider: Option<DuckDBDSProvider>, channel: 
         provider: provider.unwrap_or_default(),
         table_name: "bn_swap_kline",
         db: channel.unwrap_or_else(get_swap_kline_table),
+    })
+}
+
+pub fn get_default_binance_option_kline_repo(
+    provider: Option<DuckDBDSProvider>,
+    channel: Option<DuckTableTableChannel<BinanceOptionKlinePo>>,
+) -> BinanceOptionKlineRepository {
+    Arc::new(BinanceOptionKlineRepositoryImpl {
+        provider: provider.unwrap_or_default(),
+        db: channel.unwrap_or_else(get_binance_option_kline_table),
+    })
+}
+
+pub fn get_default_binance_option_market_price_repo(
+    provider: Option<DuckDBDSProvider>,
+    channel: Option<DuckTableTableChannel<BinanceOptionMarketPricePo>>,
+) -> BinanceOptionMarketPriceRepository {
+    Arc::new(BinanceOptionMarketPriceRepositoryImpl {
+        provider: provider.unwrap_or_default(),
+        db: channel.unwrap_or_else(get_binance_option_market_price_table),
     })
 }
 
@@ -291,6 +337,93 @@ impl BinanceKlineRepositoryTrait for BinanceKlineRepositoryImpl {
             .send(QueryCommand::BatchInsert(BatchInsertPayload::new_no_replay(klines)))
             .await
             .map_err(|error| YuError::CustomError(format!("failed insert binance kline: {error}")))?;
+        Ok(())
+    }
+}
+
+struct BinanceOptionKlineRepositoryImpl {
+    provider: DuckDBDSProvider,
+    db: DuckTableTableChannel<BinanceOptionKlinePo>,
+}
+
+#[async_trait]
+impl BinanceOptionKlineRepositoryTrait for BinanceOptionKlineRepositoryImpl {
+    async fn find_by_inst_id_between(&self, inst_id: u64, start_ms: u64, end_ms: u64) -> Result<Vec<BinanceOptionKlinePo>, YuError> {
+        let conn = self.provider.acquire()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, inst_id, candle_begin_time, open, high, low, close, volume, close_time, quote_asset_volume, number_of_trades, \
+             taker_buy_base_asset_volume, taker_buy_quote_asset_volume FROM bn_option_kline \
+             WHERE inst_id = ? AND candle_begin_time >= ? AND candle_begin_time <= ? ORDER BY candle_begin_time",
+        )?;
+        let mut rows = stmt.query(duckdb::params![inst_id as i64, start_ms as i64, end_ms as i64])?;
+        let mut klines = Vec::new();
+        while let Some(row) = rows.next()? {
+            klines.push(BinanceOptionKlinePo::try_from(row)?);
+        }
+        Ok(klines)
+    }
+
+    async fn inst_id_with_latest_timestamp_before(&self, before_ms: u64) -> Result<HashMap<i64, u64>, YuError> {
+        let before_ms = i64::try_from(before_ms).map_err(|_| YuError::new("before_ms exceeds DuckDB BIGINT range"))?;
+        let conn = self.provider.acquire()?;
+        let mut stmt = conn.prepare("SELECT inst_id, MAX(candle_begin_time) FROM bn_option_kline WHERE candle_begin_time <= ? GROUP BY inst_id")?;
+        let mut rows = stmt.query(duckdb::params![before_ms])?;
+        let mut timestamps = HashMap::new();
+        while let Some(row) = rows.next()? {
+            let inst_id: i64 = row.get(0)?;
+            let timestamp: i64 = row.get(1)?;
+            timestamps.insert(
+                inst_id,
+                u64::try_from(timestamp).map_err(|_| YuError::new("negative candle_begin_time in Binance option Kline table"))?,
+            );
+        }
+        Ok(timestamps)
+    }
+
+    async fn insert_kline(&self, kline: BinanceOptionKlinePo) -> Result<(), YuError> {
+        self.db
+            .send(QueryCommand::Insert(InsertPayload::new_no_replay(kline)))
+            .await
+            .map_err(|error| YuError::CustomError(format!("failed to insert Binance option Kline: {error}")))?;
+        Ok(())
+    }
+
+    async fn batch_insert_kline(&self, klines: Vec<BinanceOptionKlinePo>) -> Result<(), YuError> {
+        self.db
+            .send(QueryCommand::BatchInsert(BatchInsertPayload::new_no_replay(klines)))
+            .await
+            .map_err(|error| YuError::CustomError(format!("failed to batch insert Binance option Klines: {error}")))?;
+        Ok(())
+    }
+}
+
+struct BinanceOptionMarketPriceRepositoryImpl {
+    provider: DuckDBDSProvider,
+    db: DuckTableTableChannel<BinanceOptionMarketPricePo>,
+}
+
+#[async_trait]
+impl BinanceOptionMarketPriceRepositoryTrait for BinanceOptionMarketPriceRepositoryImpl {
+    async fn find_by_inst_id_between(&self, inst_id: u64, start_ms: u64, end_ms: u64) -> Result<Vec<BinanceOptionMarketPricePo>, YuError> {
+        let conn = self.provider.acquire()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, inst_id, symbol, acquire_ts, mark_price, bid_iv, ask_iv, mark_iv, delta, theta, gamma, vega, high_price_limit, \
+             low_price_limit, risk_free_interest FROM bn_option_market_price \
+             WHERE inst_id = ? AND acquire_ts >= ? AND acquire_ts <= ? ORDER BY acquire_ts",
+        )?;
+        let mut rows = stmt.query(duckdb::params![inst_id as i64, start_ms as i64, end_ms as i64])?;
+        let mut prices = Vec::new();
+        while let Some(row) = rows.next()? {
+            prices.push(BinanceOptionMarketPricePo::try_from(row)?);
+        }
+        Ok(prices)
+    }
+
+    async fn batch_insert_market_price(&self, prices: Vec<BinanceOptionMarketPricePo>) -> Result<(), YuError> {
+        self.db
+            .send(QueryCommand::BatchInsert(BatchInsertPayload::new_no_replay(prices)))
+            .await
+            .map_err(|error| YuError::CustomError(format!("failed to batch insert Binance option market prices: {error}")))?;
         Ok(())
     }
 }
@@ -621,9 +754,10 @@ mod tests {
     use super::*;
     use crate::binance::bn_consts::{BN_SYMBOL_STATUS_BREAK, BN_SYMBOL_STATUS_TRADING};
     use crate::binance::db_consts::{
-        CREATE_BINANCE_INSTRUMENTS_TABLE, CREATE_BINANCE_OPTION_INSTRUMENTS_TABLE, CREATE_FUNDING_RATE_TABLE, CREATE_SPOT_KLINE_TABLE,
-        CREATE_SWAP_KLINE_TABLE,
+        CREATE_BINANCE_INSTRUMENTS_TABLE, CREATE_BINANCE_OPTION_INSTRUMENTS_TABLE, CREATE_BINANCE_OPTION_KLINE_TABLE,
+        CREATE_BINANCE_OPTION_MARKET_PRICE_TABLE, CREATE_FUNDING_RATE_TABLE, CREATE_SPOT_KLINE_TABLE, CREATE_SWAP_KLINE_TABLE,
     };
+    use crate::duck_db::DuckDBPO;
     use crate::test_utils::create_memory_db_provider;
     use tokio::sync::mpsc;
 
@@ -1108,5 +1242,126 @@ mod tests {
         let repo = get_default_funding_rate_repo(Some(create_memory_db_provider()), Some(tx));
 
         assert!(repo.inst_id_with_lastest_timestamp_before(3000).await.is_err());
+    }
+
+    // 测试目的：验证期权 Kline 和 Market Price repository 可往返读取 DECIMAL 数据，并将批量写入交给注入的 channel。
+    // 准备数据/过程：在内存 DuckDB 创建两张表，通过各 PO 的 DuckDB 参数写入高精度 Decimal，再查询并发送批量插入命令。
+    // 预期结果：毫秒时间、instrument ID 和 Decimal 精度保持一致；批量命令分别携带对应实体数据。
+    #[tokio::test]
+    async fn binance_option_history_repositories_read_decimal_rows_and_publish_batch_commands() {
+        let provider = create_memory_db_provider();
+        let conn = provider.acquire().unwrap();
+        for statement in CREATE_BINANCE_OPTION_KLINE_TABLE
+            .split(';')
+            .map(str::trim)
+            .filter(|sql| !sql.is_empty())
+            .chain(
+                CREATE_BINANCE_OPTION_MARKET_PRICE_TABLE
+                    .split(';')
+                    .map(str::trim)
+                    .filter(|sql| !sql.is_empty()),
+            )
+        {
+            conn.execute(statement, []).unwrap();
+        }
+
+        let kline = BinanceOptionKlinePo {
+            id: 1,
+            inst_id: 42,
+            candle_begin_time: 1_700_000_000_000,
+            open: "100.000000000000000001".parse().unwrap(),
+            high: "101.2".parse().unwrap(),
+            low: "99.8".parse().unwrap(),
+            close: "100.5".parse().unwrap(),
+            volume: "2.25".parse().unwrap(),
+            close_time: 1_700_000_059_999,
+            quote_asset_volume: "225.000000000000000002".parse().unwrap(),
+            number_of_trades: 7,
+            taker_buy_base_asset_volume: "1.25".parse().unwrap(),
+            taker_buy_quote_asset_volume: "125.000000000000000003".parse().unwrap(),
+        };
+        let market_price = BinanceOptionMarketPricePo {
+            id: 2,
+            inst_id: 42,
+            symbol: "BTC-270101-50000-C".to_string(),
+            acquire_ts: 1_700_000_000_123,
+            mark_price: "123.000000000000000001".parse().unwrap(),
+            bid_iv: "0.21".parse().unwrap(),
+            ask_iv: "0.22".parse().unwrap(),
+            mark_iv: "0.215".parse().unwrap(),
+            delta: "0.5".parse().unwrap(),
+            theta: "-0.01".parse().unwrap(),
+            gamma: "0.000000000000000123".parse().unwrap(),
+            vega: "0.03".parse().unwrap(),
+            high_price_limit: "130.1".parse().unwrap(),
+            low_price_limit: "110.2".parse().unwrap(),
+            risk_free_interest: "0.1".parse().unwrap(),
+        };
+        let mut kline_appender = conn.appender("bn_option_kline").unwrap();
+        kline_appender.append_row(kline.to_params()).unwrap();
+        kline_appender.flush().unwrap();
+        let mut market_price_appender = conn.appender("bn_option_market_price").unwrap();
+        market_price_appender.append_row(market_price.to_params()).unwrap();
+        market_price_appender.flush().unwrap();
+        drop(kline_appender);
+        drop(market_price_appender);
+        drop(conn);
+
+        let (kline_tx, mut kline_rx) = mpsc::channel(1);
+        let (market_price_tx, mut market_price_rx) = mpsc::channel(1);
+        let kline_repo = get_default_binance_option_kline_repo(Some(provider.clone()), Some(kline_tx));
+        let market_price_repo = get_default_binance_option_market_price_repo(Some(provider), Some(market_price_tx));
+        let klines = kline_repo
+            .find_by_inst_id_between(42, kline.candle_begin_time, kline.candle_begin_time)
+            .await
+            .unwrap();
+        let prices = market_price_repo
+            .find_by_inst_id_between(42, market_price.acquire_ts, market_price.acquire_ts)
+            .await
+            .unwrap();
+
+        assert_eq!(klines.len(), 1);
+        assert_eq!(klines[0].open.to_string(), "100.000000000000000001");
+        assert_eq!(klines[0].quote_asset_volume.to_string(), "225.000000000000000002");
+        assert_eq!(klines[0].close_time, 1_700_000_059_999);
+        assert_eq!(
+            kline_repo.inst_id_with_latest_timestamp_before(1_700_000_000_000).await.unwrap(),
+            HashMap::from([(42, 1_700_000_000_000)])
+        );
+        assert_eq!(prices.len(), 1);
+        assert_eq!(prices[0].symbol, "BTC-270101-50000-C");
+        assert_eq!(prices[0].mark_price.to_string(), "123.000000000000000001");
+        assert_eq!(prices[0].gamma.to_string(), "0.000000000000000123");
+
+        kline_repo.batch_insert_kline(vec![kline.clone()]).await.unwrap();
+        market_price_repo.batch_insert_market_price(vec![market_price.clone()]).await.unwrap();
+        match kline_rx.recv().await.unwrap() {
+            QueryCommand::BatchInsert(payload) => assert_eq!(payload.data[0].open, kline.open),
+            _ => panic!("expected Binance option Kline batch insert"),
+        }
+        match market_price_rx.recv().await.unwrap() {
+            QueryCommand::BatchInsert(payload) => assert_eq!(payload.data[0].mark_price, market_price.mark_price),
+            _ => panic!("expected Binance option market price batch insert"),
+        }
+    }
+
+    // 测试目的：验证期权历史 repository 在表不存在或写入 channel 已关闭时显式返回错误。
+    // 准备数据/过程：分别使用缺表的内存 DuckDB 查询 Kline/Market Price，并向已关闭 channel 发起批量保存。
+    // 预期结果：查询和写入均返回 Err，而不是伪装成空历史或成功保存。
+    #[tokio::test]
+    async fn binance_option_history_repositories_propagate_storage_errors() {
+        let provider = create_memory_db_provider();
+        let (kline_tx, kline_rx) = mpsc::channel(1);
+        let (market_price_tx, market_price_rx) = mpsc::channel(1);
+        drop(kline_rx);
+        drop(market_price_rx);
+        let kline_repo = get_default_binance_option_kline_repo(Some(provider.clone()), Some(kline_tx));
+        let market_price_repo = get_default_binance_option_market_price_repo(Some(provider), Some(market_price_tx));
+
+        assert!(kline_repo.find_by_inst_id_between(42, 0, 1000).await.is_err());
+        assert!(kline_repo.inst_id_with_latest_timestamp_before(1000).await.is_err());
+        assert!(market_price_repo.find_by_inst_id_between(42, 0, 1000).await.is_err());
+        assert!(kline_repo.batch_insert_kline(Vec::new()).await.is_err());
+        assert!(market_price_repo.batch_insert_market_price(Vec::new()).await.is_err());
     }
 }

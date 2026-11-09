@@ -3,6 +3,7 @@ use crate::binance::bn_dashboard::BinanceDashboard;
 use crate::binance::db_consts::initial_tables;
 use crate::binance::models::po::BinanceOrderBookSnapshotPo;
 use crate::binance::sync_server::{
+    BinanceOptionKlineSyncHistoryService, BinanceOptionMarketPriceSyncHistoryService, BinanceOptionSyncInstrumentService,
     BinanceSpotSyncHistoryService, BinanceSwapFundingRateSyncHistoryService, BinanceSwapSyncHistoryService, BinanceSyncInstrumentService,
     subscribe_spot_order_book,
 };
@@ -56,11 +57,23 @@ pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: m
     );
     let funding_rate_history_service =
         BinanceSwapFundingRateSyncHistoryService::for_production(dash_board.clone(), app_config.get_data_retention_ms(), history_tx.clone());
+    let option_instrument_service = BinanceOptionSyncInstrumentService::for_production();
+    let option_live_instruments = option_instrument_service.live_instruments();
+    let option_kline_history_service = BinanceOptionKlineSyncHistoryService::for_production(
+        app_config.get_data_retention_ms(),
+        option_live_instruments.clone(),
+        history_tx.clone(),
+        interval.clone(),
+    );
+    let option_market_price_history_service = BinanceOptionMarketPriceSyncHistoryService::for_production(option_live_instruments, history_tx.clone());
     let mut support_history_service: HashMap<HistoryType, SyncHistoryService> = HashMap::new();
     support_history_service.insert(HistoryType::BinanceSpot, history_service.clone());
     support_history_service.insert(HistoryType::BinanceSwap, swap_history_service.clone());
     support_history_service.insert(HistoryType::BinanceSwapFundingRate, funding_rate_history_service.clone());
-    let instrument_service = BinanceSyncInstrumentService::for_production(dash_board.clone(), support_history_service);
+    support_history_service.insert(HistoryType::BinanceOptionKline, option_kline_history_service.clone());
+    support_history_service.insert(HistoryType::BinanceOptionMarketPrice, option_market_price_history_service.clone());
+    let instrument_service =
+        BinanceSyncInstrumentService::for_production_with_option_service(dash_board.clone(), support_history_service, option_instrument_service);
     info!("start initial Binance Spot, Swap and Option instruments");
     if let Err(error) = instrument_service.sync_instrument().await {
         error!("failed to sync Binance Spot, Swap and Option instruments: {}", error);
@@ -161,18 +174,29 @@ pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: m
     swap_history_service.initial_history_data(Some(start_initial_ms)).await?;
     info!("start initial Binance Swap funding rate history data");
     funding_rate_history_service.initial_history_data(Some(start_initial_ms)).await?;
+    info!("started initial Binance Option Kline history data");
+    option_kline_history_service.initial_history_data(None).await?;
+    info!("started initial Binance Option Market Price snapshot");
+    option_market_price_history_service.initial_history_data(None).await?;
     info!("started checking Binance Spot kline history data");
     history_service.check_history_data(None).await?;
     info!("started checking Binance Swap kline history data");
     swap_history_service.check_history_data(None).await?;
+    info!("started checking Binance Option Kline history data");
+    option_kline_history_service.check_history_data(None).await?;
+    option_market_price_history_service.check_history_data(None).await?;
 
     let check_history_job = history_service.clone();
     let check_swap_history_job = swap_history_service.clone();
     let funding_rate_history_check = funding_rate_history_service.clone();
+    let option_kline_history_check = option_kline_history_service.clone();
+    let option_market_price_history_check = option_market_price_history_service.clone();
     let _ = cron_job!("0 23 */6 * * *", move |_uuid, _locked| {
         let each_spot_sync = check_history_job.clone();
         let each_swap_sync = check_swap_history_job.clone();
         let each_fuding_rate_sync = funding_rate_history_check.clone();
+        let each_option_kline_sync = option_kline_history_check.clone();
+        let each_option_market_price_sync = option_market_price_history_check.clone();
         Box::pin(async move {
             debug!("start checking Binance Spot and Swap kline history");
             if let Err(error) = each_spot_sync.check_history_data(None).await {
@@ -184,7 +208,27 @@ pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: m
             if let Err(error) = each_fuding_rate_sync.check_history_data(Some(unix_time_now_u64_utc())).await {
                 error!("failed to check Binance Swap funding rate history: {}", error);
             }
+            if let Err(error) = each_option_kline_sync.check_history_data(None).await {
+                error!("failed to check Binance Option Kline history: {}", error);
+            }
+            if let Err(error) = each_option_market_price_sync.check_history_data(None).await {
+                error!("failed to check Binance Option Market Price history: {}", error);
+            }
             debug!("finished checking Binance Spot and Swap kline history");
+        })
+    });
+    let option_kline_periodic_sync = option_kline_history_service.clone();
+    let option_market_price_periodic_sync = option_market_price_history_service.clone();
+    let _ = cron_job!("37 0 * * * *", move |_uuid, _locked| {
+        let each_option_kline_sync = option_kline_periodic_sync.clone();
+        let each_option_market_price_sync = option_market_price_periodic_sync.clone();
+        Box::pin(async move {
+            if let Err(error) = each_option_kline_sync.sync_all().await {
+                error!("failed to sync Binance Option Kline history: {}", error);
+            }
+            if let Err(error) = each_option_market_price_sync.sync_all().await {
+                error!("failed to sync Binance Option Market Price history: {}", error);
+            }
         })
     });
     let sync_instrument_job = instrument_service.clone();

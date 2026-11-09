@@ -2,12 +2,15 @@ use crate::binance::bn_backend_service::{get_spot_kline_table, get_spot_order_bo
 use crate::binance::bn_dashboard::{BinanceDashboard, InstrumentProvider, SpotInstrumentProvider, SwapInstrumentProvider};
 use crate::binance::db_consts::BinanceTables;
 use crate::binance::duckdb_repository::{
-    BNInstrumentRepository, BinanceFundingRateRepository, BinanceKlineRepository, BinanceOptionInstrumentRepository,
-    get_binance_option_instrument_repo, get_default_funding_rate_repo, get_default_spot_kline_repo, get_default_swap_kline_repo,
+    BNInstrumentRepository, BinanceFundingRateRepository, BinanceKlineRepository, BinanceOptionInstrumentRepository, BinanceOptionKlineRepository,
+    BinanceOptionMarketPriceRepository, get_binance_option_instrument_repo, get_default_binance_option_kline_repo,
+    get_default_binance_option_market_price_repo, get_default_funding_rate_repo, get_default_spot_kline_repo, get_default_swap_kline_repo,
     get_instrument_repo_for_production,
 };
 use crate::binance::history::{INITIAL_HISTORY_PROGRESS_LOG_INTERVAL, initial_kline};
-use crate::binance::models::po::{BinanceInstrument, BinanceOptionInstrumentPo, FundingRatePo, KlinePo};
+use crate::binance::models::po::{
+    BinanceInstrument, BinanceOptionInstrumentPo, BinanceOptionKlinePo, BinanceOptionMarketPricePo, FundingRatePo, KlinePo,
+};
 use crate::config::AppConfig;
 use crate::data_integrity::check::{BinarySearchDS, DuckDBBinarySearchDataImpl, binary_search_gap};
 use crate::data_integrity::models::ValidationGap;
@@ -838,14 +841,16 @@ pub struct BinanceSyncInstrumentService {
 pub struct BinanceOptionSyncInstrumentService {
     instrument_repo: BinanceOptionInstrumentRepository,
     option_api: BinanceOptionExchangeApi,
-    live_instruments: Arc<RwLock<HashMap<String, BinanceOptionInstrumentPo>>>,
+    live_instruments: BinanceOptionInstrumentCache,
 }
+
+pub type BinanceOptionInstrumentCache = Arc<RwLock<HashMap<String, BinanceOptionInstrumentPo>>>;
 
 impl BinanceOptionSyncInstrumentService {
     pub fn new(
         instrument_repo: BinanceOptionInstrumentRepository,
         option_api: BinanceOptionExchangeApi,
-        live_instruments: Arc<RwLock<HashMap<String, BinanceOptionInstrumentPo>>>,
+        live_instruments: BinanceOptionInstrumentCache,
     ) -> Self {
         Self {
             instrument_repo,
@@ -860,6 +865,10 @@ impl BinanceOptionSyncInstrumentService {
             default_binance_option_api(),
             Arc::new(RwLock::new(HashMap::new())),
         ))
+    }
+
+    pub fn live_instruments(&self) -> BinanceOptionInstrumentCache {
+        self.live_instruments.clone()
     }
 
     pub async fn list_all_instruments(&self) -> Result<Vec<BinanceOptionInstrumentPo>, YuError> {
@@ -929,12 +938,330 @@ fn option_instrument_to_proto(instrument: BinanceOptionInstrumentPo) -> Result<I
         .map_err(|error| YuError::new(&format!("invalid Binance option instrument ID: {error}")))
 }
 
+pub struct BinanceOptionKlineSyncHistoryService {
+    data_retention_ms: u64,
+    live_instruments: BinanceOptionInstrumentCache,
+    kline_repo: BinanceOptionKlineRepository,
+    option_api: BinanceOptionExchangeApi,
+    binary_search_ds: BinarySearchDS,
+    history_tx: mpsc::Sender<HistoryEntry>,
+    interval: HistoryInterval,
+}
+
+impl BinanceOptionKlineSyncHistoryService {
+    pub fn new(
+        data_retention_ms: u64,
+        live_instruments: BinanceOptionInstrumentCache,
+        kline_repo: BinanceOptionKlineRepository,
+        option_api: BinanceOptionExchangeApi,
+        binary_search_ds: BinarySearchDS,
+        history_tx: mpsc::Sender<HistoryEntry>,
+        interval: HistoryInterval,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            data_retention_ms,
+            live_instruments,
+            kline_repo,
+            option_api,
+            binary_search_ds,
+            history_tx,
+            interval,
+        })
+    }
+
+    pub fn for_production(
+        data_retention_ms: u64,
+        live_instruments: BinanceOptionInstrumentCache,
+        history_tx: mpsc::Sender<HistoryEntry>,
+        interval: HistoryInterval,
+    ) -> Arc<Self> {
+        let binary_search_ds = DuckDBBinarySearchDataImpl::new(
+            DuckDBDSProvider::default(),
+            BinanceTables::OptionKline.table_name(),
+            "candle_begin_time".to_string(),
+            "inst_id".to_string(),
+        );
+        Self::new(
+            data_retention_ms,
+            live_instruments,
+            get_default_binance_option_kline_repo(None, None),
+            default_binance_option_api(),
+            binary_search_ds,
+            history_tx,
+            interval,
+        )
+    }
+
+    async fn sync_instrument_range(
+        &self,
+        instrument: &BinanceOptionInstrumentPo,
+        start_ms: u64,
+        end_ms: u64,
+        broadcast: bool,
+    ) -> Result<(), YuError> {
+        if start_ms >= end_ms {
+            return Ok(());
+        }
+        let request_end_ms = end_ms.saturating_sub(1);
+        let response = self
+            .option_api
+            .get_all_klines(instrument.symbol.clone(), self.interval.as_ref().to_string(), start_ms, request_end_ms)
+            .await?;
+        let instrument_id = u64::try_from(instrument.id).map_err(|error| YuError::new(&format!("invalid Binance option instrument ID: {error}")))?;
+        let klines = response
+            .into_iter()
+            .map(|kline| BinanceOptionKlinePo::from_option_kline(instrument_id, &kline))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter(|kline| kline.candle_begin_time >= start_ms && kline.candle_begin_time < end_ms)
+            .collect::<Vec<_>>();
+
+        if klines.is_empty() {
+            return Ok(());
+        }
+        self.kline_repo.batch_insert_kline(klines.clone()).await?;
+        if broadcast {
+            for kline in klines {
+                self.history_tx
+                    .send(kline.to_history_entry())
+                    .await
+                    .map_err(|error| YuError::CustomError(format!("failed to broadcast Binance option Kline history: {error}")))?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn live_instruments(&self) -> Vec<BinanceOptionInstrumentPo> {
+        self.live_instruments.read().await.values().cloned().collect()
+    }
+
+    fn aligned_end(&self, requested_end_ms: Option<u64>) -> u64 {
+        let now_ms = unix_time_now_u64_utc();
+        self.interval.get_close_unix_ms(requested_end_ms.unwrap_or(now_ms).min(now_ms))
+    }
+
+    fn retention_start(&self, end_ms: u64) -> u64 {
+        self.interval.get_close_unix_ms(end_ms.saturating_sub(self.data_retention_ms))
+    }
+}
+
+#[async_trait]
+impl SyncHistoryServiceTrait for BinanceOptionKlineSyncHistoryService {
+    async fn query_and_broadcast_history(
+        &self,
+        inst_id: u64,
+        start_ts: u64,
+        end_ts: u64,
+        batch_size: usize,
+        tx: mpsc::Sender<Result<ServerMessage, Status>>,
+    ) -> Result<(), YuError> {
+        let klines = self.kline_repo.find_by_inst_id_between(inst_id, start_ts, end_ts).await?;
+        if klines.is_empty() {
+            tx.send(Ok(ServerMessage {
+                history: Vec::new(),
+                server_timestamp: unix_time_now_u64_utc(),
+            }))
+            .await
+            .map_err(|error| YuError::CustomError(format!("failed to return empty Binance option Kline history: {error}")))?;
+            return Ok(());
+        }
+
+        for batch in klines.chunks(batch_size.max(1)) {
+            tx.send(Ok(ServerMessage {
+                history: batch.iter().map(BinanceOptionKlinePo::to_history_entry).collect(),
+                server_timestamp: unix_time_now_u64_utc(),
+            }))
+            .await
+            .map_err(|error| YuError::CustomError(format!("failed to return Binance option Kline history: {error}")))?;
+        }
+        Ok(())
+    }
+
+    async fn check_history_data(&self, end_ms: Option<UnixTimeStamp>) -> Result<(), YuError> {
+        let end_ms = self.aligned_end(end_ms);
+        let start_ms = self.retention_start(end_ms);
+        let instruments = self.live_instruments().await;
+        for instrument in instruments {
+            let instrument_id =
+                u64::try_from(instrument.id).map_err(|error| YuError::new(&format!("invalid Binance option instrument ID: {error}")))?;
+            let gaps = binary_search_gap(
+                &instrument_id.to_string(),
+                "BINANCE_OPTION",
+                start_ms,
+                end_ms,
+                &self.interval,
+                self.binary_search_ds.clone(),
+                0,
+            )?
+            .gaps;
+            for gap in gaps {
+                if let ValidationGap::MissingData { start_time, end_time, .. } = gap {
+                    self.sync_instrument_range(&instrument, start_time, end_time, true).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn initial_history_data(&self, end_ms: Option<u64>) -> Result<(), YuError> {
+        let end_ms = self.aligned_end(end_ms);
+        let retention_start_ms = self.retention_start(end_ms);
+        let latest_timestamps = self.kline_repo.inst_id_with_latest_timestamp_before(end_ms).await?;
+        for instrument in self.live_instruments().await {
+            let start_ms = latest_timestamps
+                .get(&instrument.id)
+                .map(|latest| latest.saturating_add(self.interval.to_milliseconds()))
+                .unwrap_or(retention_start_ms)
+                .max(retention_start_ms);
+            self.sync_instrument_range(&instrument, start_ms, end_ms, false).await?;
+        }
+        Ok(())
+    }
+
+    async fn sync_all(&self) -> Result<(), YuError> {
+        let end_ms = self.aligned_end(None);
+        let retention_start_ms = self.retention_start(end_ms);
+        let latest_timestamps = self.kline_repo.inst_id_with_latest_timestamp_before(end_ms).await?;
+        for instrument in self.live_instruments().await {
+            let start_ms = latest_timestamps
+                .get(&instrument.id)
+                .map(|latest| latest.saturating_add(self.interval.to_milliseconds()))
+                .unwrap_or(retention_start_ms)
+                .max(retention_start_ms);
+            self.sync_instrument_range(&instrument, start_ms, end_ms, true).await?;
+        }
+        Ok(())
+    }
+
+    async fn sync_period(&self) -> Result<Option<String>, YuError> {
+        Ok(None)
+    }
+}
+
+pub struct BinanceOptionMarketPriceSyncHistoryService {
+    live_instruments: BinanceOptionInstrumentCache,
+    market_price_repo: BinanceOptionMarketPriceRepository,
+    option_api: BinanceOptionExchangeApi,
+    history_tx: mpsc::Sender<HistoryEntry>,
+}
+
+impl BinanceOptionMarketPriceSyncHistoryService {
+    pub fn new(
+        live_instruments: BinanceOptionInstrumentCache,
+        market_price_repo: BinanceOptionMarketPriceRepository,
+        option_api: BinanceOptionExchangeApi,
+        history_tx: mpsc::Sender<HistoryEntry>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            live_instruments,
+            market_price_repo,
+            option_api,
+            history_tx,
+        })
+    }
+
+    pub fn for_production(live_instruments: BinanceOptionInstrumentCache, history_tx: mpsc::Sender<HistoryEntry>) -> Arc<Self> {
+        Self::new(
+            live_instruments,
+            get_default_binance_option_market_price_repo(None, None),
+            default_binance_option_api(),
+            history_tx,
+        )
+    }
+
+    async fn capture_market_prices(&self, broadcast: bool) -> Result<(), YuError> {
+        let instruments = self.live_instruments.read().await.clone();
+        let response = self.option_api.get_all_market_price().await?;
+        let mut prices = Vec::new();
+        for price in response {
+            let Some(instrument) = instruments.get(&price.symbol) else {
+                debug!("skip Binance option market price for unknown or non-trading instrument {}", price.symbol);
+                continue;
+            };
+            let instrument_id =
+                u64::try_from(instrument.id).map_err(|error| YuError::new(&format!("invalid Binance option instrument ID: {error}")))?;
+            prices.push(BinanceOptionMarketPricePo::from_market_price(instrument_id, &price));
+        }
+        if prices.is_empty() {
+            return Ok(());
+        }
+        self.market_price_repo.batch_insert_market_price(prices.clone()).await?;
+        if broadcast {
+            for price in prices {
+                self.history_tx
+                    .send(price.to_history_entry())
+                    .await
+                    .map_err(|error| YuError::CustomError(format!("failed to broadcast Binance option market price history: {error}")))?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl SyncHistoryServiceTrait for BinanceOptionMarketPriceSyncHistoryService {
+    async fn query_and_broadcast_history(
+        &self,
+        inst_id: u64,
+        start_ts: u64,
+        end_ts: u64,
+        batch_size: usize,
+        tx: mpsc::Sender<Result<ServerMessage, Status>>,
+    ) -> Result<(), YuError> {
+        let prices = self.market_price_repo.find_by_inst_id_between(inst_id, start_ts, end_ts).await?;
+        if prices.is_empty() {
+            tx.send(Ok(ServerMessage {
+                history: Vec::new(),
+                server_timestamp: unix_time_now_u64_utc(),
+            }))
+            .await
+            .map_err(|error| YuError::CustomError(format!("failed to return empty Binance option market price history: {error}")))?;
+            return Ok(());
+        }
+
+        for batch in prices.chunks(batch_size.max(1)) {
+            tx.send(Ok(ServerMessage {
+                history: batch.iter().map(BinanceOptionMarketPricePo::to_history_entry).collect(),
+                server_timestamp: unix_time_now_u64_utc(),
+            }))
+            .await
+            .map_err(|error| YuError::CustomError(format!("failed to return Binance option market price history: {error}")))?;
+        }
+        Ok(())
+    }
+
+    async fn check_history_data(&self, _end_ms: Option<UnixTimeStamp>) -> Result<(), YuError> {
+        debug!("skip Binance option market price gap check: REST API exposes only current prices, not historical snapshots");
+        Ok(())
+    }
+
+    async fn initial_history_data(&self, _end_ms: Option<u64>) -> Result<(), YuError> {
+        self.capture_market_prices(false).await
+    }
+
+    async fn sync_all(&self) -> Result<(), YuError> {
+        self.capture_market_prices(true).await
+    }
+
+    async fn sync_period(&self) -> Result<Option<String>, YuError> {
+        Ok(None)
+    }
+}
+
 impl BinanceSyncInstrumentService {
     pub fn for_production(dashboard: Arc<BinanceDashboard>, support_history_service: HashMap<HistoryType, SyncHistoryService>) -> Arc<Self> {
+        Self::for_production_with_option_service(dashboard, support_history_service, BinanceOptionSyncInstrumentService::for_production())
+    }
+
+    pub fn for_production_with_option_service(
+        dashboard: Arc<BinanceDashboard>,
+        support_history_service: HashMap<HistoryType, SyncHistoryService>,
+        option_instrument_service: Arc<BinanceOptionSyncInstrumentService>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             dashboard,
             instrument_repo: get_instrument_repo_for_production(None),
-            option_instrument_service: BinanceOptionSyncInstrumentService::for_production(),
+            option_instrument_service,
             support_history_service,
         })
     }
@@ -1004,6 +1331,494 @@ mod option_instrument_tests {
             Self {
                 exchange_info: Mutex::new(exchange_info),
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod option_history_service_tests {
+        use super::*;
+        use crate::binance::duckdb_repository::{MockBinanceOptionKlineRepositoryTrait, MockBinanceOptionMarketPriceRepositoryTrait};
+        use crate::data_integrity::check::MockBinarySearchDSTrait;
+        use crate::sync::models::grpc_sync::{HistoryType, history_entry};
+        use rust_decimal::Decimal;
+        use yue::binance::bn_models::option_restful::{KLinesResponse, MarketPriceResponse, OptionExchangeInfo};
+        use yue::binance::option_api::BinanceOptionApiTrait;
+
+        struct OptionHistoryTestApi {
+            market_prices: String,
+            fail_kline: bool,
+            fail_market_price: bool,
+        }
+
+        impl OptionHistoryTestApi {
+            fn new() -> Self {
+                Self {
+                    market_prices: r#"[
+                            {
+                                "symbol":"BTC-270101-50000-C",
+                                "markPrice":"123.000000000000000001",
+                                "bidIV":"0.21",
+                                "askIV":"0.22",
+                                "markIV":"0.215",
+                                "delta":"0.5",
+                                "theta":"-0.01",
+                                "gamma":"0.000000000000000123",
+                                "vega":"0.03",
+                                "highPriceLimit":"130.1",
+                                "lowPriceLimit":"110.2",
+                                "riskFreeInterest":"0.1"
+                            },
+                            {
+                                "symbol":"UNKNOWN-270101-50000-C",
+                                "markPrice":"123",
+                                "bidIV":"0.21",
+                                "askIV":"0.22",
+                                "markIV":"0.215",
+                                "delta":"0.5",
+                                "theta":"-0.01",
+                                "gamma":"0.0001",
+                                "vega":"0.03",
+                                "highPriceLimit":"130.1",
+                                "lowPriceLimit":"110.2",
+                                "riskFreeInterest":"0.1"
+                            }
+                        ]"#
+                    .to_string(),
+                    fail_kline: false,
+                    fail_market_price: false,
+                }
+            }
+
+            fn kline_json(start_ms: u64, interval_ms: u64) -> String {
+                serde_json::json!([[
+                    start_ms,
+                    "100.000000000000000001",
+                    "101.2",
+                    "99.8",
+                    "100.5",
+                    "2.25",
+                    start_ms + interval_ms - 1,
+                    "225.000000000000000002",
+                    7,
+                    "1.25",
+                    "125.000000000000000003",
+                    0
+                ]])
+                .to_string()
+            }
+        }
+
+        #[async_trait]
+        impl BinanceOptionApiTrait for OptionHistoryTestApi {
+            async fn get_exchange_info(&self) -> Result<OptionExchangeInfo, ExchangeError> {
+                Err(ExchangeError::new("exchange-info endpoint is not used by history tests"))
+            }
+
+            async fn get_kline_history(&self, request: CommonRequestBuilder) -> Result<KLinesResponse, ExchangeError> {
+                if self.fail_kline {
+                    return Err(ExchangeError::new("test Kline REST failure"));
+                }
+                let start_ms = request.start_time.unwrap_or_default();
+                let interval_ms = request.interval.as_ref().unwrap().to_milliseconds();
+                serde_json::from_str(&Self::kline_json(start_ms, interval_ms))
+                    .map_err(|error| ExchangeError::new(&format!("invalid test Kline JSON: {error}")))
+            }
+
+            async fn get_all_market_price(&self) -> Result<MarketPriceResponse, ExchangeError> {
+                if self.fail_market_price {
+                    return Err(ExchangeError::new("test market-price REST failure"));
+                }
+                serde_json::from_str(&self.market_prices).map_err(|error| ExchangeError::new(&format!("invalid test market-price JSON: {error}")))
+            }
+        }
+
+        fn option_instrument(id: i64, symbol: &str) -> BinanceOptionInstrumentPo {
+            BinanceOptionInstrumentPo {
+                id,
+                expiry_date: 1_800_000_000_000,
+                symbol: symbol.to_string(),
+                side: "CALL".to_string(),
+                strike_price: Decimal::ONE,
+                underlying: "BTCUSDT".to_string(),
+                unit: 1,
+                liquidation_fee_rate: Decimal::ZERO,
+                min_qty: Decimal::ONE,
+                max_qty: Decimal::ONE,
+                initial_margin: Decimal::ZERO,
+                maintenance_margin: Decimal::ZERO,
+                min_initial_margin: Decimal::ZERO,
+                min_maintenance_margin: Decimal::ZERO,
+                price_scale: 2,
+                quantity_scale: 2,
+                quote_asset: "USDT".to_string(),
+                contract_type: "CRYPTO_OPTIONS".to_string(),
+                underlying_type: "CRYPTO".to_string(),
+                naked_sell: None,
+                status: "TRADING".to_string(),
+                filters: Vec::new(),
+            }
+        }
+
+        fn option_instrument_cache() -> BinanceOptionInstrumentCache {
+            Arc::new(RwLock::new(HashMap::from([(
+                "BTC-270101-50000-C".to_string(),
+                option_instrument(42, "BTC-270101-50000-C"),
+            )])))
+        }
+
+        fn test_kline_service(
+            repository: MockBinanceOptionKlineRepositoryTrait,
+            api: OptionHistoryTestApi,
+            cache: BinanceOptionInstrumentCache,
+            history_tx: mpsc::Sender<HistoryEntry>,
+            retention_ms: u64,
+            interval: HistoryInterval,
+            binary_search_ds: Option<BinarySearchDS>,
+        ) -> Arc<BinanceOptionKlineSyncHistoryService> {
+            let binary_search_ds = binary_search_ds.unwrap_or_else(|| Arc::new(MockBinarySearchDSTrait::new()));
+            BinanceOptionKlineSyncHistoryService::new(
+                retention_ms,
+                cache,
+                Arc::new(repository),
+                Arc::new(api),
+                binary_search_ds,
+                history_tx,
+                interval,
+            )
+        }
+
+        // 测试目的：验证期权 Kline REST 数据通过关联的 BinanceOptionInstrument ID 持久化并广播。
+        // 准备数据/过程：mock 返回一个完整 K 线，注入含对应期权 instrument 的缓存和 repository mock，调用区间同步。
+        // 预期结果：保存 PO 使用 instrument ID 42 且 Decimal 精度不变；广播条目使用 BinanceOptionKline 历史类型。
+        #[tokio::test]
+        async fn option_kline_rest_sync_persists_and_broadcasts_by_option_instrument() {
+            let start_ms = 1_700_000_000_000;
+            let interval = HistoryInterval::OneMinute;
+            let mut repository = MockBinanceOptionKlineRepositoryTrait::new();
+            repository
+                .expect_batch_insert_kline()
+                .times(1)
+                .withf(|klines| {
+                    klines.len() == 1
+                        && klines[0].inst_id == 42
+                        && klines[0].open.to_string() == "100.000000000000000001"
+                        && klines[0].quote_asset_volume.to_string() == "225.000000000000000002"
+                })
+                .returning(|_| Ok(()));
+            let (history_tx, mut history_rx) = mpsc::channel(4);
+            let service = test_kline_service(
+                repository,
+                OptionHistoryTestApi::new(),
+                option_instrument_cache(),
+                history_tx,
+                60_000,
+                interval.clone(),
+                None,
+            );
+
+            service
+                .sync_instrument_range(
+                    &option_instrument(42, "BTC-270101-50000-C"),
+                    start_ms,
+                    start_ms + interval.to_milliseconds(),
+                    true,
+                )
+                .await
+                .unwrap();
+
+            let entry = history_rx.recv().await.unwrap();
+            assert_eq!(HistoryType::try_from(entry.history_type).unwrap(), HistoryType::BinanceOptionKline);
+            assert_eq!(entry.inst_id, 42);
+            let Some(history_entry::Payload::BinanceOptionKline(kline)) = entry.payload else {
+                panic!("expected Binance Option Kline payload");
+            };
+            assert_eq!(kline.candle_begin_time, start_ms);
+            assert_eq!(kline.open, "100.000000000000000001");
+            assert_eq!(kline.close_time, start_ms + interval.to_milliseconds() - 1);
+        }
+
+        // 测试目的：验证期权 Kline 的完整性检查会通过 REST 修复缺失区间并广播修复数据。
+        // 准备数据/过程：mock 二分检查报告一个缺失周期，API 根据请求区间返回对应 K 线，并由 repository 接收批量保存。
+        // 预期结果：缺口记录成功保存并以 BinanceOptionKline payload 广播，instrument 与周期时间正确。
+        #[tokio::test]
+        async fn option_kline_history_check_repairs_and_broadcasts_missing_candles() {
+            let interval = HistoryInterval::OneHour;
+            let mut binary_search = MockBinarySearchDSTrait::new();
+            binary_search.expect_count_distinct_between().returning(|_, _, _| Ok(0));
+            binary_search.expect_table_name().return_const("bn_option_kline".to_string());
+            let mut repository = MockBinanceOptionKlineRepositoryTrait::new();
+            repository
+                .expect_batch_insert_kline()
+                .times(1)
+                .withf(|klines| klines.len() == 1 && klines[0].inst_id == 42)
+                .returning(|_| Ok(()));
+            let (history_tx, mut history_rx) = mpsc::channel(4);
+            let service = test_kline_service(
+                repository,
+                OptionHistoryTestApi::new(),
+                option_instrument_cache(),
+                history_tx,
+                interval.to_milliseconds(),
+                interval.clone(),
+                Some(Arc::new(binary_search)),
+            );
+            let end_ms = interval.get_now_close_unix_ms_utc();
+
+            service.check_history_data(Some(end_ms)).await.unwrap();
+
+            let entry = history_rx.recv().await.unwrap();
+            assert_eq!(entry.inst_id, 42);
+            let Some(history_entry::Payload::BinanceOptionKline(kline)) = entry.payload else {
+                panic!("expected repaired Binance Option Kline payload");
+            };
+            assert_eq!(kline.candle_begin_time, end_ms - interval.to_milliseconds());
+        }
+
+        // 测试目的：验证期权 Kline 初始回补只写入数据库，不向客户端广播。
+        // 准备数据/过程：使用空的最新时间戳结果和一个活跃期权 instrument，调用 initial_history_data 并读取同步 channel。
+        // 预期结果：回补数据通过批量 repository 保存，HistoryEntry channel 保持为空。
+        #[tokio::test]
+        async fn option_kline_initial_sync_persists_without_broadcast() {
+            let interval = HistoryInterval::OneMinute;
+            let mut repository = MockBinanceOptionKlineRepositoryTrait::new();
+            repository
+                .expect_inst_id_with_latest_timestamp_before()
+                .times(1)
+                .returning(|_| Ok(HashMap::new()));
+            repository
+                .expect_batch_insert_kline()
+                .times(1)
+                .withf(|klines| klines.len() == 1 && klines[0].inst_id == 42)
+                .returning(|_| Ok(()));
+            let (history_tx, mut history_rx) = mpsc::channel(4);
+            let service = test_kline_service(
+                repository,
+                OptionHistoryTestApi::new(),
+                option_instrument_cache(),
+                history_tx,
+                interval.to_milliseconds(),
+                interval.clone(),
+                None,
+            );
+            let end_ms = interval.get_now_close_unix_ms_utc();
+
+            service.initial_history_data(Some(end_ms)).await.unwrap();
+
+            assert!(history_rx.try_recv().is_err());
+        }
+
+        // 测试目的：验证期权 Kline 查询历史按 batch_size 返回服务端存储数据。
+        // 准备数据/过程：mock repository 返回一条 K 线，以 batch_size=1 调用 query_and_broadcast_history 并读取 ServerMessage。
+        // 预期结果：返回一条正确的 BinanceOptionKline payload，且历史类型、instrument 和字段均保留。
+        #[tokio::test]
+        async fn option_kline_query_broadcasts_repository_history() {
+            let kline = BinanceOptionKlinePo {
+                id: 8,
+                inst_id: 42,
+                candle_begin_time: 1_700_000_000_000,
+                open: "100.000000000000000001".parse().unwrap(),
+                high: "101.2".parse().unwrap(),
+                low: "99.8".parse().unwrap(),
+                close: "100.5".parse().unwrap(),
+                volume: "2.25".parse().unwrap(),
+                close_time: 1_700_000_059_999,
+                quote_asset_volume: "225.000000000000000002".parse().unwrap(),
+                number_of_trades: 7,
+                taker_buy_base_asset_volume: "1.25".parse().unwrap(),
+                taker_buy_quote_asset_volume: "125.000000000000000003".parse().unwrap(),
+            };
+            let mut repository = MockBinanceOptionKlineRepositoryTrait::new();
+            repository
+                .expect_find_by_inst_id_between()
+                .withf(|inst_id, start_ms, end_ms| *inst_id == 42 && *start_ms == 0 && *end_ms == 2_000_000_000_000)
+                .times(1)
+                .returning(move |_, _, _| Ok(vec![kline.clone()]));
+            let (history_tx, _) = mpsc::channel(1);
+            let service = test_kline_service(
+                repository,
+                OptionHistoryTestApi::new(),
+                option_instrument_cache(),
+                history_tx,
+                0,
+                HistoryInterval::OneMinute,
+                None,
+            );
+            let (tx, mut rx) = mpsc::channel(2);
+
+            service.query_and_broadcast_history(42, 0, 2_000_000_000_000, 1, tx).await.unwrap();
+
+            let message = rx.recv().await.unwrap().unwrap();
+            assert_eq!(message.history.len(), 1);
+            assert_eq!(
+                HistoryType::try_from(message.history[0].history_type).unwrap(),
+                HistoryType::BinanceOptionKline
+            );
+            assert_eq!(message.history[0].inst_id, 42);
+        }
+
+        // 测试目的：验证期权 Kline REST 请求或本地批量保存失败时同步服务显式返回错误。
+        // 准备数据/过程：分别使用失败 REST mock 和失败 repository mock 调用同一 K 线区间同步。
+        // 预期结果：两种失败均向调用方返回 Err，且 REST 失败时不尝试保存或广播。
+        #[tokio::test]
+        async fn option_kline_sync_propagates_rest_and_repository_errors() {
+            let start_ms = 1_700_000_000_000;
+            let interval = HistoryInterval::OneMinute;
+            let (history_tx, _) = mpsc::channel(1);
+            let api_error_service = test_kline_service(
+                MockBinanceOptionKlineRepositoryTrait::new(),
+                OptionHistoryTestApi {
+                    fail_kline: true,
+                    ..OptionHistoryTestApi::new()
+                },
+                option_instrument_cache(),
+                history_tx.clone(),
+                60_000,
+                interval.clone(),
+                None,
+            );
+            assert!(
+                api_error_service
+                    .sync_instrument_range(
+                        &option_instrument(42, "BTC-270101-50000-C"),
+                        start_ms,
+                        start_ms + interval.to_milliseconds(),
+                        true,
+                    )
+                    .await
+                    .is_err()
+            );
+
+            let mut repository = MockBinanceOptionKlineRepositoryTrait::new();
+            repository
+                .expect_batch_insert_kline()
+                .times(1)
+                .returning(|_| Err(YuError::new("test Kline repository failure")));
+            let repository_error_service = test_kline_service(
+                repository,
+                OptionHistoryTestApi::new(),
+                option_instrument_cache(),
+                history_tx,
+                60_000,
+                interval.clone(),
+                None,
+            );
+            assert!(
+                repository_error_service
+                    .sync_instrument_range(
+                        &option_instrument(42, "BTC-270101-50000-C"),
+                        start_ms,
+                        start_ms + interval.to_milliseconds(),
+                        true,
+                    )
+                    .await
+                    .is_err()
+            );
+        }
+
+        // 测试目的：验证 Market Price 的初始 REST 快照只落库，后续 sync_all 才广播已匹配的 option instrument。
+        // 准备数据/过程：API mock 返回一个已知 symbol 和一个未知 symbol，调用初始同步、周期同步及无历史端点的检查。
+        // 预期结果：两次保存均只包含 instrument ID 42 的匹配记录，初始同步无广播，sync_all 发送正确 Market Price 条目。
+        #[tokio::test]
+        async fn option_market_price_sync_links_instruments_and_suppresses_initial_broadcast() {
+            let mut repository = MockBinanceOptionMarketPriceRepositoryTrait::new();
+            repository
+                .expect_batch_insert_market_price()
+                .times(2)
+                .withf(|prices| {
+                    prices.len() == 1
+                        && prices[0].inst_id == 42
+                        && prices[0].symbol == "BTC-270101-50000-C"
+                        && prices[0].mark_price.to_string() == "123.000000000000000001"
+                })
+                .returning(|_| Ok(()));
+            let (history_tx, mut history_rx) = mpsc::channel(4);
+            let service = BinanceOptionMarketPriceSyncHistoryService::new(
+                option_instrument_cache(),
+                Arc::new(repository),
+                Arc::new(OptionHistoryTestApi::new()),
+                history_tx,
+            );
+
+            service.initial_history_data(None).await.unwrap();
+            assert!(history_rx.try_recv().is_err());
+            service.sync_all().await.unwrap();
+            service.check_history_data(None).await.unwrap();
+
+            let entry = history_rx.recv().await.unwrap();
+            assert_eq!(HistoryType::try_from(entry.history_type).unwrap(), HistoryType::BinanceOptionMarketPrice);
+            assert_eq!(entry.inst_id, 42);
+            let Some(history_entry::Payload::BinanceOptionMarketPrice(price)) = entry.payload else {
+                panic!("expected Binance Option Market Price payload");
+            };
+            assert_eq!(price.symbol, "BTC-270101-50000-C");
+            assert_eq!(price.mark_price, "123.000000000000000001");
+            assert!(history_rx.try_recv().is_err());
+        }
+
+        // 测试目的：验证 Market Price 历史查询使用 repository 结果并按 batch_size 发送。
+        // 准备数据/过程：mock repository 返回一条价格快照，调用 query_and_broadcast_history 并读取返回消息。
+        // 预期结果：ServerMessage 中包含一条关联 instrument ID 42 的 BinanceOptionMarketPrice。
+        #[tokio::test]
+        async fn option_market_price_query_broadcasts_repository_history() {
+            let price = BinanceOptionMarketPricePo {
+                id: 8,
+                inst_id: 42,
+                symbol: "BTC-270101-50000-C".to_string(),
+                acquire_ts: 1_700_000_000_123,
+                mark_price: "123.000000000000000001".parse().unwrap(),
+                bid_iv: "0.21".parse().unwrap(),
+                ask_iv: "0.22".parse().unwrap(),
+                mark_iv: "0.215".parse().unwrap(),
+                delta: "0.5".parse().unwrap(),
+                theta: "-0.01".parse().unwrap(),
+                gamma: "0.000000000000000123".parse().unwrap(),
+                vega: "0.03".parse().unwrap(),
+                high_price_limit: "130.1".parse().unwrap(),
+                low_price_limit: "110.2".parse().unwrap(),
+                risk_free_interest: "0.1".parse().unwrap(),
+            };
+            let mut repository = MockBinanceOptionMarketPriceRepositoryTrait::new();
+            repository
+                .expect_find_by_inst_id_between()
+                .withf(|inst_id, start_ms, end_ms| *inst_id == 42 && *start_ms == 0 && *end_ms == 2_000_000_000_000)
+                .times(1)
+                .returning(move |_, _, _| Ok(vec![price.clone()]));
+            let (history_tx, _) = mpsc::channel(1);
+            let service = BinanceOptionMarketPriceSyncHistoryService::new(
+                option_instrument_cache(),
+                Arc::new(repository),
+                Arc::new(OptionHistoryTestApi::new()),
+                history_tx,
+            );
+            let (tx, mut rx) = mpsc::channel(2);
+
+            service.query_and_broadcast_history(42, 0, 2_000_000_000_000, 1, tx).await.unwrap();
+
+            let message = rx.recv().await.unwrap().unwrap();
+            assert_eq!(message.history.len(), 1);
+            assert_eq!(
+                HistoryType::try_from(message.history[0].history_type).unwrap(),
+                HistoryType::BinanceOptionMarketPrice
+            );
+            assert_eq!(message.history[0].inst_id, 42);
+        }
+
+        // 测试目的：验证 Binance Option REST API 失败时 Market Price 服务向调用方显式返回错误。
+        // 准备数据/过程：注入返回 REST 错误的 API mock，分别调用初始快照与周期同步。
+        // 预期结果：两种同步入口均返回 Err，不将 API 故障伪装成无数据成功。
+        #[tokio::test]
+        async fn option_market_price_sync_propagates_rest_errors() {
+            let api = OptionHistoryTestApi {
+                fail_market_price: true,
+                ..OptionHistoryTestApi::new()
+            };
+            let mut repository = MockBinanceOptionMarketPriceRepositoryTrait::new();
+            repository.expect_batch_insert_market_price().times(0);
+            let (history_tx, _) = mpsc::channel(1);
+            let service = BinanceOptionMarketPriceSyncHistoryService::new(option_instrument_cache(), Arc::new(repository), Arc::new(api), history_tx);
+
+            assert!(service.initial_history_data(None).await.is_err());
+            assert!(service.sync_all().await.is_err());
         }
     }
 

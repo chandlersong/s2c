@@ -1,4 +1,5 @@
 use crate::duck_db::DuckDBPO;
+use crate::errors::YuError;
 use duckdb::appender_params_from_iter;
 use li::tools::time::{UnixTimeStamp, unix_time_now_u64_utc};
 use rust_decimal::prelude::ToPrimitive;
@@ -227,6 +228,48 @@ impl BinanceOptionKlinePo {
     }
 }
 
+impl DuckDBPO for BinanceOptionKlinePo {
+    fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>> {
+        appender_params_from_iter(vec![
+            &self.id as &dyn duckdb::ToSql,
+            &self.inst_id as &dyn duckdb::ToSql,
+            &self.candle_begin_time as &dyn duckdb::ToSql,
+            &self.open as &dyn duckdb::ToSql,
+            &self.high as &dyn duckdb::ToSql,
+            &self.low as &dyn duckdb::ToSql,
+            &self.close as &dyn duckdb::ToSql,
+            &self.volume as &dyn duckdb::ToSql,
+            &self.close_time as &dyn duckdb::ToSql,
+            &self.quote_asset_volume as &dyn duckdb::ToSql,
+            &self.number_of_trades as &dyn duckdb::ToSql,
+            &self.taker_buy_base_asset_volume as &dyn duckdb::ToSql,
+            &self.taker_buy_quote_asset_volume as &dyn duckdb::ToSql,
+        ])
+    }
+}
+
+impl<'a> TryFrom<&'a duckdb::Row<'a>> for BinanceOptionKlinePo {
+    type Error = YuError;
+
+    fn try_from(row: &'a duckdb::Row<'a>) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: row.get(0)?,
+            inst_id: row.get(1)?,
+            candle_begin_time: row.get(2)?,
+            open: row.get(3)?,
+            high: row.get(4)?,
+            low: row.get(5)?,
+            close: row.get(6)?,
+            volume: row.get(7)?,
+            close_time: row.get(8)?,
+            quote_asset_volume: row.get(9)?,
+            number_of_trades: row.get(10)?,
+            taker_buy_base_asset_volume: row.get(11)?,
+            taker_buy_quote_asset_volume: row.get(12)?,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BinanceOptionMarketPricePo {
     pub id: u64,
@@ -277,6 +320,52 @@ impl BinanceOptionMarketPricePo {
                 crate::sync::models::grpc_sync::BinanceOptionMarketPrice::from(self.clone()),
             )),
         }
+    }
+}
+
+impl DuckDBPO for BinanceOptionMarketPricePo {
+    fn to_params(&self) -> duckdb::AppenderParamsFromIter<Vec<&dyn duckdb::ToSql>> {
+        appender_params_from_iter(vec![
+            &self.id as &dyn duckdb::ToSql,
+            &self.inst_id as &dyn duckdb::ToSql,
+            &self.symbol as &dyn duckdb::ToSql,
+            &self.acquire_ts as &dyn duckdb::ToSql,
+            &self.mark_price as &dyn duckdb::ToSql,
+            &self.bid_iv as &dyn duckdb::ToSql,
+            &self.ask_iv as &dyn duckdb::ToSql,
+            &self.mark_iv as &dyn duckdb::ToSql,
+            &self.delta as &dyn duckdb::ToSql,
+            &self.theta as &dyn duckdb::ToSql,
+            &self.gamma as &dyn duckdb::ToSql,
+            &self.vega as &dyn duckdb::ToSql,
+            &self.high_price_limit as &dyn duckdb::ToSql,
+            &self.low_price_limit as &dyn duckdb::ToSql,
+            &self.risk_free_interest as &dyn duckdb::ToSql,
+        ])
+    }
+}
+
+impl<'a> TryFrom<&'a duckdb::Row<'a>> for BinanceOptionMarketPricePo {
+    type Error = YuError;
+
+    fn try_from(row: &'a duckdb::Row<'a>) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: row.get(0)?,
+            inst_id: row.get(1)?,
+            symbol: row.get(2)?,
+            acquire_ts: row.get(3)?,
+            mark_price: row.get(4)?,
+            bid_iv: row.get(5)?,
+            ask_iv: row.get(6)?,
+            mark_iv: row.get(7)?,
+            delta: row.get(8)?,
+            theta: row.get(9)?,
+            gamma: row.get(10)?,
+            vega: row.get(11)?,
+            high_price_limit: row.get(12)?,
+            low_price_limit: row.get(13)?,
+            risk_free_interest: row.get(14)?,
+        })
     }
 }
 
