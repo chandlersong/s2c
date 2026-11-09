@@ -23,6 +23,7 @@ enum InstrumentType{
   POLYMARKET = 1;
   OKX = 2;
   BINANCE = 3;
+  BINANCE_OPTION = 4;
 }
 
 
@@ -85,12 +86,48 @@ message BinanceInstrument {
   optional uint64 on_board_time = 9;
 }
 
+message BinanceOptionSymbolFilter {
+  string filter_type = 1;
+  optional string min_price = 2;
+  optional string max_price = 3;
+  optional string tick_size = 4;
+  optional string min_qty = 5;
+  optional string max_qty = 6;
+  optional string step_size = 7;
+}
+
+message BinanceOptionInstrument {
+  uint64 server_id = 1;
+  uint64 expiry_date = 2;
+  string symbol = 3;
+  string side = 4;
+  string strike_price = 5;
+  string underlying = 6;
+  int32 unit = 7;
+  string liquidation_fee_rate = 8;
+  string min_qty = 9;
+  string max_qty = 10;
+  string initial_margin = 11;
+  string maintenance_margin = 12;
+  string min_initial_margin = 13;
+  string min_maintenance_margin = 14;
+  int32 price_scale = 15;
+  int32 quantity_scale = 16;
+  string quote_asset = 17;
+  string contract_type = 18;
+  string underlying_type = 19;
+  optional bool naked_sell = 20;
+  string status = 21;
+  repeated BinanceOptionSymbolFilter filters = 22;
+}
+
 message Instrument {
   InstrumentType instrument_type = 1;
   oneof payload {
     PolymarketInstrument polymarket = 2;     // polymarket资产
     OkxInstrument okx = 3;     // okx资产
     BinanceInstrument binance = 4;
+    BinanceOptionInstrument binance_option_instrument = 5;
   }
 
 }

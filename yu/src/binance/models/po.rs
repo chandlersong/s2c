@@ -7,6 +7,7 @@ use std::fmt::{Debug, Display};
 use std::string::ToString;
 use yue::binance::bn_models::common::SymbolInfoTrait;
 use yue::binance::bn_models::common::{PortfolioSpotOrderData, PortfolioSwapOrderData, SpotOrderData, SwapOrderData};
+use yue::binance::bn_models::option_restful::{OptionSymbol, OptionSymbolFilter};
 use yue::binance::bn_models::spot_restful::BinanceKline;
 use yue::binance::bn_models::spot_websocket_stream::{KlineStreamPayload, SpotKlineData, TradeStreamPayload};
 use yue::binance::bn_models::swap_restful::FundingRate;
@@ -77,6 +78,103 @@ impl BinanceInstrument {
                 crate::sync::models::grpc_sync::BinanceInstrument::from(self),
             )),
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinanceOptionSymbolFilterPo {
+    pub filter_type: String,
+    pub min_price: Option<rust_decimal::Decimal>,
+    pub max_price: Option<rust_decimal::Decimal>,
+    pub tick_size: Option<rust_decimal::Decimal>,
+    pub min_qty: Option<rust_decimal::Decimal>,
+    pub max_qty: Option<rust_decimal::Decimal>,
+    pub step_size: Option<rust_decimal::Decimal>,
+}
+
+impl From<&OptionSymbolFilter> for BinanceOptionSymbolFilterPo {
+    fn from(value: &OptionSymbolFilter) -> Self {
+        Self {
+            filter_type: value.filter_type.clone(),
+            min_price: value.min_price,
+            max_price: value.max_price,
+            tick_size: value.tick_size,
+            min_qty: value.min_qty,
+            max_qty: value.max_qty,
+            step_size: value.step_size,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinanceOptionInstrumentPo {
+    pub id: i64,
+    pub expiry_date: u64,
+    pub symbol: String,
+    pub side: String,
+    pub strike_price: rust_decimal::Decimal,
+    pub underlying: String,
+    pub unit: i32,
+    pub liquidation_fee_rate: rust_decimal::Decimal,
+    pub min_qty: rust_decimal::Decimal,
+    pub max_qty: rust_decimal::Decimal,
+    pub initial_margin: rust_decimal::Decimal,
+    pub maintenance_margin: rust_decimal::Decimal,
+    pub min_initial_margin: rust_decimal::Decimal,
+    pub min_maintenance_margin: rust_decimal::Decimal,
+    pub price_scale: i32,
+    pub quantity_scale: i32,
+    pub quote_asset: String,
+    pub contract_type: String,
+    pub underlying_type: String,
+    pub naked_sell: Option<bool>,
+    pub status: String,
+    pub filters: Vec<BinanceOptionSymbolFilterPo>,
+}
+
+impl BinanceOptionInstrumentPo {
+    pub fn from_option_symbol_with_id(symbol: &OptionSymbol, id: i64) -> Self {
+        Self {
+            id,
+            expiry_date: symbol.expiry_date,
+            symbol: symbol.symbol.clone(),
+            side: symbol.side.clone(),
+            strike_price: symbol.strike_price,
+            underlying: symbol.underlying.clone(),
+            unit: symbol.unit,
+            liquidation_fee_rate: symbol.liquidation_fee_rate,
+            min_qty: symbol.min_qty,
+            max_qty: symbol.max_qty,
+            initial_margin: symbol.initial_margin,
+            maintenance_margin: symbol.maintenance_margin,
+            min_initial_margin: symbol.min_initial_margin,
+            min_maintenance_margin: symbol.min_maintenance_margin,
+            price_scale: symbol.price_scale,
+            quantity_scale: symbol.quantity_scale,
+            quote_asset: symbol.quote_asset.clone(),
+            contract_type: symbol.contract_type.clone(),
+            underlying_type: symbol.underlying_type.clone(),
+            naked_sell: symbol.naked_sell,
+            status: symbol.status.clone(),
+            filters: symbol.filters.iter().map(BinanceOptionSymbolFilterPo::from).collect(),
+        }
+    }
+
+    pub fn into_proto_instrument(self) -> Result<crate::sync::models::grpc_sync::Instrument, std::num::TryFromIntError> {
+        use crate::sync::models::grpc_sync::{Instrument, InstrumentType, instrument};
+        Ok(Instrument {
+            instrument_type: InstrumentType::BinanceOption.into(),
+            payload: Some(instrument::Payload::BinanceOptionInstrument(
+                crate::sync::models::grpc_sync::BinanceOptionInstrument::try_from(self)?,
+            )),
+        })
+    }
+}
+
+impl From<&OptionSymbol> for BinanceOptionInstrumentPo {
+    fn from(symbol: &OptionSymbol) -> Self {
+        let id = i64::try_from(get_snow_flake_id_u64()).expect("Binance option instrument id must fit in i64");
+        Self::from_option_symbol_with_id(symbol, id)
     }
 }
 

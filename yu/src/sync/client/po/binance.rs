@@ -1,6 +1,7 @@
 use crate::postgresql_db::CopyInsertable;
 use crate::sync::models::grpc_sync::{
-    BinanceFundingRate, BinanceInstrument, BinanceKline, BinanceOrderBookSnapshot, BinanceTrade, HistoryEntry, history_entry::Payload,
+    BinanceFundingRate, BinanceInstrument, BinanceKline, BinanceOptionInstrument, BinanceOrderBookSnapshot, BinanceTrade, HistoryEntry,
+    history_entry::Payload,
 };
 use li::tools::time::{format_timestamp_millis, unix_time_now_u64_utc};
 use sqlx::Row;
@@ -75,6 +76,86 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for LocalBinanceInstrumentPo {
             symbol_type: row.try_get("symbol_type")?,
             on_board_time: row.try_get::<Option<i64>, _>("on_board_time")?.map(|value| value as u64),
         })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct LocalBinanceOptionSymbolFilterPo {
+    pub filter_type: String,
+    pub min_price: Option<String>,
+    pub max_price: Option<String>,
+    pub tick_size: Option<String>,
+    pub min_qty: Option<String>,
+    pub max_qty: Option<String>,
+    pub step_size: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct LocalBinanceOptionInstrumentPo {
+    pub id: u64,
+    pub server_id: u64,
+    pub expiry_date: u64,
+    pub symbol: String,
+    pub side: String,
+    pub strike_price: String,
+    pub underlying: String,
+    pub unit: i32,
+    pub liquidation_fee_rate: String,
+    pub min_qty: String,
+    pub max_qty: String,
+    pub initial_margin: String,
+    pub maintenance_margin: String,
+    pub min_initial_margin: String,
+    pub min_maintenance_margin: String,
+    pub price_scale: i32,
+    pub quantity_scale: i32,
+    pub quote_asset: String,
+    pub contract_type: String,
+    pub underlying_type: String,
+    pub naked_sell: Option<bool>,
+    pub status: String,
+    pub filters: Vec<LocalBinanceOptionSymbolFilterPo>,
+}
+
+impl LocalBinanceOptionInstrumentPo {
+    pub fn from_proto(instrument: BinanceOptionInstrument) -> Self {
+        Self {
+            id: get_snow_flake_id_u64(),
+            server_id: instrument.server_id,
+            expiry_date: instrument.expiry_date,
+            symbol: instrument.symbol,
+            side: instrument.side,
+            strike_price: instrument.strike_price,
+            underlying: instrument.underlying,
+            unit: instrument.unit,
+            liquidation_fee_rate: instrument.liquidation_fee_rate,
+            min_qty: instrument.min_qty,
+            max_qty: instrument.max_qty,
+            initial_margin: instrument.initial_margin,
+            maintenance_margin: instrument.maintenance_margin,
+            min_initial_margin: instrument.min_initial_margin,
+            min_maintenance_margin: instrument.min_maintenance_margin,
+            price_scale: instrument.price_scale,
+            quantity_scale: instrument.quantity_scale,
+            quote_asset: instrument.quote_asset,
+            contract_type: instrument.contract_type,
+            underlying_type: instrument.underlying_type,
+            naked_sell: instrument.naked_sell,
+            status: instrument.status,
+            filters: instrument
+                .filters
+                .into_iter()
+                .map(|filter| LocalBinanceOptionSymbolFilterPo {
+                    filter_type: filter.filter_type,
+                    min_price: filter.min_price,
+                    max_price: filter.max_price,
+                    tick_size: filter.tick_size,
+                    min_qty: filter.min_qty,
+                    max_qty: filter.max_qty,
+                    step_size: filter.step_size,
+                })
+                .collect(),
+        }
     }
 }
 

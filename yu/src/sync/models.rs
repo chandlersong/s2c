@@ -12,6 +12,7 @@ pub mod grpc_sync {
                 Self::Polymarket => "Polymarket",
                 Self::Okx => "OKX",
                 Self::Binance => "Binance",
+                Self::BinanceOption => "Binance Option",
                 InstrumentType::ExchangeUnspecified => "ExchangeUnspecified",
             }
         }
@@ -66,6 +67,49 @@ pub mod grpc_sync {
                 symbol_type: value.symbol_type.to_string(),
                 on_board_time: value.on_board_time,
             }
+        }
+    }
+
+    impl TryFrom<crate::binance::models::po::BinanceOptionInstrumentPo> for BinanceOptionInstrument {
+        type Error = std::num::TryFromIntError;
+
+        fn try_from(value: crate::binance::models::po::BinanceOptionInstrumentPo) -> Result<Self, Self::Error> {
+            Ok(Self {
+                server_id: u64::try_from(value.id)?,
+                expiry_date: value.expiry_date,
+                symbol: value.symbol,
+                side: value.side,
+                strike_price: value.strike_price.to_string(),
+                underlying: value.underlying,
+                unit: value.unit,
+                liquidation_fee_rate: value.liquidation_fee_rate.to_string(),
+                min_qty: value.min_qty.to_string(),
+                max_qty: value.max_qty.to_string(),
+                initial_margin: value.initial_margin.to_string(),
+                maintenance_margin: value.maintenance_margin.to_string(),
+                min_initial_margin: value.min_initial_margin.to_string(),
+                min_maintenance_margin: value.min_maintenance_margin.to_string(),
+                price_scale: value.price_scale,
+                quantity_scale: value.quantity_scale,
+                quote_asset: value.quote_asset,
+                contract_type: value.contract_type,
+                underlying_type: value.underlying_type,
+                naked_sell: value.naked_sell,
+                status: value.status,
+                filters: value
+                    .filters
+                    .into_iter()
+                    .map(|filter| BinanceOptionSymbolFilter {
+                        filter_type: filter.filter_type,
+                        min_price: filter.min_price.map(|value| value.to_string()),
+                        max_price: filter.max_price.map(|value| value.to_string()),
+                        tick_size: filter.tick_size.map(|value| value.to_string()),
+                        min_qty: filter.min_qty.map(|value| value.to_string()),
+                        max_qty: filter.max_qty.map(|value| value.to_string()),
+                        step_size: filter.step_size.map(|value| value.to_string()),
+                    })
+                    .collect(),
+            })
         }
     }
 
@@ -170,12 +214,13 @@ pub mod grpc_sync {
 
 #[cfg(test)]
 mod tests {
-    use super::grpc_sync::{BinanceFundingRate, BinanceKline, BinanceTrade, HistoryType, InstrumentType as GrpcInstrumentType};
+    use super::grpc_sync::{BinanceFundingRate, BinanceKline, BinanceTrade, HistoryType, InstrumentType as GrpcInstrumentType, instrument};
     use crate::binance::models::po::BinanceOrderBookSnapshotPo;
     use crate::binance::models::po::{BinanceInstrument as BinanceInstrumentPo, KlinePo, SpotStreamTradeRecordPo};
     use crate::sync::client::po::binance::LocalBinanceOrderBookSnapshotPo;
-    use crate::sync::client::po::binance::{LocalBinanceKlinePo, LocalBinanceTradePo};
+    use crate::sync::client::po::binance::{LocalBinanceKlinePo, LocalBinanceOptionInstrumentPo, LocalBinanceTradePo};
     use rust_decimal::Decimal;
+    use yue::binance::bn_models::option_restful::{OptionSymbol, OptionSymbolFilter};
     use yue::binance::bn_models::spot_restful::Depth;
     use yue::binance::order_book::OrderBook;
     use yue::models::InstrumentType;
@@ -185,6 +230,14 @@ mod tests {
         assert_eq!(GrpcInstrumentType::Polymarket.readable_name(), "Polymarket");
         assert_eq!(GrpcInstrumentType::Okx.readable_name(), "OKX");
         assert_eq!(GrpcInstrumentType::Binance.readable_name(), "Binance");
+    }
+
+    // 测试目的：验证新增 Binance Option instrument 类型的可读名称。
+    // 准备数据/过程：调用 protobuf InstrumentType 的 readable_name 方法。
+    // 预期结果：BinanceOption 返回 "Binance Option"。
+    #[test]
+    fn binance_option_instrument_type_has_readable_name() {
+        assert_eq!(GrpcInstrumentType::BinanceOption.readable_name(), "Binance Option");
     }
 
     #[test]
@@ -222,6 +275,84 @@ mod tests {
         assert_eq!(proto.order_types, vec!["LIMIT"]);
         assert_eq!(proto.symbol_type, "SWAP");
         assert_eq!(proto.on_board_time, Some(1_600_000_000_000));
+    }
+
+    // 测试目的：验证 Binance OptionSymbol 从 VO 经服务端 PO 和 protobuf 到客户端 PO 的字段与 ID 映射。
+    // 准备数据/过程：构造包含精确 Decimal、nullable filter 和 naked_sell 的 VO，以固定服务器 ID 转换并创建客户端 PO。
+    // 预期结果：毫秒到期时间、Decimal 字符串、nullable 字段与 filters 完整保留；server_id 保持原值，客户端本地 id 独立生成，负服务器 ID 转换失败。
+    #[test]
+    fn binance_option_symbol_maps_vo_server_po_proto_and_client_po() {
+        let source = OptionSymbol {
+            expiry_date: 1_700_000_000_123,
+            filters: vec![OptionSymbolFilter {
+                filter_type: "PRICE_FILTER".to_string(),
+                min_price: Some("0.00000001".parse().unwrap()),
+                max_price: Some("80000.01000000".parse().unwrap()),
+                tick_size: Some("0.01000000".parse().unwrap()),
+                min_qty: Some("0.01".parse().unwrap()),
+                max_qty: None,
+                step_size: Some("0.001".parse().unwrap()),
+            }],
+            symbol: "BTC-270101-50000-C".to_string(),
+            side: "CALL".to_string(),
+            strike_price: "50000.00000001".parse().unwrap(),
+            underlying: "BTCUSDT".to_string(),
+            unit: 1,
+            liquidation_fee_rate: "0.0019000".parse().unwrap(),
+            min_qty: "0.01".parse().unwrap(),
+            max_qty: "100".parse().unwrap(),
+            initial_margin: "0.15".parse().unwrap(),
+            maintenance_margin: "0.075".parse().unwrap(),
+            min_initial_margin: "0.1".parse().unwrap(),
+            min_maintenance_margin: "0.05".parse().unwrap(),
+            price_scale: 2,
+            quantity_scale: 2,
+            quote_asset: "USDT".to_string(),
+            contract_type: "CRYPTO_OPTIONS".to_string(),
+            underlying_type: "CRYPTO".to_string(),
+            naked_sell: Some(false),
+            status: "TRADING".to_string(),
+        };
+        let server_po = crate::binance::models::po::BinanceOptionInstrumentPo::from_option_symbol_with_id(&source, 123);
+        let instrument_message = server_po.into_proto_instrument().unwrap();
+        assert_eq!(instrument_message.instrument_type, GrpcInstrumentType::BinanceOption as i32);
+        let Some(instrument::Payload::BinanceOptionInstrument(proto)) = instrument_message.payload else {
+            panic!("instrument payload is not BinanceOptionInstrument");
+        };
+        let client_po = LocalBinanceOptionInstrumentPo::from_proto(proto);
+        let invalid_id_po = crate::binance::models::po::BinanceOptionInstrumentPo::from_option_symbol_with_id(&source, -1);
+        assert!(invalid_id_po.into_proto_instrument().is_err());
+
+        assert_eq!(client_po.server_id, 123);
+        assert_ne!(client_po.id, client_po.server_id);
+        assert_eq!(client_po.expiry_date, 1_700_000_000_123);
+        assert_eq!(client_po.symbol, "BTC-270101-50000-C");
+        assert_eq!(client_po.side, "CALL");
+        assert_eq!(client_po.strike_price, "50000.00000001");
+        assert_eq!(client_po.underlying, "BTCUSDT");
+        assert_eq!(client_po.unit, 1);
+        assert_eq!(client_po.liquidation_fee_rate, "0.0019000");
+        assert_eq!(client_po.min_qty, "0.01");
+        assert_eq!(client_po.max_qty, "100");
+        assert_eq!(client_po.initial_margin, "0.15");
+        assert_eq!(client_po.maintenance_margin, "0.075");
+        assert_eq!(client_po.min_initial_margin, "0.1");
+        assert_eq!(client_po.min_maintenance_margin, "0.05");
+        assert_eq!(client_po.price_scale, 2);
+        assert_eq!(client_po.quantity_scale, 2);
+        assert_eq!(client_po.quote_asset, "USDT");
+        assert_eq!(client_po.contract_type, "CRYPTO_OPTIONS");
+        assert_eq!(client_po.underlying_type, "CRYPTO");
+        assert_eq!(client_po.naked_sell, Some(false));
+        assert_eq!(client_po.status, "TRADING");
+        assert_eq!(client_po.filters.len(), 1);
+        assert_eq!(client_po.filters[0].filter_type, "PRICE_FILTER");
+        assert_eq!(client_po.filters[0].min_price.as_deref(), Some("0.00000001"));
+        assert_eq!(client_po.filters[0].max_price.as_deref(), Some("80000.01000000"));
+        assert_eq!(client_po.filters[0].tick_size.as_deref(), Some("0.01000000"));
+        assert_eq!(client_po.filters[0].min_qty.as_deref(), Some("0.01"));
+        assert_eq!(client_po.filters[0].max_qty, None);
+        assert_eq!(client_po.filters[0].step_size.as_deref(), Some("0.001"));
     }
 
     #[test]

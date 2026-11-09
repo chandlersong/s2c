@@ -14,6 +14,7 @@ pub static QUERY_LATEST_FUNDING_RATE_SQL: &str = "select symbol,max(funding_time
 #[derive(Clone)]
 pub enum BinanceTables {
     Instrument,
+    OptionInstrument,
     SpotKline,
     SwapKline,
     SwapFundingRate,
@@ -27,6 +28,7 @@ impl DuckDbTableTrait for BinanceTables {
     fn table_name(&self) -> String {
         match self {
             BinanceTables::Instrument => String::from("bn_instruments"),
+            BinanceTables::OptionInstrument => String::from("bn_option_instruments"),
             BinanceTables::SpotKline => String::from("bn_spot_kline"),
             BinanceTables::SwapKline => String::from("bn_swap_kline"),
             BinanceTables::SwapFundingRate => String::from("bn_swap_funding_rate"),
@@ -40,6 +42,7 @@ impl DuckDbTableTrait for BinanceTables {
     fn create_table_statement(&self) -> String {
         match self {
             BinanceTables::Instrument => String::from(CREATE_BINANCE_INSTRUMENTS_TABLE),
+            BinanceTables::OptionInstrument => String::from(CREATE_BINANCE_OPTION_INSTRUMENTS_TABLE),
             BinanceTables::SpotKline => String::from(CREATE_SPOT_KLINE_TABLE),
             BinanceTables::SwapKline => String::from(CREATE_SWAP_KLINE_TABLE),
             BinanceTables::SwapFundingRate => String::from(CREATE_FUNDING_RATE_TABLE),
@@ -74,6 +77,33 @@ CREATE TABLE IF NOT EXISTS bn_instruments (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_bn_instruments_symbol_type
     ON bn_instruments(symbol, symbol_type);
+"#;
+
+pub const CREATE_BINANCE_OPTION_INSTRUMENTS_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS bn_option_instruments (
+    id                      BIGINT PRIMARY KEY,
+    expiry_date             BIGINT NOT NULL,
+    symbol                  VARCHAR NOT NULL,
+    side                    VARCHAR NOT NULL,
+    strike_price            DECIMAL(38, 18) NOT NULL,
+    underlying              VARCHAR NOT NULL,
+    unit                    INTEGER NOT NULL,
+    liquidation_fee_rate    DECIMAL(38, 18) NOT NULL,
+    min_qty                 DECIMAL(38, 18) NOT NULL,
+    max_qty                 DECIMAL(38, 18) NOT NULL,
+    initial_margin          DECIMAL(38, 18) NOT NULL,
+    maintenance_margin      DECIMAL(38, 18) NOT NULL,
+    min_initial_margin      DECIMAL(38, 18) NOT NULL,
+    min_maintenance_margin  DECIMAL(38, 18) NOT NULL,
+    price_scale             INTEGER NOT NULL,
+    quantity_scale          INTEGER NOT NULL,
+    quote_asset             VARCHAR NOT NULL,
+    contract_type           VARCHAR NOT NULL,
+    underlying_type         VARCHAR NOT NULL,
+    naked_sell              BOOLEAN,
+    status                  VARCHAR NOT NULL,
+    filters                 JSON NOT NULL
+);
 "#;
 
 // 直接为三张表生成格式化建表SQL（不带索引），字段对齐、注释清晰
@@ -196,6 +226,7 @@ const CREATE_BN_SPOT_ORDER_BOOK_SNAPSHOT_TABLE: &str = r#"
 // 原生方式：维护一个静态数组，便于遍历所有表类型
 pub(crate) const ALL_BINANCE_TABLES: &[BinanceTables] = &[
     BinanceTables::Instrument,
+    BinanceTables::OptionInstrument,
     BinanceTables::SpotKline,
     BinanceTables::SwapKline,
     BinanceTables::SwapFundingRate,
@@ -285,6 +316,26 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM pragma_table_info('bn_instruments')", [], |row| row.get(0))
             .unwrap();
         assert_eq!(column_count, 9);
+    }
+
+    // 测试目的：验证 Binance OptionSymbol 表已注册并且服务端 DDL 可在 DuckDB 中创建完整 schema。
+    // 准备数据/过程：通过 BinanceTables 获取 option instrument 的表名和 DDL，在内存 DuckDB 中执行后检查列数。
+    // 预期结果：表名为 bn_option_instruments，初始化注册集合包含该表，DDL 创建包含全部 22 个字段。
+    #[test]
+    fn binance_option_instrument_table_ddl_executes() {
+        let table = BinanceTables::OptionInstrument;
+        assert_eq!(table.table_name(), "bn_option_instruments");
+        assert!(ALL_BINANCE_TABLES.iter().any(|registered| registered.table_name() == table.table_name()));
+
+        let conn = duckdb::Connection::open_in_memory().unwrap();
+        for statement in table.create_table_statement().split(';').map(str::trim).filter(|sql| !sql.is_empty()) {
+            conn.execute(statement, []).unwrap();
+        }
+
+        let column_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM pragma_table_info('bn_option_instruments')", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(column_count, 22);
     }
 
     // 测试目的：验证订单簿快照表已注册到 Binance 表集合且 DDL 包含完整快照字段。

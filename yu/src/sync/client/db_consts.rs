@@ -8,6 +8,7 @@ pub enum ClientsTables {
     OkxOptionSummary,
     OkxInstruments,
     BinanceInstruments,
+    BinanceOptionInstruments,
     BinanceSpotKline,
     BinanceSpotTrade,
     BinanceSwapKline,
@@ -25,6 +26,7 @@ impl PostgresqlTableTrait for ClientsTables {
             ClientsTables::OkxOptionSummary => "okx_option_summary",
             ClientsTables::OkxInstruments => "okx_instruments",
             ClientsTables::BinanceInstruments => "binance_instruments",
+            ClientsTables::BinanceOptionInstruments => "binance_option_instruments",
             ClientsTables::BinanceSpotKline => "binance_spot_kline_history",
             ClientsTables::BinanceSpotTrade => "binance_spot_trade_history",
             ClientsTables::BinanceSwapKline => "binance_swap_kline_history",
@@ -42,6 +44,7 @@ impl PostgresqlTableTrait for ClientsTables {
             ClientsTables::OkxOptionSummary => CREATE_OKX_OPTION_SUMMARY_TABLE,
             ClientsTables::OkxInstruments => CREATE_OKX_INSTRUMENTS_TABLE,
             ClientsTables::BinanceInstruments => CREATE_BINANCE_INSTRUMENTS_TABLE,
+            ClientsTables::BinanceOptionInstruments => CREATE_BINANCE_OPTION_INSTRUMENTS_TABLE,
             ClientsTables::BinanceSpotKline => CREATE_BINANCE_SPOT_KLINE_TABLE,
             ClientsTables::BinanceSpotTrade => CREATE_BINANCE_SPOT_TRADE_TABLE,
             ClientsTables::BinanceSwapKline => CREATE_BINANCE_SWAP_KLINE_TABLE,
@@ -199,6 +202,34 @@ CREATE TABLE IF NOT EXISTS binance_instruments (
     symbol_type VARCHAR NOT NULL,
     on_board_time BIGINT,
     UNIQUE (symbol, symbol_type)
+);
+"#;
+
+pub const CREATE_BINANCE_OPTION_INSTRUMENTS_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS binance_option_instruments (
+    id BIGINT PRIMARY KEY,
+    server_id BIGINT NOT NULL UNIQUE,
+    expiry_date TIMESTAMPTZ NOT NULL,
+    symbol VARCHAR NOT NULL,
+    side VARCHAR NOT NULL,
+    strike_price NUMERIC NOT NULL,
+    underlying VARCHAR NOT NULL,
+    unit INTEGER NOT NULL,
+    liquidation_fee_rate NUMERIC NOT NULL,
+    min_qty NUMERIC NOT NULL,
+    max_qty NUMERIC NOT NULL,
+    initial_margin NUMERIC NOT NULL,
+    maintenance_margin NUMERIC NOT NULL,
+    min_initial_margin NUMERIC NOT NULL,
+    min_maintenance_margin NUMERIC NOT NULL,
+    price_scale INTEGER NOT NULL,
+    quantity_scale INTEGER NOT NULL,
+    quote_asset VARCHAR NOT NULL,
+    contract_type VARCHAR NOT NULL,
+    underlying_type VARCHAR NOT NULL,
+    naked_sell BOOLEAN,
+    status VARCHAR NOT NULL,
+    filters JSONB NOT NULL
 );
 "#;
 
@@ -367,6 +398,7 @@ pub(crate) const ALL_CLIENT_TABLES: &[ClientsTables] = &[
     ClientsTables::OkxOptionSummary,
     ClientsTables::OkxInstruments,
     ClientsTables::BinanceInstruments,
+    ClientsTables::BinanceOptionInstruments,
     ClientsTables::BinanceSpotKline,
     ClientsTables::BinanceSpotTrade,
     ClientsTables::BinanceSwapKline,
@@ -401,6 +433,29 @@ mod tests {
         assert!(ALL_CLIENT_TABLES.iter().any(|registered| registered.table_name() == table.table_name()));
         for column in columns {
             assert!(table.create_table_statement().contains(column));
+        }
+    }
+
+    // 测试目的：验证 Binance OptionSymbol 客户端表已进入初始化注册列表且 schema 保留本地/服务器 ID 与毫秒到期时间。
+    // 准备数据/过程：读取表注册项和 DDL，逐项检查 option 字段、Decimal 数值列、JSON filters 及时间列类型。
+    // 预期结果：表名和注册正确，DDL 使用独立 server_id、TIMESTAMPTZ expiry_date 与 JSONB filters，并包含所有实体字段。
+    #[test]
+    fn binance_option_instrument_client_table_is_registered() {
+        let table = ClientsTables::BinanceOptionInstruments;
+        let ddl = table.create_table_statement();
+        let columns = [
+            "id BIGINT PRIMARY KEY",
+            "server_id BIGINT NOT NULL UNIQUE",
+            "expiry_date TIMESTAMPTZ NOT NULL",
+            "strike_price NUMERIC NOT NULL",
+            "naked_sell BOOLEAN",
+            "filters JSONB NOT NULL",
+        ];
+
+        assert_eq!(table.table_name(), "binance_option_instruments");
+        assert!(ALL_CLIENT_TABLES.iter().any(|registered| registered.table_name() == table.table_name()));
+        for column in columns {
+            assert!(ddl.contains(column));
         }
     }
 }

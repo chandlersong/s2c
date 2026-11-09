@@ -52,8 +52,7 @@ async fn main() -> Result<(), YuError> {
                     }
                     false
                 }
-                Payload::Okx(_) => false,
-                Payload::Binance(_) => false,
+                _ => false,
             };
         }
         return false;
