@@ -79,7 +79,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for LocalBinanceInstrumentPo {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LocalBinanceOptionSymbolFilterPo {
     pub filter_type: String,
     pub min_price: Option<String>,
@@ -90,7 +90,7 @@ pub struct LocalBinanceOptionSymbolFilterPo {
     pub step_size: Option<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LocalBinanceOptionInstrumentPo {
     pub id: u64,
     pub server_id: u64,

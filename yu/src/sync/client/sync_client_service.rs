@@ -1,6 +1,6 @@
 use crate::errors::YuError;
 use crate::sync::client::grpc_manager::GrpcChannelManager;
-use crate::sync::client::service::binance::BinanceSpotClientInstrumentService;
+use crate::sync::client::service::binance::{BinanceOptionClientInstrumentService, BinanceSpotClientInstrumentService};
 use crate::sync::client::service::okx::OkxHistoryClientService;
 use crate::sync::client::service::polymarket::PolymarketClientInstrumentService;
 use crate::sync::models::grpc_sync::{
@@ -103,10 +103,14 @@ impl SyncClientService {
         // 组装Binance Spot和Swap的service
         let binance_instruments = BinanceSpotClientInstrumentService::for_production()?;
         history_services.extend(binance_instruments.supported_history_services()?);
+        // Binance Option instruments have no client-side history service.
+        let binance_option_instruments = BinanceOptionClientInstrumentService::for_production()?;
+        history_services.extend(binance_option_instruments.supported_history_services()?);
 
         instrument_services.insert(InstrumentType::Polymarket, polymarket_service.clone());
         instrument_services.insert(InstrumentType::Okx, okx_instruments);
         instrument_services.insert(InstrumentType::Binance, binance_instruments);
+        instrument_services.insert(InstrumentType::BinanceOption, binance_option_instruments);
         Ok(Self {
             instrument_services,
             history_services,

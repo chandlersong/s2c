@@ -11,10 +11,12 @@ use crate::sync::client::database::{
 use crate::sync::client::db_consts::ClientsTables;
 use crate::sync::client::grpc_manager::{GrpcChannelManager, get_grpc_manager_from_config};
 use crate::sync::client::po::binance::{
-    BinanceInstrumentType, LocalBinanceFundingRatePo, LocalBinanceInstrumentPo, LocalBinanceKlinePo, LocalBinanceOrderBookSnapshotPo,
-    LocalBinanceTradePo,
+    BinanceInstrumentType, LocalBinanceFundingRatePo, LocalBinanceInstrumentPo, LocalBinanceKlinePo, LocalBinanceOptionInstrumentPo,
+    LocalBinanceOrderBookSnapshotPo, LocalBinanceTradePo,
 };
-use crate::sync::client::repository::binance::{ClientBinanceRepository, ClientBinanceRepositoryImpl};
+use crate::sync::client::repository::binance::{
+    ClientBinanceOptionInstrumentRepository, ClientBinanceOptionInstrumentRepositoryImpl, ClientBinanceRepository, ClientBinanceRepositoryImpl,
+};
 use crate::sync::client::sync_client_service::{
     ClientHistoryService, ClientHistoryServiceTrait, ClientInstrumentService, ClientInstrumentServiceTrait,
 };
@@ -181,6 +183,112 @@ impl ClientInstrumentServiceTrait for BinanceSpotClientInstrumentService {
 
     fn supported_history_services(&self) -> Result<HashMap<HistoryType, ClientHistoryService>, YuError> {
         Ok(self.history_services.clone())
+    }
+}
+
+type BinanceOptionInstrumentCache = Arc<RwLock<HashMap<u64, LocalBinanceOptionInstrumentPo>>>;
+
+pub struct BinanceOptionClientInstrumentService {
+    inst_cache: BinanceOptionInstrumentCache,
+    repository: ClientBinanceOptionInstrumentRepository,
+}
+
+impl BinanceOptionClientInstrumentService {
+    pub fn for_production() -> Result<ClientInstrumentService, YuError> {
+        let pool = get_sync_client_pg_pool_sync()?;
+        let repository = ClientBinanceOptionInstrumentRepositoryImpl::from_pool(pool);
+        let instruments = block_on(repository.list_all_instruments())?;
+        let inst_cache = instruments
+            .into_iter()
+            .filter(|instrument| instrument.status.eq_ignore_ascii_case(BN_SYMBOL_STATUS_TRADING))
+            .map(|instrument| (instrument.server_id, instrument))
+            .collect();
+        Ok(Arc::new(Self {
+            inst_cache: Arc::new(RwLock::new(inst_cache)),
+            repository,
+        }))
+    }
+
+    #[cfg(test)]
+    fn new(repository: ClientBinanceOptionInstrumentRepository, inst_cache: BinanceOptionInstrumentCache) -> Self {
+        Self { inst_cache, repository }
+    }
+}
+
+#[async_trait]
+impl ClientInstrumentServiceTrait for BinanceOptionClientInstrumentService {
+    async fn initial_data(&self, _instrument: Instrument, _end_ms: UnixTimeStamp) -> Result<(), YuError> {
+        debug!("Binance Option instruments do not have a supported history service; skipping initial data");
+        Ok(())
+    }
+
+    async fn reconcile_instrument(&self, instrument: Instrument) -> Result<(), YuError> {
+        if instrument.instrument_type != InstrumentType::BinanceOption as i32 {
+            debug!("ignoring non-Binance Option instrument in Binance Option client service");
+            return Ok(());
+        }
+        let Some(instrument::Payload::BinanceOptionInstrument(option_instrument)) = instrument.payload else {
+            debug!("ignoring Binance Option instrument with a missing or mismatched payload");
+            return Ok(());
+        };
+
+        let server_id = option_instrument.server_id;
+        let mut local_instrument = LocalBinanceOptionInstrumentPo::from_proto(option_instrument);
+        let cached_instrument = self.inst_cache.read().await.get(&server_id).cloned();
+        let cache_hit = cached_instrument.is_some();
+        let existing_instrument = match cached_instrument {
+            Some(instrument) => Some(instrument),
+            None => self.repository.find_instrument_by_server_id(server_id).await?,
+        };
+
+        match existing_instrument {
+            Some(existing_instrument) => {
+                local_instrument.id = existing_instrument.id;
+                let changed = existing_instrument.expiry_date != local_instrument.expiry_date
+                    || existing_instrument.symbol != local_instrument.symbol
+                    || existing_instrument.side != local_instrument.side
+                    || existing_instrument.strike_price != local_instrument.strike_price
+                    || existing_instrument.underlying != local_instrument.underlying
+                    || existing_instrument.unit != local_instrument.unit
+                    || existing_instrument.liquidation_fee_rate != local_instrument.liquidation_fee_rate
+                    || existing_instrument.min_qty != local_instrument.min_qty
+                    || existing_instrument.max_qty != local_instrument.max_qty
+                    || existing_instrument.initial_margin != local_instrument.initial_margin
+                    || existing_instrument.maintenance_margin != local_instrument.maintenance_margin
+                    || existing_instrument.min_initial_margin != local_instrument.min_initial_margin
+                    || existing_instrument.min_maintenance_margin != local_instrument.min_maintenance_margin
+                    || existing_instrument.price_scale != local_instrument.price_scale
+                    || existing_instrument.quantity_scale != local_instrument.quantity_scale
+                    || existing_instrument.quote_asset != local_instrument.quote_asset
+                    || existing_instrument.contract_type != local_instrument.contract_type
+                    || existing_instrument.underlying_type != local_instrument.underlying_type
+                    || existing_instrument.naked_sell != local_instrument.naked_sell
+                    || existing_instrument.status != local_instrument.status
+                    || existing_instrument.filters != local_instrument.filters;
+                if changed {
+                    self.repository.update_instrument(local_instrument.clone()).await?;
+                }
+
+                if local_instrument.status.eq_ignore_ascii_case(BN_SYMBOL_STATUS_TRADING) {
+                    if changed || !cache_hit {
+                        self.inst_cache.write().await.insert(server_id, local_instrument);
+                    }
+                } else {
+                    self.inst_cache.write().await.remove(&server_id);
+                }
+            }
+            None => {
+                local_instrument.id = self.repository.create_instrument(local_instrument.clone()).await?;
+                if local_instrument.status.eq_ignore_ascii_case(BN_SYMBOL_STATUS_TRADING) {
+                    self.inst_cache.write().await.insert(server_id, local_instrument);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn supported_history_services(&self) -> Result<HashMap<HistoryType, ClientHistoryService>, YuError> {
+        Ok(HashMap::new())
     }
 }
 
@@ -774,10 +882,11 @@ mod tests {
     use crate::data_integrity::check::MockBinarySearchDSTrait;
     use crate::postgresql_db_tables::MockPostgresqlBatchInsertTrait;
     use crate::sync::client::grpc_manager::MockGrpcChannelManagerTrait;
-    use crate::sync::client::repository::binance::MockClientBinanceRepositoryTrait;
+    use crate::sync::client::repository::binance::{MockClientBinanceOptionInstrumentRepositoryTrait, MockClientBinanceRepositoryTrait};
     use crate::sync::client::sync_client_service::MockClientHistoryServiceTrait;
     use crate::sync::models::grpc_sync::{
-        BinanceFundingRate, BinanceKline, BinanceOrderBookLevel, BinanceOrderBookSnapshot, BinanceTrade, HistoryType, InstrumentType,
+        BinanceFundingRate, BinanceKline, BinanceOptionInstrument, BinanceOptionSymbolFilter, BinanceOrderBookLevel, BinanceOrderBookSnapshot,
+        BinanceTrade, HistoryType, InstrumentType,
     };
 
     fn mock_binary_search() -> BinarySearchDS {
@@ -824,6 +933,88 @@ mod tests {
         }
     }
 
+    fn local_option_instrument(server_id: u64, id: u64) -> LocalBinanceOptionInstrumentPo {
+        LocalBinanceOptionInstrumentPo {
+            id,
+            server_id,
+            expiry_date: 1_700_000_000_123,
+            symbol: "BTC-240628-50000-C".to_string(),
+            side: "CALL".to_string(),
+            strike_price: "50000.00000000".to_string(),
+            underlying: "BTCUSDT".to_string(),
+            unit: 1,
+            liquidation_fee_rate: "0.015".to_string(),
+            min_qty: "0.01".to_string(),
+            max_qty: "1000".to_string(),
+            initial_margin: "0.1".to_string(),
+            maintenance_margin: "0.05".to_string(),
+            min_initial_margin: "0.1".to_string(),
+            min_maintenance_margin: "0.05".to_string(),
+            price_scale: 2,
+            quantity_scale: 3,
+            quote_asset: "USDT".to_string(),
+            contract_type: "欧式".to_string(),
+            underlying_type: "COIN".to_string(),
+            naked_sell: Some(false),
+            status: "TRADING".to_string(),
+            filters: vec![crate::sync::client::po::binance::LocalBinanceOptionSymbolFilterPo {
+                filter_type: "PRICE_FILTER".to_string(),
+                min_price: Some("0.01".to_string()),
+                max_price: Some("100000".to_string()),
+                tick_size: Some("0.01".to_string()),
+                min_qty: None,
+                max_qty: None,
+                step_size: None,
+            }],
+        }
+    }
+
+    fn option_instrument(status: &str) -> Instrument {
+        Instrument {
+            instrument_type: InstrumentType::BinanceOption as i32,
+            payload: Some(instrument::Payload::BinanceOptionInstrument(BinanceOptionInstrument {
+                server_id: 42,
+                expiry_date: 1_700_000_000_123,
+                symbol: "BTC-240628-50000-C".to_string(),
+                side: "CALL".to_string(),
+                strike_price: "50000.00000000".to_string(),
+                underlying: "BTCUSDT".to_string(),
+                unit: 1,
+                liquidation_fee_rate: "0.015".to_string(),
+                min_qty: "0.01".to_string(),
+                max_qty: "1000".to_string(),
+                initial_margin: "0.1".to_string(),
+                maintenance_margin: "0.05".to_string(),
+                min_initial_margin: "0.1".to_string(),
+                min_maintenance_margin: "0.05".to_string(),
+                price_scale: 2,
+                quantity_scale: 3,
+                quote_asset: "USDT".to_string(),
+                contract_type: "欧式".to_string(),
+                underlying_type: "COIN".to_string(),
+                naked_sell: Some(false),
+                status: status.to_string(),
+                filters: vec![BinanceOptionSymbolFilter {
+                    filter_type: "PRICE_FILTER".to_string(),
+                    min_price: Some("0.01".to_string()),
+                    max_price: Some("100000".to_string()),
+                    tick_size: Some("0.01".to_string()),
+                    min_qty: None,
+                    max_qty: None,
+                    step_size: None,
+                }],
+            })),
+        }
+    }
+
+    fn option_instrument_cache(cached: Option<LocalBinanceOptionInstrumentPo>) -> BinanceOptionInstrumentCache {
+        Arc::new(RwLock::new(
+            cached
+                .map(|instrument| HashMap::from([(instrument.server_id, instrument)]))
+                .unwrap_or_default(),
+        ))
+    }
+
     fn order_book_snapshot_entry() -> HistoryEntry {
         HistoryEntry {
             history_type: HistoryType::BinanceOrderBookSnapshot as i32,
@@ -843,6 +1034,150 @@ mod tests {
                 }],
             })),
         }
+    }
+
+    // 测试目的：验证缺失的 Binance Option instrument 会持久化，并使用数据库返回的本地 ID 缓存。
+    // 准备数据/过程：mock repository 查询不到服务端 ID 42，创建时返回本地 ID 7，再对账包含精确小数和毫秒时间的 Option payload。
+    // 预期结果：创建参数保留 server ID、毫秒 expiry、Decimal 字符串及 JSON filters，缓存使用本地 ID 7。
+    #[tokio::test]
+    async fn option_instrument_reconcile_creates_and_caches_local_instrument() {
+        let mut repository = MockClientBinanceOptionInstrumentRepositoryTrait::new();
+        repository
+            .expect_find_instrument_by_server_id()
+            .with(mockall::predicate::eq(42))
+            .times(1)
+            .returning(|_| Ok(None));
+        repository
+            .expect_create_instrument()
+            .withf(|instrument| {
+                instrument.server_id == 42
+                    && instrument.expiry_date == 1_700_000_000_123
+                    && instrument.strike_price == "50000.00000000"
+                    && instrument.filters.len() == 1
+                    && instrument.filters[0].tick_size.as_deref() == Some("0.01")
+            })
+            .times(1)
+            .returning(|_| Ok(7));
+        repository.expect_update_instrument().times(0);
+        let cache = option_instrument_cache(None);
+        let service = BinanceOptionClientInstrumentService::new(Arc::new(repository), cache.clone());
+
+        service.reconcile_instrument(option_instrument("TRADING")).await.unwrap();
+
+        let cache = cache.read().await;
+        let cached = cache.get(&42).expect("new active Option instrument must be cached");
+        assert_eq!(cached.id, 7);
+        assert_eq!(cached.server_id, 42);
+    }
+
+    // 测试目的：验证 cache miss 时从数据库加载现有记录并回填 active instrument 缓存，且不更改未变化数据。
+    // 准备数据/过程：mock repository 返回 server ID 42 对应的本地 ID 7 记录，并提交字段相同的服务端 payload。
+    // 预期结果：不调用 create/update，缓存回填数据库记录且保留本地 ID 7。
+    #[tokio::test]
+    async fn option_instrument_reconcile_loads_existing_record_on_cache_miss() {
+        let mut repository = MockClientBinanceOptionInstrumentRepositoryTrait::new();
+        repository
+            .expect_find_instrument_by_server_id()
+            .with(mockall::predicate::eq(42))
+            .times(1)
+            .returning(|_| Ok(Some(local_option_instrument(42, 7))));
+        repository.expect_create_instrument().times(0);
+        repository.expect_update_instrument().times(0);
+        let cache = option_instrument_cache(None);
+        let service = BinanceOptionClientInstrumentService::new(Arc::new(repository), cache.clone());
+
+        service.reconcile_instrument(option_instrument("TRADING")).await.unwrap();
+
+        assert_eq!(cache.read().await.get(&42).map(|instrument| instrument.id), Some(7));
+    }
+
+    // 测试目的：验证 Binance Option instrument 字段变化后先更新数据库，再刷新缓存，并保留本地 ID。
+    // 准备数据/过程：缓存 local ID 7 的旧记录，将服务端 status 改为 EXPIRED，mock update 校验两种 ID 和新状态。
+    // 预期结果：repository 收到一次更新，更新成功后该非交易 instrument 从 live cache 移除。
+    #[tokio::test]
+    async fn option_instrument_reconcile_updates_record_and_removes_inactive_cache_entry() {
+        let mut repository = MockClientBinanceOptionInstrumentRepositoryTrait::new();
+        repository.expect_find_instrument_by_server_id().times(0);
+        repository.expect_create_instrument().times(0);
+        repository
+            .expect_update_instrument()
+            .withf(|instrument| instrument.id == 7 && instrument.server_id == 42 && instrument.status == "EXPIRED")
+            .times(1)
+            .returning(|_| Ok(()));
+        let cache = option_instrument_cache(Some(local_option_instrument(42, 7)));
+        let service = BinanceOptionClientInstrumentService::new(Arc::new(repository), cache.clone());
+
+        service.reconcile_instrument(option_instrument("EXPIRED")).await.unwrap();
+
+        assert!(!cache.read().await.contains_key(&42));
+    }
+
+    // 测试目的：验证 active Option instrument 的字段更新完成后刷新缓存内容。
+    // 准备数据/过程：缓存 local ID 7 的旧 strike price，提交 strike price 已变化的服务端 payload，并 mock 成功更新。
+    // 预期结果：数据库更新参数保留 local ID 7，缓存保留该 instrument 且 strike price 更新为服务端值。
+    #[tokio::test]
+    async fn option_instrument_reconcile_refreshes_active_cache_after_update() {
+        let mut repository = MockClientBinanceOptionInstrumentRepositoryTrait::new();
+        repository.expect_find_instrument_by_server_id().times(0);
+        repository.expect_create_instrument().times(0);
+        repository
+            .expect_update_instrument()
+            .withf(|instrument| instrument.id == 7 && instrument.strike_price == "51000.00000000")
+            .times(1)
+            .returning(|_| Ok(()));
+        let cache = option_instrument_cache(Some(local_option_instrument(42, 7)));
+        let service = BinanceOptionClientInstrumentService::new(Arc::new(repository), cache.clone());
+        let mut updated = option_instrument("TRADING");
+        if let Some(instrument::Payload::BinanceOptionInstrument(option)) = updated.payload.as_mut() {
+            option.strike_price = "51000.00000000".to_string();
+        }
+
+        service.reconcile_instrument(updated).await.unwrap();
+
+        assert_eq!(
+            cache.read().await.get(&42).map(|instrument| instrument.strike_price.as_str()),
+            Some("51000.00000000")
+        );
+    }
+
+    // 测试目的：验证 Option instrument 不执行历史初始化、不注册历史类型，且错误 payload 不触发 repository。
+    // 准备数据/过程：调用 initial_data 和 supported_history_services，再提交没有 payload 的 Binance Option instrument。
+    // 预期结果：初始化成功且 history map 为空；异常 payload 被跳过，repository 无读写调用。
+    #[tokio::test]
+    async fn option_instrument_has_no_history_and_ignores_invalid_payload() {
+        let mut repository = MockClientBinanceOptionInstrumentRepositoryTrait::new();
+        repository.expect_find_instrument_by_server_id().times(0);
+        repository.expect_create_instrument().times(0);
+        repository.expect_update_instrument().times(0);
+        let service = BinanceOptionClientInstrumentService::new(Arc::new(repository), option_instrument_cache(None));
+
+        service.initial_data(option_instrument("TRADING"), 1_700_000_000_123).await.unwrap();
+        assert!(service.supported_history_services().unwrap().is_empty());
+        let mut invalid = option_instrument("TRADING");
+        invalid.payload = None;
+        service.reconcile_instrument(invalid).await.unwrap();
+    }
+
+    // 测试目的：验证 Option instrument repository 查询错误会向调用方传播，避免以成功结果掩盖数据库故障。
+    // 准备数据/过程：mock repository 在 server ID 42 查询时返回数据库错误，并对账 cache miss 的有效 Option instrument。
+    // 预期结果：对账返回错误且缓存保持为空，不执行创建或更新。
+    #[tokio::test]
+    async fn option_instrument_reconcile_propagates_repository_error() {
+        let mut repository = MockClientBinanceOptionInstrumentRepositoryTrait::new();
+        repository
+            .expect_find_instrument_by_server_id()
+            .with(mockall::predicate::eq(42))
+            .times(1)
+            .returning(|_| Err(YuError::new("database unavailable")));
+        repository.expect_create_instrument().times(0);
+        repository.expect_update_instrument().times(0);
+        let cache = option_instrument_cache(None);
+        let service = BinanceOptionClientInstrumentService::new(Arc::new(repository), cache.clone());
+
+        let error = service.reconcile_instrument(option_instrument("TRADING")).await.unwrap_err();
+
+        assert!(error.to_string().contains("database unavailable"));
+        assert!(cache.read().await.is_empty());
     }
 
     // 测试目的：验证实时订单簿快照使用缓存的本地 instrument ID 提交批量落库。
