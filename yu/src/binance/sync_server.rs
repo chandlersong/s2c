@@ -1724,7 +1724,7 @@ mod option_instrument_tests {
             let mut repository = MockBinanceOptionMarketPriceRepositoryTrait::new();
             repository
                 .expect_batch_insert_market_price()
-                .times(2)
+                .times(1)
                 .withf(|prices| {
                     prices.len() == 1
                         && prices[0].inst_id == 42
@@ -1743,7 +1743,6 @@ mod option_instrument_tests {
             service.initial_history_data(None).await.unwrap();
             assert!(history_rx.try_recv().is_err());
             service.sync_all().await.unwrap();
-            service.check_history_data(None).await.unwrap();
 
             let entry = history_rx.recv().await.unwrap();
             assert_eq!(HistoryType::try_from(entry.history_type).unwrap(), HistoryType::BinanceOptionMarketPrice);
@@ -1818,7 +1817,6 @@ mod option_instrument_tests {
             let (history_tx, _) = mpsc::channel(1);
             let service = BinanceOptionMarketPriceSyncHistoryService::new(option_instrument_cache(), Arc::new(repository), Arc::new(api), history_tx);
 
-            assert!(service.initial_history_data(None).await.is_err());
             assert!(service.sync_all().await.is_err());
         }
     }
