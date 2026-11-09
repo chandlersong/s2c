@@ -197,19 +197,16 @@ pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: m
     swap_history_service.check_history_data(None).await?;
     info!("started checking Binance Option Kline history data");
     option_kline_history_service.check_history_data(None).await?;
-    option_market_price_history_service.check_history_data(None).await?;
 
     let check_history_job = history_service.clone();
     let check_swap_history_job = swap_history_service.clone();
     let funding_rate_history_check = funding_rate_history_service.clone();
     let option_kline_history_check = option_kline_history_service.clone();
-    let option_market_price_history_check = option_market_price_history_service.clone();
     let _ = cron_job!("0 23 */6 * * *", move |_uuid, _locked| {
         let each_spot_sync = check_history_job.clone();
         let each_swap_sync = check_swap_history_job.clone();
         let each_fuding_rate_sync = funding_rate_history_check.clone();
         let each_option_kline_sync = option_kline_history_check.clone();
-        let each_option_market_price_sync = option_market_price_history_check.clone();
         Box::pin(async move {
             debug!("start checking Binance Spot and Swap kline history");
             if let Err(error) = each_spot_sync.check_history_data(None).await {
@@ -223,9 +220,6 @@ pub async fn start_binance_sync_server_job(app_config: &AppConfig, history_tx: m
             }
             if let Err(error) = each_option_kline_sync.check_history_data(None).await {
                 error!("failed to check Binance Option Kline history: {}", error);
-            }
-            if let Err(error) = each_option_market_price_sync.check_history_data(None).await {
-                error!("failed to check Binance Option Market Price history: {}", error);
             }
             debug!("finished checking Binance Spot and Swap kline history");
         })

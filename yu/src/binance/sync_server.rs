@@ -1236,7 +1236,8 @@ impl SyncHistoryServiceTrait for BinanceOptionMarketPriceSyncHistoryService {
     }
 
     async fn initial_history_data(&self, _end_ms: Option<u64>) -> Result<(), YuError> {
-        self.capture_market_prices(false).await
+        debug!("skip Binance option market price gap check: REST API exposes only current prices, not historical snapshots");
+        Ok(())
     }
 
     async fn sync_all(&self) -> Result<(), YuError> {
