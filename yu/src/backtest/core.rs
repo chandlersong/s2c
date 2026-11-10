@@ -2,11 +2,18 @@
 //! 本模块主要是用于回测的核心逻辑，主要包括以下几个方面：
 //! 1. 回测的核心类和trait的定义。
 //! 2. 通用的一些实现。
+//!
+//! # 设计
+//! 其实也就三个核心，
+//! 1. 获取和分发数据的DataFeedTrait
+//! 2. 策略的执行和调度的StrategyTrait
+//! 3. 回测的核心逻辑BacktestCoreTrait
+//!
 
 use crate::errors::YuError;
 use async_trait::async_trait;
-
-pub struct CommonResult {}
+use futures::Stream;
+use polars::prelude::DataFrame;
 
 ///
 /// 做为回测的核心trait，主要是为了一个placeholder
@@ -21,7 +28,7 @@ pub struct CommonResult {}
 ///
 pub trait BacktestCoreTrait {
     type Result: Clone + Send;
-    fn execute(&self) -> Result<Self::Result, YuError>;
+    fn calculate(&self) -> Result<Self::Result, YuError>;
 }
 
 ///
@@ -53,7 +60,7 @@ pub trait BacktestCoreTrait {
 #[async_trait]
 pub trait StrategyTrait {
     type Result: Clone + Send;
-    fn support_strategy_type(&self) -> Vec<StrategyType>;
+    fn support_backtest_type(&self) -> Vec<BacktestType>;
 
     ///
     /// 一次返回一个周期的结果。只是支持序列模式的策略。
@@ -68,7 +75,18 @@ pub trait StrategyTrait {
     async fn batch_execute(&self) -> Result<Vec<Self::Result>, YuError>;
 }
 
-pub enum StrategyType {
+pub enum BacktestType {
     Vector,
     Sequence,
+}
+
+///
+/// 这里为了迎合策略的两种方式。所以来说，做了这种处理。
+///
+#[async_trait]
+pub trait DataFeedTrait {
+    type Entry: Clone + Send;
+    async fn get_all_data(&self) -> Result<DataFrame, YuError>;
+
+    async fn get_steam(&self) -> Result<impl Stream<Item = Self::Entry>, YuError>;
 }

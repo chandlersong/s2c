@@ -43,6 +43,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "alloc-no-stdlib"
+version = "2.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc7bb162ec39d46ab1ca8c77bf72e890535becd1751bb45f64c597edb4c8c6b3"
+
+[[package]]
+name = "alloc-stdlib"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e76a019e91224d279006ff972f1e984179a6e9feb050adba6ce8274aef23195"
+dependencies = [
+ "alloc-no-stdlib",
+]
+
+[[package]]
 name = "allocator-api2"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1017,6 +1032,27 @@ name = "boxcar"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "36f64beae40a84da1b4b26ff2761a5b895c12adc41dc25aaee1c4f2bbfe97a6e"
+
+[[package]]
+name = "brotli"
+version = "7.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc97b8f16f944bba54f0433f07e30be199b6dc2bd25937444bbad560bcea29bd"
+dependencies = [
+ "alloc-no-stdlib",
+ "alloc-stdlib",
+ "brotli-decompressor",
+]
+
+[[package]]
+name = "brotli-decompressor"
+version = "4.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a334ef7c9e23abf0ce748e8cd309037da93e606ad52eb372e4ce327a0dcfbdfd"
+dependencies = [
+ "alloc-no-stdlib",
+ "alloc-stdlib",
+]
 
 [[package]]
 name = "bumpalo"
@@ -3944,6 +3980,7 @@ version = "0.49.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "675294ddf9174029e48caa4e59b0665ea64bfb784a366b197690895a6ed65c68"
 dependencies = [
+ "futures",
  "memmap2",
  "polars-arrow",
  "polars-core",
@@ -3956,6 +3993,7 @@ dependencies = [
  "polars-utils",
  "rayon",
  "recursive",
+ "tokio",
 ]
 
 [[package]]
@@ -3999,10 +4037,13 @@ checksum = "7c849c10edd9511ccd4ec4130e283ee3a8b3bb48a7d74ac6354c1c20add81065"
 dependencies = [
  "async-stream",
  "base64",
+ "brotli",
  "bytemuck",
  "ethnum",
+ "flate2",
  "futures",
  "hashbrown 0.15.5",
+ "lz4",
  "num-traits",
  "polars-arrow",
  "polars-compute",
@@ -4011,7 +4052,9 @@ dependencies = [
  "polars-utils",
  "serde",
  "simdutf8",
+ "snap",
  "streaming-decompression",
+ "zstd",
 ]
 
 [[package]]
@@ -4036,6 +4079,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "either",
+ "futures",
  "hashbrown 0.15.5",
  "memmap2",
  "num-traits",
@@ -4045,6 +4089,7 @@ dependencies = [
  "polars-core",
  "polars-io",
  "polars-ops",
+ "polars-parquet",
  "polars-time",
  "polars-utils",
  "rayon",
@@ -5425,6 +5470,12 @@ checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 dependencies = [
  "serde",
 ]
+
+[[package]]
+name = "snap"
+version = "1.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "199905e6153d6405f9728fe44daace35f8f837bbf830bb6e85fbd5828709a886"
 
 [[package]]
 name = "socket2"
@@ -7022,6 +7073,7 @@ dependencies = [
  "li",
  "log",
  "mockall",
+ "polars",
  "prost",
  "r2d2",
  "rmcp",
