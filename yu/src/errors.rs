@@ -6,6 +6,8 @@ use yue::errors::YueError;
 pub enum YuError {
     #[error("system io: {0}")]
     SystemIOError(#[from] std::io::Error),
+    #[error("polars error: {0}")]
+    PolarsError(#[from] polars::prelude::PolarsError),
     #[error("yue error: {0}")]
     YueError(#[from] YueError),
     #[error("duckDB error: {0}")]

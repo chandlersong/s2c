@@ -94,5 +94,11 @@ pub trait VectorDataFeedTrait {
     /// 这里不用而是用Dataframe，主要是在处理的时候，往往是多维度的。有时候处理要基于时间，有时候要基于instrument。
     /// 如果我用list，map，则需要通过不同的业务需求，进行调整。缺乏通用性。
     ///
+    /// FUTURE:
+    /// 1. 优化流程，首先，写成本地文件parquet，然后在用polars进行lazy读取
+    ///
+    /// NOTE:
+    /// 1. 币安的数据，1000小时大概10M，5000小时12.66 MB。时间倒是一样的。
+    ///
     async fn get_all_data(&self) -> Result<DataFrame, YuError>;
 }
