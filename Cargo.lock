@@ -3012,31 +3012,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "li"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "aws-config",
- "aws-sdk-dynamodb",
- "bon",
- "chrono",
- "cron",
- "fern",
- "futures-util",
- "humantime",
- "log",
- "mockall",
- "rocksdb",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tokio-native-tls",
- "tokio-tungstenite",
- "unicode-segmentation",
-]
-
-[[package]]
 name = "libc"
 version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5092,6 +5067,97 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
+name = "s2c-li"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "aws-config",
+ "aws-sdk-dynamodb",
+ "bon",
+ "chrono",
+ "cron",
+ "fern",
+ "futures-util",
+ "humantime",
+ "log",
+ "mockall",
+ "rocksdb",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-native-tls",
+ "tokio-tungstenite",
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "s2c-yu"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bon",
+ "chrono",
+ "config",
+ "duckdb",
+ "futures",
+ "governor",
+ "log",
+ "mockall",
+ "polars",
+ "prost",
+ "r2d2",
+ "rmcp",
+ "rmcp-macros",
+ "rust_decimal",
+ "s2c-li",
+ "s2c-yue",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "sqlx-postgres",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-cron-scheduler",
+ "tokio-stream",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "walkdir",
+]
+
+[[package]]
+name = "s2c-yue"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64",
+ "bon",
+ "chrono",
+ "csv",
+ "ed25519-dalek",
+ "governor",
+ "hmac 0.12.1",
+ "log",
+ "mockall",
+ "moka",
+ "prost",
+ "prost-build",
+ "reqwest",
+ "rust_decimal",
+ "s2c-li",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "sha2 0.10.9",
+ "sonyflake",
+ "thiserror 2.0.18",
+ "tokio",
+ "url",
+ "wiremock",
+]
+
+[[package]]
 name = "same-file"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7057,72 +7123,6 @@ dependencies = [
  "quote",
  "syn 2.0.118",
  "synstructure",
-]
-
-[[package]]
-name = "yu"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "bon",
- "chrono",
- "config",
- "duckdb",
- "futures",
- "governor",
- "li",
- "log",
- "mockall",
- "polars",
- "prost",
- "r2d2",
- "rmcp",
- "rmcp-macros",
- "rust_decimal",
- "serde",
- "serde_json",
- "sqlx",
- "sqlx-postgres",
- "thiserror 2.0.18",
- "tokio",
- "tokio-cron-scheduler",
- "tokio-stream",
- "tonic",
- "tonic-prost",
- "tonic-prost-build",
- "walkdir",
- "yue",
-]
-
-[[package]]
-name = "yue"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "base64",
- "bon",
- "chrono",
- "csv",
- "ed25519-dalek",
- "governor",
- "hmac 0.12.1",
- "li",
- "log",
- "mockall",
- "moka",
- "prost",
- "prost-build",
- "reqwest",
- "rust_decimal",
- "serde",
- "serde_json",
- "serial_test",
- "sha2 0.10.9",
- "sonyflake",
- "thiserror 2.0.18",
- "tokio",
- "url",
- "wiremock",
 ]
 
 [[package]]

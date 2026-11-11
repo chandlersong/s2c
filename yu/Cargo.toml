@@ -1,15 +1,22 @@
 [package]
-name = "yu"
+name = "s2c-yu"
 version = "0.1.0"
 edition = "2024"
+description = "Market data, storage, and backtesting services for the S2C trading system"
+license = "AGPL-3.0-only"
+repository = "https://github.com/chandlersong/s2c"
+readme = "README.md"
+
+[lib]
+name = "yu"
 
 [dependencies]
 duckdb = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }
 tokio-cron-scheduler = { workspace = true }
-yue = { path = "../yue" }
-li = { path = "../li" }
+yue = { package = "s2c-yue", version = "0.1.0", path = "../yue" }
+li = { package = "s2c-li", version = "0.1.0", path = "../li" }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 log = { workspace = true }
@@ -44,7 +51,7 @@ sqlx-postgres = "0.9.0"
 polars = { workspace = true }
 [dev-dependencies]
 # keep yue mockable enabled for tests
-yue = { path = "../yue", features = ["mockable"] }
+yue = { package = "s2c-yue", version = "0.1.0", path = "../yue", features = ["mockable"] }
 # mockall for tests
 mockall = { workspace = true }
 

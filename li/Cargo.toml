@@ -1,7 +1,14 @@
 [package]
-name = "li"
+name = "s2c-li"
 version = "0.1.0"
 edition = "2024"
+description = "Infrastructure utilities for the S2C trading system"
+license = "AGPL-3.0-only"
+repository = "https://github.com/chandlersong/s2c"
+readme = "README.md"
+
+[lib]
+name = "li"
 
 [dependencies]
 rocksdb = { workspace = true }
