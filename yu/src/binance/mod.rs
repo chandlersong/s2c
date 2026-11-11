@@ -2,7 +2,6 @@ pub mod bn_backend_service;
 pub mod bn_consts;
 pub mod bn_dashboard;
 pub mod bn_mcp;
-pub mod datafeed;
 pub mod db_consts;
 pub mod duckdb_repository;
 pub mod history;
