@@ -58,16 +58,8 @@ pub trait BacktestCoreTrait {
 /// 而关于策略的其他参数，则是作为属性来配置。
 ///
 #[async_trait]
-pub trait StrategyTrait {
+pub trait SequenceStrategyTrait {
     type Result: Clone + Send;
-    fn support_backtest_type(&self) -> Vec<BacktestType>;
-
-    ///
-    /// 一次返回一个周期的结果。只是支持序列模式的策略。
-    /// 1. 策略需要自己维护状态，
-    /// 2. 每调用一次，则表示状态有一次变化。
-    ///
-    async fn tick_execute(&self) -> Result<Self::Result, YuError>;
 
     ///
     /// 一次返回所有的结果，主要是为了向量模式的策略。
@@ -75,9 +67,15 @@ pub trait StrategyTrait {
     async fn batch_execute(&self) -> Result<Vec<Self::Result>, YuError>;
 }
 
-pub enum BacktestType {
-    Vector,
-    Sequence,
+#[async_trait]
+pub trait VectorStrategyTrait {
+    type Result: Clone + Send;
+    ///
+    /// 一次返回一个周期的结果。只是支持序列模式的策略。
+    /// 1. 策略需要自己维护状态，
+    /// 2. 每调用一次，则表示状态有一次变化。
+    ///
+    async fn tick_execute(&self) -> Result<Self::Result, YuError>;
 }
 
 ///
@@ -86,7 +84,15 @@ pub enum BacktestType {
 #[async_trait]
 pub trait DataFeedTrait {
     type Entry: Clone + Send;
-    async fn get_all_data(&self) -> Result<DataFrame, YuError>;
 
     async fn get_steam(&self) -> Result<impl Stream<Item = Self::Entry>, YuError>;
+}
+
+#[async_trait]
+pub trait VectorDataFeedTrait {
+    ///
+    /// 这里不用而是用Dataframe，主要是在处理的时候，往往是多维度的。有时候处理要基于时间，有时候要基于instrument。
+    /// 如果我用list，map，则需要通过不同的业务需求，进行调整。缺乏通用性。
+    ///
+    async fn get_all_data(&self) -> Result<DataFrame, YuError>;
 }
