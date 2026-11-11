@@ -22,6 +22,7 @@ RUN mkdir -p yue/src li/src yu/src && \
     echo "pub fn __dummy_yue_lib() {}" > li/src/lib.rs && \
     echo "fn main() {}" > li/src/lib.rs && \
     echo "fn main() {}" > yue/src/lib.rs && \
+    echo "pub fn __dummy_yu_lib() {}" > yu/src/lib.rs && \
     echo "fn main() {}" > yu/src/main.rs
 RUN cargo chef prepare --recipe-path recipe.json
 
