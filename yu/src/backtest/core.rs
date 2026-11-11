@@ -82,7 +82,7 @@ pub trait VectorStrategyTrait {
 /// 这里为了迎合策略的两种方式。所以来说，做了这种处理。
 ///
 #[async_trait]
-pub trait DataFeedTrait {
+pub trait SequenceDataFeedTrait {
     type Entry: Clone + Send;
 
     async fn get_steam(&self) -> Result<impl Stream<Item = Self::Entry>, YuError>;
