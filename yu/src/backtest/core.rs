@@ -3,11 +3,44 @@
 //! 1. 回测的核心类和trait的定义。
 //! 2. 通用的一些实现。
 //!
-//! # 设计
-//! 其实也就三个核心，
-//! 1. 获取和分发数据的DataFeedTrait
-//! 2. 策略的执行和调度的StrategyTrait
-//! 3. 回测的核心逻辑BacktestCoreTrait
+//!  其实策略，本质的问题和BacktestCoreTrait是一致的。
+//! 但是不同类型的策略统一调度的场景还是挺多的。
+//! 1. 实盘。
+//! 2，回测时候的混合策略。
+//!
+//! 现在想的到想要支持的策略
+//! 1. 选股类策略，需要有全市场或者某个域下面，选币或者选股策略。
+//!     - CTA策略其实也可以简化为这类策略，可以看成是域只有一个选股
+//! 2. 一些订单流类，或者拨头皮类策略，主要是做一些高频的策略。
+//! 3. 期权类策略
+//!
+//!
+//! # 业务设计
+//
+//! ## 向量模式和序列模式
+//! 就是一把算出所有，还是一个tick，一个tick来算。
+//! 其实前向量模式，只是快，而且实现简单，序列模式复杂，但是比较适合实盘。
+//! 这里暂时考虑两个都支持吧。
+//! 1， 回测如果两个都有，则是优选向量。
+//! 2. 实盘有限选序列模式
+//!
+//! ## 关于运行模式
+//! 基于上面的想法，这里有两种运行模式，就是运行两种execute方法，tick_execute和batch_execute。前者是序列模式，后者是向量模式。
+//! 而关于策略的其他参数，则是作为属性来配置。
+//!
+//! ## 没有定义StrategyTrait
+//! 主要是策略其实很灵活，定义也是一个空的trait，
+//! 如果需要不同类型策略的混用，其实需要定义多个Engine，因为不同类型的策略，feed，return这些完全不一样。
+//! 如果是相同策略的混用，完全可以Strategy里面套用Strategy。没有必要去定义一个空的trait。
+//!
+//! 实际使用中，相同类型的策略，最好是一个文件，比如中性，剥头皮策略应该用相同的文件。
+//!
+//! 实际使用中，自定义的策略往往是
+//! 1. 配置文件，比如一些纯因子的选币类。
+//! 2. 一个方法的hook，比如一些CTA策略，或者剥头皮策略。
+//! 这些都没有办法做到统一。
+//! 但是策略的本质是计算Positon。这才是最关键的。这里也无法处理。
+//!
 //!
 
 use crate::errors::YuError;
@@ -16,49 +49,10 @@ use futures::Stream;
 use polars::prelude::DataFrame;
 
 ///
-/// 做为回测的核心trait，主要是为了一个placeholder
-///
-/// 主要这一个回测，比较适合做成函数。是一次性的。但是有问题。就是说不同的回测，参数不同，统一回非常麻烦
-/// 这个唯一的使用场景，也就是不同策略的混合。比如说一个期权策略和中性策略混合。但是这也是后期的功能。
-///
-///
-/// ## 规则
-/// 1. 所有的回测的参数，做为struct的属性放入。这样做，是为了方便后续的调度。
-///
-///
-pub trait BacktestCoreTrait {
-    type Result: Clone + Send;
-    fn calculate(&self) -> Result<Self::Result, YuError>;
-}
-
-///
-/// 其实关于策略，本质的问题和BacktestCoreTrait是一致的。
-/// 但是不同类型的策略统一调度的场景还是挺多的。
-/// 1. 实盘。
-/// 2，回测时候的混合策略。
-///
-/// 现在想的到想要支持的策略
-/// 1. 选股类策略，需要有全市场或者某个域下面，选币或者选股策略。
-///     - CTA策略其实也可以简化为这类策略，可以看成是域只有一个选股
-/// 2. 一些订单流类，或者拨头皮类策略，主要是做一些高频的策略。
-/// 3. 期权类策略
-///
-///
-/// # 业务设计
-///
-/// ## 向量模式和序列模式
-/// 就是一把算出所有，还是一个tick，一个tick来算。
-/// 其实前向量模式，只是快，而且实现简单，序列模式复杂，但是比较适合实盘。
-/// 这里暂时考虑两个都支持吧。
-/// 1， 回测如果两个都有，则是优选向量。
-/// 2. 实盘有限选序列模式
-///
-/// ## 关于运行模式
-/// 基于上面的想法，这里有两种运行模式，就是运行两种execute方法，tick_execute和batch_execute。前者是序列模式，后者是向量模式。
-/// 而关于策略的其他参数，则是作为属性来配置。
+/// 作为一个总协调的地方，这里偏向一个placeholder的地方。
 ///
 #[async_trait]
-pub trait SequenceStrategyTrait {
+pub trait EngineTrait {
     type Result: Clone + Send;
 
     ///
@@ -67,15 +61,25 @@ pub trait SequenceStrategyTrait {
     async fn batch_execute(&self) -> Result<Vec<Self::Result>, YuError>;
 }
 
-#[async_trait]
-pub trait VectorStrategyTrait {
+///
+/// 做为回测的核心trait，主要是为了一个placeholder
+///
+/// 主要是为了计算回撤的回报。因为本质是根据仓位信息和市场信息，计算出回报。然后根据回报计算出回撤。
+/// 无论是向量模式还是序列模式，都是一样的。
+/// 向量模式，是一个数组，calculate会被调用一次。回报在这里来组合
+/// 序列模式，是一次一次的调用calculate，由外围来整合成完整的回报。
+///
+///
+/// ## 规则
+/// 1. 所有的回测的参数，做为struct的属性放入。这样做，是为了方便后续的调度。
+///
+///
+pub trait ReturnCalculateTrait {
+    type Position: Clone + Send;
+    type Market: Clone + Send;
     type Result: Clone + Send;
-    ///
-    /// 一次返回一个周期的结果。只是支持序列模式的策略。
-    /// 1. 策略需要自己维护状态，
-    /// 2. 每调用一次，则表示状态有一次变化。
-    ///
-    async fn tick_execute(&self) -> Result<Self::Result, YuError>;
+
+    fn calculate(&self, position_data: Self::Position, market_data: Self::Market) -> Result<Self::Result, YuError>;
 }
 
 ///
