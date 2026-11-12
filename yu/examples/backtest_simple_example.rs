@@ -1,10 +1,10 @@
 use li::tools::logs::setup_logger;
 use log::{LevelFilter, info};
-use polars::io::ipc::IpcWriter;
-use polars::prelude::SerWriter;
 use std::collections::HashMap;
 use yu::backtest::binance::pg_datafeed::SpotHourlyDataFeed;
-use yu::backtest::core::VectorDataFeedTrait;
+use yu::backtest::core::EngineTrait;
+use yu::backtest::selection_strategy::demo::SelectionDemoStrategy;
+use yu::backtest::selection_strategy::{BatchSelectionEngine, position_summary_lines};
 use yu::config::get_config;
 use yu::errors::YuError;
 use yu::postgresql_db::get_sync_client_pg_pool_sync;
@@ -21,14 +21,16 @@ async fn main() -> Result<(), YuError> {
 
     let pg_pool = get_sync_client_pg_pool_sync()?;
     let data_feed = SpotHourlyDataFeed::new(0, pg_pool, 5000);
-    let mut df = data_feed.get_all_data().await?;
-    info!(
-        "DataFrame shape: {:?},memory usage: {:.2} MB",
-        df.shape(),
-        df.estimated_size() as f64 / 1024.0 / 1024.0
-    );
-    let mut buf: Vec<u8> = Vec::new();
-    IpcWriter::new(&mut buf).finish(&mut df)?;
-    println!("Parquet MB: {:.2}", buf.len() as f64 / 1024.0 / 1024.0);
+
+    let demo_strategy = SelectionDemoStrategy::new_for_demo();
+
+    let engine = BatchSelectionEngine::new(Box::new(data_feed), demo_strategy);
+
+    let result = engine.execute().await?;
+
+    for line in position_summary_lines(&result)? {
+        info!("{line}");
+    }
+
     Ok(())
 }

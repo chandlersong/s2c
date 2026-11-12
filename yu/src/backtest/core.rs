@@ -14,6 +14,9 @@
 //! 2. 一些订单流类，或者拨头皮类策略，主要是做一些高频的策略。
 //! 3. 期权类策略
 //!
+//! # 规则
+//! 1. 所有的instrument在内部运算时，皆以inst_id为其唯一的标识。
+//!
 //!
 //! # 业务设计
 //
@@ -23,6 +26,9 @@
 //! 这里暂时考虑两个都支持吧。
 //! 1， 回测如果两个都有，则是优选向量。
 //! 2. 实盘有限选序列模式
+//!
+//! 向量就叫做Batch
+//! 序列化就叫做Sequence
 //!
 //! ## 关于运行模式
 //! 基于上面的想法，这里有两种运行模式，就是运行两种execute方法，tick_execute和batch_execute。前者是序列模式，后者是向量模式。
@@ -47,6 +53,7 @@ use crate::errors::YuError;
 use async_trait::async_trait;
 use futures::Stream;
 use polars::prelude::DataFrame;
+use std::sync::Arc;
 
 ///
 /// 作为一个总协调的地方，这里偏向一个placeholder的地方。
@@ -58,7 +65,7 @@ pub trait EngineTrait {
     ///
     /// 一次返回所有的结果，主要是为了向量模式的策略。
     ///
-    async fn batch_execute(&self) -> Result<Vec<Self::Result>, YuError>;
+    async fn execute(&self) -> Result<Self::Result, YuError>;
 }
 
 ///
@@ -93,7 +100,14 @@ pub trait SequenceDataFeedTrait {
 }
 
 #[async_trait]
-pub trait VectorDataFeedTrait {
+pub trait BatchDataFeedTrait {
+    ///
+    /// 方便后续的校验和调度
+    ///
+    fn columns(&self) -> Result<Vec<String>, YuError> {
+        Ok(vec![])
+    }
+
     ///
     /// 这里不用而是用Dataframe，主要是在处理的时候，往往是多维度的。有时候处理要基于时间，有时候要基于instrument。
     /// 如果我用list，map，则需要通过不同的业务需求，进行调整。缺乏通用性。
@@ -106,3 +120,8 @@ pub trait VectorDataFeedTrait {
     ///
     async fn get_all_data(&self) -> Result<DataFrame, YuError>;
 }
+
+pub type BatchDataFeed = Box<dyn BatchDataFeedTrait + Send + Sync>;
+pub type ArcBatchDataFeed = Arc<dyn BatchDataFeedTrait + Send + Sync>;
+pub type SequenceDataFeed<Entry> = Box<dyn SequenceDataFeedTrait<Entry = Entry> + Send + Sync>;
+pub type ArcSequenceDataFeed<Entry> = Arc<dyn SequenceDataFeedTrait<Entry = Entry> + Send + Sync>;

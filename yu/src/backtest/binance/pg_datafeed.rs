@@ -1,4 +1,4 @@
-use crate::backtest::core::VectorDataFeedTrait;
+use crate::backtest::core::BatchDataFeedTrait;
 use crate::errors::YuError;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -30,11 +30,37 @@ impl SpotHourlyDataFeed {
 }
 
 #[async_trait]
-impl VectorDataFeedTrait for SpotHourlyDataFeed {
+impl BatchDataFeedTrait for SpotHourlyDataFeed {
+    fn columns(&self) -> Result<Vec<String>, YuError> {
+        Ok(vec![
+            "id".to_string(),
+            "inst_id".to_string(),
+            "candle_begin_time".to_string(),
+            "window_end".to_string(),
+            "open".to_string(),
+            "high".to_string(),
+            "low".to_string(),
+            "close".to_string(),
+            "volume".to_string(),
+            "quote_volume".to_string(),
+            "number_of_trades".to_string(),
+            "taker_buy_base_asset_volume".to_string(),
+            "taker_buy_quote_asset_volume".to_string(),
+            "close_time".to_string(),
+            "interval".to_string(),
+            "first_trade_id".to_string(),
+            "last_trade_id".to_string(),
+            "batch_timestamp".to_string(),
+            "minute_count".to_string(),
+            "minute_index".to_string(),
+        ])
+    }
+
     ///
     /// 从binance_spot_kline_rolling_1h这个view当中获取数据，满足以下条件
     /// 1. 根据bt_retention_ms，计算earliest_ms = now - self.bt_retention_ms，然后取earliest_ms之后的数据
     /// 2. 取minute_index为minute的数据
+    ///
     ///
     async fn get_all_data(&self) -> Result<DataFrame, YuError> {
         if self.minute > 59 {

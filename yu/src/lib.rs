@@ -1,3 +1,5 @@
+extern crate core;
+
 pub mod backtest;
 pub mod binance;
 pub mod config;
