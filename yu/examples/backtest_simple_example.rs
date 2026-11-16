@@ -28,9 +28,7 @@ async fn main() -> Result<(), YuError> {
 
     let result = engine.execute().await?;
 
-    for line in position_summary_lines(&result)? {
-        info!("{line}");
-    }
+    info!("total rows: {}", result.height());
 
     Ok(())
 }
