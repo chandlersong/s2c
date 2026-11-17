@@ -82,11 +82,11 @@ pub trait EngineTrait {
 ///
 ///
 pub trait ReturnCalculateTrait {
-    type Position: Clone + Send;
-    type Market: Clone + Send;
+    type Position<'p>: Clone + Send;
+    type Market<'m>: Clone + Send;
     type Result: Clone + Send;
 
-    fn calculate(&self, position_data: Self::Position, market_data: Self::Market) -> Result<Self::Result, YuError>;
+    fn calculate<'p>(&self, position_data: Self::Position<'p>, market_data: Self::Market<'p>) -> Result<Self::Result, YuError>;
 }
 
 ///

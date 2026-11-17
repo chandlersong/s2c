@@ -1,5 +1,6 @@
 use crate::backtest::core::ReturnCalculateTrait;
 use crate::errors::YuError;
+use li::tools::time::UnixTimeStamp;
 use polars::prelude::{DataFrame, IntoLazy, JoinArgs, JoinType, SortMultipleOptions, col, lit};
 use std::collections::{HashMap, HashSet};
 use yue::models::{Decimal, HistoryInterval};
@@ -20,7 +21,8 @@ pub struct OrderInfo {
     order_reason: OrderReason,
 }
 #[derive(Clone)]
-pub struct AccountHistory {
+pub struct AccountSnapshot {
+    timestamp: UnixTimeStamp,
     wallet_balance: Decimal,
     margin_balance: Decimal,
     realized_pnl: Decimal,
@@ -33,10 +35,17 @@ pub struct AccountHistory {
 
 #[derive(Clone)]
 pub struct BacktestResult {
-    pub account_history: Vec<AccountHistory>,
+    pub account_history: Vec<AccountSnapshot>,
     pub order_infos: Vec<OrderInfo>,
 }
 
+#[derive(Clone)]
+pub struct TickBacktestResult {
+    pub account_snapshot: AccountSnapshot,
+    pub order_infos: Vec<OrderInfo>,
+}
+
+#[derive(Clone)]
 struct BacktestPosition {
     position: Decimal,
     entry_price: Decimal,
@@ -210,6 +219,26 @@ where
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+pub struct SequencePosition<'p> {
+    position_state: &'p HashMap<u64, BacktestPosition>,
+}
+
+pub struct SequenceCalculateReturn {
+    tick_interval: HistoryInterval,
+    account: AccountSnapshot,
+}
+
+impl ReturnCalculateTrait for SequenceCalculateReturn {
+    type Position<'p> = SequencePosition<'p>;
+    type Market<'p> = &'p DataFrame;
+    type Result = TickBacktestResult;
+
+    fn calculate<'p>(&self, position_data: Self::Position<'p>, market_data: Self::Market<'p>) -> Result<Self::Result, YuError> {
+        todo!()
+    }
+}
+
 pub struct BatchCalculateReturn {
     position_state: HashMap<u64, BacktestPosition>,
     tick_interval: HistoryInterval,
@@ -218,8 +247,8 @@ pub struct BatchCalculateReturn {
 impl BatchCalculateReturn {}
 
 impl ReturnCalculateTrait for BatchCalculateReturn {
-    type Position = DataFrame;
-    type Market = DataFrame;
+    type Position<'p> = DataFrame;
+    type Market<'p> = DataFrame;
     type Result = BacktestResult;
 
     /// # 参数
@@ -249,7 +278,7 @@ impl ReturnCalculateTrait for BatchCalculateReturn {
     /// 2. 每个instrument+tick单独计算，然后汇总。
     ///
     ///
-    fn calculate(&self, position_data: Self::Position, market_data: Self::Market) -> Result<Self::Result, YuError> {
+    fn calculate<'p>(&self, position_data: Self::Position<'p>, market_data: Self::Market<'p>) -> Result<Self::Result, YuError> {
         match_position_market_data(&position_data, &market_data, &self.tick_interval, |_| Ok(()))?;
         Ok(BacktestResult {
             account_history: vec![],
