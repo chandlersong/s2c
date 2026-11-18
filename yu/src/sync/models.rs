@@ -63,11 +63,13 @@ pub mod grpc_sync {
                 symbol: value.symbol,
                 status: value.status,
                 base_asset: value.base_asset,
+                base_asset_precision: value.base_asset_precision,
                 quote_asset: value.quote_asset,
                 quote_asset_precision: value.quote_asset_precision,
                 order_types: value.order_types,
                 symbol_type: value.symbol_type.to_string(),
                 on_board_time: value.on_board_time,
+                filters_json: value.filters.to_string(),
             }
         }
     }
@@ -294,6 +296,9 @@ mod tests {
         assert_eq!(HistoryType::InstrumentUnspecified.readable_name(), "InstrumentUnspecified");
     }
 
+    // 测试目的：验证 BinanceInstrument 的新增公共字段和 filters JSON 在服务端 PO 到 protobuf 转换中保留。
+    // 准备数据/过程：构造包含基础资产精度及 PRICE_FILTER JSON 的服务端 PO 并转换为 protobuf。
+    // 预期结果：基础资产精度一致，filters_json 与 PO 的 JSON 序列化内容一致。
     #[test]
     fn binance_instrument_server_to_proto_preserves_fields() {
         let server_po = BinanceInstrumentPo {
@@ -301,11 +306,13 @@ mod tests {
             symbol: "BTCUSDT".to_string(),
             status: "TRADING".to_string(),
             base_asset: "BTC".to_string(),
+            base_asset_precision: 8,
             quote_asset: "USDT".to_string(),
             quote_asset_precision: 8,
             order_types: vec!["LIMIT".to_string()],
             symbol_type: InstrumentType::Swap,
             on_board_time: Some(1_600_000_000_000),
+            filters: serde_json::json!([{"filterType": "PRICE_FILTER", "tickSize": "0.01"}]),
         };
 
         let proto = super::grpc_sync::BinanceInstrument::from(server_po);
@@ -314,11 +321,13 @@ mod tests {
         assert_eq!(proto.symbol, "BTCUSDT");
         assert_eq!(proto.status, "TRADING");
         assert_eq!(proto.base_asset, "BTC");
+        assert_eq!(proto.base_asset_precision, 8);
         assert_eq!(proto.quote_asset, "USDT");
         assert_eq!(proto.quote_asset_precision, 8);
         assert_eq!(proto.order_types, vec!["LIMIT"]);
         assert_eq!(proto.symbol_type, "SWAP");
         assert_eq!(proto.on_board_time, Some(1_600_000_000_000));
+        assert_eq!(proto.filters_json, r#"[{"filterType":"PRICE_FILTER","tickSize":"0.01"}]"#);
     }
 
     // 测试目的：验证 Binance OptionSymbol 从 VO 经服务端 PO 和 protobuf 到客户端 PO 的字段与 ID 映射。

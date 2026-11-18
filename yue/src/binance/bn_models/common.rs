@@ -80,27 +80,6 @@ pub struct WsCommandResponse {
     pub result: Option<String>,
 }
 
-pub trait SymbolInfoTrait {
-    fn symbol(&self) -> &str;
-    fn status(&self) -> &str;
-    fn base_asset(&self) -> &str;
-    fn quote_asset(&self) -> &str;
-    fn order_types(&self) -> &Vec<String>;
-    fn quote_precision(&self) -> i32;
-    fn symbol_type(&self) -> &str;
-
-    fn get_on_board_time(&self) -> Option<u64> {
-        None
-    }
-}
-
-pub trait ExchangeInfoTrait {
-    type SymbolInfo: SymbolInfoTrait;
-    fn timezone(&self) -> &str;
-    fn server_time(&self) -> u64;
-    fn symbols(&self) -> &Vec<Self::SymbolInfo>;
-}
-
 pub fn map_depth_levels<'de, D>(deserializer: D) -> Result<Vec<(f64, f64)>, D::Error>
 where
     D: Deserializer<'de>,
@@ -154,59 +133,5 @@ impl<T: Clone + DeserializeOwned> AccountData<T> {
             account_name: account_name.to_string(),
             data,
         }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SymbolInfo {
-    /// 交易对符号，如 "BTCUSDT"
-    pub symbol: String,
-    /// 交易状态，可能的值包括：TRADING, END_OF_DAY, HALT, BREAK
-    pub status: String,
-    /// 基础资产，如 "BTC"
-    pub base_asset: String,
-    /// 报价资产，如 "USDT"
-    pub quote_asset: String,
-    /// 报价资产精度
-    pub quote_asset_precision: i32,
-    /// 支持的订单类型数组
-    pub order_types: Vec<String>,
-    /// 类型字段，spot统一填"spot"，swap填contract_type
-    pub symbol_type: String,
-    /// 上线时间，单位毫秒时间戳，spot取不到，所以为None，swap有值
-    pub on_board_time: Option<u64>,
-}
-
-impl SymbolInfoTrait for SymbolInfo {
-    fn symbol(&self) -> &str {
-        &self.symbol
-    }
-
-    fn status(&self) -> &str {
-        &self.status
-    }
-
-    fn base_asset(&self) -> &str {
-        &self.base_asset
-    }
-
-    fn quote_asset(&self) -> &str {
-        &self.quote_asset
-    }
-
-    fn order_types(&self) -> &Vec<String> {
-        &self.order_types
-    }
-
-    fn quote_precision(&self) -> i32 {
-        self.quote_asset_precision
-    }
-
-    fn symbol_type(&self) -> &str {
-        &self.symbol_type
-    }
-
-    fn get_on_board_time(&self) -> Option<u64> {
-        self.on_board_time
     }
 }

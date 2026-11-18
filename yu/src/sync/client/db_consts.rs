@@ -202,11 +202,13 @@ CREATE TABLE IF NOT EXISTS binance_instruments (
     symbol VARCHAR NOT NULL,
     status VARCHAR NOT NULL,
     base_asset VARCHAR NOT NULL,
+    base_asset_precision INTEGER NOT NULL,
     quote_asset VARCHAR NOT NULL,
     quote_asset_precision INTEGER NOT NULL,
     order_types TEXT[] NOT NULL,
     symbol_type VARCHAR NOT NULL,
     on_board_time BIGINT,
+    filters JSONB NOT NULL,
     UNIQUE (symbol, symbol_type)
 );
 "#;
@@ -529,6 +531,20 @@ mod tests {
         for column in columns {
             assert!(ddl.contains(column));
         }
+    }
+
+    // 测试目的：验证 Binance Spot/Swap instrument 客户端表包含新增的共有精度和 JSON filters 字段。
+    // 准备数据/过程：读取表注册项和 DDL，检查基础资产精度及 JSONB filters 列。
+    // 预期结果：表名已注册，DDL 中两个新增列均为非空并使用 JSONB 保存 filters。
+    #[test]
+    fn binance_instrument_client_table_has_common_symbol_fields() {
+        let table = ClientsTables::BinanceInstruments;
+        let ddl = table.create_table_statement();
+
+        assert_eq!(table.table_name(), "binance_instruments");
+        assert!(ALL_CLIENT_TABLES.iter().any(|registered| registered.table_name() == table.table_name()));
+        assert!(ddl.contains("base_asset_precision INTEGER NOT NULL"));
+        assert!(ddl.contains("filters JSONB NOT NULL"));
     }
 
     // 测试目的：验证 Binance Option Kline 和 Market Price 客户端表注册及 DDL 与客户端 PO 字段对齐。

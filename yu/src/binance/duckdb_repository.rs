@@ -483,8 +483,8 @@ impl BNInstrumentRepositoryTrait for BNInstrumentRepositoryImpl {
         );
         let sql = format!(
             "INSERT INTO bn_instruments \
-             (id, symbol, status, base_asset, quote_asset, quote_asset_precision, order_types, symbol_type, on_board_time) \
-             VALUES (?, ?, ?, ?, ?, ?, {order_types}, ?, ?);"
+             (id, symbol, status, base_asset, base_asset_precision, quote_asset, quote_asset_precision, order_types, symbol_type, on_board_time, filters) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, {order_types}, ?, ?, ?);"
         );
         conn.execute(
             &sql,
@@ -493,10 +493,12 @@ impl BNInstrumentRepositoryTrait for BNInstrumentRepositoryImpl {
                 instrument.symbol,
                 instrument.status,
                 instrument.base_asset,
+                instrument.base_asset_precision,
                 instrument.quote_asset,
                 instrument.quote_asset_precision,
                 instrument.symbol_type.to_string(),
                 instrument.on_board_time.map(|time| time as i64),
+                instrument.filters.to_string(),
             ],
         )?;
         Ok(())
@@ -515,8 +517,8 @@ impl BNInstrumentRepositoryTrait for BNInstrumentRepositoryImpl {
         );
         let sql = format!(
             "UPDATE bn_instruments \
-             SET status = ?, base_asset = ?, quote_asset = ?, quote_asset_precision = ?, \
-                 order_types = {order_types}, on_board_time = ? \
+             SET status = ?, base_asset = ?, base_asset_precision = ?, quote_asset = ?, quote_asset_precision = ?, \
+                 order_types = {order_types}, on_board_time = ?, filters = ? \
              WHERE symbol = ? AND \
                  (UPPER(symbol_type) = ? OR (? = 'SWAP' AND UPPER(symbol_type) = 'PERPETUAL'));"
         );
@@ -525,9 +527,11 @@ impl BNInstrumentRepositoryTrait for BNInstrumentRepositoryImpl {
             duckdb::params![
                 instrument.status,
                 instrument.base_asset,
+                instrument.base_asset_precision,
                 instrument.quote_asset,
                 instrument.quote_asset_precision,
                 instrument.on_board_time.map(|time| time as i64),
+                instrument.filters.to_string(),
                 instrument.symbol,
                 instrument.symbol_type.to_string(),
                 instrument.symbol_type.to_string(),
@@ -557,7 +561,7 @@ impl BNInstrumentRepositoryTrait for BNInstrumentRepositoryImpl {
     async fn get_by_symbol(&self, symbol: &str, inst_type: InstrumentType) -> Result<Option<BinanceInstrument>, YuError> {
         let conn = self.provider.acquire()?;
         let mut stmt = conn.prepare(
-            "SELECT id, symbol, status, base_asset, quote_asset, quote_asset_precision, order_types, symbol_type, on_board_time \
+            "SELECT id, symbol, status, base_asset, base_asset_precision, quote_asset, quote_asset_precision, order_types, symbol_type, on_board_time, filters \
              FROM bn_instruments \
              WHERE symbol = ? AND (UPPER(symbol_type) = ? OR (? = 'SWAP' AND UPPER(symbol_type) = 'PERPETUAL')) \
              LIMIT 1;",
@@ -573,12 +577,14 @@ impl BNInstrumentRepositoryTrait for BNInstrumentRepositoryImpl {
             symbol: row.get(1)?,
             status: row.get(2)?,
             base_asset: row.get(3)?,
-            quote_asset: row.get(4)?,
-            quote_asset_precision: row.get(5)?,
-            order_types: read_order_types(row.get(6)?)?,
-            symbol_type: InstrumentType::from_symbol_type(&row.get::<_, String>(7)?)
+            base_asset_precision: row.get(4)?,
+            quote_asset: row.get(5)?,
+            quote_asset_precision: row.get(6)?,
+            order_types: read_order_types(row.get(7)?)?,
+            symbol_type: InstrumentType::from_symbol_type(&row.get::<_, String>(8)?)
                 .ok_or_else(|| YuError::new("unsupported bn_instruments.symbol_type"))?,
-            on_board_time: row.get::<_, Option<i64>>(8)?.map(|time| time as u64),
+            on_board_time: row.get::<_, Option<i64>>(9)?.map(|time| time as u64),
+            filters: serde_json::from_str(&row.get::<_, String>(10)?)?,
         }))
     }
 }
@@ -588,7 +594,7 @@ impl BNInstrumentRepositoryImpl {
         let conn = self.provider.acquire()?;
         let status_filter = if trading_only { " AND UPPER(status) = ?" } else { "" };
         let sql = format!(
-            "SELECT id, symbol, status, base_asset, quote_asset, quote_asset_precision, order_types, symbol_type, on_board_time \
+            "SELECT id, symbol, status, base_asset, base_asset_precision, quote_asset, quote_asset_precision, order_types, symbol_type, on_board_time, filters \
              FROM bn_instruments \
              WHERE (UPPER(symbol_type) = ? OR (? = 'SWAP' AND UPPER(symbol_type) = 'PERPETUAL')){status_filter};"
         );
@@ -610,12 +616,14 @@ impl BNInstrumentRepositoryImpl {
                 symbol: row.get(1)?,
                 status: row.get(2)?,
                 base_asset: row.get(3)?,
-                quote_asset: row.get(4)?,
-                quote_asset_precision: row.get(5)?,
-                order_types: read_order_types(row.get(6)?)?,
-                symbol_type: InstrumentType::from_symbol_type(&row.get::<_, String>(7)?)
+                base_asset_precision: row.get(4)?,
+                quote_asset: row.get(5)?,
+                quote_asset_precision: row.get(6)?,
+                order_types: read_order_types(row.get(7)?)?,
+                symbol_type: InstrumentType::from_symbol_type(&row.get::<_, String>(8)?)
                     .ok_or_else(|| YuError::new("unsupported bn_instruments.symbol_type"))?,
-                on_board_time: row.get::<_, Option<i64>>(8)?.map(|time| time as u64),
+                on_board_time: row.get::<_, Option<i64>>(9)?.map(|time| time as u64),
+                filters: serde_json::from_str(&row.get::<_, String>(10)?)?,
             });
         }
 
@@ -844,9 +852,9 @@ mod tests {
         assert!(repo.list_all().await.is_err());
     }
 
-    // 测试目的：验证 instrument 的全量查询和交易中查询会按 status 正确区分。
-    // 准备数据/过程：插入 BTCUSDT Spot，先查询交易中列表，再将其更新为 BREAK 后重新查询。
-    // 预期结果：全量查询始终返回该 instrument；交易中查询只在 status 为 TRADING 时返回它。
+    // 测试目的：验证 instrument CRUD 保留共有精度、filters JSON 和 status。
+    // 准备数据/过程：插入并查询 BTCUSDT Spot，再更新 status、基础精度和 filters 后重新查询。
+    // 预期结果：新增字段往返一致，且交易中查询仍只返回 TRADING instrument。
     #[tokio::test]
     async fn instrument_repository_supports_crud_queries() {
         let provider = create_memory_db_provider();
@@ -865,11 +873,13 @@ mod tests {
             symbol: "BTCUSDT".to_string(),
             status: BN_SYMBOL_STATUS_TRADING.to_string(),
             base_asset: "BTC".to_string(),
+            base_asset_precision: 8,
             quote_asset: "USDT".to_string(),
             quote_asset_precision: 8,
             order_types: vec!["LIMIT".to_string(), "MARKET".to_string()],
             symbol_type: InstrumentType::Spot,
             on_board_time: Some(1_700_000_000_000),
+            filters: serde_json::json!([{"filterType":"LOT_SIZE","minQty":"0.001"}]),
         };
 
         repo.insert_instrument(instrument.clone()).await.unwrap();
@@ -879,6 +889,8 @@ mod tests {
         assert_eq!(fetched[0].id, instrument.id);
         assert_eq!(fetched[0].order_types, instrument.order_types);
         assert_eq!(fetched[0].on_board_time, instrument.on_board_time);
+        assert_eq!(fetched[0].base_asset_precision, instrument.base_asset_precision);
+        assert_eq!(fetched[0].filters, instrument.filters);
         assert_eq!(repo.get_trading_instrument_by_type(InstrumentType::Spot).await.unwrap().len(), 1);
         assert_eq!(
             repo.get_map_of_symbol_id(vec![InstrumentType::Spot]).await.unwrap().get("BTCUSDT"),
@@ -887,6 +899,8 @@ mod tests {
 
         let updated = BinanceInstrument {
             status: BN_SYMBOL_STATUS_BREAK.to_string(),
+            base_asset_precision: 9,
+            filters: serde_json::json!([{"filterType":"PRICE_FILTER","tickSize":"0.01"}]),
             ..instrument.clone()
         };
         repo.update_instrument(updated.clone()).await.unwrap();
@@ -894,12 +908,14 @@ mod tests {
         let fetched = repo.get_all_instruments_by_type(InstrumentType::Spot).await.unwrap();
         assert_eq!(fetched.len(), 1);
         assert_eq!(fetched[0].status, updated.status);
+        assert_eq!(fetched[0].base_asset_precision, updated.base_asset_precision);
+        assert_eq!(fetched[0].filters, updated.filters);
         assert!(repo.get_trading_instrument_by_type(InstrumentType::Spot).await.unwrap().is_empty());
     }
 
-    // 测试目的：验证按 symbol 和类型查询时可区分同名 Spot 与 Swap instrument，并对不存在的记录返回 None。
+    // 测试目的：验证按 symbol 和类型查询时可区分同名 Spot 与 Swap instrument，并保留共有字段。
     // 准备数据/过程：在内存 DuckDB 创建 instrument 表，插入同名的 Spot 和 Swap instrument，再分别按类型及不存在的 symbol 查询。
-    // 预期结果：Spot 和 Swap 查询分别返回对应记录；不存在的 symbol 返回 None。
+    // 预期结果：Spot 和 Swap 查询分别返回对应记录及 filters/基础精度；不存在的 symbol 返回 None。
     #[tokio::test]
     async fn instrument_repository_gets_instrument_by_symbol_and_type() {
         let provider = create_memory_db_provider();
@@ -919,11 +935,13 @@ mod tests {
                 symbol: "BTCUSDT".to_string(),
                 status: BN_SYMBOL_STATUS_TRADING.to_string(),
                 base_asset: "BTC".to_string(),
+                base_asset_precision: 8,
                 quote_asset: "USDT".to_string(),
                 quote_asset_precision: 8,
                 order_types: vec!["LIMIT".to_string(), "MARKET".to_string()],
                 symbol_type,
                 on_board_time: Some(1_700_000_000_000),
+                filters: serde_json::json!([{"filterType":"LOT_SIZE","minQty":"0.001"}]),
             })
             .await
             .unwrap();
@@ -933,11 +951,13 @@ mod tests {
         assert_eq!(spot.id, 42);
         assert_eq!(spot.symbol_type.to_string(), "SPOT");
         assert_eq!(spot.order_types, vec!["LIMIT".to_string(), "MARKET".to_string()]);
+        assert_eq!(spot.filters, serde_json::json!([{"filterType":"LOT_SIZE","minQty":"0.001"}]));
 
         let swap = repo.get_by_symbol("BTCUSDT", InstrumentType::Swap).await.unwrap().unwrap();
         assert_eq!(swap.id, 43);
         assert_eq!(swap.symbol_type.to_string(), "SWAP");
         assert_eq!(swap.on_board_time, Some(1_700_000_000_000));
+        assert_eq!(swap.base_asset_precision, 8);
 
         assert!(repo.get_by_symbol("ETHUSDT", InstrumentType::Spot).await.unwrap().is_none());
     }
@@ -978,11 +998,13 @@ mod tests {
                 symbol: symbol.to_string(),
                 status: BN_SYMBOL_STATUS_TRADING.to_string(),
                 base_asset: "BTC".to_string(),
+                base_asset_precision: 8,
                 quote_asset: "USDT".to_string(),
                 quote_asset_precision: 8,
                 order_types: vec!["LIMIT".to_string()],
                 symbol_type,
                 on_board_time: None,
+                filters: serde_json::json!([]),
             })
             .await
             .unwrap();

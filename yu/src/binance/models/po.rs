@@ -1,17 +1,17 @@
 use crate::duck_db::DuckDBPO;
 use crate::errors::YuError;
+use crate::models::BacktestInstTrait;
 use duckdb::appender_params_from_iter;
 use li::tools::time::{UnixTimeStamp, unix_time_now_u64_utc};
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display};
 use std::string::ToString;
-use yue::binance::bn_models::common::SymbolInfoTrait;
 use yue::binance::bn_models::common::{PortfolioSpotOrderData, PortfolioSwapOrderData, SpotOrderData, SwapOrderData};
 use yue::binance::bn_models::option_restful::{OptionKLine, OptionMarketPrice, OptionSymbol, OptionSymbolFilter};
-use yue::binance::bn_models::spot_restful::BinanceKline;
+use yue::binance::bn_models::spot_restful::{BinanceKline, ExchangeSymbol};
 use yue::binance::bn_models::spot_websocket_stream::{KlineStreamPayload, SpotKlineData, TradeStreamPayload};
-use yue::binance::bn_models::swap_restful::FundingRate;
+use yue::binance::bn_models::swap_restful::{FundingRate, SwapExchangeSymbol};
 use yue::binance::bn_models::swap_websocket_stream::SwapWebsocketKlineData;
 use yue::binance::order_book::OrderBook;
 use yue::models::InstrumentType;
@@ -27,26 +27,46 @@ pub struct BinanceInstrument {
     pub symbol: String,
     pub status: String,
     pub base_asset: String,
+    pub base_asset_precision: i32,
     pub quote_asset: String,
     pub quote_asset_precision: i32,
     pub order_types: Vec<String>,
     pub symbol_type: InstrumentType,
     pub on_board_time: Option<u64>,
+    pub filters: serde_json::Value,
 }
 
-impl<T: SymbolInfoTrait> From<&T> for BinanceInstrument {
-    fn from(symbol: &T) -> Self {
-        Self {
-            id: get_snow_flake_id_u64() as i64,
-            symbol: symbol.symbol().to_string(),
-            status: symbol.status().to_string(),
-            base_asset: symbol.base_asset().to_string(),
-            quote_asset: symbol.quote_asset().to_string(),
-            quote_asset_precision: symbol.quote_precision(),
-            order_types: symbol.order_types().clone(),
-            symbol_type: InstrumentType::from_symbol_type(symbol.symbol_type()).expect("unsupported Binance symbol type"),
-            on_board_time: symbol.get_on_board_time(),
-        }
+impl BacktestInstTrait for BinanceInstrument {
+    fn inst_id(&self) -> u64 {
+        self.id as u64
+    }
+
+    fn symbol(&self) -> &str {
+        &self.symbol
+    }
+
+    fn status(&self) -> &str {
+        &self.status
+    }
+
+    fn base_asset(&self) -> &str {
+        &self.base_asset
+    }
+
+    fn quote_asset(&self) -> &str {
+        &self.quote_asset
+    }
+
+    fn min_trade_size(&self) -> f64 {
+        0.1
+    }
+
+    fn min_trade_quantity(&self) -> f64 {
+        0.1
+    }
+
+    fn tick_size(&self) -> f64 {
+        0.1
     }
 }
 
@@ -54,22 +74,48 @@ impl BinanceInstrument {
     ///
     /// 数据库的场景。已经已经存在了。就是需要传入id。而不是自动生成
     ///
-    pub fn from_symbol_info_with_id<T: SymbolInfoTrait>(symbol: &T, id: i64) -> Self {
-        Self {
-            id,
-            symbol: symbol.symbol().to_string(),
-            status: symbol.status().to_string(),
-            base_asset: symbol.base_asset().to_string(),
-            quote_asset: symbol.quote_asset().to_string(),
-            quote_asset_precision: symbol.quote_precision(),
-            order_types: symbol.order_types().clone(),
-            symbol_type: InstrumentType::from_symbol_type(symbol.symbol_type()).expect("unsupported Binance symbol type"),
-            on_board_time: symbol.get_on_board_time(),
-        }
-    }
 
     pub fn get_id_u64(&self) -> u64 {
         self.id as u64
+    }
+
+    pub fn try_from_spot_exchange_symbol(symbol: &ExchangeSymbol) -> Result<Self, YuError> {
+        Ok(Self {
+            id: get_snow_flake_id_u64() as i64,
+            symbol: symbol.symbol.clone(),
+            status: symbol.status.clone(),
+            base_asset: symbol.base_asset.clone(),
+            base_asset_precision: symbol.base_asset_precision,
+            quote_asset: symbol.quote_asset.clone(),
+            quote_asset_precision: symbol.quote_asset_precision,
+            order_types: symbol.order_types.clone(),
+            symbol_type: InstrumentType::Spot,
+            on_board_time: None,
+            filters: serde_json::to_value(&symbol.filters)?,
+        })
+    }
+
+    pub fn from_spot_exchange_symbol(symbol: &ExchangeSymbol) -> Self {
+        Self::try_from_spot_exchange_symbol(symbol).expect("Binance spot filters must serialize to JSON")
+    }
+
+    pub fn try_from_swap_exchange_symbol(symbol: &SwapExchangeSymbol) -> Result<Self, YuError> {
+        let symbol_type = InstrumentType::from_symbol_type(&symbol.contract_type)
+            .ok_or_else(|| YuError::CustomError(format!("unsupported Binance contract type: {}", symbol.contract_type)))?;
+
+        Ok(Self {
+            id: get_snow_flake_id_u64() as i64,
+            symbol: symbol.symbol.clone(),
+            status: symbol.status.clone(),
+            base_asset: symbol.base_asset.clone(),
+            base_asset_precision: symbol.base_asset_precision,
+            quote_asset: symbol.quote_asset.clone(),
+            quote_asset_precision: symbol.quote_precision,
+            order_types: symbol.order_types.clone(),
+            symbol_type,
+            on_board_time: symbol.onboard_date,
+            filters: serde_json::to_value(&symbol.filters)?,
+        })
     }
 
     pub fn into_proto_instrument(self) -> crate::sync::models::grpc_sync::Instrument {
@@ -79,6 +125,18 @@ impl BinanceInstrument {
                 crate::sync::models::grpc_sync::BinanceInstrument::from(self),
             )),
         }
+    }
+}
+
+impl From<&ExchangeSymbol> for BinanceInstrument {
+    fn from(symbol: &ExchangeSymbol) -> Self {
+        Self::from_spot_exchange_symbol(symbol)
+    }
+}
+
+impl From<&SwapExchangeSymbol> for BinanceInstrument {
+    fn from(symbol: &SwapExchangeSymbol) -> Self {
+        Self::try_from_swap_exchange_symbol(symbol).expect("unsupported Binance contract type in swap exchange info")
     }
 }
 
@@ -940,6 +998,36 @@ mod tests {
     use yue::binance::bn_models::spot_restful::ExchangeSymbol;
     use yue::binance::bn_models::swap_restful::SwapExchangeSymbol;
 
+    // 测试目的：验证无法识别的 swap 合约类型会返回错误，而不是生成错误的 instrument 类型。
+    // 准备数据/过程：反序列化 contractType 为 UNKNOWN 的合约信息，并调用 swap 转换方法。
+    // 预期结果：转换返回错误，错误信息包含未支持的合约类型。
+    #[test]
+    fn rejects_unknown_swap_contract_type() {
+        let symbol: SwapExchangeSymbol = serde_json::from_value(serde_json::json!({
+            "symbol": "BTCUSDT",
+            "pair": "BTCUSDT",
+            "contractType": "UNKNOWN",
+            "status": BN_SYMBOL_STATUS_TRADING,
+            "baseAsset": "BTC",
+            "quoteAsset": "USDT",
+            "marginAsset": "USDT",
+            "pricePrecision": 2,
+            "quantityPrecision": 3,
+            "baseAssetPrecision": 8,
+            "quotePrecision": 8,
+            "filters": [],
+            "orderTypes": ["LIMIT"]
+        }))
+        .unwrap();
+
+        let error = BinanceInstrument::try_from_swap_exchange_symbol(&symbol).unwrap_err();
+
+        assert!(error.to_string().contains("UNKNOWN"));
+    }
+
+    // 测试目的：验证 Spot VO 的公共字段和 filters 能转换为 BinanceInstrument。
+    // 准备数据/过程：构造包含精度、订单类型和 PRICE_FILTER 的现货交易对并执行转换。
+    // 预期结果：基础资产精度及共有字段保持一致，filters 序列化为 JSON 数组。
     #[test]
     fn spot_exchange_symbol_converts_to_binance_instrument() {
         let symbol = ExchangeSymbol {
@@ -960,7 +1048,13 @@ mod tests {
             cancel_replace_allowed: true,
             is_spot_trading_allowed: true,
             is_margin_trading_allowed: true,
-            filters: Vec::new(),
+            filters: serde_json::from_value(serde_json::json!([{
+                "filterType": "PRICE_FILTER",
+                "minPrice": "0.01000000",
+                "maxPrice": "100000.00000000",
+                "tickSize": "0.01000000"
+            }]))
+            .unwrap(),
             permissions: vec!["SPOT".to_string()],
             default_self_trade_prevention_mode: "NONE".to_string(),
             allowed_self_trade_prevention_modes: vec!["NONE".to_string()],
@@ -970,10 +1064,23 @@ mod tests {
 
         assert_eq!(instrument.symbol, "BTCUSDT");
         assert!(matches!(instrument.symbol_type, InstrumentType::Spot));
+        assert_eq!(instrument.base_asset_precision, 8);
         assert_eq!(instrument.quote_asset_precision, 8);
         assert_eq!(instrument.on_board_time, None);
+        assert_eq!(
+            instrument.filters,
+            serde_json::json!([{
+                "filterType": "PRICE_FILTER",
+                "minPrice": "0.01000000",
+                "maxPrice": "100000.00000000",
+                "tickSize": "0.01000000"
+            }])
+        );
     }
 
+    // 测试目的：验证 Swap VO 的公共字段和 filters 能转换为 BinanceInstrument。
+    // 准备数据/过程：构造包含精度、上线时间和 LOT_SIZE 的永续合约交易对并执行转换。
+    // 预期结果：基础资产精度及共有字段保持一致，contractType 映射为 Swap，filters 序列化为 JSON 数组。
     #[test]
     fn swap_exchange_symbol_converts_to_binance_instrument() {
         let symbol = SwapExchangeSymbol {
@@ -996,7 +1103,13 @@ mod tests {
             underlying_sub_type: None,
             settle_plan: None,
             trigger_protect: None,
-            filters: Vec::new(),
+            filters: serde_json::from_value(serde_json::json!([{
+                "filterType": "LOT_SIZE",
+                "minQty": "0.001",
+                "maxQty": "1000",
+                "stepSize": "0.001"
+            }]))
+            .unwrap(),
             order_types: vec!["LIMIT".to_string()],
             time_in_force: None,
             liquidation_fee: None,
@@ -1009,7 +1122,17 @@ mod tests {
 
         assert_eq!(instrument.symbol, "BTCUSDT");
         assert!(matches!(instrument.symbol_type, InstrumentType::Swap));
+        assert_eq!(instrument.base_asset_precision, 8);
         assert_eq!(instrument.on_board_time, Some(1_600_000_000_000));
+        assert_eq!(
+            instrument.filters,
+            serde_json::json!([{
+                "filterType": "LOT_SIZE",
+                "minQty": "0.001",
+                "maxQty": "1000",
+                "stepSize": "0.001"
+            }])
+        );
     }
 
     // 测试目的：验证 Spot Kline stream payload 转换时写入传入的 instrument id。

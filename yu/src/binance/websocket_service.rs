@@ -360,11 +360,13 @@ mod tests {
             symbol: symbol.to_string(),
             status: "TRADING".to_string(),
             base_asset: symbol.trim_end_matches("USDT").to_string(),
+            base_asset_precision: 8,
             quote_asset: "USDT".to_string(),
             quote_asset_precision: 8,
             order_types: vec!["LIMIT".to_string()],
             symbol_type: yue::models::InstrumentType::Spot,
             on_board_time: None,
+            filters: serde_json::json!([]),
         }
     }
 

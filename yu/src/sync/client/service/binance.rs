@@ -150,7 +150,7 @@ impl ClientInstrumentServiceTrait for BinanceSpotClientInstrumentService {
             return Err(YuError::new("unsupported Binance instrument symbol type"));
         }
 
-        let mut local_instrument = LocalBinanceInstrumentPo::from_proto(binance_instrument.clone());
+        let mut local_instrument = LocalBinanceInstrumentPo::from_proto(binance_instrument.clone())?;
         let cached_instrument = self.inst_cache.read().await.get(&binance_instrument.server_id).cloned();
         match cached_instrument {
             Some(existing_instrument) => {
@@ -158,11 +158,13 @@ impl ClientInstrumentServiceTrait for BinanceSpotClientInstrumentService {
                 let changed = existing_instrument.symbol != local_instrument.symbol
                     || existing_instrument.status != local_instrument.status
                     || existing_instrument.base_asset != local_instrument.base_asset
+                    || existing_instrument.base_asset_precision != local_instrument.base_asset_precision
                     || existing_instrument.quote_asset != local_instrument.quote_asset
                     || existing_instrument.quote_asset_precision != local_instrument.quote_asset_precision
                     || existing_instrument.order_types != local_instrument.order_types
                     || existing_instrument.symbol_type != local_instrument.symbol_type
-                    || existing_instrument.on_board_time != local_instrument.on_board_time;
+                    || existing_instrument.on_board_time != local_instrument.on_board_time
+                    || existing_instrument.filters != local_instrument.filters;
                 if changed {
                     self.repository.update_instrument(local_instrument.clone()).await?;
                 }
@@ -1242,11 +1244,13 @@ mod tests {
             symbol: "BTCUSDT".to_string(),
             status: "TRADING".to_string(),
             base_asset: "BTC".to_string(),
+            base_asset_precision: 8,
             quote_asset: "USDT".to_string(),
             quote_asset_precision: 8,
             order_types: vec!["LIMIT".to_string()],
             symbol_type: "SPOT".to_string(),
             on_board_time: Some(1_700_000_000_000),
+            filters: serde_json::json!([]),
         }
     }
 
@@ -1266,11 +1270,13 @@ mod tests {
                 symbol: "BTCUSDT".to_string(),
                 status: "TRADING".to_string(),
                 base_asset: "BTC".to_string(),
+                base_asset_precision: 8,
                 quote_asset: "USDT".to_string(),
                 quote_asset_precision: 8,
                 order_types: vec!["LIMIT".to_string()],
                 symbol_type: "SPOT".to_string(),
                 on_board_time: Some(1_700_000_000_000),
+                filters_json: "[]".to_string(),
             })),
         }
     }
@@ -1864,11 +1870,13 @@ mod tests {
                     symbol: "BTCUSDT".to_string(),
                     status: "TRADING".to_string(),
                     base_asset: "BTC".to_string(),
+                    base_asset_precision: 8,
                     quote_asset: "USDT".to_string(),
                     quote_asset_precision: 8,
                     order_types: vec!["LIMIT".to_string()],
                     symbol_type: "SWAP".to_string(),
                     on_board_time: Some(1_000),
+                    filters: serde_json::json!([]),
                 }])
             });
 
@@ -2060,18 +2068,26 @@ mod tests {
         assert_eq!(cached.status, "TRADING");
     }
 
-    // 测试目的：验证发现 Binance instrument 字段变化时保留本地 ID、更新数据库并刷新缓存。
-    // 准备数据/过程：缓存中预置状态为 BREAK 的本地 instrument，服务端状态为 TRADING，并校验更新 PO。
-    // 预期结果：update 被调用一次，且缓存包含更新后的字段和原本地 ID。
+    // 测试目的：验证 instrument 的状态、基础精度或 filters 变化时会保留本地 ID、更新数据库并刷新缓存。
+    // 准备数据/过程：缓存中预置不同状态、基础精度和 filters 的 instrument，服务端提交最新 PO 并校验更新内容。
+    // 预期结果：update 被调用一次且含最新共有字段，缓存保留原本地 ID 并同步最新数据。
     #[tokio::test]
     async fn reconcile_instrument_updates_changed_instrument() {
         let mut cached = local_instrument(42, 7);
         cached.status = "BREAK".to_string();
+        cached.base_asset_precision = 6;
+        cached.filters = serde_json::json!([{"filterType":"LOT_SIZE","minQty":"0.01"}]);
         let mut repository = MockClientBinanceRepositoryTrait::new();
         repository.expect_find_instrument_by_server_id().times(0);
         repository
             .expect_update_instrument()
-            .withf(|instrument| instrument.id == 7 && instrument.server_id == 42 && instrument.status == "TRADING")
+            .withf(|instrument| {
+                instrument.id == 7
+                    && instrument.server_id == 42
+                    && instrument.status == "TRADING"
+                    && instrument.base_asset_precision == 8
+                    && instrument.filters == serde_json::json!([])
+            })
             .times(1)
             .returning(|_| Ok(()));
         repository.expect_create_instrument().times(0);
@@ -2088,6 +2104,8 @@ mod tests {
         let cached = cache.read().await.get(&42).cloned().unwrap();
         assert_eq!(cached.id, 7);
         assert_eq!(cached.status, "TRADING");
+        assert_eq!(cached.base_asset_precision, 8);
+        assert_eq!(cached.filters, serde_json::json!([]));
     }
 
     // 测试目的：验证缓存中的 Binance instrument 变为非交易状态后会从共享缓存移除。
@@ -2198,11 +2216,13 @@ mod tests {
                 symbol: "BTCUSDT".to_string(),
                 status: "TRADING".to_string(),
                 base_asset: "BTC".to_string(),
+                base_asset_precision: 8,
                 quote_asset: "USDT".to_string(),
                 quote_asset_precision: 8,
                 order_types: vec!["LIMIT".to_string()],
                 symbol_type: "SWAP".to_string(),
                 on_board_time: Some(1_700_000_000_000),
+                filters_json: "[]".to_string(),
             })),
         };
 
@@ -2249,11 +2269,13 @@ mod tests {
                 symbol: "BTCUSDT".to_string(),
                 status: "TRADING".to_string(),
                 base_asset: "BTC".to_string(),
+                base_asset_precision: 8,
                 quote_asset: "USDT".to_string(),
                 quote_asset_precision: 8,
                 order_types: vec!["LIMIT".to_string()],
                 symbol_type: "SPOT".to_string(),
                 on_board_time: Some(1_700_000_000_000),
+                filters_json: "[]".to_string(),
             })),
         };
 
@@ -2288,11 +2310,13 @@ mod tests {
                 symbol: "BTCUSDT".to_string(),
                 status: "TRADING".to_string(),
                 base_asset: "BTC".to_string(),
+                base_asset_precision: 8,
                 quote_asset: "USDT".to_string(),
                 quote_asset_precision: 8,
                 order_types: vec!["LIMIT".to_string()],
                 symbol_type: "SWAP".to_string(),
                 on_board_time: Some(1_700_000_000_000),
+                filters_json: "[]".to_string(),
             })),
         };
 

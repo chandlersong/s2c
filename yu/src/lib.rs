@@ -7,6 +7,7 @@ pub mod data_integrity;
 pub mod duck_db;
 pub mod duck_db_tables;
 pub mod errors;
+pub mod models;
 pub mod okx;
 pub mod polymarket;
 pub mod postgresql_db;

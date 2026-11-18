@@ -75,11 +75,13 @@ CREATE TABLE IF NOT EXISTS bn_instruments (
     symbol                  VARCHAR NOT NULL,
     status                  VARCHAR NOT NULL,
     base_asset              VARCHAR NOT NULL,
+    base_asset_precision    INTEGER NOT NULL,
     quote_asset             VARCHAR NOT NULL,
     quote_asset_precision   INTEGER NOT NULL,
     order_types             VARCHAR[] NOT NULL,
     symbol_type             VARCHAR NOT NULL,
-    on_board_time           BIGINT
+    on_board_time            BIGINT,
+    filters                 JSON NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_bn_instruments_symbol_type
     ON bn_instruments(symbol, symbol_type);
@@ -354,6 +356,9 @@ CREATE INDEX IF NOT EXISTS idx_order_events_swap_symbol_time ON bn_order_events_
 mod tests {
     use super::*;
 
+    // 测试目的：验证 Binance instrument 表的 DDL 包含新增的基础资产精度和 JSON filters 列。
+    // 准备数据/过程：在内存 DuckDB 执行表 DDL，并查询 bn_instruments 的列数。
+    // 预期结果：DDL 可执行且表包含 11 列。
     #[test]
     fn binance_instrument_table_ddl_executes() {
         let conn = duckdb::Connection::open_in_memory().unwrap();
@@ -364,7 +369,7 @@ mod tests {
         let column_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM pragma_table_info('bn_instruments')", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(column_count, 9);
+        assert_eq!(column_count, 11);
     }
 
     // 测试目的：验证 Binance OptionSymbol 表已注册并且服务端 DDL 可在 DuckDB 中创建完整 schema。

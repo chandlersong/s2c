@@ -1,4 +1,4 @@
-use crate::binance::bn_models::common::{ExchangeInfoTrait, HistoryVo, SymbolInfoTrait};
+use crate::binance::bn_models::common::HistoryVo;
 use crate::binance::bn_models::spot_restful::{ExchangeFilter, RateLimit};
 use crate::tools::{string_to_float, string_to_option_float};
 use serde::{Deserialize, Serialize};
@@ -27,19 +27,6 @@ pub struct SwapExchangeInfo {
     #[serde(rename = "symbols")]
     /// 合约交易对信息数组
     pub symbols: Vec<SwapExchangeSymbol>,
-}
-
-impl ExchangeInfoTrait for SwapExchangeInfo {
-    type SymbolInfo = SwapExchangeSymbol;
-    fn timezone(&self) -> &str {
-        &self.timezone
-    }
-    fn server_time(&self) -> u64 {
-        self.server_time
-    }
-    fn symbols(&self) -> &Vec<Self::SymbolInfo> {
-        &self.symbols
-    }
 }
 
 /// U本位合约交易对信息结构体
@@ -125,33 +112,6 @@ pub struct SwapExchangeSymbol {
     /// 价格刻度，部分合约有
     pub price_scale: Option<i32>,
     // 其他合约特有字段可按需补充
-}
-
-impl SymbolInfoTrait for SwapExchangeSymbol {
-    fn symbol(&self) -> &str {
-        &self.symbol
-    }
-    fn status(&self) -> &str {
-        &self.status
-    }
-    fn base_asset(&self) -> &str {
-        &self.base_asset
-    }
-    fn quote_asset(&self) -> &str {
-        &self.quote_asset
-    }
-    fn order_types(&self) -> &Vec<String> {
-        &self.order_types
-    }
-    fn quote_precision(&self) -> i32 {
-        self.quote_precision
-    }
-    fn symbol_type(&self) -> &str {
-        &self.contract_type
-    }
-    fn get_on_board_time(&self) -> Option<u64> {
-        self.onboard_date
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

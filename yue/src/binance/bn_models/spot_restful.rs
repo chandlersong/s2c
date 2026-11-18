@@ -1,5 +1,5 @@
+use crate::binance::bn_models::common::HistoryVo;
 use crate::binance::bn_models::common::map_depth_levels_decimal;
-use crate::binance::bn_models::common::{ExchangeInfoTrait, HistoryVo, SymbolInfoTrait};
 use crate::models::Decimal;
 use crate::tools::string_to_decimal;
 use serde::{Deserialize, Serialize};
@@ -28,19 +28,6 @@ pub struct ExchangeInfo {
     pub symbols: Vec<ExchangeSymbol>,
 }
 
-impl ExchangeInfoTrait for ExchangeInfo {
-    type SymbolInfo = ExchangeSymbol;
-    fn timezone(&self) -> &str {
-        &self.timezone
-    }
-    fn server_time(&self) -> u64 {
-        self.server_time
-    }
-    fn symbols(&self) -> &Vec<Self::SymbolInfo> {
-        &self.symbols
-    }
-}
-
 /// 速率限制规则结构体
 /// 定义 API 调用的速率限制，包括类型、间隔和限制值
 #[derive(Deserialize, Debug)]
@@ -64,7 +51,7 @@ pub struct RateLimit {
 
 /// 交易所过滤器结构体
 /// 定义交易所级别的过滤规则，使用标签区分不同类型
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 #[serde(tag = "filterType")]
 pub enum ExchangeFilter {
     #[serde(rename = "PRICE_FILTER")]
@@ -156,29 +143,6 @@ pub struct ExchangeSymbol {
     #[serde(rename = "allowedSelfTradePreventionModes")]
     /// 允许的自成交预防模式数组
     pub allowed_self_trade_prevention_modes: Vec<String>,
-}
-impl SymbolInfoTrait for ExchangeSymbol {
-    fn symbol(&self) -> &str {
-        &self.symbol
-    }
-    fn status(&self) -> &str {
-        &self.status
-    }
-    fn base_asset(&self) -> &str {
-        &self.base_asset
-    }
-    fn quote_asset(&self) -> &str {
-        &self.quote_asset
-    }
-    fn order_types(&self) -> &Vec<String> {
-        &self.order_types
-    }
-    fn quote_precision(&self) -> i32 {
-        self.quote_asset_precision
-    }
-    fn symbol_type(&self) -> &str {
-        "spot"
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -38,27 +38,32 @@ pub struct LocalBinanceInstrumentPo {
     pub symbol: String,
     pub status: String,
     pub base_asset: String,
+    pub base_asset_precision: i32,
     pub quote_asset: String,
     pub quote_asset_precision: i32,
     pub order_types: Vec<String>,
     pub symbol_type: String,
     pub on_board_time: Option<u64>,
+    pub filters: serde_json::Value,
 }
 
 impl LocalBinanceInstrumentPo {
-    pub fn from_proto(instrument: BinanceInstrument) -> Self {
-        Self {
+    pub fn from_proto(instrument: BinanceInstrument) -> Result<Self, crate::errors::YuError> {
+        let filters = serde_json::from_str(&instrument.filters_json)?;
+        Ok(Self {
             id: get_snow_flake_id_u64(),
             server_id: instrument.server_id,
             symbol: instrument.symbol,
             status: instrument.status,
             base_asset: instrument.base_asset,
+            base_asset_precision: instrument.base_asset_precision,
             quote_asset: instrument.quote_asset,
             quote_asset_precision: instrument.quote_asset_precision,
             order_types: instrument.order_types,
             symbol_type: instrument.symbol_type,
             on_board_time: instrument.on_board_time,
-        }
+            filters,
+        })
     }
 }
 
@@ -70,11 +75,13 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for LocalBinanceInstrumentPo {
             symbol: row.try_get("symbol")?,
             status: row.try_get("status")?,
             base_asset: row.try_get("base_asset")?,
+            base_asset_precision: row.try_get("base_asset_precision")?,
             quote_asset: row.try_get("quote_asset")?,
             quote_asset_precision: row.try_get("quote_asset_precision")?,
             order_types: row.try_get("order_types")?,
             symbol_type: row.try_get("symbol_type")?,
             on_board_time: row.try_get::<Option<i64>, _>("on_board_time")?.map(|value| value as u64),
+            filters: row.try_get::<sqlx::types::Json<serde_json::Value>, _>("filters")?.0,
         })
     }
 }
@@ -613,6 +620,9 @@ mod tests {
         assert_eq!(BinanceInstrumentType::Swap.symbol_type(), "SWAP");
     }
 
+    // 测试目的：验证 protobuf 中的基础资产精度和 filters JSON 能转换到客户端 PO。
+    // 准备数据/过程：构造含 JSON 字符串 filters 的 BinanceInstrument protobuf 并调用 from_proto。
+    // 预期结果：新旧字段均保留，filters_json 被解析为等价 JSON 值。
     #[test]
     fn binance_instrument_proto_maps_all_fields_to_client_po() {
         let proto = BinanceInstrument {
@@ -620,24 +630,50 @@ mod tests {
             symbol: "BTCUSDT".to_string(),
             status: "TRADING".to_string(),
             base_asset: "BTC".to_string(),
+            base_asset_precision: 8,
             quote_asset: "USDT".to_string(),
             quote_asset_precision: 8,
             order_types: vec!["LIMIT".to_string(), "MARKET".to_string()],
             symbol_type: "SWAP".to_string(),
             on_board_time: Some(1_600_000_000_000),
+            filters_json: r#"[{"filterType":"LOT_SIZE","minQty":"0.001"}]"#.to_string(),
         };
 
-        let po = LocalBinanceInstrumentPo::from_proto(proto);
+        let po = LocalBinanceInstrumentPo::from_proto(proto).unwrap();
 
         assert_eq!(po.server_id, 17);
         assert_eq!(po.symbol, "BTCUSDT");
         assert_eq!(po.status, "TRADING");
         assert_eq!(po.base_asset, "BTC");
+        assert_eq!(po.base_asset_precision, 8);
         assert_eq!(po.quote_asset, "USDT");
         assert_eq!(po.quote_asset_precision, 8);
         assert_eq!(po.order_types, vec!["LIMIT", "MARKET"]);
         assert_eq!(po.symbol_type, "SWAP");
         assert_eq!(po.on_board_time, Some(1_600_000_000_000));
+        assert_eq!(po.filters, serde_json::json!([{"filterType":"LOT_SIZE","minQty":"0.001"}]));
+    }
+
+    // 测试目的：验证 protobuf 的无效 filters JSON 会作为解析错误返回。
+    // 准备数据/过程：构造 filters_json 为不完整 JSON 文本的 BinanceInstrument 并调用 from_proto。
+    // 预期结果：转换返回 Err，不生成内容缺失或默认化的客户端 PO。
+    #[test]
+    fn binance_instrument_proto_rejects_invalid_filters_json() {
+        let proto = BinanceInstrument {
+            server_id: 17,
+            symbol: "BTCUSDT".to_string(),
+            status: "TRADING".to_string(),
+            base_asset: "BTC".to_string(),
+            base_asset_precision: 8,
+            quote_asset: "USDT".to_string(),
+            quote_asset_precision: 8,
+            order_types: vec!["LIMIT".to_string()],
+            symbol_type: "SPOT".to_string(),
+            on_board_time: None,
+            filters_json: "{".to_string(),
+        };
+
+        assert!(LocalBinanceInstrumentPo::from_proto(proto).is_err());
     }
 
     #[test]

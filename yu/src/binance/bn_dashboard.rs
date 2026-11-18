@@ -13,9 +13,8 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
-use yue::binance::bn_models::common::SymbolInfoTrait;
-use yue::binance::bn_models::spot_restful::ExchangeInfo;
-use yue::binance::bn_models::swap_restful::SwapExchangeInfo;
+use yue::binance::bn_models::spot_restful::{ExchangeInfo, ExchangeSymbol};
+use yue::binance::bn_models::swap_restful::{SwapExchangeInfo, SwapExchangeSymbol};
 use yue::binance::bn_restful_commands::{
     BINANCE_SPOT_BASE, BINANCE_SWAP_BASE, SPOT_EXCHANGE_COMMAND, SPOT_RATE_PER_MINUTE, SWAP_EXCHANGE_COMMAND, execute_json_request,
 };
@@ -214,21 +213,13 @@ impl BinanceDashboard {
                 // let tradifi_perpetual = TRADIFI_PERPETUAL_TEXT.to_string();
 
                 let live_spot = self
-                    .parse_exchange_symbols(&spot.symbols, vec![InstrumentType::Spot])
+                    .parse_spot_exchange_symbols(&spot.symbols)
                     .await?
                     .into_iter()
                     .filter(|(_, instrument)| matches!(instrument.symbol_type, InstrumentType::Spot) && instrument.status == BN_SYMBOL_STATUS_TRADING)
                     .collect::<HashMap<String, BinanceInstrument>>();
                 let live_swap = self
-                    .parse_exchange_symbols(
-                        &swap.symbols,
-                        vec![
-                            InstrumentType::Swap,
-                            InstrumentType::CurrentQuarter,
-                            InstrumentType::TradifiPerpetual,
-                            InstrumentType::NextQuarter,
-                        ],
-                    )
+                    .parse_swap_exchange_symbols(&swap.symbols)
                     .await?
                     .into_iter()
                     .filter(|(_, instrument)| matches!(instrument.symbol_type, InstrumentType::Swap) && instrument.status == BN_SYMBOL_STATUS_TRADING)
@@ -244,44 +235,55 @@ impl BinanceDashboard {
         }
     }
 
-    ///
-    /// # 步骤
-    /// 1. 从数据库中，获取symbol和id的hashmap，后续称之symbols。
-    /// 2. loop stops。判断symbol是否在存在于symbols.
-    ///  - 如果不存在，则转换成po，存入数据库
-    ///  - 如果存在，则跳过，在map中删除该条symbol
-    /// 3. 把symbol中剩余的数据，标注为非交易
-    ///
-    ///
-    /// # 关于传统金融
-    /// 1. spot没有区分，swap区分了。
-    /// 2. bstock区分
-    ///     - 通过`capital/config/getall`活的列表，然后通过判断名字结尾是否是bStocks
-    pub async fn parse_exchange_symbols<S: SymbolInfoTrait>(
+    /// Converts and persists Binance spot symbols.
+    pub async fn parse_spot_exchange_symbols(&self, symbols: &[ExchangeSymbol]) -> Result<HashMap<String, BinanceInstrument>, YuError> {
+        let instruments = symbols
+            .iter()
+            .map(BinanceInstrument::try_from_spot_exchange_symbol)
+            .collect::<Result<Vec<_>, _>>()?;
+        self.persist_exchange_instruments(instruments, vec![InstrumentType::Spot]).await
+    }
+
+    /// Converts and persists Binance swap symbols, including delivery contracts.
+    pub async fn parse_swap_exchange_symbols(&self, symbols: &[SwapExchangeSymbol]) -> Result<HashMap<String, BinanceInstrument>, YuError> {
+        let instruments = symbols
+            .iter()
+            .map(BinanceInstrument::try_from_swap_exchange_symbol)
+            .collect::<Result<Vec<_>, _>>()?;
+        self.persist_exchange_instruments(
+            instruments,
+            vec![
+                InstrumentType::Swap,
+                InstrumentType::CurrentQuarter,
+                InstrumentType::TradifiPerpetual,
+                InstrumentType::NextQuarter,
+            ],
+        )
+        .await
+    }
+
+    /// Reuses stored IDs, inserts new instruments, and marks symbols absent from the response as not trading.
+    async fn persist_exchange_instruments(
         &self,
-        symbols: &Vec<S>,
+        instruments: Vec<BinanceInstrument>,
         inst_types: Vec<InstrumentType>,
     ) -> Result<HashMap<String, BinanceInstrument>, YuError> {
         let mut existing_symbols = self.instrument_repo.get_map_of_symbol_id(inst_types).await?;
         let mut live_instruments = HashMap::new();
 
-        for symbol in symbols {
-            let instrument = match existing_symbols.remove(symbol.symbol()) {
-                Some(server_id) => BinanceInstrument::from_symbol_info_with_id(symbol, server_id as i64),
+        for mut instrument in instruments {
+            match existing_symbols.remove(&instrument.symbol) {
+                Some(server_id) => instrument.id = server_id as i64,
                 None => {
-                    let instrument = BinanceInstrument::from(symbol);
                     if let Err(error) = self.instrument_repo.insert_instrument(instrument.clone()).await {
                         error!(
                             "error adding instrument to symbol {} type is {}: {:?}",
-                            symbol.symbol(),
-                            symbol.symbol_type(),
-                            error
+                            instrument.symbol, instrument.symbol_type, error
                         );
                         return Err(error);
                     }
-                    instrument
                 }
-            };
+            }
             live_instruments.insert(instrument.symbol.clone(), instrument);
         }
 

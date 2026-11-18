@@ -359,19 +359,21 @@ impl ClientBinanceRepositoryTrait for ClientBinanceRepositoryImpl {
         let inserted_id: i64 = sqlx::query_scalar(
             r#"
             INSERT INTO binance_instruments (
-                id, server_id, symbol, status, base_asset, quote_asset, quote_asset_precision,
-                order_types, symbol_type, on_board_time
+                id, server_id, symbol, status, base_asset, base_asset_precision, quote_asset, quote_asset_precision,
+                order_types, symbol_type, on_board_time, filters
             )
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
             ON CONFLICT (server_id) DO UPDATE SET
                 symbol = EXCLUDED.symbol,
                 status = EXCLUDED.status,
                 base_asset = EXCLUDED.base_asset,
+                base_asset_precision = EXCLUDED.base_asset_precision,
                 quote_asset = EXCLUDED.quote_asset,
                 quote_asset_precision = EXCLUDED.quote_asset_precision,
                 order_types = EXCLUDED.order_types,
                 symbol_type = EXCLUDED.symbol_type,
-                on_board_time = EXCLUDED.on_board_time
+                on_board_time = EXCLUDED.on_board_time,
+                filters = EXCLUDED.filters
             RETURNING id
             "#,
         )
@@ -380,11 +382,13 @@ impl ClientBinanceRepositoryTrait for ClientBinanceRepositoryImpl {
         .bind(instrument.symbol)
         .bind(instrument.status)
         .bind(instrument.base_asset)
+        .bind(instrument.base_asset_precision)
         .bind(instrument.quote_asset)
         .bind(instrument.quote_asset_precision)
         .bind(instrument.order_types)
         .bind(instrument.symbol_type)
         .bind(on_board_time)
+        .bind(sqlx::types::Json(instrument.filters))
         .fetch_one(&self.pg_pool)
         .await?;
 
@@ -402,19 +406,21 @@ impl ClientBinanceRepositoryTrait for ClientBinanceRepositoryImpl {
         let result = sqlx::query(
             r#"
             UPDATE binance_instruments
-            SET symbol = $1, status = $2, base_asset = $3, quote_asset = $4, quote_asset_precision = $5,
-                order_types = $6, symbol_type = $7, on_board_time = $8
-            WHERE server_id = $9 AND id = $10
+            SET symbol = $1, status = $2, base_asset = $3, base_asset_precision = $4, quote_asset = $5, quote_asset_precision = $6,
+                order_types = $7, symbol_type = $8, on_board_time = $9, filters = $10
+            WHERE server_id = $11 AND id = $12
             "#,
         )
         .bind(instrument.symbol)
         .bind(instrument.status)
         .bind(instrument.base_asset)
+        .bind(instrument.base_asset_precision)
         .bind(instrument.quote_asset)
         .bind(instrument.quote_asset_precision)
         .bind(instrument.order_types)
         .bind(instrument.symbol_type)
         .bind(on_board_time)
+        .bind(sqlx::types::Json(instrument.filters))
         .bind(server_id)
         .bind(id)
         .execute(&self.pg_pool)
