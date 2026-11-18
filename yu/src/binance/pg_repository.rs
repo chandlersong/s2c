@@ -1,7 +1,7 @@
-use crate::errors::YuError;
-use crate::sync::client::po::binance::{
+use crate::binance::models::local_po::{
     BinanceInstrumentType, LocalBinanceInstrumentPo, LocalBinanceOptionInstrumentPo, LocalBinanceOptionSymbolFilterPo,
 };
+use crate::errors::YuError;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};

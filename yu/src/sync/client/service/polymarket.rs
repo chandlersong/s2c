@@ -1,13 +1,13 @@
 use crate::data_integrity::check::{BinarySearchDS, SyncClientBinarySearchDataImpl, binary_search_gap};
 use crate::data_integrity::models::ValidationGap;
 use crate::errors::YuError;
+use crate::polymarket::local_po::{LocalPolyMarketHistoryPo, LocalPolyMarketInstrumentPo};
+use crate::polymarket::pg_repository::{ClientPolyMarketRepository, default_client_polymarket_repository};
 use crate::postgresql_db::{PostgresqlTableTrait, get_sync_client_pg_pool_sync};
 use crate::postgresql_db_tables::PostgresqlBatchInsert;
 use crate::sync::client::database::get_polymarket_price_batch_insert;
 use crate::sync::client::db_consts::ClientsTables;
 use crate::sync::client::grpc_manager::{GrpcChannelManager, get_grpc_manager_from_config};
-use crate::sync::client::po::polymarket::{LocalPolyMarketHistoryPo, LocalPolyMarketInstrumentPo};
-use crate::sync::client::repository::polymarket::{ClientPolyMarketRepository, default_client_polymarket_repository};
 use crate::sync::client::sync_client_service::{ClientHistoryService, ClientHistoryServiceTrait, ClientInstrumentServiceTrait};
 use crate::sync::models::grpc_sync::{HistoryEntry, HistoryType, Instrument, InstrumentType, SyncRequest, history_entry::Payload, instrument};
 use async_trait::async_trait;
@@ -326,9 +326,9 @@ impl ClientHistoryServiceTrait for PolymarketClientHistoryService {
 mod tests {
     use super::*;
     use crate::data_integrity::check::MockBinarySearchDSTrait;
+    use crate::polymarket::pg_repository::MockClientPolyMarketRepositoryTrait;
     use crate::postgresql_db_tables::MockPostgresqlBatchInsertTrait;
     use crate::sync::client::grpc_manager::{GrpcServerMessageStream, MockGrpcChannelManagerTrait};
-    use crate::sync::client::repository::polymarket::MockClientPolyMarketRepositoryTrait;
     use crate::sync::models::grpc_sync::{HistoryEntry, HistoryType, InstrumentType, PolyMarketHistory, PolymarketInstrument, ServerMessage};
     use li::tools::time::unix_time_now_u64_utc;
 

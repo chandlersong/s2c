@@ -4,5 +4,7 @@ pub mod duckdb_tables;
 pub mod service;
 
 pub mod duckdb_repository;
+pub mod local_po;
+pub mod pg_repository;
 pub mod sync_job;
 pub mod sync_server;

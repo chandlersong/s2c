@@ -1,13 +1,13 @@
 use crate::data_integrity::check::{BinarySearchDS, SyncClientBinarySearchDataImpl, binary_search_gap};
 use crate::data_integrity::models::ValidationGap;
 use crate::errors::YuError;
+use crate::okx::local_po::{LocalOkxInstrumentPo, LocalOkxKlinePo, LocalOkxOptionSummaryPo};
+use crate::okx::pg_repository::{ClientOkxRepository, ClientOkxRepositoryImpl};
 use crate::postgresql_db::{PostgresqlTableTrait, get_sync_client_pg_pool_sync};
 use crate::postgresql_db_tables::PostgresqlBatchInsert;
 use crate::sync::client::database::{get_okx_kline_batch_insert, get_okx_option_summary_batch_insert};
 use crate::sync::client::db_consts::ClientsTables;
 use crate::sync::client::grpc_manager::{GrpcChannelManager, get_grpc_manager_from_config};
-use crate::sync::client::po::okx::{LocalOkxInstrumentPo, LocalOkxKlinePo, LocalOkxOptionSummaryPo};
-use crate::sync::client::repository::okx::{ClientOkxRepository, ClientOkxRepositoryImpl};
 use crate::sync::client::sync_client_service::{
     ClientHistoryService, ClientHistoryServiceTrait, ClientInstrumentService, ClientInstrumentServiceTrait,
 };
@@ -427,10 +427,9 @@ impl ClientHistoryServiceTrait for OkxOptionSummaryClientHistoryService {
 mod tests {
     use super::*;
     use crate::data_integrity::check::MockBinarySearchDSTrait;
+    use crate::okx::pg_repository::MockClientOkxRepositoryTrait;
     use crate::postgresql_db_tables::MockPostgresqlBatchInsertTrait;
     use crate::sync::client::grpc_manager::{GrpcServerMessageStream, MockGrpcChannelManagerTrait};
-    use crate::sync::client::po::okx::{LocalOkxInstrumentPo, LocalOkxOptionSummaryPo};
-    use crate::sync::client::repository::okx::MockClientOkxRepositoryTrait;
     use crate::sync::models::grpc_sync::{HistoryEntry, OkxInstrument, OkxOptionSummary, ServerMessage, history_entry::Payload, instrument};
 
     fn empty_stream() -> GrpcServerMessageStream {

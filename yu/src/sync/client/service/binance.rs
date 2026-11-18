@@ -1,4 +1,11 @@
 use crate::binance::bn_consts::BN_SYMBOL_STATUS_TRADING;
+use crate::binance::models::local_po::{
+    BinanceInstrumentType, LocalBinanceFundingRatePo, LocalBinanceInstrumentPo, LocalBinanceKlinePo, LocalBinanceOptionInstrumentPo,
+    LocalBinanceOptionKlinePo, LocalBinanceOptionMarketPricePo, LocalBinanceOrderBookSnapshotPo, LocalBinanceTradePo,
+};
+use crate::binance::pg_repository::{
+    ClientBinanceOptionInstrumentRepository, ClientBinanceOptionInstrumentRepositoryImpl, ClientBinanceRepository, ClientBinanceRepositoryImpl,
+};
 use crate::config::get_config;
 use crate::data_integrity::check::{BinarySearchDS, SyncClientBinarySearchDataImpl, binary_search_gap};
 use crate::data_integrity::models::ValidationGap;
@@ -12,13 +19,6 @@ use crate::sync::client::database::{
 };
 use crate::sync::client::db_consts::ClientsTables;
 use crate::sync::client::grpc_manager::{GrpcChannelManager, get_grpc_manager_from_config};
-use crate::sync::client::po::binance::{
-    BinanceInstrumentType, LocalBinanceFundingRatePo, LocalBinanceInstrumentPo, LocalBinanceKlinePo, LocalBinanceOptionInstrumentPo,
-    LocalBinanceOptionKlinePo, LocalBinanceOptionMarketPricePo, LocalBinanceOrderBookSnapshotPo, LocalBinanceTradePo,
-};
-use crate::sync::client::repository::binance::{
-    ClientBinanceOptionInstrumentRepository, ClientBinanceOptionInstrumentRepositoryImpl, ClientBinanceRepository, ClientBinanceRepositoryImpl,
-};
 use crate::sync::client::sync_client_service::{
     ClientHistoryService, ClientHistoryServiceTrait, ClientInstrumentService, ClientInstrumentServiceTrait,
 };
@@ -1223,10 +1223,11 @@ impl ClientHistoryServiceTrait for BinanceOrderBookSnapshotClientHistoryService 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::binance::models::local_po::{LocalBinanceOptionSymbolFilterPo, LocalBinanceTradePo};
+    use crate::binance::pg_repository::{MockClientBinanceOptionInstrumentRepositoryTrait, MockClientBinanceRepositoryTrait};
     use crate::data_integrity::check::MockBinarySearchDSTrait;
     use crate::postgresql_db_tables::MockPostgresqlBatchInsertTrait;
     use crate::sync::client::grpc_manager::MockGrpcChannelManagerTrait;
-    use crate::sync::client::repository::binance::{MockClientBinanceOptionInstrumentRepositoryTrait, MockClientBinanceRepositoryTrait};
     use crate::sync::client::sync_client_service::MockClientHistoryServiceTrait;
     use crate::sync::models::grpc_sync::{
         BinanceFundingRate, BinanceKline, BinanceOptionInstrument, BinanceOptionKline, BinanceOptionMarketPrice, BinanceOptionSymbolFilter,
@@ -1305,7 +1306,7 @@ mod tests {
             underlying_type: "COIN".to_string(),
             naked_sell: Some(false),
             status: "TRADING".to_string(),
-            filters: vec![crate::sync::client::po::binance::LocalBinanceOptionSymbolFilterPo {
+            filters: vec![LocalBinanceOptionSymbolFilterPo {
                 filter_type: "PRICE_FILTER".to_string(),
                 min_price: Some("0.01".to_string()),
                 max_price: Some("100000".to_string()),
@@ -2287,13 +2288,13 @@ mod tests {
     // 预期结果：两个子服务各收到一次相同 instrument 和结束时间，组合初始化成功。
     #[tokio::test]
     async fn swap_initial_data_backfills_kline_and_funding_rate() {
-        let mut kline_service = crate::sync::client::sync_client_service::MockClientHistoryServiceTrait::new();
+        let mut kline_service = MockClientHistoryServiceTrait::new();
         kline_service
             .expect_initial_data()
             .withf(|instrument, end_ms| instrument.instrument_type == InstrumentType::Binance as i32 && *end_ms == 1_700_000_060_000)
             .times(1)
             .returning(|_, _| Box::pin(async { Ok(()) }));
-        let mut funding_rate_service = crate::sync::client::sync_client_service::MockClientHistoryServiceTrait::new();
+        let mut funding_rate_service = MockClientHistoryServiceTrait::new();
         funding_rate_service
             .expect_initial_data()
             .withf(|instrument, end_ms| instrument.instrument_type == InstrumentType::Binance as i32 && *end_ms == 1_700_000_060_000)

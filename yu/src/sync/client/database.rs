@@ -1,9 +1,14 @@
+use crate::binance::models::local_po::{
+    LocalBinanceFundingRatePo, LocalBinanceKlinePo, LocalBinanceOptionKlinePo, LocalBinanceOptionMarketPricePo, LocalBinanceOrderBookSnapshotPo,
+    LocalBinanceTradePo,
+};
 use crate::errors::YuError;
+use crate::okx::local_po::{LocalOkxKlinePo, LocalOkxOptionSummaryPo};
+use crate::polymarket::local_po::LocalPolyMarketHistoryPo;
 use crate::postgresql_db::{PostgresqlTableTrait, get_sync_client_pg_pool_sync};
 use crate::postgresql_db_tables::{PostgresqlBatchInsert, PostgresqlBatchInsertImpl};
 use crate::sync::client::db_consts::ALL_CLIENT_TABLES;
 use crate::sync::client::db_consts::ClientsTables;
-use crate::sync::client::po::polymarket::LocalPolyMarketHistoryPo;
 use futures::executor::block_on;
 use log::{error, info};
 use sqlx::PgPool;
@@ -29,26 +34,15 @@ pub async fn initial_grpc_client_tables(option_pool: Option<PgPool>) -> Result<(
 }
 
 pub(crate) static POLYMARKET_PRICE_BATCH_INSERT: OnceLock<PostgresqlBatchInsert<LocalPolyMarketHistoryPo>> = OnceLock::new();
-pub(crate) static OKX_KLINE_BATCH_INSERT: OnceLock<PostgresqlBatchInsert<crate::sync::client::po::okx::LocalOkxKlinePo>> = OnceLock::new();
-pub(crate) static OKX_OPTION_SUMMARY_BATCH_INSERT: OnceLock<PostgresqlBatchInsert<crate::sync::client::po::okx::LocalOkxOptionSummaryPo>> =
-    OnceLock::new();
-pub(crate) static BINANCE_KLINE_BATCH_INSERT: OnceLock<PostgresqlBatchInsert<crate::sync::client::po::binance::LocalBinanceKlinePo>> =
-    OnceLock::new();
-pub(crate) static BINANCE_SWAP_KLINE_BATCH_INSERT: OnceLock<PostgresqlBatchInsert<crate::sync::client::po::binance::LocalBinanceKlinePo>> =
-    OnceLock::new();
-pub(crate) static BINANCE_TRADE_BATCH_INSERT: OnceLock<PostgresqlBatchInsert<crate::sync::client::po::binance::LocalBinanceTradePo>> =
-    OnceLock::new();
-pub(crate) static BINANCE_SWAP_FUNDING_RATE_BATCH_INSERT: OnceLock<
-    PostgresqlBatchInsert<crate::sync::client::po::binance::LocalBinanceFundingRatePo>,
-> = OnceLock::new();
-pub(crate) static BINANCE_ORDER_BOOK_SNAPSHOT_BATCH_INSERT: OnceLock<
-    PostgresqlBatchInsert<crate::sync::client::po::binance::LocalBinanceOrderBookSnapshotPo>,
-> = OnceLock::new();
-pub(crate) static BINANCE_OPTION_KLINE_BATCH_INSERT: OnceLock<PostgresqlBatchInsert<crate::sync::client::po::binance::LocalBinanceOptionKlinePo>> =
-    OnceLock::new();
-pub(crate) static BINANCE_OPTION_MARKET_PRICE_BATCH_INSERT: OnceLock<
-    PostgresqlBatchInsert<crate::sync::client::po::binance::LocalBinanceOptionMarketPricePo>,
-> = OnceLock::new();
+pub(crate) static OKX_KLINE_BATCH_INSERT: OnceLock<PostgresqlBatchInsert<LocalOkxKlinePo>> = OnceLock::new();
+pub(crate) static OKX_OPTION_SUMMARY_BATCH_INSERT: OnceLock<PostgresqlBatchInsert<LocalOkxOptionSummaryPo>> = OnceLock::new();
+pub(crate) static BINANCE_KLINE_BATCH_INSERT: OnceLock<PostgresqlBatchInsert<LocalBinanceKlinePo>> = OnceLock::new();
+pub(crate) static BINANCE_SWAP_KLINE_BATCH_INSERT: OnceLock<PostgresqlBatchInsert<LocalBinanceKlinePo>> = OnceLock::new();
+pub(crate) static BINANCE_TRADE_BATCH_INSERT: OnceLock<PostgresqlBatchInsert<LocalBinanceTradePo>> = OnceLock::new();
+pub(crate) static BINANCE_SWAP_FUNDING_RATE_BATCH_INSERT: OnceLock<PostgresqlBatchInsert<LocalBinanceFundingRatePo>> = OnceLock::new();
+pub(crate) static BINANCE_ORDER_BOOK_SNAPSHOT_BATCH_INSERT: OnceLock<PostgresqlBatchInsert<LocalBinanceOrderBookSnapshotPo>> = OnceLock::new();
+pub(crate) static BINANCE_OPTION_KLINE_BATCH_INSERT: OnceLock<PostgresqlBatchInsert<LocalBinanceOptionKlinePo>> = OnceLock::new();
+pub(crate) static BINANCE_OPTION_MARKET_PRICE_BATCH_INSERT: OnceLock<PostgresqlBatchInsert<LocalBinanceOptionMarketPricePo>> = OnceLock::new();
 
 pub fn get_polymarket_price_batch_insert() -> PostgresqlBatchInsert<LocalPolyMarketHistoryPo> {
     POLYMARKET_PRICE_BATCH_INSERT
@@ -63,11 +57,11 @@ pub fn get_polymarket_price_batch_insert() -> PostgresqlBatchInsert<LocalPolyMar
         .clone()
 }
 
-pub fn get_okx_kline_batch_insert() -> PostgresqlBatchInsert<crate::sync::client::po::okx::LocalOkxKlinePo> {
+pub fn get_okx_kline_batch_insert() -> PostgresqlBatchInsert<LocalOkxKlinePo> {
     OKX_KLINE_BATCH_INSERT
         .get_or_init(|| {
             let pool = get_sync_client_pg_pool_sync().expect("get_sync_client_pg_pool failed");
-            let batch_insert = block_on(PostgresqlBatchInsertImpl::<crate::sync::client::po::okx::LocalOkxKlinePo>::new(
+            let batch_insert = block_on(PostgresqlBatchInsertImpl::<LocalOkxKlinePo>::new(
                 ClientsTables::OkxPriceHistory.table_name(),
                 pool,
             ));
@@ -76,11 +70,11 @@ pub fn get_okx_kline_batch_insert() -> PostgresqlBatchInsert<crate::sync::client
         .clone()
 }
 
-pub fn get_okx_option_summary_batch_insert() -> PostgresqlBatchInsert<crate::sync::client::po::okx::LocalOkxOptionSummaryPo> {
+pub fn get_okx_option_summary_batch_insert() -> PostgresqlBatchInsert<LocalOkxOptionSummaryPo> {
     OKX_OPTION_SUMMARY_BATCH_INSERT
         .get_or_init(|| {
             let pool = get_sync_client_pg_pool_sync().expect("get_sync_client_pg_pool failed");
-            let batch_insert = block_on(PostgresqlBatchInsertImpl::<crate::sync::client::po::okx::LocalOkxOptionSummaryPo>::new(
+            let batch_insert = block_on(PostgresqlBatchInsertImpl::<LocalOkxOptionSummaryPo>::new(
                 ClientsTables::OkxOptionSummary.table_name(),
                 pool,
             ));
@@ -89,11 +83,11 @@ pub fn get_okx_option_summary_batch_insert() -> PostgresqlBatchInsert<crate::syn
         .clone()
 }
 
-pub fn get_binance_kline_batch_insert() -> PostgresqlBatchInsert<crate::sync::client::po::binance::LocalBinanceKlinePo> {
+pub fn get_binance_kline_batch_insert() -> PostgresqlBatchInsert<LocalBinanceKlinePo> {
     BINANCE_KLINE_BATCH_INSERT
         .get_or_init(|| {
             let pool = get_sync_client_pg_pool_sync().expect("get_sync_client_pg_pool failed");
-            block_on(PostgresqlBatchInsertImpl::<crate::sync::client::po::binance::LocalBinanceKlinePo>::new(
+            block_on(PostgresqlBatchInsertImpl::<LocalBinanceKlinePo>::new(
                 ClientsTables::BinanceSpotKline.table_name(),
                 pool,
             ))
@@ -101,11 +95,11 @@ pub fn get_binance_kline_batch_insert() -> PostgresqlBatchInsert<crate::sync::cl
         .clone()
 }
 
-pub fn get_binance_swap_kline_batch_insert() -> PostgresqlBatchInsert<crate::sync::client::po::binance::LocalBinanceKlinePo> {
+pub fn get_binance_swap_kline_batch_insert() -> PostgresqlBatchInsert<LocalBinanceKlinePo> {
     BINANCE_SWAP_KLINE_BATCH_INSERT
         .get_or_init(|| {
             let pool = get_sync_client_pg_pool_sync().expect("get_sync_client_pg_pool failed");
-            block_on(PostgresqlBatchInsertImpl::<crate::sync::client::po::binance::LocalBinanceKlinePo>::new(
+            block_on(PostgresqlBatchInsertImpl::<LocalBinanceKlinePo>::new(
                 ClientsTables::BinanceSwapKline.table_name(),
                 pool,
             ))
@@ -113,11 +107,11 @@ pub fn get_binance_swap_kline_batch_insert() -> PostgresqlBatchInsert<crate::syn
         .clone()
 }
 
-pub fn get_binance_trade_batch_insert() -> PostgresqlBatchInsert<crate::sync::client::po::binance::LocalBinanceTradePo> {
+pub fn get_binance_trade_batch_insert() -> PostgresqlBatchInsert<LocalBinanceTradePo> {
     BINANCE_TRADE_BATCH_INSERT
         .get_or_init(|| {
             let pool = get_sync_client_pg_pool_sync().expect("get_sync_client_pg_pool failed");
-            block_on(PostgresqlBatchInsertImpl::<crate::sync::client::po::binance::LocalBinanceTradePo>::new(
+            block_on(PostgresqlBatchInsertImpl::<LocalBinanceTradePo>::new(
                 ClientsTables::BinanceSpotTrade.table_name(),
                 pool,
             ))
@@ -125,52 +119,50 @@ pub fn get_binance_trade_batch_insert() -> PostgresqlBatchInsert<crate::sync::cl
         .clone()
 }
 
-pub fn get_binance_swap_funding_rate_batch_insert() -> PostgresqlBatchInsert<crate::sync::client::po::binance::LocalBinanceFundingRatePo> {
+pub fn get_binance_swap_funding_rate_batch_insert() -> PostgresqlBatchInsert<LocalBinanceFundingRatePo> {
     BINANCE_SWAP_FUNDING_RATE_BATCH_INSERT
         .get_or_init(|| {
             let pool = get_sync_client_pg_pool_sync().expect("get_sync_client_pg_pool failed");
-            block_on(
-                PostgresqlBatchInsertImpl::<crate::sync::client::po::binance::LocalBinanceFundingRatePo>::new(
-                    ClientsTables::BinanceSwapFundingRate.table_name(),
-                    pool,
-                ),
-            )
+            block_on(PostgresqlBatchInsertImpl::<LocalBinanceFundingRatePo>::new(
+                ClientsTables::BinanceSwapFundingRate.table_name(),
+                pool,
+            ))
         })
         .clone()
 }
 
-pub fn get_binance_order_book_snapshot_batch_insert() -> PostgresqlBatchInsert<crate::sync::client::po::binance::LocalBinanceOrderBookSnapshotPo> {
+pub fn get_binance_order_book_snapshot_batch_insert() -> PostgresqlBatchInsert<LocalBinanceOrderBookSnapshotPo> {
     BINANCE_ORDER_BOOK_SNAPSHOT_BATCH_INSERT
         .get_or_init(|| {
             let pool = get_sync_client_pg_pool_sync().expect("get_sync_client_pg_pool failed");
-            block_on(PostgresqlBatchInsertImpl::<
-                crate::sync::client::po::binance::LocalBinanceOrderBookSnapshotPo,
-            >::new(ClientsTables::BinanceOrderBookSnapshot.table_name(), pool))
+            block_on(PostgresqlBatchInsertImpl::<LocalBinanceOrderBookSnapshotPo>::new(
+                ClientsTables::BinanceOrderBookSnapshot.table_name(),
+                pool,
+            ))
         })
         .clone()
 }
 
-pub fn get_binance_option_kline_batch_insert() -> PostgresqlBatchInsert<crate::sync::client::po::binance::LocalBinanceOptionKlinePo> {
+pub fn get_binance_option_kline_batch_insert() -> PostgresqlBatchInsert<LocalBinanceOptionKlinePo> {
     BINANCE_OPTION_KLINE_BATCH_INSERT
         .get_or_init(|| {
             let pool = get_sync_client_pg_pool_sync().expect("get_sync_client_pg_pool failed");
-            block_on(
-                PostgresqlBatchInsertImpl::<crate::sync::client::po::binance::LocalBinanceOptionKlinePo>::new(
-                    ClientsTables::BinanceOptionKline.table_name(),
-                    pool,
-                ),
-            )
+            block_on(PostgresqlBatchInsertImpl::<LocalBinanceOptionKlinePo>::new(
+                ClientsTables::BinanceOptionKline.table_name(),
+                pool,
+            ))
         })
         .clone()
 }
 
-pub fn get_binance_option_market_price_batch_insert() -> PostgresqlBatchInsert<crate::sync::client::po::binance::LocalBinanceOptionMarketPricePo> {
+pub fn get_binance_option_market_price_batch_insert() -> PostgresqlBatchInsert<LocalBinanceOptionMarketPricePo> {
     BINANCE_OPTION_MARKET_PRICE_BATCH_INSERT
         .get_or_init(|| {
             let pool = get_sync_client_pg_pool_sync().expect("get_sync_client_pg_pool failed");
-            block_on(PostgresqlBatchInsertImpl::<
-                crate::sync::client::po::binance::LocalBinanceOptionMarketPricePo,
-            >::new(ClientsTables::BinanceOptionMarketPrice.table_name(), pool))
+            block_on(PostgresqlBatchInsertImpl::<LocalBinanceOptionMarketPricePo>::new(
+                ClientsTables::BinanceOptionMarketPrice.table_name(),
+                pool,
+            ))
         })
         .clone()
 }

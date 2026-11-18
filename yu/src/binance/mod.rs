@@ -11,3 +11,5 @@ pub mod sync_job;
 pub mod sync_server;
 pub mod trading_service;
 pub mod websocket_service;
+
+pub mod pg_repository;

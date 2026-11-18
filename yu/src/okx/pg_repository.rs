@@ -1,5 +1,5 @@
 use crate::errors::YuError;
-use crate::sync::client::po::okx::LocalOkxInstrumentPo;
+use crate::okx::local_po::LocalOkxInstrumentPo;
 use async_trait::async_trait;
 use sqlx::PgPool;
 use std::collections::HashMap;

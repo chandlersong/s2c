@@ -259,12 +259,12 @@ pub mod grpc_sync {
 #[cfg(test)]
 mod tests {
     use super::grpc_sync::{BinanceFundingRate, BinanceKline, BinanceTrade, HistoryType, InstrumentType as GrpcInstrumentType, instrument};
+    use crate::binance::models::local_po::{
+        LocalBinanceKlinePo, LocalBinanceOptionInstrumentPo, LocalBinanceOptionKlinePo, LocalBinanceOptionMarketPricePo,
+        LocalBinanceOrderBookSnapshotPo, LocalBinanceTradePo,
+    };
     use crate::binance::models::po::BinanceOrderBookSnapshotPo;
     use crate::binance::models::po::{BinanceInstrument as BinanceInstrumentPo, KlinePo, SpotStreamTradeRecordPo};
-    use crate::sync::client::po::binance::LocalBinanceOrderBookSnapshotPo;
-    use crate::sync::client::po::binance::{
-        LocalBinanceKlinePo, LocalBinanceOptionInstrumentPo, LocalBinanceOptionKlinePo, LocalBinanceOptionMarketPricePo, LocalBinanceTradePo,
-    };
     use rust_decimal::Decimal;
     use yue::binance::bn_models::option_restful::{OptionKLine, OptionMarketPrice as OptionMarketPriceVo, OptionSymbol, OptionSymbolFilter};
     use yue::binance::bn_models::spot_restful::Depth;

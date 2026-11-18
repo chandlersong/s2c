@@ -257,7 +257,7 @@ impl SyncClientService {
 
                 warn!("SubscribeLatest stream ended; reconnecting");
                 grpc_manager.reconnect().await;
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
                 match grpc_manager.subscribe_latest(SubscribeRequest { client_id }).await {
                     Ok(new_stream) => {
                         info!("subscribe latest success");
@@ -265,7 +265,7 @@ impl SyncClientService {
                     }
                     Err(e) => {
                         error!("error reconnecting SubscribeLatest stream: {}", e);
-                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                        tokio::time::sleep(Duration::from_secs(2)).await;
                     }
                 }
             }

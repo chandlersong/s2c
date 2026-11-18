@@ -1,6 +1,6 @@
 use crate::errors::YuError;
+use crate::polymarket::local_po::LocalPolyMarketInstrumentPo;
 use crate::postgresql_db::get_sync_client_pg_pool_sync;
-use crate::sync::client::po::polymarket::LocalPolyMarketInstrumentPo;
 use async_trait::async_trait;
 use sqlx::PgPool;
 use std::collections::HashMap;

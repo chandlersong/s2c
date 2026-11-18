@@ -36,45 +36,10 @@ pub struct BinanceInstrument {
     pub filters: serde_json::Value,
 }
 
-impl BacktestInstTrait for BinanceInstrument {
-    fn inst_id(&self) -> u64 {
-        self.id as u64
-    }
-
-    fn symbol(&self) -> &str {
-        &self.symbol
-    }
-
-    fn status(&self) -> &str {
-        &self.status
-    }
-
-    fn base_asset(&self) -> &str {
-        &self.base_asset
-    }
-
-    fn quote_asset(&self) -> &str {
-        &self.quote_asset
-    }
-
-    fn min_trade_size(&self) -> f64 {
-        0.1
-    }
-
-    fn min_trade_quantity(&self) -> f64 {
-        0.1
-    }
-
-    fn tick_size(&self) -> f64 {
-        0.1
-    }
-}
-
 impl BinanceInstrument {
     ///
     /// 数据库的场景。已经已经存在了。就是需要传入id。而不是自动生成
     ///
-
     pub fn get_id_u64(&self) -> u64 {
         self.id as u64
     }

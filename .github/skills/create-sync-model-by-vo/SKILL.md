@@ -46,7 +46,7 @@ service、请求流程或运行时分发逻辑。
 - 服务端表：`yu/src/okx/duckdb_consts.rs` 中对应的实体 DDL。
 - protobuf message：`yu/proto/history_data.proto` 中的 `OkxOptionSummary`。
     - instrument的类型，需要修改InstrumentType enum，History类型的数据，需要加入一个HistoryType enum
-- 客户端 PO：`yu/src/sync/client/po/okx.rs` 中的 `LocalOkxOptionSummaryPo`。
+- 客户端 PO：`yu/src/okx/local_po.rs` 中的 `LocalOkxOptionSummaryPo`。
     - 时间字段，在po中为u64，数据中为`TIMESTAMPTZ`。注意转换
 - 客户端表：`yu/src/sync/client/db_consts.rs` 中对应的实体 DDL。
     - 时间字段在数据中，用`TIMESTAMPTZ`。

@@ -11,6 +11,8 @@ pub trait BacktestInstTrait {
 
     fn quote_asset(&self) -> &str;
 
+    fn instrument_type(&self) -> &str;
+
     fn min_trade_size(&self) -> f64;
 
     fn min_trade_quantity(&self) -> f64;
