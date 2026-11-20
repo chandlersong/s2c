@@ -19,4 +19,4 @@ pub trait BacktestInstTrait {
     fn tick_size(&self) -> f64;
 }
 
-pub type BacktestInst = Box<dyn BacktestInstTrait>;
+pub type BacktestInst = Box<dyn BacktestInstTrait + Send + Sync>;
