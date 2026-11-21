@@ -29,7 +29,7 @@ pub enum YuError {
     #[error("Custom error: {0}")]
     CustomError(String),
     #[error("data alignment failed: {0}")]
-    DataAlignmentError(String),
+    DataError(String),
     #[error("{0},exceed max error: {1}")]
     MaxErrorReached(String, usize),
     #[error("missing configuration:{0}")]

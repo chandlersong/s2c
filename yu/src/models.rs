@@ -1,3 +1,5 @@
+use yue::models::Decimal;
+
 ///
 /// 主要为了方便在回测中使用，提供一个统一的接口来获取交易对信息
 ///
@@ -13,10 +15,10 @@ pub trait BacktestInstTrait {
 
     fn instrument_type(&self) -> &str;
 
-    fn min_trade_size(&self) -> f64;
+    fn min_trade_size(&self) -> Decimal;
 
-    fn min_trade_quantity(&self) -> f64;
-    fn tick_size(&self) -> f64;
+    fn min_trade_quantity(&self) -> Decimal;
+    fn tick_size(&self) -> Decimal;
 }
 
 pub type BacktestInst = Box<dyn BacktestInstTrait + Send + Sync>;

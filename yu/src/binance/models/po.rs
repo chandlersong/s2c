@@ -1,6 +1,5 @@
 use crate::duck_db::DuckDBPO;
 use crate::errors::YuError;
-use crate::models::BacktestInstTrait;
 use duckdb::appender_params_from_iter;
 use li::tools::time::{UnixTimeStamp, unix_time_now_u64_utc};
 use rust_decimal::prelude::ToPrimitive;

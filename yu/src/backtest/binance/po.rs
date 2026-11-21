@@ -1,5 +1,6 @@
 use crate::models::BacktestInstTrait;
 use sqlx::{Row, postgres::PgRow};
+use yue::models::Decimal;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct BacktestBinanceInstrumentPo {
@@ -9,9 +10,9 @@ pub struct BacktestBinanceInstrumentPo {
     pub base_asset: String,
     pub quote_asset: String,
     pub instrument_type: String,
-    pub min_trade_size: f64,
-    pub min_trade_quantity: f64,
-    pub tick_size: f64,
+    pub min_trade_size: Decimal,
+    pub min_trade_quantity: Decimal,
+    pub tick_size: Decimal,
 }
 
 impl<'r> sqlx::FromRow<'r, PgRow> for BacktestBinanceInstrumentPo {
@@ -58,15 +59,15 @@ impl BacktestInstTrait for BacktestBinanceInstrumentPo {
         &self.instrument_type
     }
 
-    fn min_trade_size(&self) -> f64 {
+    fn min_trade_size(&self) -> Decimal {
         self.min_trade_size
     }
 
-    fn min_trade_quantity(&self) -> f64 {
+    fn min_trade_quantity(&self) -> Decimal {
         self.min_trade_quantity
     }
 
-    fn tick_size(&self) -> f64 {
+    fn tick_size(&self) -> Decimal {
         self.tick_size
     }
 }
@@ -87,9 +88,9 @@ mod tests {
             base_asset: "BTC".to_string(),
             quote_asset: "USDT".to_string(),
             instrument_type: "binance_SPOT".to_string(),
-            min_trade_size: 5.0,
-            min_trade_quantity: 0.001,
-            tick_size: 0.01,
+            min_trade_size: Decimal::new(5, 0),
+            min_trade_quantity: Decimal::new(1, 3),
+            tick_size: Decimal::new(1, 2),
         };
 
         assert_eq!(instrument.inst_id(), 42);
@@ -98,8 +99,8 @@ mod tests {
         assert_eq!(instrument.base_asset(), "BTC");
         assert_eq!(instrument.quote_asset(), "USDT");
         assert_eq!(instrument.instrument_type(), "binance_SPOT");
-        assert_eq!(instrument.min_trade_size(), 5.0);
-        assert_eq!(instrument.min_trade_quantity(), 0.001);
-        assert_eq!(instrument.tick_size(), 0.01);
+        assert_eq!(instrument.min_trade_size(), Decimal::new(5, 0));
+        assert_eq!(instrument.min_trade_quantity(), Decimal::new(1, 3));
+        assert_eq!(instrument.tick_size(), Decimal::new(1, 2));
     }
 }
